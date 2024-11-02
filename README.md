@@ -2,7 +2,7 @@
 
 - Upload a PDF document
 - Ask questions based on the content of the uploaded document
-- Get answers using advanced language models and embeddings
+- Get answers using advanced language models and embeddings (Based on Ollama 3.2)
 
 ## Installation
 
