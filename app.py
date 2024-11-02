@@ -16,7 +16,7 @@ os.environ['OPENAI_API_KEY'] = os.getenv("OPENAI_API_KEY")
 openai_api_key = os.getenv('OPENAI_API_KEY')
 
 # Streamlit app title
-st.title("Document-Based Question Answering")
+st.title("DocBot")
 
 # File uploader for PDF
 uploaded_file = st.file_uploader("Choose a PDF file", type="pdf")
