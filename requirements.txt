@@ -1,0 +1,13 @@
+numpy 
+pandas
+langchain_community
+pypdf
+ollama
+openai
+langchain_openai
+fastapi
+uvicorn
+sse_starlette
+faiss-cpu
+langchain_core
+streamlit
