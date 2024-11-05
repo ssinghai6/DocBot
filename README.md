@@ -18,4 +18,4 @@ source venv/bin/activate  # On Windows use `venv\Scripts\activate`
 
 4. create .env file with OPENAI_API_KEY=your_openai_api_key
 
-5. Run streamlit run app.py
+5. Run streamlit run app_ollama.py
