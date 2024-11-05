@@ -10,4 +10,5 @@ uvicorn
 sse_starlette
 faiss-cpu
 langchain_core
+langchain_ollama
 streamlit
