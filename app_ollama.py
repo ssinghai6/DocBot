@@ -9,11 +9,8 @@ from langchain_community.llms import Ollama
 from langchain_core.prompts import ChatPromptTemplate
 from langchain.chains.combine_documents import create_stuff_documents_chain
 from langchain.chains import create_retrieval_chain
+from langchain_ollama import OllamaEmbeddings
 
-# Load environment variables
-load_dotenv()
-os.environ['OPENAI_API_KEY'] = os.getenv("OPENAI_API_KEY")
-openai_api_key = os.getenv('OPENAI_API_KEY')
 
 # Streamlit app title
 st.title("DocBot")
@@ -34,7 +31,7 @@ if uploaded_file is not None:
     all_splits = text_splitter.split_documents(loaded_doc)
 
     # Initialize embeddings and vector store
-    embeddings = OpenAIEmbeddings(api_key=openai_api_key)
+    embeddings = OllamaEmbeddings(model='llama3.2')
     db = FAISS.from_documents(loaded_doc, embeddings)
 
     # Initialize the language model
