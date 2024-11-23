@@ -12,3 +12,4 @@ faiss-cpu
 langchain_core
 langchain_ollama
 streamlit
+chromadb
