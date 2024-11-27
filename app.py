@@ -5,7 +5,7 @@ from dotenv import load_dotenv
 from langchain_text_splitters import RecursiveCharacterTextSplitter
 from langchain_community.embeddings import OpenAIEmbeddings, OllamaEmbeddings
 from langchain_community.vectorstores import FAISS
-from langchain_community.llms import Ollama, OpenAI, Groqai
+from langchain_community.llms import Ollama, OpenAI
 from langchain_core.prompts import ChatPromptTemplate
 from langchain.chains.combine_documents import create_stuff_documents_chain
 from langchain.chains import create_retrieval_chain
@@ -38,7 +38,7 @@ if uploaded_file is not None:
     db = FAISS.from_documents(loaded_doc, embeddings)
 
     # Initialize the language model
-    # llm = Ollama(model="llama3.2")
+    #llm = Ollama(model="llama3.2")
     llm = OpenAI()
 
     # Create the prompt template
@@ -74,3 +74,4 @@ else:
 
 st.markdown("---")  # Horizontal line
 st.markdown("<p style='text-align: center'>Developed by Sanshrit Singhai</p>", unsafe_allow_html=True)
+
