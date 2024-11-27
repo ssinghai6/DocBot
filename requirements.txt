@@ -12,3 +12,6 @@ faiss-cpu
 langchain_core
 langchain_ollama
 streamlit
+chromadb
+groq
+langchain-groq
