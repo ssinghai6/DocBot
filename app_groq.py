@@ -5,13 +5,16 @@ from dotenv import load_dotenv
 from langchain_text_splitters import RecursiveCharacterTextSplitter
 from langchain_community.embeddings import OpenAIEmbeddings, OllamaEmbeddings
 from langchain_community.vectorstores import FAISS
-from langchain_community.llms import Ollama, OpenAI, Groqai
+from langchain_community.llms import Ollama, OpenAI
+from groq import Groq
 from langchain_core.prompts import ChatPromptTemplate
 from langchain.chains.combine_documents import create_stuff_documents_chain
 from langchain.chains import create_retrieval_chain
+from langchain_groq import ChatGroq
 
-# Load environment variables
 load_dotenv()
+os.environ['GROQ_API_KEY'] = os.getenv("GROQ_API_KEY")
+groq_api_key = os.getenv('GROQ_API_KEY')
 os.environ['OPENAI_API_KEY'] = os.getenv("OPENAI_API_KEY")
 openai_api_key = os.getenv('OPENAI_API_KEY')
 
@@ -35,12 +38,18 @@ if uploaded_file is not None:
 
     # Initialize embeddings and vector store
     embeddings = OpenAIEmbeddings(api_key=openai_api_key)
+    # embeddings = OllamaEmbeddings(model='llama3.2')
     db = FAISS.from_documents(loaded_doc, embeddings)
 
     # Initialize the language model
     # llm = Ollama(model="llama3.2")
-    llm = OpenAI()
-
+    
+    
+    llm = ChatGroq(api_key=groq_api_key,
+        model="mixtral-8x7b-32768",
+        temperature=0.0,
+        max_retries=2
+    )
     # Create the prompt template
     prompt = ChatPromptTemplate.from_template("""Answer the following question strictly only based on the provided document.
                                               <context>
