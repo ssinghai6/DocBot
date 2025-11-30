@@ -15,3 +15,8 @@ streamlit
 chromadb
 groq
 langchain-groq
+sentence-transformers
+langchain-groq
+langchain-google-genai
+python-dotenv
+langchain
