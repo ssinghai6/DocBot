@@ -19,4 +19,4 @@ sentence-transformers
 langchain-groq
 langchain-google-genai
 python-dotenv
-langchain
+langchain == 1.0.0
