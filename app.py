@@ -123,25 +123,24 @@ st.markdown("""
 # File uploader for PDF
 uploaded_file = st.file_uploader("Choose a PDF file", type="pdf")
 
-@st.cache_resource
+@st.cache_resource(show_spinner="Processing your document, please wait...")
 def get_vectorstore_from_pdf(uploaded_file):
     if uploaded_file is not None:
-        with st.spinner("Processing document..."):
-            with open("temp.pdf", "wb") as f:
-                f.write(uploaded_file.getbuffer())
+        with open("temp.pdf", "wb") as f:
+            f.write(uploaded_file.getbuffer())
 
-            # Load the PDF document
-            loader = PyPDFLoader('temp.pdf')
-            loaded_doc = loader.load()
+        # Load the PDF document
+        loader = PyPDFLoader('temp.pdf')
+        loaded_doc = loader.load()
 
-            # Split the document into chunks
-            text_splitter = RecursiveCharacterTextSplitter(chunk_size=600, chunk_overlap=40)
-            all_splits = text_splitter.split_documents(loaded_doc)
+        # Split the document into chunks
+        text_splitter = RecursiveCharacterTextSplitter(chunk_size=600, chunk_overlap=40)
+        all_splits = text_splitter.split_documents(loaded_doc)
 
-            # Initialize embeddings and vector store
-            embeddings = HuggingFaceEmbeddings(model_name="BAAI/bge-small-en")
-            db = FAISS.from_documents(all_splits, embeddings)
-            return db
+        # Initialize embeddings and vector store
+        embeddings = HuggingFaceEmbeddings(model_name="BAAI/bge-small-en")
+        db = FAISS.from_documents(all_splits, embeddings)
+        return db
     return None
 
 db = get_vectorstore_from_pdf(uploaded_file)
