@@ -11,6 +11,7 @@ from langchain.chains.combine_documents import create_stuff_documents_chain
 from langchain.chains import create_retrieval_chain
 from langchain_groq import ChatGroq
 from langchain.chat_models import init_chat_model
+from langchain_google_genai import ChatGoogleGenerativeAI
 
 st.markdown("""
     <style>
@@ -83,7 +84,13 @@ if uploaded_file is not None:
 
     os.environ["GOOGLE_API_KEY"] = os.getenv("GOOGLE_API_KEY")
 
-    llm = init_chat_model("google_genai:gemini-2.5-flash-lite")
+    # llm = init_chat_model("google_genai:gemini-2.5-flash-lite")
+    llm = ChatGoogleGenerativeAI(
+            model="gemini-2.5-pro",
+            temperature=0,
+            max_tokens=None,
+            timeout=None,
+            max_retries=2)
 
     # Create the prompt template
     prompt = ChatPromptTemplate.from_template("""Answer the following question strictly only based on the provided document.
