@@ -166,7 +166,7 @@ if db is not None:
     # Initialize the language model
     os.environ["GOOGLE_API_KEY"] = os.getenv("GOOGLE_API_KEY")
     llm = ChatGoogleGenerativeAI(
-            model="gemini-2.5-pro",
+            model="gemini-3-flash-preview",
             temperature=0,
             max_tokens=None,
             timeout=None,
@@ -222,15 +222,21 @@ if db is not None:
                 for msg in st.session_state.messages
             ]
             
-            # Get the response from the retrieval chain
-            response = retrieval_chain.invoke({"input": prompt, "chat_history": chat_history})
-            answer = response['answer']
-
-        # Display assistant response in chat message container
-        with st.chat_message("assistant"):
-            st.markdown(answer)
-        # Add assistant response to chat history
-        st.session_state.messages.append({"role": "assistant", "content": answer})
+            try:
+                # Get the response from the retrieval chain
+                response = retrieval_chain.invoke({"input": prompt, "chat_history": chat_history})
+                answer = response['answer']
+                
+                # Display assistant response in chat message container
+                with st.chat_message("assistant"):
+                    st.markdown(answer)
+                # Add assistant response to chat history
+                st.session_state.messages.append({"role": "assistant", "content": answer})
+            except Exception as e:
+                error_message = f"An error occurred: {str(e)}"
+                st.error(error_message)
+                # Optionally log the error
+                # logging.error(error_message)
 
 else:
     st.write("Please upload a PDF file.")
