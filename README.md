@@ -1,10 +1,13 @@
 # DocBot: Your Conversational PDF Assistant
 
-DocBot is an intelligent, conversational PDF assistant built with Streamlit and LangChain. Upload any PDF document and ask questions in a natural, conversational manner. The chatbot remembers the context of your conversation to provide accurate, relevant answers based on the document's content.
+DocBot is an intelligent, conversational assistant built with Streamlit and LangChain. Upload your PDF documents and ask questions in a natural, conversational manner. The chatbot remembers the context of your conversation to provide accurate, relevant answers strictly based on your documents.
 
 ## Key Features
 
-- **Interactive Chat Interface**: Ask questions about your PDF documents through a user-friendly chat UI.
+- **Multi-Document Support**: Seamlessly upload and query multiple PDF documents simultaneously.
+- **Strict Context Enforcement**: Responses are grounded strictly in the provided documents, eliminating hallucinations and outside knowledge.
+- **Senior Consultant Persona**: Receive professional, authoritative, and perfectly formatted answers suitable for high-level decision making.
+- **Premium Dark Mode**: Enjoy a consistent, sleek dark-themed interface with custom animations.
 - **Conversational Memory**: The chatbot maintains a "chain of thought," allowing you to ask follow-up questions that reference the previous context.
 - **Efficient Document Processing**: Utilizes caching to process each PDF only once, ensuring fast and responsive interactions for subsequent questions.
 - **Powered by LangChain & Gemini**: Leverages the power of LangChain for retrieval-augmented generation (RAG) and Google's Gemini Pro for intelligent, context-aware responses.

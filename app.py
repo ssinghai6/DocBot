@@ -121,29 +121,44 @@ st.markdown("""
 """, unsafe_allow_html=True)
 
 # File uploader for PDF
-uploaded_file = st.file_uploader("Choose a PDF file", type="pdf")
+# File uploader for PDF
+uploaded_files = st.file_uploader("Choose PDF file(s)", type="pdf", accept_multiple_files=True)
 
-@st.cache_resource(show_spinner="Processing your document, please wait...")
-def get_vectorstore_from_pdf(uploaded_file):
-    if uploaded_file is not None:
-        with open("temp.pdf", "wb") as f:
-            f.write(uploaded_file.getbuffer())
+@st.cache_resource(show_spinner="Processing your document(s), please wait...")
+def get_vectorstore_from_pdfs(uploaded_files):
+    if uploaded_files:
+        all_splits = []
+        for uploaded_file in uploaded_files:
+            # Use original filename to prevent collisions effectively, or just a safe temp name
+            # Since we process sequentially inside the loop, we can reuse a temp name, 
+            # OR better, use the file's name to be safe if parallelization ever happens (not here though).
+            # Simple approach: write to a temp file, load, then delete.
+            temp_path = f"temp_{uploaded_file.name}"
+            with open(temp_path, "wb") as f:
+                f.write(uploaded_file.getbuffer())
 
-        # Load the PDF document
-        loader = PyPDFLoader('temp.pdf')
-        loaded_doc = loader.load()
+            try:
+                # Load the PDF document
+                loader = PyPDFLoader(temp_path)
+                loaded_doc = loader.load()
 
-        # Split the document into chunks
-        text_splitter = RecursiveCharacterTextSplitter(chunk_size=600, chunk_overlap=40)
-        all_splits = text_splitter.split_documents(loaded_doc)
+                # Split the document into chunks
+                text_splitter = RecursiveCharacterTextSplitter(chunk_size=600, chunk_overlap=40)
+                splits = text_splitter.split_documents(loaded_doc)
+                all_splits.extend(splits)
+            finally:
+                # Clean up temp file
+                if os.path.exists(temp_path):
+                    os.remove(temp_path)
 
         # Initialize embeddings and vector store
-        embeddings = HuggingFaceEmbeddings(model_name="BAAI/bge-small-en")
-        db = FAISS.from_documents(all_splits, embeddings)
-        return db
+        if all_splits:
+            embeddings = HuggingFaceEmbeddings(model_name="BAAI/bge-small-en")
+            db = FAISS.from_documents(all_splits, embeddings)
+            return db
     return None
 
-db = get_vectorstore_from_pdf(uploaded_file)
+db = get_vectorstore_from_pdfs(uploaded_files)
 
 if db is not None:
     st.sidebar.title("Options")
@@ -166,7 +181,7 @@ if db is not None:
     # Initialize the language model
     os.environ["GOOGLE_API_KEY"] = os.getenv("GOOGLE_API_KEY")
     llm = ChatGoogleGenerativeAI(
-            model="gemini-2.5-pro",
+            model="gemini-3-flash-preview",
             temperature=0,
             max_tokens=None,
             timeout=None,
@@ -188,7 +203,7 @@ if db is not None:
     # Create the prompt template for answering the question
     qa_prompt = ChatPromptTemplate.from_messages(
         [
-            ("system", "Answer the user's question based on the below context:\n\n{context}"),
+            ("system", "You are a Senior Consultant. Answer the question strictly based ONLY on the following context:\n\n{context}\n\nIf the answer is not in the context, say 'I cannot answer this based on the provided document.' Do not use outside knowledge. Maintain a professional and authoritative tone.\n\nIMPORTANT: The context may contain formatting errors like missing spaces between numbers (e.g., '100to200'). You MUST correct these in your response (e.g., write '100 to 200')."),
             MessagesPlaceholder("chat_history"),
             ("human", "{input}"),
         ]
@@ -233,7 +248,7 @@ if db is not None:
         st.session_state.messages.append({"role": "assistant", "content": answer})
 
 else:
-    st.write("Please upload a PDF file.")
+    st.write("Please upload PDF file(s).")
 
 st.markdown("<p style='text-align: center; color: #888; font-size: 12px;'>Developed by <a href='https://sanshrit-singhai.vercel.app' style='color: #00C4FF; text-decoration: none;'>Sanshrit Singhai</a></p>", unsafe_allow_html=True)
 
