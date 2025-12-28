@@ -1,5 +1,6 @@
 import streamlit as st
 import logging
+import time
 
 # Set logging level for libraries that might be too verbose
 logging.getLogger("torch").setLevel(logging.ERROR)
@@ -269,25 +270,47 @@ def get_vectorstore_from_pdfs(uploaded_files):
                             # Encode image to base64
                             encoded_image = base64.b64encode(image_bytes).decode('utf-8')
                             
-                            chat_completion = client.chat.completions.create(
-                                messages=[
-                                    {
-                                        "role": "user",
-                                        "content": [
-                                            {"type": "text", "text": "Analyze this image in detail. If it's a chart or graph, describe the data trends, axes, and key values. If it's a diagram, explain the flow. If text, transcribe it."},
+                            # Retry logic for Rate Limits (429)
+                            max_retries = 3
+                            description = ""
+                            
+                            for attempt in range(max_retries):
+                                try:
+                                    # Rate limit throttling: Sleep to respect 30 RPM (1 req / 2s). 
+                                    # Sleeping 2.5s is safe.
+                                    time.sleep(2.5)
+                                    
+                                    chat_completion = client.chat.completions.create(
+                                        messages=[
                                             {
-                                                "type": "image_url",
-                                                "image_url": {
-                                                    "url": f"data:image/jpeg;base64,{encoded_image}",
-                                                },
-                                            },
+                                                "role": "user",
+                                                "content": [
+                                                    {"type": "text", "text": "Analyze this image in detail. If it's a chart or graph, describe the data trends, axes, and key values. If it's a diagram, explain the flow. If text, transcribe it."},
+                                                    {
+                                                        "type": "image_url",
+                                                        "image_url": {
+                                                            "url": f"data:image/jpeg;base64,{encoded_image}",
+                                                        },
+                                                    },
+                                                ],
+                                            }
                                         ],
-                                    }
-                                ],
-                                model="meta-llama/llama-4-scout-17b-16e-instruct",
-                            )
-                            description = chat_completion.choices[0].message.content
-                            image_descriptions.append(f"[IMAGE DESCRIPTION (Page {page_num+1}, Image {img_index+1})]: {description}")
+                                        model="meta-llama/llama-4-scout-17b-16e-instruct",
+                                    )
+                                    description = chat_completion.choices[0].message.content
+                                    break # Success, exit retry loop
+                                except Exception as e:
+                                    if "429" in str(e) and attempt < max_retries - 1:
+                                        # Rate limit hit, wait longer
+                                        st.toast(f"Rate limit hit, retrying image {img_index+1}...", icon="⏳")
+                                        time.sleep(5)
+                                        continue
+                                    else:
+                                        raise e # Other error or max retries reached
+
+                            if description:
+                                image_descriptions.append(f"[IMAGE DESCRIPTION (Page {page_num+1}, Image {img_index+1})]: {description}")
+                                
                         except Exception as e:
                             print(f"Error processing image: {e}")
                             continue
