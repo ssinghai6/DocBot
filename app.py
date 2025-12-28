@@ -15,8 +15,11 @@ from langchain_community.vectorstores import FAISS
 from langchain_core.prompts import ChatPromptTemplate, MessagesPlaceholder
 from langchain.chains.combine_documents import create_stuff_documents_chain
 from langchain.chains import create_retrieval_chain, create_history_aware_retriever
-from langchain_groq import ChatGroq
+import fitz  # PyMuPDF
+import base64
 from langchain_core.messages import HumanMessage, AIMessage
+from groq import Groq
+from langchain_groq import ChatGroq
 
 st.markdown("""
     <style>
@@ -161,6 +164,9 @@ if not groq_api_key:
     st.error("Please add your Groq API key to the .env file")
     st.stop()
 
+# Initialize Groq client for Vision
+client = Groq(api_key=groq_api_key)
+
 # Initialize the language model (Global init for reuse)
 llm = ChatGroq(
         model="llama-3.3-70b-versatile",
@@ -191,36 +197,83 @@ if uploaded_files:
         if "persona_suggestion" in st.session_state:
             del st.session_state.persona_suggestion
 
-@st.cache_resource(show_spinner="Processing your document(s), please wait...")
+@st.cache_resource(show_spinner="Processing your document(s) (including images), please wait...")
 def get_vectorstore_from_pdfs(uploaded_files):
     if uploaded_files:
         all_splits = []
         for uploaded_file in uploaded_files:
-            # Use original filename to prevent collisions effectively, or just a safe temp name
-            # Since we process sequentially inside the loop, we can reuse a temp name, 
-            # OR better, use the file's name to be safe if parallelization ever happens (not here though).
-            # Simple approach: write to a temp file, load, then delete.
             temp_path = f"temp_{uploaded_file.name}"
             with open(temp_path, "wb") as f:
                 f.write(uploaded_file.getbuffer())
 
             try:
-                # Load the PDF document
-                loader = PyPDFLoader(temp_path)
-                loaded_doc = loader.load()
+                # Open PDF with PyMuPDF
+                doc = fitz.open(temp_path)
+                combined_content = []
 
-                # Split the document into chunks
-                text_splitter = RecursiveCharacterTextSplitter(chunk_size=600, chunk_overlap=40)
-                splits = text_splitter.split_documents(loaded_doc)
+                for page_num, page in enumerate(doc):
+                    # 1. Extract Text
+                    text = page.get_text()
+                    
+                    # 2. Extract Images
+                    images = page.get_images(full=True)
+                    image_descriptions = []
+                    
+                    for img_index, img in enumerate(images):
+                        xref = img[0]
+                        base_image = doc.extract_image(xref)
+                        image_bytes = base_image["image"]
+                        
+                        # Analyze image with Vision Model
+                        try:
+                            # Encode image to base64
+                            encoded_image = base64.b64encode(image_bytes).decode('utf-8')
+                            
+                            chat_completion = client.chat.completions.create(
+                                messages=[
+                                    {
+                                        "role": "user",
+                                        "content": [
+                                            {"type": "text", "text": "Analyze this image in detail. If it's a chart or graph, describe the data trends, axes, and key values. If it's a diagram, explain the flow. If text, transcribe it."},
+                                            {
+                                                "type": "image_url",
+                                                "image_url": {
+                                                    "url": f"data:image/jpeg;base64,{encoded_image}",
+                                                },
+                                            },
+                                        ],
+                                    }
+                                ],
+                                model="meta-llama/llama-4-scout-17b-16e-instruct",
+                            )
+                            description = chat_completion.choices[0].message.content
+                            image_descriptions.append(f"[IMAGE DESCRIPTION (Page {page_num+1}, Image {img_index+1})]: {description}")
+                        except Exception as e:
+                            print(f"Error processing image: {e}")
+                            continue
+
+                    # Combine text and image descriptions
+                    page_content = text + "\n\n" + "\n\n".join(image_descriptions)
+                    
+                    # Create a Document object directly (simulating what PyPDFLoader does but better)
+                    from langchain_core.documents import Document
+                    combined_content.append(Document(page_content=page_content, metadata={"source": temp_path, "page": page_num}))
+
+                # Split the combined document content
+                text_splitter = RecursiveCharacterTextSplitter(chunk_size=1000, chunk_overlap=100) # Increased chunk size for descriptions
+                splits = text_splitter.split_documents(combined_content)
                 all_splits.extend(splits)
+                
+                doc.close()
+
             finally:
-                # Clean up temp file
                 if os.path.exists(temp_path):
                     os.remove(temp_path)
 
         # Initialize embeddings and vector store
         if all_splits:
             embeddings = HuggingFaceEmbeddings(model_name="BAAI/bge-small-en")
+            # Using ChromaDB might be better for larger contexts, but sticking to FAISS as per original
             db = FAISS.from_documents(all_splits, embeddings)
             return db
     return None
@@ -235,7 +288,8 @@ def analyze_document_persona(db, llm):
         context_text = "\n\n".join([d.page_content for d in docs])[:3000]
 
         prompt = f"""
-        Analyze the following document excerpt and determine the SINGLE best Expert Persona to answer questions about it.
+        Prompt:
+        Analyze the following document excerpt (which may include text and descriptions of visual content like charts/graphs) and determine the SINGLE best Expert Persona to answer questions about it.
         
         Options:
         - Doctor
