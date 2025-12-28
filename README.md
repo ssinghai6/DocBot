@@ -1,55 +1,95 @@
-# DocBot: Your Conversational PDF Assistant
+# 🤖 DocBot 2.0: Advanced Smart PDF Assistant
 
-DocBot is an intelligent, conversational assistant built with Streamlit and LangChain. Upload your PDF documents and ask questions in a natural, conversational manner. The chatbot remembers the context of your conversation to provide accurate, relevant answers strictly based on your documents.
+**DocBot** is a next-generation conversational AI assistant that turns your static PDF documents into interactive, intelligent conversations. It uses advanced RAG (Retrieval-Augmented Generation) to answer questions strictly based on your data, with zero hallucinations.
 
-## Key Features
+Now supercharged with **Expert Personas**, **Deep Research capabilities**, and powered by **Meta's Llama 3.3 70B** via Groq for uncompromised speed and reasoning.
 
-- **Multi-Document Support**: Seamlessly upload and query multiple PDF documents simultaneously.
-- **Strict Context Enforcement**: Responses are grounded strictly in the provided documents, eliminating hallucinations and outside knowledge.
-- **Senior Consultant Persona**: Receive professional, authoritative, and perfectly formatted answers suitable for high-level decision making.
-- **Premium Dark Mode**: Enjoy a consistent, sleek dark-themed interface with custom animations.
-- **Conversational Memory**: The chatbot maintains a "chain of thought," allowing you to ask follow-up questions that reference the previous context.
-- **Efficient Document Processing**: Utilizes caching to process each PDF only once, ensuring fast and responsive interactions for subsequent questions.
-- **Powered by LangChain & Gemini**: Leverages the power of LangChain for retrieval-augmented generation (RAG) and Google's Gemini Pro for intelligent, context-aware responses.
+---
 
-## Getting Started
+## 🚀 Key Features
 
-Follow these steps to set up and run the project locally.
+### 🎭 Smart Expert Personas
+DocBot doesn't just answer; it adopts the mindset of an expert tailored to your needs:
+- **🩺 Doctor**: Medical analysis with empathy & clinical precision.
+- **💰 Finance Expert**: ROI, risk assessment, and market analysis.
+- **⚙️ Engineer**: Technical specifications, system design, and feasibility.
+- **⚖️ Lawyer**: Contract analysis, compliance, and regulatory insights.
+- **🤖 AI/ML Expert**: Data science, algorithms, and model architecture.
+- **📊 Consultant**: Strategic business advice and actionable insights.
+- **🎯 Generalist**: Balanced, clear, and helpful for any topic.
+
+### 🧠 Auto-Magical Suggestion
+Upload a PDF, and DocBot **automatically reads and analyzes it** to recommend the perfect expert mode for you.
+> *Upload a medical report? DocBot suggests "Doctor Mode".*
+> *Upload a balance sheet? DocBot suggests "Finance Expert Mode".*
+
+### 🔬 Deep Research Mode
+Need more than a quick answer? Toggle **Deep Research** (available in expert modes) to activate:
+- **Multi-Angle Analysis**: Examines edge cases and assumptions.
+- **Step-by-Step Reasoning**: Logical breakdowns of complex topics.
+- **Evidence-Based Answers**: Strict citations from your documents.
+
+### ⚡ Unlimited Free Intelligence
+- **Powered by Llama 3.3 70B**: One of the world's most advanced open-source models.
+- **Blazing Fast**: Hosted on Groq LPU™ Inference Engine for instant responses.
+- **Free**: No paid API keys required for standard usage.
+
+### 🎨 Modern "Deep Space" UI
+- **Glassmorphism Design**: Sleek, translucent cards and blurred backgrounds.
+- **Dynamic Gradients**: A stunning deep space theme that looks professional.
+- **Smooth Animations**: Interactive elements that feel alive.
+
+---
+
+## 🛠️ Getting Started
+
+Follow these steps to set up DocBot 2.0 locally.
 
 ### Prerequisites
-
 - Python 3.8+
-- A virtual environment tool (like `venv`)
+- [Groq API Key](https://console.groq.com/) (Free)
 
 ### Installation
 
 1.  **Clone the repository:**
     ```sh
     git clone <repository-url>
-    cd <repository-directory>
+    cd DocBot
     ```
 
-2.  **Create and activate a virtual environment:**
+2.  **Create a virtual environment:**
     ```sh
     python -m venv .venv
-    source .venv/bin/activate  # On Windows, use `.venv\Scripts\activate`
+    source .venv/bin/activate  # Windows: .venv\Scripts\activate
     ```
 
-3.  **Install the required dependencies:**
+3.  **Install dependencies:**
     ```sh
     pip install -r requirements.txt
     ```
 
-4.  **Configure your API keys:**
-    Create a `.env` file in the root of the project and add your API keys:
+4.  **Configure API Keys:**
+    Create a `.env` file in the root folder:
     ```env
-    GOOGLE_API_KEY="your_google_api_key"
-    GROQ_API_KEY="your_groq_api_key"
+    # Only Groq is needed now!
+    GROQ_API_KEY="your_groq_api_key_here"
     ```
 
-5.  **Run the Streamlit application:**
+5.  **Run the App:**
     ```sh
     streamlit run app.py
     ```
 
-The application will now be running and accessible in your web browser.
+---
+
+## 💡 How to Use
+
+1.  **Upload**: Drag & drop your PDF(s) into the sidebar.
+2.  **Wait for Suggestion**: Watch for the "💡 Suggested Mode" alert.
+3.  **Select Mode**: Confirm the suggested expert or pick your own from the dropdown.
+4.  **Deep Research**: (Optional) Toggle "Deep Research" for complex queries.
+5.  **Chat**: Ask questions and get expert-level, cited answers!
+
+---
+
+**Built with:** [Streamlit](https://streamlit.io/) • [LangChain](https://www.langchain.com/) • [Groq](https://groq.com/) • [FAISS](https://github.com/facebookresearch/faiss)
