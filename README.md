@@ -4,6 +4,8 @@
 
 Now supercharged with **Expert Personas**, **Deep Research capabilities**, and powered by **Meta's Llama 3.3 70B** via Groq for uncompromised speed and reasoning.
 
+We now also support **running completely locally** with Ollama!
+
 ---
 
 ## 🚀 Key Features
@@ -21,7 +23,7 @@ DocBot doesn't just answer; it adopts the mindset of an expert tailored to your 
 ### 👁️ Multimodal Vision Analysis
 DocBot is now fully multimodal! It **sees and understands** images, charts, and graphs within your PDFs.
 *   **Extracts Images**: Automatically pulls text and visuals from every page.
-*   **Vision AI**: Uses **Llama 4 Scout (17B)** to describe charts, graphs, and diagrams in detail.
+*   **Vision AI**: Uses **Llama 4 Scout (17B)** (Cloud) or **Llama 3.2 Vision** (Local) to describe charts, graphs, and diagrams in detail.
 *   **Integrated Context**: Image descriptions are indexed so you can ask questions like *"What is the trend in the sales graph on page 3?"*
 
 ### 🧠 Auto-Magical Suggestion
@@ -47,9 +49,9 @@ Need more than a quick answer? Toggle **Deep Research** (available in expert mod
 
 ---
 
-## 🛠️ Getting Started
+## 🛠️ Getting Started (Cloud / Groq)
 
-Follow these steps to set up DocBot 2.0 locally.
+This is the easiest way to start with no hardware requirements.
 
 ### Prerequisites
 - Python 3.8+
@@ -88,6 +90,43 @@ Follow these steps to set up DocBot 2.0 locally.
 
 ---
 
+## 🔒 Getting Started (Local / Ollama)
+
+Run everything 100% locally on your machine for maximum privacy.
+
+### Prerequisites
+- [Ollama](https://ollama.com/) installed and running.
+- A machine with decent RAM (8GB+ recommended, 16GB+ for best results).
+
+### Setup
+
+1.  **Pull Recommended Models**:
+    Run these commands in your terminal:
+    ```sh
+    # Chat & Embeddings (Lightweight)
+    ollama pull llama3.2
+
+    # Advanced Reasoning (Optional, requires more RAM)
+    ollama pull deepseek-r1
+
+    # Vision Model (Required for image analysis)
+    ollama pull llava  # Standard
+    # OR
+    ollama pull llama3.2-vision # Advanced (Requires update in sidebar)
+    ```
+
+2.  **Run the Local App**:
+    ```sh
+    streamlit run app_ollama.py
+    ```
+
+3.  **Local Configuration**:
+    - Open the **Sidebar**.
+    - Enter the names of the models you pulled (e.g., set Chat Model to `deepseek-r1` or `llama3.2`).
+    - Everything runs locally!
+
+---
+
 ## 💡 How to Use
 
 1.  **Upload**: Drag & drop your PDF(s) into the sidebar.
@@ -98,4 +137,4 @@ Follow these steps to set up DocBot 2.0 locally.
 
 ---
 
-**Built with:** [Streamlit](https://streamlit.io/) • [LangChain](https://www.langchain.com/) • [Groq](https://groq.com/) • [FAISS](https://github.com/facebookresearch/faiss)
+**Built with:** [Streamlit](https://streamlit.io/) • [LangChain](https://www.langchain.com/) • [Groq](https://groq.com/) • [Ollama](https://ollama.com/) • [FAISS](https://github.com/facebookresearch/faiss)
