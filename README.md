@@ -18,6 +18,12 @@ DocBot doesn't just answer; it adopts the mindset of an expert tailored to your 
 - **📊 Consultant**: Strategic business advice and actionable insights.
 - **🎯 Generalist**: Balanced, clear, and helpful for any topic.
 
+### 👁️ Multimodal Vision Analysis
+DocBot is now fully multimodal! It **sees and understands** images, charts, and graphs within your PDFs.
+*   **Extracts Images**: Automatically pulls text and visuals from every page.
+*   **Vision AI**: Uses **Llama 4 Scout (17B)** to describe charts, graphs, and diagrams in detail.
+*   **Integrated Context**: Image descriptions are indexed so you can ask questions like *"What is the trend in the sales graph on page 3?"*
+
 ### 🧠 Auto-Magical Suggestion
 Upload a PDF, and DocBot **automatically reads and analyzes it** to recommend the perfect expert mode for you.
 > *Upload a medical report? DocBot suggests "Doctor Mode".*
