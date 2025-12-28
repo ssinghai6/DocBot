@@ -151,6 +151,46 @@ st.markdown("""
         ::-webkit-scrollbar-thumb:hover {
             background: linear-gradient(135deg, #764ba2 0%, #667eea 100%);
         }
+
+        /* --- Mobile Responsiveness --- */
+        @media (max-width: 768px) {
+            /* General text scaling */
+            html, body, [class*="css"] {
+                font-size: 16px !important;
+            }
+
+            /* Adjust header */
+            h1 {
+                font-size: 2rem !important;
+            }
+            
+            /* Sidebar adjustments */
+            section[data-testid="stSidebar"] {
+                width: 100% !important;
+            }
+
+            /* Improve touch targets for inputs and buttons */
+            .stButton > button, 
+            .stTextInput > div > div > input,
+            .stSelectbox > div > div {
+                min-height: 50px !important;
+                font-size: 1rem !important;
+            }
+            
+            /* Chat message padding */
+            .stChatMessage {
+                padding: 1rem !important;
+                margin-bottom: 0.5rem !important;
+            }
+
+            /* File uploader touch area */
+            [data-testid="stFileUploader"] {
+                padding: 15px !important;
+            }
+            
+            /* Hide decorative background elements on slow mobile devices if needed, 
+               but keeping them for now as they are CSS-only */
+        }
     </style>
 """, unsafe_allow_html=True)
 
