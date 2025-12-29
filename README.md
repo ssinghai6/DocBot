@@ -1,4 +1,4 @@
-# 🤖 DocBot 2.0: Advanced Smart PDF Assistant
+# 🤖 DocBot: Advanced Smart PDF Assistant
 
 **DocBot** is a next-generation conversational AI assistant that turns your static PDF documents into interactive, intelligent conversations. It uses advanced RAG (Retrieval-Augmented Generation) to answer questions strictly based on your data, with zero hallucinations.
 
