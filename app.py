@@ -24,176 +24,201 @@ from langchain_groq import ChatGroq
 
 st.markdown("""
     <style>
-        /* Modern gradient background */
+        /* DOCBOT 2.0 - PREMIUM INTERACTIVE UI */
+        
+        /* Animated Gradient Background */
         .stApp {
-            background: linear-gradient(135deg, #0f0f23 0%, #1a1a2e 25%, #16213e 50%, #1a1a2e 75%, #0f0f23 100%);
+            background: linear-gradient(-45deg, #0f0f23, #1a1a2e, #16213e, #0f2027, #1a1a2e);
+            background-size: 400% 400%;
+            animation: gradientShift 15s ease infinite;
             background-attachment: fixed;
         }
         
-        /* Subtle animated gradient overlay */
+        @keyframes gradientShift {
+            0% { background-position: 0% 50%; }
+            50% { background-position: 100% 50%; }
+            100% { background-position: 0% 50%; }
+        }
+        
+        /* Floating Orbs Effect */
         .stApp::before {
             content: '';
             position: fixed;
-            top: 0;
-            left: 0;
-            width: 100%;
-            height: 100%;
+            top: 0; left: 0;
+            width: 100%; height: 100%;
             background: 
-                radial-gradient(ellipse at 20% 80%, rgba(120, 119, 198, 0.15) 0%, transparent 50%),
-                radial-gradient(ellipse at 80% 20%, rgba(255, 119, 198, 0.1) 0%, transparent 50%),
-                radial-gradient(ellipse at 40% 40%, rgba(72, 187, 255, 0.1) 0%, transparent 40%);
+                radial-gradient(ellipse at 20% 80%, rgba(120, 119, 198, 0.2) 0%, transparent 50%),
+                radial-gradient(ellipse at 80% 20%, rgba(255, 119, 198, 0.15) 0%, transparent 50%),
+                radial-gradient(ellipse at 40% 40%, rgba(72, 187, 255, 0.15) 0%, transparent 40%);
             pointer-events: none;
             z-index: 0;
+            animation: floatOrbs 20s ease-in-out infinite;
         }
         
-        /* Main content styling */
-        .stApp > header {
-            background-color: transparent !important;
+        @keyframes floatOrbs {
+            0%, 100% { transform: translateY(0); opacity: 0.8; }
+            50% { transform: translateY(-20px); opacity: 1; }
         }
         
+        .stApp > header { background-color: transparent !important; }
+        
+        /* Premium Sidebar */
         section[data-testid="stSidebar"] {
-            background: linear-gradient(180deg, #1a1a2e 0%, #16213e 100%);
+            background: linear-gradient(180deg, rgba(26, 26, 46, 0.95) 0%, rgba(22, 33, 62, 0.95) 100%);
             border-right: 1px solid rgba(255, 255, 255, 0.1);
+            backdrop-filter: blur(20px);
         }
         
-        section[data-testid="stSidebar"] .stMarkdown {
-            color: #e0e0e0;
-        }
+        section[data-testid="stSidebar"] .stMarkdown { color: #e0e0e0; }
         
-        /* Chat container styling */
+        /* Glassmorphism Chat Messages with Slide Animation */
         .stChatMessage {
-            background-color: rgba(30, 30, 46, 0.7) !important;
-            border-radius: 12px;
-            border: 1px solid rgba(255, 255, 255, 0.1);
-            backdrop-filter: blur(10px);
+            background: rgba(30, 30, 46, 0.6) !important;
+            border-radius: 16px !important;
+            border: 1px solid rgba(255, 255, 255, 0.1) !important;
+            backdrop-filter: blur(20px) !important;
+            box-shadow: 0 8px 32px rgba(0, 0, 0, 0.3) !important;
+            animation: messageSlideIn 0.4s ease-out !important;
+            transition: all 0.3s ease !important;
         }
         
-        /* User message styling */
-        [data-testid="stChatMessageContent"] {
-            color: #e0e0e0 !important;
+        .stChatMessage:hover {
+            border-color: rgba(102, 126, 234, 0.3) !important;
+            box-shadow: 0 8px 32px rgba(102, 126, 234, 0.15) !important;
+            transform: translateY(-2px) !important;
         }
         
-        /* Chat input styling */
+        @keyframes messageSlideIn {
+            from { opacity: 0; transform: translateY(20px); }
+            to { opacity: 1; transform: translateY(0); }
+        }
+        
+        [data-testid="stChatMessageContent"] { color: #e0e0e0 !important; }
+        
+        /* Premium Chat Input with Glow */
         .stChatInputContainer {
-            background-color: rgba(30, 30, 46, 0.8) !important;
+            background: rgba(30, 30, 46, 0.8) !important;
             border: 1px solid rgba(255, 255, 255, 0.15) !important;
-            border-radius: 12px !important;
-            backdrop-filter: blur(10px);
+            border-radius: 16px !important;
+            backdrop-filter: blur(20px) !important;
+            box-shadow: 0 4px 20px rgba(0, 0, 0, 0.2) !important;
+            transition: all 0.3s ease !important;
         }
         
-        .stChatInputContainer textarea {
-            color: #ffffff !important;
+        .stChatInputContainer:focus-within {
+            border-color: rgba(102, 126, 234, 0.5) !important;
+            box-shadow: 0 4px 20px rgba(102, 126, 234, 0.2) !important;
         }
         
-        /* Button styling */
+        .stChatInputContainer textarea { color: #ffffff !important; }
+        
+        /* Animated Gradient Button */
         .stButton > button {
-            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 50%, #667eea 100%);
+            background-size: 200% 200%;
             color: white;
             border: none;
-            border-radius: 8px;
+            border-radius: 12px;
+            padding: 0.6rem 1.5rem;
+            font-weight: 600;
             transition: all 0.3s ease;
+            box-shadow: 0 4px 15px rgba(102, 126, 234, 0.3);
         }
         
         .stButton > button:hover {
-            transform: translateY(-2px);
-            box-shadow: 0 4px 15px rgba(102, 126, 234, 0.4);
+            background-position: 100% 0;
+            transform: translateY(-3px);
+            box-shadow: 0 6px 25px rgba(102, 126, 234, 0.5);
         }
         
-        /* File uploader styling */
+        /* Premium File Uploader */
         [data-testid="stFileUploader"] {
-            background-color: rgba(30, 30, 46, 0.6);
-            border-radius: 12px;
-            border: 2px dashed rgba(255, 255, 255, 0.2);
-            padding: 20px;
+            background: rgba(30, 30, 46, 0.5);
+            border-radius: 16px;
+            border: 2px dashed rgba(102, 126, 234, 0.3);
+            padding: 25px;
+            transition: all 0.3s ease;
         }
         
         [data-testid="stFileUploader"]:hover {
-            border-color: rgba(102, 126, 234, 0.5);
+            border-color: rgba(102, 126, 234, 0.6);
+            background: rgba(30, 30, 46, 0.7);
+            box-shadow: 0 0 30px rgba(102, 126, 234, 0.1);
         }
         
-        /* Selectbox styling */
+        /* Selectbox & Toggle */
         .stSelectbox > div > div {
             background-color: rgba(30, 30, 46, 0.8) !important;
             border: 1px solid rgba(255, 255, 255, 0.15) !important;
-            border-radius: 8px;
+            border-radius: 12px !important;
+            transition: all 0.3s ease !important;
         }
         
-        /* Toggle styling */
-        .stToggle span {
-            color: #e0e0e0 !important;
+        .stSelectbox > div > div:hover { border-color: rgba(102, 126, 234, 0.4) !important; }
+        .stToggle span { color: #e0e0e0 !important; }
+        
+        /* Expander Styling */
+        .streamlit-expanderHeader {
+            background: rgba(30, 30, 46, 0.5) !important;
+            border-radius: 12px !important;
+            border: 1px solid rgba(255, 255, 255, 0.1) !important;
+            transition: all 0.3s ease !important;
         }
         
-        /* Success/error message styling */
-        .stSuccess {
-            background-color: rgba(40, 167, 69, 0.2) !important;
-            border: 1px solid rgba(40, 167, 69, 0.4) !important;
+        .streamlit-expanderHeader:hover {
+            background: rgba(30, 30, 46, 0.7) !important;
+            border-color: rgba(102, 126, 234, 0.3) !important;
         }
         
-        /* Spinner styling */
-        .stSpinner > div {
-            border-top-color: #667eea !important;
+        /* Success/Info Messages */
+        .stSuccess, .stInfo {
+            background: rgba(40, 167, 69, 0.15) !important;
+            border: 1px solid rgba(40, 167, 69, 0.3) !important;
+            border-radius: 12px !important;
+            backdrop-filter: blur(10px) !important;
         }
         
-        /* Scrollbar styling */
-        ::-webkit-scrollbar {
-            width: 8px;
-            height: 8px;
+        .stInfo {
+            background: rgba(102, 126, 234, 0.15) !important;
+            border-color: rgba(102, 126, 234, 0.3) !important;
         }
         
-        ::-webkit-scrollbar-track {
-            background: rgba(30, 30, 46, 0.5);
+        .stSpinner > div { border-top-color: #667eea !important; }
+        
+        /* Premium Scrollbar */
+        ::-webkit-scrollbar { width: 8px; height: 8px; }
+        ::-webkit-scrollbar-track { background: rgba(30, 30, 46, 0.5); border-radius: 4px; }
+        ::-webkit-scrollbar-thumb { background: linear-gradient(135deg, #667eea 0%, #764ba2 100%); border-radius: 4px; }
+        ::-webkit-scrollbar-thumb:hover { background: linear-gradient(135deg, #764ba2 0%, #667eea 100%); }
+        
+        /* Pulse Animation */
+        @keyframes pulse {
+            0%, 100% { opacity: 1; }
+            50% { opacity: 0.5; }
         }
         
-        ::-webkit-scrollbar-thumb {
-            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
-            border-radius: 4px;
+        .status-dot {
+            display: inline-block;
+            width: 8px; height: 8px;
+            background: #28a745;
+            border-radius: 50%;
+            animation: pulse 2s infinite;
+            margin-right: 8px;
         }
         
-        ::-webkit-scrollbar-thumb:hover {
-            background: linear-gradient(135deg, #764ba2 0%, #667eea 100%);
-        }
-
-        /* --- Mobile Responsiveness --- */
+        /* Mobile Responsive */
         @media (max-width: 768px) {
-            /* General text scaling */
-            html, body, [class*="css"] {
-                font-size: 16px !important;
-            }
-
-            /* Adjust header */
-            h1 {
-                font-size: 2rem !important;
-            }
-            
-            /* Sidebar adjustments */
-            section[data-testid="stSidebar"] {
-                width: 100% !important;
-            }
-
-            /* Improve touch targets for inputs and buttons */
-            .stButton > button, 
-            .stTextInput > div > div > input,
-            .stSelectbox > div > div {
-                min-height: 50px !important;
-                font-size: 1rem !important;
-            }
-            
-            /* Chat message padding */
-            .stChatMessage {
-                padding: 1rem !important;
-                margin-bottom: 0.5rem !important;
-            }
-
-            /* File uploader touch area */
-            [data-testid="stFileUploader"] {
-                padding: 15px !important;
-            }
-            
-            /* Hide decorative background elements on slow mobile devices if needed, 
-               but keeping them for now as they are CSS-only */
+            html, body, [class*="css"] { font-size: 16px !important; }
+            h1 { font-size: 1.8rem !important; }
+            section[data-testid="stSidebar"] { width: 100% !important; }
+            .stButton > button, .stTextInput > div > div > input, .stSelectbox > div > div { min-height: 50px !important; font-size: 1rem !important; }
+            .stChatMessage { padding: 1rem !important; margin-bottom: 0.5rem !important; border-radius: 12px !important; }
+            [data-testid="stFileUploader"] { padding: 15px !important; border-radius: 12px !important; }
         }
     </style>
 """, unsafe_allow_html=True)
+
+
 
 
 # Load environment variables
@@ -216,30 +241,103 @@ llm = ChatGroq(
         max_tokens=None,
         max_retries=2)
 
-# Streamlit app title
-
-
+# Streamlit app title - Enhanced Interactive Header
 st.markdown("""
-    <div style="text-align: center; padding: 20px; background-color: #2F2F2F; border-radius: 10px;">
-        <h1 style="color: #FFFFFF; margin-bottom: 0;">DocBot</h1>
-        <p style="color: #BDBDBD; margin-top: 0;">Your friendly PDF assistant</p>
+    <div style="
+        text-align: center; 
+        padding: 30px 20px; 
+        background: linear-gradient(135deg, rgba(30, 30, 46, 0.9), rgba(22, 33, 62, 0.9));
+        border-radius: 20px;
+        border: 1px solid rgba(102, 126, 234, 0.3);
+        box-shadow: 0 10px 40px rgba(0, 0, 0, 0.3);
+        margin-bottom: 1.5rem;
+        position: relative;
+        overflow: hidden;
+    ">
+        <div style="
+            position: absolute;
+            top: 0; left: 0; right: 0; bottom: 0;
+            background: linear-gradient(45deg, transparent, rgba(102, 126, 234, 0.1), transparent);
+            animation: shimmer 3s ease-in-out infinite;
+        "></div>
+        <h1 style="
+            color: #FFFFFF; 
+            margin-bottom: 8px;
+            font-size: 2.5rem;
+            font-weight: 700;
+            background: linear-gradient(135deg, #667eea, #764ba2, #667eea);
+            background-size: 200% auto;
+            -webkit-background-clip: text;
+            -webkit-text-fill-color: transparent;
+            animation: gradientText 3s ease infinite;
+        ">🤖 DocBot 2.0</h1>
+        <p style="color: #a0a0a0; margin-top: 0; font-size: 1.1rem;">
+            Your AI-Powered PDF Assistant • Powered by <span style="color: #667eea;">Llama 3.3</span>
+        </p>
+        <div style="display: flex; justify-content: center; gap: 20px; margin-top: 15px; flex-wrap: wrap;">
+            <span style="
+                background: rgba(102, 126, 234, 0.15);
+                padding: 6px 14px;
+                border-radius: 20px;
+                font-size: 0.85rem;
+                color: #a0aec0;
+                border: 1px solid rgba(102, 126, 234, 0.3);
+            ">📊 Charts Analysis</span>
+            <span style="
+                background: rgba(118, 75, 162, 0.15);
+                padding: 6px 14px;
+                border-radius: 20px;
+                font-size: 0.85rem;
+                color: #a0aec0;
+                border: 1px solid rgba(118, 75, 162, 0.3);
+            ">✅ Form Detection</span>
+            <span style="
+                background: rgba(72, 187, 120, 0.15);
+                padding: 6px 14px;
+                border-radius: 20px;
+                font-size: 0.85rem;
+                color: #a0aec0;
+                border: 1px solid rgba(72, 187, 120, 0.3);
+            ">🎭 Expert Modes</span>
+        </div>
     </div>
+    <style>
+        @keyframes shimmer {
+            0% { transform: translateX(-100%); }
+            100% { transform: translateX(100%); }
+        }
+        @keyframes gradientText {
+            0%, 100% { background-position: 0% center; }
+            50% { background-position: 200% center; }
+        }
+    </style>
 """, unsafe_allow_html=True)
 
-# File uploader for PDF
+# Deep Visual Analysis Toggle - placed before file upload so cache key includes it
+st.markdown("### 📄 Document Upload")
+deep_visual_mode = st.toggle(
+    "🔍 Deep Visual Analysis",
+    value=False,
+    help="Enable to detect tick marks, checkboxes, and form selections. Slower but more accurate for forms/surveys."
+)
+if deep_visual_mode:
+    st.caption("*Full page analysis enabled - will detect tick marks, checkboxes, and form selections*")
+
 # File uploader for PDF
 uploaded_files = st.file_uploader("Choose PDF file(s)", type="pdf", accept_multiple_files=True)
 
-# Reset suggestion if files change
+# Reset suggestion if files change or deep visual mode changes
 if uploaded_files:
     current_file_names = {f.name for f in uploaded_files}
-    if "last_uploaded_files" not in st.session_state or st.session_state.last_uploaded_files != current_file_names:
+    cache_key = (current_file_names, deep_visual_mode)
+    if "last_upload_cache_key" not in st.session_state or st.session_state.last_upload_cache_key != cache_key:
+        st.session_state.last_upload_cache_key = cache_key
         st.session_state.last_uploaded_files = current_file_names
         if "persona_suggestion" in st.session_state:
             del st.session_state.persona_suggestion
 
-@st.cache_resource(show_spinner="Processing your document(s) (including images), please wait...")
-def get_vectorstore_from_pdfs(uploaded_files):
+@st.cache_resource(show_spinner="Processing your document(s), please wait...")
+def get_vectorstore_from_pdfs(uploaded_files, deep_visual_mode=False):
     if uploaded_files:
         all_splits = []
         for uploaded_file in uploaded_files:
@@ -256,9 +354,59 @@ def get_vectorstore_from_pdfs(uploaded_files):
                     # 1. Extract Text
                     text = page.get_text()
                     
-                    # 2. Extract Images
-                    images = page.get_images(full=True)
                     image_descriptions = []
+                    
+                    # 2. FULL PAGE ANALYSIS - Only when deep_visual_mode is enabled
+                    # Captures tick marks, checkboxes, stamps, handwritten notes, etc.
+                    if deep_visual_mode:
+                        try:
+                            # Render page at 150 DPI for good quality without huge file size
+                            pix = page.get_pixmap(matrix=fitz.Matrix(150/72, 150/72))
+                            page_image_bytes = pix.tobytes("png")
+                            encoded_page = base64.b64encode(page_image_bytes).decode('utf-8')
+                            
+                            max_retries = 3
+                            page_description = ""
+                            
+                            for attempt in range(max_retries):
+                                try:
+                                    time.sleep(2.5)  # Rate limit throttling
+                                    
+                                    chat_completion = client.chat.completions.create(
+                                        messages=[
+                                            {
+                                                "role": "user",
+                                                "content": [
+                                                    {"type": "text", "text": "Analyze this entire document page. Focus on: 1) Any forms, surveys, or questionnaires - identify ALL checkboxes, radio buttons, tick marks (✓, ✔, X), filled circles, or any selection indicators. CLEARLY STATE which options are SELECTED and which are EMPTY. 2) Any charts, graphs, or diagrams - describe data trends and key values. 3) Any tables - describe the structure and key data. 4) Any handwritten notes, stamps, or signatures. Be thorough and explicit about selection states."},
+                                                    {
+                                                        "type": "image_url",
+                                                        "image_url": {
+                                                            "url": f"data:image/png;base64,{encoded_page}",
+                                                        },
+                                                    },
+                                                ],
+                                            }
+                                        ],
+                                        model="meta-llama/llama-4-scout-17b-16e-instruct",
+                                    )
+                                    page_description = chat_completion.choices[0].message.content
+                                    break
+                                except Exception as e:
+                                    if "429" in str(e) and attempt < max_retries - 1:
+                                        st.toast(f"Rate limit hit on page {page_num+1}, retrying...", icon="⏳")
+                                        time.sleep(5)
+                                        continue
+                                    else:
+                                        raise e
+                            
+                            if page_description:
+                                image_descriptions.append(f"[FULL PAGE VISUAL ANALYSIS (Page {page_num+1})]: {page_description}")
+                                
+                        except Exception as e:
+                            print(f"Error in full page analysis for page {page_num+1}: {e}")
+                    
+                    # 3. Extract Embedded Images (charts, figures embedded separately)
+                    images = page.get_images(full=True)
                     
                     for img_index, img in enumerate(images):
                         xref = img[0]
@@ -285,7 +433,7 @@ def get_vectorstore_from_pdfs(uploaded_files):
                                             {
                                                 "role": "user",
                                                 "content": [
-                                                    {"type": "text", "text": "Analyze this image in detail. If it's a chart or graph, describe the data trends, axes, and key values. If it's a diagram, explain the flow. If text, transcribe it."},
+                                                    {"type": "text", "text": "Analyze this image in detail. If it's a chart or graph, describe the data trends, axes, and key values. If it's a diagram, explain the flow. If text, transcribe it. IMPORTANT: If this is a form, survey, or questionnaire, carefully identify ALL checkboxes, radio buttons, tick marks, and selection indicators. Clearly state which options are SELECTED (marked with ✓, ✔, X, filled circles, highlights, or any other selection indicator) and which are EMPTY/UNSELECTED. List all options and their selection status explicitly."},
                                                     {
                                                         "type": "image_url",
                                                         "image_url": {
@@ -380,7 +528,7 @@ def analyze_document_persona(db, llm):
         print(f"Error analyzing persona: {e}")
         return "Generalist"
 
-db = get_vectorstore_from_pdfs(uploaded_files)
+db = get_vectorstore_from_pdfs(uploaded_files, deep_visual_mode)
 
 # Define expert personas with their system prompts
 EXPERT_PERSONAS = {
@@ -536,7 +684,33 @@ Take your time to think deeply. Quality and thoroughness are more important than
         base_system_prompt = base_system_prompt + deep_research_addon
     
     # Add formatting correction instruction to all prompts
-    system_prompt_with_formatting = base_system_prompt + "\n\nIMPORTANT: The context may contain formatting errors like missing spaces between numbers (e.g., '100to200'). You MUST correct these in your response (e.g., write '100 to 200')."
+    system_prompt_with_formatting = base_system_prompt + """
+
+ABSOLUTELY CRITICAL - RESPONSE FORMATTING:
+You MUST follow these rules STRICTLY:
+
+1. FORBIDDEN - NEVER OUTPUT THESE PATTERNS:
+   - NO: $4,090.30+$2,405.33 = $6,495.63
+   - NO: 4,090.30+2,405.33+4,858.28=...
+   - NO: Any inline math expressions with + signs between numbers
+   - NO: LaTeX notation of any kind
+
+2. REQUIRED FORMAT FOR CALCULATIONS:
+   Use tables or bullet lists:
+   | Item | Amount |
+   |------|--------|
+   | Earnings | $4,090.30 |
+   | Holiday | $2,405.33 |
+   | **Total** | **$6,495.63** |
+
+3. FIX ALL TEXT EXTRACTION ERRORS:
+   - Fix spaces inside numbers: "30, 000" → "30,000", "25, 000" → "25,000"
+   - Fix merged words: "witha" → "with a", "withthe" → "with the"
+   - Fix missing spaces: "250deductible" → "$250 deductible"
+   - Proper currency format: Always use $X,XXX.XX format
+   
+4. NEVER chain numbers with + signs in a single line.
+5. Always present data in clean, readable format."""
     
     # Create the prompt template for answering the question
     qa_prompt = ChatPromptTemplate.from_messages(
