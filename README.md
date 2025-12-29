@@ -25,6 +25,7 @@ DocBot is now fully multimodal! It **sees and understands** images, charts, and 
 *   **Extracts Images**: Automatically pulls text and visuals from every page.
 *   **Vision AI**: Uses **Llama 4 Scout (17B)** (Cloud) or **Llama 3.2 Vision** (Local) to describe charts, graphs, and diagrams in detail.
 *   **Integrated Context**: Image descriptions are indexed so you can ask questions like *"What is the trend in the sales graph on page 3?"*
+*   **Form & Checkbox Detection**: Intelligently identifies checkboxes, radio buttons, tick marks (✓, ✔, X), and selection indicators in forms, surveys, and questionnaires—accurately reporting which options are selected vs. empty.
 
 ### 🧠 Auto-Magical Suggestion
 Upload a PDF, and DocBot **automatically reads and analyzes it** to recommend the perfect expert mode for you.
