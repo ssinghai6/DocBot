@@ -24,7 +24,7 @@ from langchain_groq import ChatGroq
 
 st.markdown("""
     <style>
-        /* DOCBOT 2.0 - PREMIUM INTERACTIVE UI */
+        /* DOCBOT - PREMIUM INTERACTIVE UI */
         
         /* Animated Gradient Background */
         .stApp {
@@ -40,24 +40,46 @@ st.markdown("""
             100% { background-position: 0% 50%; }
         }
         
-        /* Floating Orbs Effect */
+        /* Floating Particles Effect */
         .stApp::before {
             content: '';
             position: fixed;
             top: 0; left: 0;
             width: 100%; height: 100%;
             background: 
-                radial-gradient(ellipse at 20% 80%, rgba(120, 119, 198, 0.2) 0%, transparent 50%),
-                radial-gradient(ellipse at 80% 20%, rgba(255, 119, 198, 0.15) 0%, transparent 50%),
-                radial-gradient(ellipse at 40% 40%, rgba(72, 187, 255, 0.15) 0%, transparent 40%);
+                radial-gradient(circle at 20% 80%, rgba(120, 119, 198, 0.3) 0%, transparent 30%),
+                radial-gradient(circle at 80% 20%, rgba(255, 119, 198, 0.25) 0%, transparent 30%),
+                radial-gradient(circle at 40% 40%, rgba(72, 187, 255, 0.2) 0%, transparent 25%),
+                radial-gradient(circle at 60% 70%, rgba(168, 85, 247, 0.15) 0%, transparent 35%),
+                radial-gradient(circle at 90% 60%, rgba(59, 130, 246, 0.2) 0%, transparent 25%);
             pointer-events: none;
             z-index: 0;
-            animation: floatOrbs 20s ease-in-out infinite;
+            animation: floatParticles 25s ease-in-out infinite;
         }
         
-        @keyframes floatOrbs {
-            0%, 100% { transform: translateY(0); opacity: 0.8; }
-            50% { transform: translateY(-20px); opacity: 1; }
+        .stApp::after {
+            content: '';
+            position: fixed;
+            top: 0; left: 0;
+            width: 100%; height: 100%;
+            background: 
+                radial-gradient(circle at 70% 30%, rgba(236, 72, 153, 0.12) 0%, transparent 40%),
+                radial-gradient(circle at 30% 60%, rgba(34, 211, 238, 0.1) 0%, transparent 35%);
+            pointer-events: none;
+            z-index: 0;
+            animation: floatParticles2 30s ease-in-out infinite reverse;
+        }
+        
+        @keyframes floatParticles {
+            0%, 100% { transform: translateY(0) translateX(0) scale(1); opacity: 0.8; }
+            25% { transform: translateY(-30px) translateX(20px) scale(1.05); opacity: 1; }
+            50% { transform: translateY(-15px) translateX(-15px) scale(0.95); opacity: 0.9; }
+            75% { transform: translateY(-40px) translateX(10px) scale(1.02); opacity: 1; }
+        }
+        
+        @keyframes floatParticles2 {
+            0%, 100% { transform: translateY(0) translateX(0); opacity: 0.6; }
+            50% { transform: translateY(25px) translateX(-20px); opacity: 0.8; }
         }
         
         .stApp > header { background-color: transparent !important; }
@@ -270,7 +292,7 @@ st.markdown("""
             -webkit-background-clip: text;
             -webkit-text-fill-color: transparent;
             animation: gradientText 3s ease infinite;
-        ">🤖 DocBot 2.0</h1>
+        ">🤖 DocBot</h1>
         <p style="color: #a0a0a0; margin-top: 0; font-size: 1.1rem;">
             Your AI-Powered PDF Assistant • Powered by <span style="color: #667eea;">Llama 3.3</span>
         </p>
