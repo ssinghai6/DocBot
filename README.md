@@ -43,6 +43,11 @@ Need more than a quick answer? Toggle **Deep Research** (available in expert mod
 - **Blazing Fast**: Hosted on Groq LPU™ Inference Engine for instant responses.
 - **Free**: No paid API keys required for standard usage.
 
+### 🛡️ Enterprise-Grade Reliability
+- **Strict Anti-Hallucination**: DocBot is engineered to typically refuse answering if the data isn't in your document, rather than making things up.
+- **Prompt Protection**: Advanced guardrails prevent system prompt leakage, ensuring the assistant stays in character and secure.
+- **Context-Aware Formatting**: Automatically cleans up OCR errors and formats financial data into readable tables.
+
 ### 🎨 Modern "Deep Space" UI
 - **Glassmorphism Design**: Sleek, translucent cards and blurred backgrounds.
 - **Dynamic Gradients**: A stunning deep space theme that looks professional.
