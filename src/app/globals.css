@@ -1,0 +1,136 @@
+@import "tailwindcss";
+
+@theme {
+  --font-sans: var(--font-geist-sans);
+  --font-mono: var(--font-geist-mono);
+}
+
+:root {
+  --background: #ffffff;
+  --foreground: #171717;
+}
+
+@media (prefers-color-scheme: dark) {
+  :root {
+    --background: #0a0a0a;
+    --foreground: #ededed;
+  }
+}
+
+body {
+    margin: 0;
+    font-family: var(--font-sans), sans-serif;
+    background: linear-gradient(-45deg, #0f0f23, #1a1a2e, #16213e, #0f2027, #1a1a2e);
+    background-size: 400% 400%;
+    animation: gradientShift 15s ease infinite;
+    background-attachment: fixed;
+    color: #e0e0e0;
+    min-height: 100vh;
+}
+
+@keyframes gradientShift {
+    0% { background-position: 0% 50%; }
+    50% { background-position: 100% 50%; }
+    100% { background-position: 0% 50%; }
+}
+
+/* Floating Particles Effect */
+body::before {
+    content: '';
+    position: fixed;
+    top: 0; left: 0;
+    width: 100%; height: 100%;
+    background: 
+        radial-gradient(circle at 20% 80%, rgba(120, 119, 198, 0.3) 0%, transparent 30%),
+        radial-gradient(circle at 80% 20%, rgba(255, 119, 198, 0.25) 0%, transparent 30%),
+        radial-gradient(circle at 40% 40%, rgba(72, 187, 255, 0.2) 0%, transparent 25%),
+        radial-gradient(circle at 60% 70%, rgba(168, 85, 247, 0.15) 0%, transparent 35%),
+        radial-gradient(circle at 90% 60%, rgba(59, 130, 246, 0.2) 0%, transparent 25%);
+    pointer-events: none;
+    z-index: 0;
+    animation: floatParticles 25s ease-in-out infinite;
+}
+
+body::after {
+    content: '';
+    position: fixed;
+    top: 0; left: 0;
+    width: 100%; height: 100%;
+    background: 
+        radial-gradient(circle at 70% 30%, rgba(236, 72, 153, 0.12) 0%, transparent 40%),
+        radial-gradient(circle at 30% 60%, rgba(34, 211, 238, 0.1) 0%, transparent 35%);
+    pointer-events: none;
+    z-index: 0;
+    animation: floatParticles2 30s ease-in-out infinite reverse;
+}
+
+@keyframes floatParticles {
+    0%, 100% { transform: translateY(0) translateX(0) scale(1); opacity: 0.8; }
+    25% { transform: translateY(-30px) translateX(20px) scale(1.05); opacity: 1; }
+    50% { transform: translateY(-15px) translateX(-15px) scale(0.95); opacity: 0.9; }
+    75% { transform: translateY(-40px) translateX(10px) scale(1.02); opacity: 1; }
+}
+
+@keyframes floatParticles2 {
+    0%, 100% { transform: translateY(0) translateX(0); opacity: 0.6; }
+    50% { transform: translateY(25px) translateX(-20px); opacity: 0.8; }
+}
+
+/* Premium Scrollbar */
+::-webkit-scrollbar { width: 8px; height: 8px; }
+::-webkit-scrollbar-track { background: rgba(30, 30, 46, 0.5); border-radius: 4px; }
+::-webkit-scrollbar-thumb { background: linear-gradient(135deg, #667eea 0%, #764ba2 100%); border-radius: 4px; }
+::-webkit-scrollbar-thumb:hover { background: linear-gradient(135deg, #764ba2 0%, #667eea 100%); }
+
+@keyframes shimmer {
+    0% { transform: translateX(-100%); }
+    100% { transform: translateX(100%); }
+}
+
+@keyframes gradientText {
+    0%, 100% { background-position: 0% center; }
+    50% { background-position: 200% center; }
+}
+
+.animate-shimmer {
+    animation: shimmer 3s ease-in-out infinite;
+}
+
+.animate-gradient-text {
+    background-size: 200% auto;
+    animation: gradientText 3s ease infinite;
+}
+
+@keyframes messageSlideIn {
+    from { opacity: 0; transform: translateY(20px); }
+    to { opacity: 1; transform: translateY(0); }
+}
+
+.animate-message-slide-in {
+    animation: messageSlideIn 0.4s ease-out;
+}
+
+/* Prose tweaks for React Markdown */
+.prose {
+    color: #e0e0e0;
+}
+.prose h1, .prose h2, .prose h3, .prose h4 {
+    color: #ffffff;
+}
+.prose a {
+    color: #667eea;
+}
+.prose code {
+    color: #a855f7;
+    background: rgba(30, 30, 46, 0.8);
+    padding: 0.2rem 0.4rem;
+    border-radius: 0.25rem;
+}
+.prose pre code {
+    background: transparent;
+    color: inherit;
+    padding: 0;
+}
+.prose strong {
+    color: #ffffff;
+}
