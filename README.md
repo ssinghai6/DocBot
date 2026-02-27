@@ -1,146 +1,75 @@
-# 🤖 DocBot: Advanced Smart PDF Assistant
+# 🤖 DocBot
 
-**DocBot** is a next-generation conversational AI assistant that turns your static PDF documents into interactive, intelligent conversations. It uses advanced RAG (Retrieval-Augmented Generation) to answer questions strictly based on your data, with zero hallucinations.
+DocBot is an AI-powered PDF assistant built with a modern, high-performance web architecture. It combines a premium Next.js frontend with a powerful Python FastAPI backend, specifically designed for seamless deployment on Vercel.
 
-Now supercharged with **Expert Personas**, **Deep Research capabilities**, and powered by **Meta's Llama 3.3 70B** via Groq for uncompromised speed and reasoning.
+## Features
 
-We now also support **running completely locally** with Ollama!
+- **Advanced Document Processing**: Extract text, perform deep visual analysis (detecting checkboxes, forms, signatures), and understand embedded charts using Groq's Llama Vision models.
+- **Expert Personas**: Switch between different specialized AI personas (Generalist, Doctor, Finance Expert, Engineer, Lawyer, Consultant) to get tailored responses.
+- **Deep Research Mode**: Enable rigorous, multi-angle analysis with step-by-step reasoning for complex inquiries.
+- **Premium UI**: An interactive, glassmorphism-inspired design with animated backgrounds and sleek chat interfaces.
 
----
+## Architecture
 
-## 🚀 Key Features
+- **Frontend**: React / Next.js (App Router), styled with TailwindCSS and Lucide React icons.
+- **Backend**: Python FastAPI serving as Vercel Serverless Functions (`/api/*`).
+- **AI & RAG**: LangChain, PyMuPDF (Fitz) for PDF extraction, FAISS for local vector storage, and Groq's high-speed inference (Llama 3.3 and Llama 3.2 Vision).
 
-### 🎭 Smart Expert Personas
-DocBot doesn't just answer; it adopts the mindset of an expert tailored to your needs:
-- **🩺 Doctor**: Medical analysis with empathy & clinical precision.
-- **💰 Finance Expert**: ROI, risk assessment, and market analysis.
-- **⚙️ Engineer**: Technical specifications, system design, and feasibility.
-- **⚖️ Lawyer**: Contract analysis, compliance, and regulatory insights.
-- **🤖 AI/ML Expert**: Data science, algorithms, and model architecture.
-- **📊 Consultant**: Strategic business advice and actionable insights.
-- **🎯 Generalist**: Balanced, clear, and helpful for any topic.
-
-### 👁️ Multimodal Vision Analysis
-DocBot is now fully multimodal! It **sees and understands** images, charts, and graphs within your PDFs.
-*   **Extracts Images**: Automatically pulls text and visuals from every page.
-*   **Vision AI**: Uses **Llama 4 Scout (17B)** (Cloud) or **Llama 3.2 Vision** (Local) to describe charts, graphs, and diagrams in detail.
-*   **Integrated Context**: Image descriptions are indexed so you can ask questions like *"What is the trend in the sales graph on page 3?"*
-*   **Form & Checkbox Detection**: Intelligently identifies checkboxes, radio buttons, tick marks (✓, ✔, X), and selection indicators in forms, surveys, and questionnaires—accurately reporting which options are selected vs. empty.
-
-### 🧠 Auto-Magical Suggestion
-Upload a PDF, and DocBot **automatically reads and analyzes it** to recommend the perfect expert mode for you.
-> *Upload a medical report? DocBot suggests "Doctor Mode".*
-> *Upload a balance sheet? DocBot suggests "Finance Expert Mode".*
-
-### 🔬 Deep Research Mode
-Need more than a quick answer? Toggle **Deep Research** (available in expert modes) to activate:
-- **Multi-Angle Analysis**: Examines edge cases and assumptions.
-- **Step-by-Step Reasoning**: Logical breakdowns of complex topics.
-- **Evidence-Based Answers**: Strict citations from your documents.
-
-### ⚡ Unlimited Free Intelligence
-- **Powered by Llama 3.3 70B**: One of the world's most advanced open-source models.
-- **Blazing Fast**: Hosted on Groq LPU™ Inference Engine for instant responses.
-- **Free**: No paid API keys required for standard usage.
-
-### 🛡️ Enterprise-Grade Reliability
-- **Strict Anti-Hallucination**: DocBot is engineered to typically refuse answering if the data isn't in your document, rather than making things up.
-- **Prompt Protection**: Advanced guardrails prevent system prompt leakage, ensuring the assistant stays in character and secure.
-- **Context-Aware Formatting**: Automatically cleans up OCR errors and formats financial data into readable tables.
-
-### 🎨 Modern "Deep Space" UI
-- **Glassmorphism Design**: Sleek, translucent cards and blurred backgrounds.
-- **Dynamic Gradients**: A stunning deep space theme that looks professional.
-- **Smooth Animations**: Interactive elements that feel alive.
-
----
-
-## 🛠️ Getting Started (Cloud / Groq)
-
-This is the easiest way to start with no hardware requirements.
+## Getting Started Locally
 
 ### Prerequisites
-- Python 3.8+
-- [Groq API Key](https://console.groq.com/) (Free)
 
-### Installation
+- Node.js (v18+)
+- Python 3.12+ (Python 3.14 recommended, though `python3` must be used explicitly on macOS to avoid Xcode license prompts)
+- A Groq API Key
 
-1.  **Clone the repository:**
-    ```sh
-    git clone <repository-url>
-    cd DocBot
-    ```
+### 1. Environment Setup
 
-2.  **Create a virtual environment:**
-    ```sh
-    python -m venv .venv
-    source .venv/bin/activate  # Windows: .venv\Scripts\activate
-    ```
+Create a `.env` file in the root directory and add your Groq API key:
 
-3.  **Install dependencies:**
-    ```sh
-    pip install -r requirements.txt
-    ```
+```env
+groq_api_key=your_api_key_here
+```
 
-4.  **Configure API Keys:**
-    Create a `.env` file in the root folder:
-    ```env
-    # Only Groq is needed now!
-    GROQ_API_KEY="your_groq_api_key_here"
-    ```
+### 2. Install Dependencies
 
-5.  **Run the App:**
-    ```sh
-    streamlit run app.py
-    ```
+**Frontend Dependencies:**
+```bash
+npm install
+```
 
----
+**Backend Dependencies:**
+Create a virtual environment and install the required Python packages:
+```bash
+python3 -m venv .venv
+source .venv/bin/activate
+pip install -r requirements.txt
+```
 
-## 🔒 Getting Started (Local / Ollama)
+### 3. Run the Development Servers
 
-Run everything 100% locally on your machine for maximum privacy.
+You will need to run both the Next.js frontend and the FastAPI backend concurrently.
 
-### Prerequisites
-- [Ollama](https://ollama.com/) installed and running.
-- A machine with decent RAM (8GB+ recommended, 16GB+ for best results).
+**Terminal 1: Start the FastAPI Backend**
+```bash
+source .venv/bin/activate
+# Note: On macOS, use `python3` instead of `python` to prevent Xcode popups
+python3 -m uvicorn api.index:app --host 0.0.0.0 --port 8000 --reload
+```
 
-### Setup
+**Terminal 2: Start the Next.js Frontend**
+```bash
+npm run dev -- --port 3000
+```
 
-1.  **Pull Recommended Models**:
-    Run these commands in your terminal:
-    ```sh
-    # Chat & Embeddings (Lightweight)
-    ollama pull llama3.2
+Open [http://localhost:3000](http://localhost:3000) in your browser. The Next.js app will automatically proxy `/api/*` requests to the FastAPI backend running on port 8000.
 
-    # Advanced Reasoning (Optional, requires more RAM)
-    ollama pull deepseek-r1
+## Deployment to Vercel
 
-    # Vision Model (Required for image analysis)
-    ollama pull llava  # Standard
-    # OR
-    ollama pull llama3.2-vision # Advanced (Requires update in sidebar)
-    ```
+This repository is pre-configured for deployment on Vercel. 
 
-2.  **Run the Local App**:
-    ```sh
-    streamlit run app_ollama.py
-    ```
-
-3.  **Local Configuration**:
-    - Open the **Sidebar**.
-    - Enter the names of the models you pulled (e.g., set Chat Model to `deepseek-r1` or `llama3.2`).
-    - Everything runs locally!
-
----
-
-## 💡 How to Use
-
-1.  **Upload**: Drag & drop your PDF(s) into the sidebar.
-2.  **Wait for Suggestion**: Watch for the "💡 Suggested Mode" alert.
-3.  **Select Mode**: Confirm the suggested expert or pick your own from the dropdown.
-4.  **Deep Research**: (Optional) Toggle "Deep Research" for complex queries.
-5.  **Chat**: Ask questions and get expert-level, cited answers!
-
----
-
-**Built with:** [Streamlit](https://streamlit.io/) • [LangChain](https://www.langchain.com/) • [Groq](https://groq.com/) • [Ollama](https://ollama.com/) • [FAISS](https://github.com/facebookresearch/faiss)
+1. Push your code to a GitHub repository.
+2. Import the project into Vercel.
+3. Vercel will automatically detect the Next.js frontend and the `api/` directory containing the FastAPI backend.
+4. Add your `groq_api_key` environment variable in the Vercel project settings.
+5. Deploy! Vercel's Serverless Functions will automatically serve the Python endpoints alongside the React application.
