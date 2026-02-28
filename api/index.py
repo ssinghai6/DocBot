@@ -15,7 +15,7 @@ from dotenv import load_dotenv
 # Langchain and Groq
 from langchain_community.document_loaders import PyPDFLoader
 from langchain_text_splitters import RecursiveCharacterTextSplitter
-from langchain_community.embeddings import HuggingFaceEmbeddings
+from langchain_huggingface import HuggingFaceEndpointEmbeddings
 from langchain_community.vectorstores import FAISS
 from langchain_core.prompts import ChatPromptTemplate, MessagesPlaceholder
 from langchain.chains.combine_documents import create_stuff_documents_chain
@@ -284,7 +284,15 @@ async def upload_documents(
         raise HTTPException(status_code=400, detail="No extractable text or content found in the provided documents.")
 
     try:
-        embeddings = HuggingFaceEmbeddings(model_name="BAAI/bge-small-en")
+        hf_token = os.getenv('huggingface_api_key') or os.getenv('HUGGINGFACEHUB_API_TOKEN')
+        if not hf_token:
+            logger.warning("No HuggingFace token found. Embedding API might be rate-limited or fail.")
+            
+        embeddings = HuggingFaceEndpointEmbeddings(
+            model="sentence-transformers/all-MiniLM-L6-v2",
+            task="feature-extraction",
+            huggingfacehub_api_token=hf_token,
+        )
         db = FAISS.from_documents(all_splits, embeddings)
         
         VECTOR_STORES[session_id] = db
