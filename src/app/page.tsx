@@ -48,6 +48,16 @@ export default function Home() {
     if (!e.target.files || e.target.files.length === 0) return;
 
     const files = Array.from(e.target.files);
+
+    const MAX_FILE_SIZE = 4.5 * 1024 * 1024; // 4.5 MB max for Vercel
+    const totalSize = files.reduce((acc, file) => acc + file.size, 0);
+
+    if (totalSize > MAX_FILE_SIZE) {
+      alert("Total file size exceeds 4.5MB limit. Please upload smaller documents to bypass Vercel serverless limitations.");
+      if (fileInputRef.current) fileInputRef.current.value = "";
+      return;
+    }
+
     setUploadedFiles(files);
     setIsLoading(true);
 
