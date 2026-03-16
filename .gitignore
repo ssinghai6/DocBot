@@ -30,6 +30,21 @@ yarn-debug.log*
 yarn-error.log*
 .pnpm-debug.log*
 
+# python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+*.egg-info/
+dist/
+build/
+
+# venv
+.venv/
+venv/
+ENV/
+
 # env files (can opt-in for committing if needed)
 .env*
 
@@ -40,3 +55,6 @@ yarn-error.log*
 *.tsbuildinfo
 next-env.d.ts
 .env*.local
+
+# folder
+.opencode/
