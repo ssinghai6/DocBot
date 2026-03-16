@@ -169,7 +169,7 @@ export default function Home() {
               type="file"
               ref={fileInputRef}
               className="hidden"
-              accept=".pdf"
+              accept="application/pdf"
               multiple
               onChange={handleFileUpload}
             />
