@@ -17,6 +17,10 @@
   }
 }
 
+html {
+  color-scheme: dark;
+}
+
 body {
     margin: 0;
     font-family: var(--font-sans), sans-serif;
@@ -26,6 +30,23 @@ body {
     background-attachment: fixed;
     color: #e0e0e0;
     min-height: 100vh;
+}
+
+/* Reduced motion preference */
+@media (prefers-reduced-motion: reduce) {
+  body {
+    animation: none;
+    background-attachment: scroll;
+  }
+  
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+    scroll-behavior: auto !important;
+  }
 }
 
 @keyframes gradientShift {
@@ -82,6 +103,30 @@ body::after {
 ::-webkit-scrollbar-thumb { background: linear-gradient(135deg, #667eea 0%, #764ba2 100%); border-radius: 4px; }
 ::-webkit-scrollbar-thumb:hover { background: linear-gradient(135deg, #764ba2 0%, #667eea 100%); }
 
+/* Firefox scrollbar */
+* {
+  scrollbar-width: thin;
+  scrollbar-color: #667eea #1a1a2e;
+}
+
+/* Selection */
+::selection {
+  background: rgba(102, 126, 234, 0.3);
+  color: white;
+}
+
+/* Focus visible for accessibility */
+:focus-visible {
+  outline: 2px solid #667eea;
+  outline-offset: 2px;
+}
+
+/* Button focus override */
+button:focus-visible {
+  outline: 2px solid #667eea;
+  outline-offset: 2px;
+}
+
 @keyframes shimmer {
     0% { transform: translateX(-100%); }
     100% { transform: translateX(100%); }
@@ -110,27 +155,130 @@ body::after {
     animation: messageSlideIn 0.4s ease-out;
 }
 
+/* Toast animations */
+@keyframes toastSlideIn {
+    from {
+        opacity: 0;
+        transform: translateX(100%);
+    }
+    to {
+        opacity: 1;
+        transform: translateX(0);
+    }
+}
+
+.animate-in {
+    animation: toastSlideIn 0.3s ease-out;
+}
+
 /* Prose tweaks for React Markdown */
 .prose {
     color: #e0e0e0;
 }
 .prose h1, .prose h2, .prose h3, .prose h4 {
     color: #ffffff;
+    font-weight: 600;
+}
+.prose h1 { font-size: 1.75rem; margin-top: 1.5rem; margin-bottom: 0.75rem; }
+.prose h2 { font-size: 1.5rem; margin-top: 1.25rem; margin-bottom: 0.5rem; }
+.prose h3 { font-size: 1.25rem; margin-top: 1rem; margin-bottom: 0.5rem; }
+.prose p {
+    margin-top: 0.75rem;
+    margin-bottom: 0.75rem;
+    line-height: 1.7;
+}
+.prose ul, .prose ol {
+    margin-top: 0.75rem;
+    margin-bottom: 0.75rem;
+    padding-left: 1.5rem;
+}
+.prose li {
+    margin-top: 0.25rem;
+    margin-bottom: 0.25rem;
 }
 .prose a {
     color: #667eea;
+    text-decoration: none;
+    border-bottom: 1px solid transparent;
+    transition: border-color 0.2s;
+}
+.prose a:hover {
+    border-bottom-color: #667eea;
 }
 .prose code {
     color: #a855f7;
     background: rgba(30, 30, 46, 0.8);
     padding: 0.2rem 0.4rem;
     border-radius: 0.25rem;
+    font-family: var(--font-mono);
+    font-size: 0.875em;
+}
+.prose pre {
+    background: #1a1a24;
+    border: 1px solid rgba(255, 255, 255, 0.08);
+    border-radius: 0.75rem;
+    padding: 1rem;
+    overflow-x: auto;
+    margin: 1rem 0;
 }
 .prose pre code {
     background: transparent;
     color: inherit;
     padding: 0;
+    font-size: 0.875rem;
+    line-height: 1.6;
+}
+.prose blockquote {
+    border-left: 3px solid #667eea;
+    padding-left: 1rem;
+    margin: 1rem 0;
+    color: #9ca3af;
+    font-style: italic;
 }
 .prose strong {
     color: #ffffff;
+    font-weight: 600;
+}
+.prose hr {
+    border: none;
+    border-top: 1px solid rgba(255, 255, 255, 0.1);
+    margin: 1.5rem 0;
+}
+.prose table {
+    width: 100%;
+    border-collapse: collapse;
+    margin: 1rem 0;
+}
+.prose th {
+    background: rgba(102, 126, 234, 0.1);
+    border: 1px solid rgba(255, 255, 255, 0.1);
+    padding: 0.75rem;
+    text-align: left;
+    font-weight: 600;
+    color: #ffffff;
+}
+.prose td {
+    border: 1px solid rgba(255, 255, 255, 0.1);
+    padding: 0.75rem;
+}
+.prose tr:hover td {
+    background: rgba(102, 126, 234, 0.05);
+}
+.prose img {
+    max-width: 100%;
+    border-radius: 0.75rem;
+    margin: 1rem 0;
+}
+
+/* Print styles */
+@media print {
+    body::before,
+    body::after {
+        display: none;
+    }
+    
+    body {
+        background: white;
+        color: black;
+    }
 }
