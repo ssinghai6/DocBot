@@ -1,24 +1,193 @@
 "use client"
 
-import React, { useState, useRef, useEffect } from "react";
-import ReactMarkdown from "react-markdown";
-import remarkGfm from "remark-gfm";
-import { Send, Upload, File, Loader2, Trash2 } from "lucide-react";
+import React, { useState, useRef, useEffect, useCallback } from "react"
+import ReactMarkdown from "react-markdown"
+import remarkGfm from "remark-gfm"
+import {
+  Send, Upload, File, Loader2, Trash2,
+  Sparkles, Brain, BookOpen, Stethoscope,
+  TrendingUp, Code, Cpu, Scale, Briefcase,
+  X, CheckCircle2, AlertCircle, Zap, ChevronDown,
+  FileText, MessageSquare, Settings, Keyboard,
+  Maximize2, Minimize2, Copy, Check, Info,
+  Clock, Hash, Wand2, Layers, ArrowRight,
+  Terminal, Database, Eye, EyeOff, RefreshCw,
+  Menu, XCircle, AlertTriangle, HelpCircle,
+  Download, FileJson, FileText as FileTxt
+} from "lucide-react"
+
+type Citation = {
+  source: string;
+  page: number;
+  text: string;
+};
 
 type Message = {
   role: "user" | "assistant";
   content: string;
+  timestamp?: Date;
+  citations?: Citation[];
 };
 
-const EXPERT_PERSONAS: Record<string, { icon: string; description: string }> = {
-  Generalist: { icon: "🎯", description: "Balanced, general-purpose assistant" },
-  Doctor: { icon: "🩺", description: "Medical & healthcare perspective" },
-  "Finance Expert": { icon: "💰", description: "Financial & investment analysis" },
-  Engineer: { icon: "⚙️", description: "Technical & engineering focus" },
-  "AI/ML Expert": { icon: "🤖", description: "AI, ML & data science insights" },
-  Lawyer: { icon: "⚖️", description: "Legal analysis & compliance" },
-  Consultant: { icon: "📊", description: "Strategic business advisory" },
+type Toast = {
+  id: string;
+  type: "success" | "error" | "info" | "warning";
+  message: string;
 };
+
+type FileUploadState = "idle" | "dragover" | "uploading" | "success" | "error";
+
+const EXPERT_PERSONAS: Record<string, {
+  icon: React.ReactNode;
+  description: string;
+  color: string;
+  gradient: string;
+  accent: string;
+}> = {
+  Generalist: {
+    icon: <Sparkles className="w-5 h-5" />,
+    description: "Balanced, general-purpose assistant for any document",
+    color: "text-[#667eea]",
+    gradient: "from-[#667eea] to-[#764ba2]",
+    accent: "#667eea"
+  },
+  Doctor: {
+    icon: <Stethoscope className="w-5 h-5" />,
+    description: "Medical & healthcare perspective - analyze clinical documents",
+    color: "text-[#10b981]",
+    gradient: "from-[#10b981] to-[#059669]",
+    accent: "#10b981"
+  },
+  "Finance Expert": {
+    icon: <TrendingUp className="w-5 h-5" />,
+    description: "Financial & investment analysis - parse reports & statements",
+    color: "text-[#f59e0b]",
+    gradient: "from-[#f59e0b] to-[#d97706]",
+    accent: "#f59e0b"
+  },
+  Engineer: {
+    icon: <Code className="w-5 h-5" />,
+    description: "Technical & engineering focus - documentation & specs",
+    color: "text-[#3b82f6]",
+    gradient: "from-[#3b82f6] to-[#2563eb]",
+    accent: "#3b82f6"
+  },
+  "AI/ML Expert": {
+    icon: <Cpu className="w-5 h-5" />,
+    description: "AI, ML & data science insights - research papers & models",
+    color: "text-[#8b5cf6]",
+    gradient: "from-[#8b5cf6] to-[#7c3aed]",
+    accent: "#8b5cf6"
+  },
+  Lawyer: {
+    icon: <Scale className="w-5 h-5" />,
+    description: "Legal analysis & compliance - contracts & policies",
+    color: "text-[#ef4444]",
+    gradient: "from-[#ef4444] to-[#dc2626]",
+    accent: "#ef4444"
+  },
+  Consultant: {
+    icon: <Briefcase className="w-5 h-5" />,
+    description: "Strategic business advisory - strategy & planning",
+    color: "text-[#06b6d4]",
+    gradient: "from-[#06b6d4] to-[#0891b2]",
+    accent: "#06b6d4"
+  },
+};
+
+// Toast Component
+function ToastContainer({ toasts, onDismiss }: { toasts: Toast[]; onDismiss: (id: string) => void }) {
+  return (
+    <div className="fixed top-4 right-4 z-50 flex flex-col gap-2 max-w-sm">
+      {toasts.map((toast) => (
+        <div
+          key={toast.id}
+          className={`flex items-start gap-3 p-4 rounded-xl border backdrop-blur-xl shadow-lg animate-in slide-in-from-right duration-300 ${toast.type === "success" ? "bg-[#10b981]/10 border-[#10b981]/30 text-[#10b981]" :
+              toast.type === "error" ? "bg-[#ef4444]/10 border-[#ef4444]/30 text-[#ef4444]" :
+                toast.type === "warning" ? "bg-[#f59e0b]/10 border-[#f59e0b]/30 text-[#f59e0b]" :
+                  "bg-[#3b82f6]/10 border-[#3b82f6]/30 text-[#3b82f6]"
+            }`}
+        >
+          {toast.type === "success" && <CheckCircle2 className="w-5 h-5 shrink-0 mt-0.5" />}
+          {toast.type === "error" && <AlertCircle className="w-5 h-5 shrink-0 mt-0.5" />}
+          {toast.type === "warning" && <AlertTriangle className="w-5 h-5 shrink-0 mt-0.5" />}
+          {toast.type === "info" && <Info className="w-5 h-5 shrink-0 mt-0.5" />}
+          <p className="text-sm font-medium flex-1 text-gray-200">{toast.message}</p>
+          <button onClick={() => onDismiss(toast.id)} className="shrink-0 hover:opacity-70 transition-opacity">
+            <X className="w-4 h-4" />
+          </button>
+        </div>
+      ))}
+    </div>
+  )
+}
+
+// Typing Indicator Component
+function TypingIndicator() {
+  return (
+    <div className="flex items-center gap-1 px-4 py-3 bg-[#12121a]/80 border border-[#ffffff08] rounded-2xl rounded-bl-sm">
+      <div className="flex gap-1">
+        <div className="w-2 h-2 bg-[#667eea] rounded-full animate-bounce" style={{ animationDelay: '0ms' }} />
+        <div className="w-2 h-2 bg-[#764ba2] rounded-full animate-bounce" style={{ animationDelay: '150ms' }} />
+        <div className="w-2 h-2 bg-[#8b5cf6] rounded-full animate-bounce" style={{ animationDelay: '300ms' }} />
+      </div>
+      <span className="text-sm text-gray-400 ml-2">Analyzing document</span>
+    </div>
+  )
+}
+
+// Session Info Component
+function SessionInfo({ sessionId, fileCount, persona, onClear }: {
+  sessionId: string | null;
+  fileCount: number;
+  persona: string;
+  onClear: () => void;
+}) {
+  const [copied, setCopied] = useState(false);
+
+  const copySessionId = () => {
+    if (sessionId) {
+      navigator.clipboard.writeText(sessionId);
+      setCopied(true);
+      setTimeout(() => setCopied(false), 2000);
+    }
+  };
+
+  if (!sessionId) return null;
+
+  return (
+    <div className="flex items-center gap-3 px-3 py-1.5 bg-[#1a1a24]/60 rounded-lg border border-[#ffffff06]">
+      <div className="flex items-center gap-1.5">
+        <div className="w-2 h-2 bg-[#10b981] rounded-full animate-pulse" />
+        <span className="text-xs text-gray-400">Active Session</span>
+      </div>
+      <div className="w-px h-4 bg-[#ffffff10]" />
+      <div className="flex items-center gap-1.5">
+        <FileText className="w-3 h-3 text-[#667eea]" />
+        <span className="text-xs text-gray-300">{fileCount} file{fileCount !== 1 ? 's' : ''}</span>
+      </div>
+      <div className="w-px h-4 bg-[#ffffff10]" />
+      <div className="flex items-center gap-1.5">
+        <Sparkles className="w-3 h-3 text-[#764ba2]" />
+        <span className="text-xs text-gray-300">{persona}</span>
+      </div>
+      <button
+        onClick={copySessionId}
+        className="ml-1 p-1 hover:bg-[#ffffff08] rounded transition-colors"
+        title="Copy session ID"
+      >
+        {copied ? <Check className="w-3 h-3 text-[#10b981]" /> : <Hash className="w-3 h-3 text-gray-500" />}
+      </button>
+      <button
+        onClick={onClear}
+        className="p-1 hover:bg-red-500/10 rounded transition-colors"
+        title="Clear session"
+      >
+        <XCircle className="w-3 h-3 text-gray-500 hover:text-red-400" />
+      </button>
+    </div>
+  )
+}
 
 export default function Home() {
   const [messages, setMessages] = useState<Message[]>([]);
@@ -26,15 +195,37 @@ export default function Home() {
   const [isLoading, setIsLoading] = useState(false);
   const [uploadedFiles, setUploadedFiles] = useState<File[]>([]);
   const [sessionId, setSessionId] = useState<string | null>(null);
+  const [uploadProgress, setUploadProgress] = useState<number | null>(null);
 
   // Sidebar State
   const [selectedPersona, setSelectedPersona] = useState("Generalist");
   const [suggestedPersona, setSuggestedPersona] = useState<string | null>(null);
   const [deepVisualMode, setDeepVisualMode] = useState(false);
   const [deepResearch, setDeepResearch] = useState(false);
+  const [sidebarOpen, setSidebarOpen] = useState(true);
+
+  // File Upload State
+  const [fileUploadState, setFileUploadState] = useState<FileUploadState>("idle");
+
+  // Toast State
+  const [toasts, setToasts] = useState<Toast[]>([]);
 
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
+  const textareaRef = useRef<HTMLTextAreaElement>(null);
+
+  // Toast helper
+  const showToast = useCallback((type: Toast['type'], message: string) => {
+    const id = Math.random().toString(36).substring(7);
+    setToasts(prev => [...prev, { id, type, message }]);
+    setTimeout(() => {
+      setToasts(prev => prev.filter(t => t.id !== id));
+    }, 5000);
+  }, []);
+
+  const dismissToast = useCallback((id: string) => {
+    setToasts(prev => prev.filter(t => t.id !== id));
+  }, []);
 
   const scrollToBottom = () => {
     messagesEndRef.current?.scrollIntoView({ behavior: "smooth" });
@@ -43,6 +234,34 @@ export default function Home() {
   useEffect(() => {
     scrollToBottom();
   }, [messages]);
+
+  // Auto-resize textarea
+  useEffect(() => {
+    if (textareaRef.current) {
+      textareaRef.current.style.height = 'auto';
+      textareaRef.current.style.height = Math.min(textareaRef.current.scrollHeight, 160) + 'px';
+    }
+  }, [input]);
+
+  // Keyboard shortcuts
+  useEffect(() => {
+    const handleKeyDown = (e: KeyboardEvent) => {
+      // Ctrl/Cmd + Enter to send
+      if ((e.ctrlKey || e.metaKey) && e.key === 'Enter') {
+        if (input.trim() && sessionId && !isLoading) {
+          handleSendMessage();
+        }
+      }
+      // Escape to clear input
+      if (e.key === 'Escape') {
+        setInput("");
+        textareaRef.current?.blur();
+      }
+    };
+
+    window.addEventListener('keydown', handleKeyDown);
+    return () => window.removeEventListener('keydown', handleKeyDown);
+  }, [input, sessionId, isLoading]);
 
   const handleFileUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
     if (!e.target.files || e.target.files.length === 0) return;
@@ -53,13 +272,15 @@ export default function Home() {
     const totalSize = files.reduce((acc, file) => acc + file.size, 0);
 
     if (totalSize > MAX_FILE_SIZE) {
-      alert("Total file size exceeds 4.5MB limit. Please upload smaller documents to bypass Vercel serverless limitations.");
+      showToast("error", "Total file size exceeds 4.5MB limit. Please upload smaller documents.");
       if (fileInputRef.current) fileInputRef.current.value = "";
       return;
     }
 
     setUploadedFiles(files);
     setIsLoading(true);
+    setUploadProgress(0);
+    setFileUploadState("uploading");
 
     const formData = new FormData();
     files.forEach(file => {
@@ -68,11 +289,18 @@ export default function Home() {
     formData.append('deep_visual_mode', String(deepVisualMode));
 
     try {
-      // In Vercel, this will hit our Python backend due to rewrites in vercel.json
+      // Simulate progress
+      const progressInterval = setInterval(() => {
+        setUploadProgress(prev => Math.min((prev || 0) + 10, 90));
+      }, 200);
+
       const response = await fetch('/api/upload', {
         method: 'POST',
         body: formData,
       });
+
+      clearInterval(progressInterval);
+      setUploadProgress(100);
 
       if (!response.ok) {
         const errData = await response.json();
@@ -85,16 +313,56 @@ export default function Home() {
       if (data.suggested_persona) {
         setSuggestedPersona(data.suggested_persona);
         setSelectedPersona(data.suggested_persona);
+        showToast("info", `Recommended ${data.suggested_persona} mode for your document`);
+      } else {
+        showToast("success", `Successfully processed ${files.length} document${files.length > 1 ? 's' : ''}`);
       }
 
-      alert("Documents processed successfully!");
+      setFileUploadState("success");
+      setTimeout(() => setFileUploadState("idle"), 2000);
+
     } catch (error: any) {
       console.error("Upload error:", error);
-      alert(`Error uploading documents: ${error.message}`);
+      setFileUploadState("error");
+      showToast("error", `Upload failed: ${error.message}`);
       setUploadedFiles([]);
+      setTimeout(() => setFileUploadState("idle"), 3000);
     } finally {
       setIsLoading(false);
+      setUploadProgress(null);
       if (fileInputRef.current) fileInputRef.current.value = "";
+    }
+  };
+
+  const handleDragOver = (e: React.DragEvent) => {
+    e.preventDefault();
+    e.stopPropagation();
+    setFileUploadState("dragover");
+  };
+
+  const handleDragLeave = (e: React.DragEvent) => {
+    e.preventDefault();
+    e.stopPropagation();
+    setFileUploadState("idle");
+  };
+
+  const handleDrop = (e: React.DragEvent) => {
+    e.preventDefault();
+    e.stopPropagation();
+
+    const files = Array.from(e.dataTransfer.files).filter(f => f.type === "application/pdf");
+
+    if (files.length > 0) {
+      const dataTransfer = new DataTransfer();
+      files.forEach(f => dataTransfer.items.add(f));
+      if (fileInputRef.current) {
+        fileInputRef.current.files = dataTransfer.files;
+        const event = { target: { files: dataTransfer.files } } as any;
+        handleFileUpload(event);
+      }
+    } else {
+      showToast("warning", "Please drop PDF files only");
+      setFileUploadState("idle");
     }
   };
 
@@ -102,7 +370,7 @@ export default function Home() {
     if (e) e.preventDefault();
     if (!input.trim() || !sessionId) return;
 
-    const userMsg: Message = { role: "user", content: input };
+    const userMsg: Message = { role: "user", content: input, timestamp: new Date() };
     setMessages(prev => [...prev, userMsg]);
     setInput("");
     setIsLoading(true);
@@ -126,10 +394,20 @@ export default function Home() {
       }
 
       const data = await response.json();
-      setMessages(prev => [...prev, { role: "assistant", content: data.content }]);
+      setMessages(prev => [...prev, {
+        role: "assistant",
+        content: data.content,
+        citations: data.citations || [],
+        timestamp: new Date()
+      }]);
     } catch (error: any) {
       console.error("Chat error:", error);
-      alert(`Error generating response: ${error.message}`);
+      showToast("error", `Error: ${error.message}`);
+      setMessages(prev => [...prev, {
+        role: "assistant",
+        content: "I apologize, but I encountered an error processing your request. Please try again.",
+        timestamp: new Date()
+      }]);
     } finally {
       setIsLoading(false);
     }
@@ -137,34 +415,183 @@ export default function Home() {
 
   const clearChat = () => {
     setMessages([]);
+    showToast("info", "Chat cleared");
+  };
+
+  const clearSession = () => {
+    setSessionId(null);
+    setUploadedFiles([]);
+    setMessages([]);
+    setSuggestedPersona(null);
+    showToast("info", "Session cleared");
+  };
+
+  const exportChat = async (format: 'txt' | 'markdown' | 'json') => {
+    if (!sessionId) {
+      showToast("error", "No active session to export");
+      return;
+    }
+
+    try {
+      const response = await fetch(`/api/export/${sessionId}?format=${format}`, {
+        method: 'GET',
+      });
+
+      if (!response.ok) {
+        throw new Error("Export failed");
+      }
+
+      const blob = await response.blob();
+      const url = window.URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = `docbot-chat.${format === 'markdown' ? 'md' : format}`;
+      document.body.appendChild(a);
+      a.click();
+      window.URL.revokeObjectURL(url);
+      document.body.removeChild(a);
+
+      showToast("success", `Chat exported as ${format.toUpperCase()}`);
+    } catch (error) {
+      console.error("Export error:", error);
+      showToast("error", "Failed to export chat");
+    }
+  };
+
+  const copyToClipboard = (text: string) => {
+    navigator.clipboard.writeText(text);
+    showToast("success", "Copied to clipboard");
+  };
+
+  const getFileUploadBorderColor = () => {
+    switch (fileUploadState) {
+      case "dragover": return "border-[#10b981] bg-[#10b981]/5";
+      case "uploading": return "border-[#667eea] bg-[#667eea]/5";
+      case "success": return "border-[#10b981] bg-[#10b981]/5";
+      case "error": return "border-[#ef4444] bg-[#ef4444]/5";
+      default: return "border-[#667eea]/30 bg-[#12121a]/50";
+    }
   };
 
   return (
-    <div className="flex h-screen relative z-10 text-[#e0e0e0] overflow-hidden">
+    <div className="flex h-screen relative z-10 text-[#e0e0e0] overflow-hidden bg-[#0a0a0f]">
+      <ToastContainer toasts={toasts} onDismiss={dismissToast} />
+
+      {/* Mobile Menu Toggle */}
+      <button
+        onClick={() => setSidebarOpen(!sidebarOpen)}
+        className="lg:hidden fixed top-4 left-4 z-50 p-2 bg-[#12121a]/90 backdrop-blur-xl rounded-lg border border-[#ffffff08]"
+      >
+        {sidebarOpen ? <X className="w-5 h-5" /> : <Menu className="w-5 h-5" />}
+      </button>
+
       {/* Settings / Options Sidebar */}
-      <aside className="w-80 backdrop-blur-xl bg-[#1a1a2e]/95 border-r border-[#ffffff1a] flex flex-col p-6 z-20 shrink-0 shadow-2xl overflow-y-auto">
-        <h2 className="text-2xl font-bold mb-6 text-white tracking-wide">Options</h2>
+      <aside className={`
+        w-80 backdrop-blur-2xl bg-[#12121a]/95 border-r border-[#ffffff08] flex flex-col p-5 z-20 shrink-0 shadow-2xl overflow-y-auto
+        transition-transform duration-300 ease-in-out
+        ${sidebarOpen ? 'translate-x-0' : '-translate-x-full lg:translate-x-0'}
+        fixed lg:relative h-full
+      `}>
+        {/* Logo */}
+        <div className="flex items-center gap-3 mb-6">
+          <div className="w-10 h-10 rounded-xl bg-gradient-to-br from-[#667eea] to-[#764ba2] flex items-center justify-center shadow-lg shadow-[#667eea]/20">
+            <Brain className="w-5 h-5 text-white" />
+          </div>
+          <div className="flex-1">
+            <h2 className="text-lg font-bold text-white tracking-wide flex items-center gap-2">
+              DocBot
+              <span className="px-1.5 py-0.5 bg-[#667eea]/20 text-[#667eea] text-[10px] font-bold rounded">AI</span>
+            </h2>
+            <p className="text-xs text-gray-500">Document Intelligence</p>
+          </div>
+        </div>
 
         {/* Document Upload Section */}
-        <div className="mb-8">
-          <h3 className="text-lg font-semibold mb-3 text-white">📄 Document Upload</h3>
-          <div className="mb-4">
-            <label className="flex items-center space-x-2 cursor-pointer group">
-              <div className={`w-10 h-6 flex items-center bg-gray-600 rounded-full p-1 transition-colors ${deepVisualMode ? 'bg-[#667eea]' : ''}`}>
-                <div className={`bg-white w-4 h-4 rounded-full shadow-md transform transition-transform ${deepVisualMode ? 'translate-x-4' : ''}`}></div>
+        <div className="mb-6">
+          <h3 className="text-sm font-semibold mb-3 text-white flex items-center gap-2">
+            <FileText className="w-4 h-4 text-[#667eea]" />
+            Documents
+            <span className="ml-auto text-[10px] text-gray-500 font-normal">PDF only</span>
+          </h3>
+
+          {/* Deep Visual Mode Toggle */}
+          <div className="mb-4 bg-[#1a1a24]/50 rounded-xl p-3 border border-[#ffffff06]">
+            <label className="flex items-center justify-between cursor-pointer group">
+              <div className="flex items-center gap-3">
+                <div className={`w-9 h-5 flex items-center bg-gray-700/50 rounded-full p-0.5 transition-colors ${deepVisualMode ? 'bg-[#667eea]' : ''}`}>
+                  <div className={`bg-white w-4 h-4 rounded-full shadow-md transform transition-transform ${deepVisualMode ? 'translate-x-4' : ''}`}></div>
+                </div>
+                <div>
+                  <span className="text-sm font-medium text-gray-300 group-hover:text-white transition-colors">Deep Visual</span>
+                  <p className="text-[10px] text-gray-500">Full page OCR analysis</p>
+                </div>
               </div>
-              <span className="text-sm font-medium group-hover:text-white transition-colors">🔍 Deep Visual Analysis</span>
               <input type="checkbox" className="hidden" checked={deepVisualMode} onChange={() => setDeepVisualMode(!deepVisualMode)} />
             </label>
-            <p className="text-xs text-gray-400 mt-2 italic">*Full page analysis enabled - will detect tick marks, checkboxes, and form selections*</p>
           </div>
 
+          {/* Upload Area */}
           <div
             onClick={() => fileInputRef.current?.click()}
-            className="border-2 border-dashed border-[#667eea]/40 rounded-2xl p-6 text-center cursor-pointer hover:bg-[#1e1e2e]/70 hover:border-[#667eea]/80 hover:shadow-[0_0_20px_rgba(102,126,234,0.15)] transition-all bg-[#1e1e2e]/50"
+            onDragOver={handleDragOver}
+            onDragLeave={handleDragLeave}
+            onDrop={handleDrop}
+            className={`
+              group relative border-2 border-dashed rounded-2xl p-5 text-center cursor-pointer transition-all
+              ${getFileUploadBorderColor()}
+              hover:border-[#667eea]/60 hover:shadow-[0_0_30px_rgba(102,126,234,0.15)]
+              ${fileUploadState === "uploading" ? 'pointer-events-none' : ''}
+            `}
           >
-            <Upload className="mx-auto h-8 w-8 text-[#667eea] mb-2" />
-            <p className="text-sm font-medium">Choose PDF file(s)</p>
+            {fileUploadState === "uploading" ? (
+              <div className="py-2">
+                <div className="w-12 h-12 mx-auto mb-3 relative">
+                  <div className="absolute inset-0 rounded-2xl border-2 border-[#667eea]/30"></div>
+                  <div
+                    className="absolute inset-0 rounded-2xl border-2 border-transparent border-t-[#667eea] animate-spin"
+                  />
+                  <Loader2 className="absolute inset-0 m-auto w-6 h-6 text-[#667eea] animate-spin" />
+                </div>
+                <p className="text-sm font-medium text-gray-300">Processing documents...</p>
+                {uploadProgress !== null && (
+                  <div className="mt-2 w-full bg-[#ffffff10] rounded-full h-1.5 overflow-hidden">
+                    <div
+                      className="h-full bg-gradient-to-r from-[#667eea] to-[#764ba2] transition-all duration-300"
+                      style={{ width: `${uploadProgress}%` }}
+                    />
+                  </div>
+                )}
+              </div>
+            ) : fileUploadState === "success" ? (
+              <div className="py-2">
+                <div className="w-12 h-12 mx-auto mb-3 rounded-2xl bg-[#10b981]/20 flex items-center justify-center">
+                  <CheckCircle2 className="w-6 h-6 text-[#10b981]" />
+                </div>
+                <p className="text-sm font-medium text-[#10b981]">Upload complete!</p>
+              </div>
+            ) : fileUploadState === "error" ? (
+              <div className="py-2">
+                <div className="w-12 h-12 mx-auto mb-3 rounded-2xl bg-[#ef4444]/20 flex items-center justify-center">
+                  <AlertCircle className="w-6 h-6 text-[#ef4444]" />
+                </div>
+                <p className="text-sm font-medium text-[#ef4444]">Upload failed</p>
+              </div>
+            ) : fileUploadState === "dragover" ? (
+              <div className="py-2">
+                <div className="w-12 h-12 mx-auto mb-3 rounded-2xl bg-[#10b981]/20 flex items-center justify-center animate-bounce">
+                  <FileText className="w-6 h-6 text-[#10b981]" />
+                </div>
+                <p className="text-sm font-medium text-[#10b981]">Drop files to upload</p>
+              </div>
+            ) : (
+              <div className="relative">
+                <div className="w-12 h-12 mx-auto mb-3 rounded-2xl bg-gradient-to-br from-[#667eea]/20 to-[#764ba2]/20 flex items-center justify-center group-hover:scale-110 transition-transform">
+                  <Upload className="w-6 h-6 text-[#667eea]" />
+                </div>
+                <p className="text-sm font-medium text-gray-300 group-hover:text-white">Drop PDF files here</p>
+                <p className="text-xs text-gray-500 mt-1">or click to browse • Max 4.5MB</p>
+              </div>
+            )}
             <input
               type="file"
               ref={fileInputRef}
@@ -174,12 +601,17 @@ export default function Home() {
               onChange={handleFileUpload}
             />
           </div>
+
+          {/* Uploaded Files */}
           {uploadedFiles.length > 0 && (
             <div className="mt-3 space-y-2">
               {uploadedFiles.map((f, i) => (
-                <div key={i} className="flex items-center text-xs text-green-400 bg-green-400/10 px-3 py-2 rounded-lg border border-green-400/20">
-                  <File className="w-4 h-4 mr-2" />
-                  <span className="truncate flex-1">{f.name}</span>
+                <div key={i} className="flex items-center text-xs bg-[#10b981]/10 px-3 py-2.5 rounded-xl border border-[#10b981]/20">
+                  <FileText className="w-4 h-4 mr-2 text-[#10b981] shrink-0" />
+                  <span className="truncate flex-1 text-gray-300">{f.name}</span>
+                  <span className="text-[10px] text-gray-500 ml-2">
+                    {(f.size / 1024).toFixed(1)}KB
+                  </span>
                 </div>
               ))}
             </div>
@@ -187,113 +619,322 @@ export default function Home() {
         </div>
 
         {/* Persona Selection */}
-        <div className="mb-8">
-          <h3 className="text-lg font-semibold mb-3 text-white">🎭 Expert Mode</h3>
+        <div className="mb-6 flex-1">
+          <h3 className="text-sm font-semibold mb-3 text-white flex items-center gap-2">
+            <Wand2 className="w-4 h-4 text-[#764ba2]" />
+            Expert Mode
+          </h3>
+
           {suggestedPersona && suggestedPersona !== "Generalist" && (
-            <div className="bg-[#667eea]/15 border border-[#667eea]/30 p-3 rounded-xl mb-3 text-sm flex items-start">
-              <span className="mr-2">💡</span>
-              <span>based on your document, <strong>{suggestedPersona}</strong> mode is recommended.</span>
+            <div className="bg-[#667eea]/10 border border-[#667eea]/20 p-3 rounded-xl mb-3 text-sm flex items-start gap-2">
+              <Zap className="w-4 h-4 text-[#667eea] mt-0.5 shrink-0" />
+              <div>
+                <span className="text-gray-300">Recommended: </span>
+                <strong className="text-white">{suggestedPersona}</strong>
+              </div>
             </div>
           )}
 
-          <div className="relative">
-            <select
-              value={selectedPersona}
-              onChange={(e) => setSelectedPersona(e.target.value)}
-              className="w-full appearance-none bg-[#1e1e2e]/80 border border-[#ffffff26] rounded-xl px-4 py-3 text-white pr-8 focus:outline-none focus:border-[#667eea]/50 focus:ring-1 focus:ring-[#667eea]/50 transition-all cursor-pointer"
-            >
-              {Object.entries(EXPERT_PERSONAS).map(([name, data]) => (
-                <option key={name} value={name}>{data.icon} {name}</option>
-              ))}
-            </select>
-            <div className="pointer-events-none absolute inset-y-0 right-0 flex items-center px-4 text-white">
-              <svg className="fill-current h-4 w-4" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 20 20"><path d="M9.293 12.95l.707.707L15.657 8l-1.414-1.414L10 10.828 5.757 6.586 4.343 8z" /></svg>
-            </div>
+          {/* Persona Cards Grid */}
+          <div className="grid grid-cols-2 gap-2">
+            {Object.entries(EXPERT_PERSONAS).map(([name, data]) => {
+              const isSelected = selectedPersona === name;
+              return (
+                <button
+                  key={name}
+                  onClick={() => setSelectedPersona(name)}
+                  className={`group relative p-3 rounded-xl text-left transition-all duration-200 ${isSelected
+                      ? 'bg-gradient-to-br ' + data.gradient + ' shadow-lg scale-[1.02]'
+                      : 'bg-[#1a1a24]/50 border border-[#ffffff06] hover:border-[#ffffff15] hover:bg-[#1a1a24]/80'
+                    }`}
+                >
+                  <div className={`${isSelected ? 'text-white' : data.color} mb-1`}>
+                    {data.icon}
+                  </div>
+                  <div className={`text-xs font-medium ${isSelected ? 'text-white' : 'text-gray-300'}`}>
+                    {name}
+                  </div>
+                  {isSelected && (
+                    <div className="absolute top-2 right-2">
+                      <CheckCircle2 className="w-3 h-3 text-white" />
+                    </div>
+                  )}
+                </button>
+              );
+            })}
           </div>
-          <p className="text-xs text-gray-400 mt-2 italic">*{EXPERT_PERSONAS[selectedPersona]?.description}*</p>
+
+          <div className="mt-3 p-3 bg-[#1a1a24]/30 rounded-xl border border-[#ffffff06]">
+            <p className="text-xs text-gray-400 flex items-start gap-2">
+              <Info className="w-3 h-3 mt-0.5 shrink-0 text-[#667eea]" />
+              {EXPERT_PERSONAS[selectedPersona]?.description}
+            </p>
+          </div>
         </div>
 
-        {/* Deep Research */}
+        {/* Deep Research Toggle */}
         {selectedPersona !== "Generalist" && (
-          <div className="mb-8">
-            <h3 className="text-lg font-semibold mb-3 text-white">🔬 Analysis Mode</h3>
-            <label className="flex items-center space-x-2 cursor-pointer group">
-              <div className={`w-10 h-6 flex items-center bg-gray-600 rounded-full p-1 transition-colors ${deepResearch ? 'bg-[#764ba2]' : ''}`}>
-                <div className={`bg-white w-4 h-4 rounded-full shadow-md transform transition-transform ${deepResearch ? 'translate-x-4' : ''}`}></div>
+          <div className="mb-4 bg-[#1a1a24]/50 rounded-xl p-3 border border-[#ffffff06]">
+            <h3 className="text-sm font-semibold mb-3 text-white flex items-center gap-2">
+              <Layers className="w-4 h-4 text-[#764ba2]" />
+              Analysis Mode
+            </h3>
+            <label className="flex items-center justify-between cursor-pointer group">
+              <div className="flex items-center gap-3">
+                <div className={`w-9 h-5 flex items-center bg-gray-700/50 rounded-full p-0.5 transition-colors ${deepResearch ? 'bg-[#764ba2]' : ''}`}>
+                  <div className={`bg-white w-4 h-4 rounded-full shadow-md transform transition-transform ${deepResearch ? 'translate-x-4' : ''}`}></div>
+                </div>
+                <div>
+                  <span className="text-sm font-medium text-gray-300 group-hover:text-white transition-colors">Deep Research</span>
+                  <p className="text-[10px] text-gray-500">Enhanced reasoning</p>
+                </div>
               </div>
-              <span className="text-sm font-medium group-hover:text-white transition-colors">Deep Research</span>
               <input type="checkbox" className="hidden" checked={deepResearch} onChange={() => setDeepResearch(!deepResearch)} />
             </label>
             {deepResearch && (
-              <p className="text-xs text-gray-400 mt-2 italic">*🧠 Deep reasoning enabled - responses will be more thorough*</p>
+              <p className="text-xs text-gray-500 mt-2 ml-12 flex items-center gap-1">
+                <Brain className="w-3 h-3 text-[#764ba2]" /> Advanced analysis enabled
+              </p>
             )}
           </div>
         )}
 
-        <div className="mt-auto pt-6 border-t border-[#ffffff1a]">
+        {/* Footer */}
+        <div className="pt-4 border-t border-[#ffffff08]">
           <button
             onClick={clearChat}
-            className="w-full flex items-center justify-center py-3 px-4 rounded-xl bg-[#1e1e2e]/80 border border-[#ffffff26] hover:bg-red-500/20 hover:border-red-500/50 hover:text-red-400 transition-all font-medium"
+            disabled={messages.length === 0}
+            className="w-full flex items-center justify-center py-2.5 px-4 rounded-xl bg-[#1a1a24]/80 border border-[#ffffff06] hover:bg-red-500/15 hover:border-red-500/30 hover:text-red-400 transition-all text-sm font-medium disabled:opacity-40 disabled:cursor-not-allowed disabled:hover:bg-[#1a1a24]/80 disabled:hover:border-[#ffffff06] disabled:hover:text-inherit"
           >
             <Trash2 className="w-4 h-4 mr-2" />
             Clear Chat
           </button>
 
-          <div className="mt-8 text-center text-xs text-gray-500">
-            <p className="mb-2">Developed by <a href="https://sanshrit-singhai.vercel.app" className="text-[#00C4FF] hover:underline" target="_blank" rel="noopener noreferrer">Sanshrit Singhai</a></p>
-            <p>Support development:</p>
-            <a href="https://www.paypal.com/donate/?business=G5C3WRTY7YTXC&no_recurring=0&currency_code=USD" target="_blank" rel="noopener noreferrer" className="inline-block mt-2">
-              <img src="https://www.paypalobjects.com/en_US/i/btn/btn_donate_LG.gif" alt="Donate with PayPal" className="opacity-80 hover:opacity-100 transition-opacity" />
-            </a>
+          {/* Keyboard Shortcuts Help */}
+          <div className="mt-3 p-3 bg-[#1a1a24]/30 rounded-xl border border-[#ffffff06]">
+            <div className="flex items-center gap-2 text-xs text-gray-500 mb-2">
+              <Keyboard className="w-3 h-3" />
+              <span className="font-medium">Keyboard Shortcuts</span>
+            </div>
+            <div className="grid grid-cols-2 gap-1 text-[10px] text-gray-500">
+              <div className="flex items-center gap-1">
+                <kbd className="px-1.5 py-0.5 bg-[#ffffff10] rounded text-gray-400">Ctrl</kbd>
+                <span>+</span>
+                <kbd className="px-1.5 py-0.5 bg-[#ffffff10] rounded text-gray-400">↵</kbd>
+                <span className="ml-1">Send</span>
+              </div>
+              <div className="flex items-center gap-1">
+                <kbd className="px-1.5 py-0.5 bg-[#ffffff10] rounded text-gray-400">Esc</kbd>
+                <span className="ml-1">Clear</span>
+              </div>
+            </div>
+          </div>
+
+          <div className="mt-4 text-center text-xs text-gray-600">
+            <p>Built by <a href="https://sanshrit-singhai.vercel.app" className="text-[#667eea] hover:underline" target="_blank" rel="noopener noreferrer">Sanshrit Singhai</a></p>
           </div>
         </div>
       </aside>
 
       {/* Main Chat Area */}
       <main className="flex-1 flex flex-col min-w-0 bg-transparent relative z-10">
-
         {/* Header */}
-        <header className="px-8 py-6 flex-none">
-          <div className="relative overflow-hidden bg-gradient-to-br from-[#1e1e2e]/90 to-[#16213e]/90 rounded-3xl border border-[#667eea]/30 shadow-[0_10px_40px_rgba(0,0,0,0.3)] p-8 text-center">
-            <div className="absolute inset-0 bg-gradient-to-tr from-transparent via-[#667eea]/10 to-transparent animate-shimmer"></div>
-            <h1 className="relative z-10 text-5xl font-bold mb-3 text-transparent bg-clip-text bg-gradient-to-br from-[#667eea] via-[#764ba2] to-[#667eea] animate-gradient-text">
-              🤖 DocBot
-            </h1>
-            <p className="relative z-10 text-gray-300 text-lg">
-              Your AI-Powered PDF Assistant • Powered by <span className="text-[#667eea] font-semibold">Llama 3.3</span>
-            </p>
+        <header className="px-4 lg:p-6 flex-none">
+          <div className="relative overflow-hidden bg-gradient-to-br from-[#12121a]/95 to-[#1a1a28]/95 rounded-2xl border border-[#ffffff08] shadow-2xl p-4 lg:p-6 max-w-5xl mx-auto">
+            <div className="absolute inset-0 bg-gradient-to-tr from-[#667eea]/5 via-transparent to-[#764ba2]/5"></div>
+            <div className="relative z-10 flex flex-col lg:flex-row lg:items-center justify-between gap-4">
+              <div className="flex items-center gap-4">
+                <div className="hidden lg:block">
+                  <h1 className="text-2xl lg:text-3xl font-bold text-white mb-1 flex items-center gap-3">
+                    <span className="bg-gradient-to-br from-[#667eea] to-[#764ba2] bg-clip-text text-transparent">
+                      Chat with Documents
+                    </span>
+                  </h1>
+                  <p className="text-gray-400 text-sm flex items-center gap-2">
+                    <Terminal className="w-3 h-3" />
+                    Powered by <span className="text-[#667eea] font-semibold">Llama 3.3</span> • Upload PDFs and ask questions
+                  </p>
+                </div>
+                <div className="lg:hidden">
+                  <h1 className="text-xl font-bold text-white flex items-center gap-2">
+                    <span className="bg-gradient-to-br from-[#667eea] to-[#764ba2] bg-clip-text text-transparent">
+                      DocBot
+                    </span>
+                  </h1>
+                  <p className="text-gray-500 text-xs">AI Document Assistant</p>
+                </div>
+              </div>
 
-            <div className="relative z-10 flex justify-center gap-4 mt-6 flex-wrap">
-              <span className="bg-[#667eea]/15 px-4 py-1.5 rounded-full text-sm text-gray-300 border border-[#667eea]/30 backdrop-blur-sm">📊 Charts Analysis</span>
-              <span className="bg-[#764ba2]/15 px-4 py-1.5 rounded-full text-sm text-gray-300 border border-[#764ba2]/30 backdrop-blur-sm">✅ Form Detection</span>
-              <span className="bg-[#48bb78]/15 px-4 py-1.5 rounded-full text-sm text-gray-300 border border-[#48bb78]/30 backdrop-blur-sm">🎭 Expert Modes</span>
+              <div className="flex flex-wrap gap-2 items-center">
+                <SessionInfo
+                  sessionId={sessionId}
+                  fileCount={uploadedFiles.length}
+                  persona={selectedPersona}
+                  onClear={clearSession}
+                />
+                {sessionId && messages.length > 0 && (
+                  <div className="relative group">
+                    <button className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs text-gray-300 bg-[#1a1a24]/60 border border-[#ffffff08] hover:border-[#667eea]/30 hover:bg-[#1a1a24]/80 transition-all">
+                      <Download className="w-3 h-3" />
+                      Export
+                    </button>
+                    <div className="absolute top-full right-0 mt-1 py-1 bg-[#1a1a24]/95 backdrop-blur-xl rounded-lg border border-[#ffffff08] shadow-xl opacity-0 invisible group-hover:opacity-100 group-hover:visible transition-all z-50 min-w-[140px]">
+                      <button
+                        onClick={() => exportChat('txt')}
+                        className="w-full flex items-center gap-2 px-3 py-2 text-xs text-gray-300 hover:bg-[#ffffff08] hover:text-white transition-colors"
+                      >
+                        <FileTxt className="w-3 h-3" />
+                        Text (.txt)
+                      </button>
+                      <button
+                        onClick={() => exportChat('markdown')}
+                        className="w-full flex items-center gap-2 px-3 py-2 text-xs text-gray-300 hover:bg-[#ffffff08] hover:text-white transition-colors"
+                      >
+                        <FileText className="w-3 h-3" />
+                        Markdown (.md)
+                      </button>
+                      <button
+                        onClick={() => exportChat('json')}
+                        className="w-full flex items-center gap-2 px-3 py-2 text-xs text-gray-300 hover:bg-[#ffffff08] hover:text-white transition-colors"
+                      >
+                        <FileJson className="w-3 h-3" />
+                        JSON (.json)
+                      </button>
+                    </div>
+                  </div>
+                )}
+                <div className="flex gap-2">
+                  <span className="bg-[#667eea]/10 px-3 py-1.5 rounded-lg text-xs text-gray-300 border border-[#667eea]/20 flex items-center gap-1.5">
+                    <FileText className="w-3 h-3" /> PDF
+                  </span>
+                  <span className="bg-[#764ba2]/10 px-3 py-1.5 rounded-lg text-xs text-gray-300 border border-[#764ba2]/20 flex items-center gap-1.5">
+                    <Brain className="w-3 h-3" /> AI
+                  </span>
+                </div>
+              </div>
             </div>
           </div>
         </header>
 
         {/* Chat Output */}
-        <div className="flex-1 overflow-y-auto px-8 pb-4">
+        <div className="flex-1 overflow-y-auto px-4 lg:px-6 pb-4 max-w-5xl mx-auto w-full">
           {!sessionId && messages.length === 0 ? (
-            <div className="flex flex-col items-center justify-center h-full text-gray-400 opacity-60">
-              <Upload className="w-16 h-16 mb-4" />
-              <p className="text-xl">Upload PDF documents to begin chatting</p>
+            <div className="flex flex-col items-center justify-center h-full text-gray-500">
+              <div className="relative">
+                <div className="w-24 h-24 rounded-3xl bg-gradient-to-br from-[#667eea]/20 to-[#764ba2]/20 flex items-center justify-center mb-6 animate-pulse">
+                  <Upload className="w-12 h-12 text-[#667eea]" />
+                </div>
+                <div className="absolute -bottom-2 -right-2 w-8 h-8 bg-[#10b981] rounded-full flex items-center justify-center shadow-lg">
+                  <ArrowRight className="w-4 h-4 text-white" />
+                </div>
+              </div>
+              <p className="text-xl font-medium text-gray-300 mb-2 text-center">Upload PDF documents to begin</p>
+              <p className="text-sm text-gray-500 text-center max-w-md mb-6">
+                Drag and drop files or click the upload area. Your documents are processed securely and never leave your browser.
+              </p>
+
+              {/* Feature highlights */}
+              <div className="grid grid-cols-1 sm:grid-cols-3 gap-4 max-w-2xl">
+                <div className="flex flex-col items-center p-4 bg-[#12121a]/40 rounded-xl border border-[#ffffff06] max-w-[140px]">
+                  <Stethoscope className="w-6 h-6 text-[#10b981] mb-2" />
+                  <span className="text-xs text-gray-400 text-center">Medical Docs</span>
+                </div>
+                <div className="flex flex-col items-center p-4 bg-[#12121a]/40 rounded-xl border border-[#ffffff06] max-w-[140px]">
+                  <TrendingUp className="w-6 h-6 text-[#f59e0b] mb-2" />
+                  <span className="text-xs text-gray-400 text-center">Financial Reports</span>
+                </div>
+                <div className="flex flex-col items-center p-4 bg-[#12121a]/40 rounded-xl border border-[#ffffff06] max-w-[140px]">
+                  <Scale className="w-6 h-6 text-[#ef4444] mb-2" />
+                  <span className="text-xs text-gray-400 text-center">Legal Contracts</span>
+                </div>
+              </div>
+            </div>
+          ) : messages.length === 0 && sessionId ? (
+            <div className="flex flex-col items-center justify-center h-full text-gray-500">
+              <div className="w-16 h-16 rounded-2xl bg-gradient-to-br from-[#667eea]/20 to-[#764ba2]/20 flex items-center justify-center mb-4">
+                <MessageSquare className="w-8 h-8 text-[#667eea]" />
+              </div>
+              <p className="text-lg font-medium text-gray-300 mb-2">Ready to chat!</p>
+              <p className="text-sm text-gray-500">Ask me anything about your uploaded documents</p>
+
+              {/* Suggested questions */}
+              <div className="mt-8 grid gap-2 max-w-lg w-full">
+                <p className="text-xs text-gray-500 text-center mb-2">Try asking:</p>
+                {[
+                  "Summarize the main points of this document",
+                  "What are the key findings?",
+                  "Extract all tables and figures",
+                  "What are the action items?"
+                ].map((question, idx) => (
+                  <button
+                    key={idx}
+                    onClick={() => setInput(question)}
+                    className="text-left p-3 bg-[#12121a]/60 border border-[#ffffff08] rounded-xl text-sm text-gray-400 hover:text-white hover:border-[#667eea]/30 hover:bg-[#1a1a24]/60 transition-all"
+                  >
+                    <Sparkles className="w-3 h-3 inline mr-2 text-[#667eea]" />
+                    {question}
+                  </button>
+                ))}
+              </div>
             </div>
           ) : (
-            <div className="space-y-6 max-w-4xl mx-auto pb-20">
+            <div className="space-y-4 max-w-5xl mx-auto pb-20">
               {messages.map((msg, idx) => (
                 <div
                   key={idx}
-                  className={`flex ${msg.role === "user" ? "justify-end" : "justify-start"}`}
+                  className={`flex ${msg.role === "user" ? "justify-end" : "justify-start"} animate-in slide-in-from-bottom-2 duration-300`}
                 >
                   <div
-                    className={`max-w-[85%] rounded-2xl p-5 animate-message-slide-in shadow-lg border backdrop-blur-xl
+                    className={`max-w-[85%] lg:max-w-[80%] rounded-2xl p-4 shadow-lg border backdrop-blur-xl group
                       ${msg.role === "user"
-                        ? "bg-gradient-to-br from-[#667eea] to-[#764ba2] text-white border-transparent rounded-tr-sm"
-                        : "bg-[#1e1e2e]/80 border-[#ffffff1a] text-[#e0e0e0] rounded-tl-sm hover:border-[#667eea]/30 hover:shadow-[0_8px_32px_rgba(102,126,234,0.15)] transition-all"
+                        ? "bg-gradient-to-br from-[#667eea] to-[#764ba2] text-white border-transparent rounded-br-sm"
+                        : "bg-[#12121a]/80 border-[#ffffff08] text-[#e0e0e0] rounded-bl-sm hover:border-[#667eea]/20 transition-colors"
                       }`}
                   >
+                    {/* Message Header */}
+                    {msg.role === "assistant" && (
+                      <div className="flex items-center gap-2 mb-2 pb-2 border-b border-[#ffffff08]">
+                        <div className="w-6 h-6 rounded-lg bg-gradient-to-br from-[#667eea] to-[#764ba2] flex items-center justify-center">
+                          <Brain className="w-3 h-3 text-white" />
+                        </div>
+                        <span className="text-xs font-medium text-gray-400">DocBot</span>
+                        {msg.timestamp && (
+                          <>
+                            <span className="text-[10px] text-gray-600">•</span>
+                            <span className="text-[10px] text-gray-600 flex items-center gap-1">
+                              <Clock className="w-2 h-2" />
+                              {msg.timestamp.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
+                            </span>
+                          </>
+                        )}
+                      </div>
+                    )}
+
+                    {msg.role === "user" && (
+                      <div className="flex items-center gap-2 mb-2 pb-2 border-b border-[#ffffff10]">
+                        <span className="text-xs font-medium text-white/80">You</span>
+                        {msg.timestamp && (
+                          <span className="text-[10px] text-white/40 flex items-center gap-1 ml-auto">
+                            <Clock className="w-2 h-2" />
+                            {msg.timestamp.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
+                          </span>
+                        )}
+                      </div>
+                    )}
+
+                    {/* Message Content */}
                     {msg.role === "assistant" ? (
-                      <div className="prose prose-invert max-w-none text-sm leading-relaxed">
+                      <div className="prose prose-invert prose-sm max-w-none 
+                        prose-p:leading-7 prose-p:text-gray-300
+                        prose-headings:text-white prose-headings:font-semibold prose-headings:mt-0 prose-headings:mb-2
+                        prose-strong:text-white prose-strong:font-medium
+                        prose-ul:text-gray-300 prose-ul:my-2 prose-li:my-1
+                        prose-ol:text-gray-300 prose-ol:my-2 prose-li:my-1
+                        prose-li:marker:text-[#667eea]
+                        prose-a:text-[#667eea] prose-a:no-underline hover:prose-a:underline
+                        prose-blockquote:border-l-[#667eea] prose-blockquote:bg-[#1a1a24]/50 prose-blockquote:py-1 prose-blockquote:px-3 prose-blockquote:rounded-r-lg prose-blockquote:text-gray-400 prose-blockquote:not-italic
+                        prose-code:text-[#764ba2] prose-code:bg-[#1a1a24]/60 prose-code:px-1.5 prose-code:py-0.5 prose-code:rounded prose-code:before:content-none prose-code:after:content-none
+                        prose-pre:bg-[#1a1a24]/80 prose-pre:border prose-pre:border-[#ffffff08]">
                         <ReactMarkdown remarkPlugins={[remarkGfm]}>
                           {msg.content}
                         </ReactMarkdown>
@@ -301,15 +942,48 @@ export default function Home() {
                     ) : (
                       <p className="text-[15px] leading-relaxed whitespace-pre-wrap">{msg.content}</p>
                     )}
+
+                    {/* Citations */}
+                    {msg.role === "assistant" && msg.citations && msg.citations.length > 0 && (
+                      <div className="mt-4 pt-3 border-t border-[#ffffff08]">
+                        <div className="flex items-center gap-2 mb-3">
+                          <BookOpen className="w-3 h-3 text-[#667eea]" />
+                          <span className="text-[11px] font-semibold text-gray-400 uppercase tracking-wider">References</span>
+                        </div>
+                        <div className="flex flex-wrap gap-2">
+                          {msg.citations.map((citation, idx) => (
+                            <div
+                              key={idx}
+                              className="text-[11px] px-3 py-2 bg-[#1a1a24]/80 rounded-lg border border-[#ffffff10] text-gray-400 hover:text-gray-300 hover:border-[#667eea]/30 hover:bg-[#1a1a24] transition-all cursor-pointer group"
+                              title={`${citation.source} - Page ${citation.page}`}
+                            >
+                              <span className="text-[#667eea] font-medium">{citation.source}</span>
+                              <span className="text-gray-600 mx-1.5">•</span>
+                              <span className="text-gray-500">Page {citation.page}</span>
+                            </div>
+                          ))}
+                        </div>
+                      </div>
+                    )}
+
+                    {/* Message Actions */}
+                    {msg.role === "assistant" && (
+                      <div className="flex gap-2 mt-2 pt-2 border-t border-[#ffffff08] opacity-0 group-hover:opacity-100 transition-opacity">
+                        <button
+                          onClick={() => copyToClipboard(msg.content)}
+                          className="flex items-center gap-1 text-[10px] text-gray-500 hover:text-gray-300 transition-colors"
+                        >
+                          <Copy className="w-3 h-3" />
+                          Copy
+                        </button>
+                      </div>
+                    )}
                   </div>
                 </div>
               ))}
               {isLoading && messages.length > 0 && messages[messages.length - 1].role === "user" && (
                 <div className="flex justify-start">
-                  <div className="bg-[#1e1e2e]/80 border border-[#ffffff1a] rounded-2xl rounded-tl-sm p-4 animate-pulse flex items-center text-gray-400">
-                    <Loader2 className="w-5 h-5 animate-spin mr-3 text-[#667eea]" />
-                    Analyzing document and generating response...
-                  </div>
+                  <TypingIndicator />
                 </div>
               )}
               <div ref={messagesEndRef} />
@@ -318,35 +992,42 @@ export default function Home() {
         </div>
 
         {/* Input Area */}
-        <div className="p-8 pt-0 flex-none max-w-5xl mx-auto w-full">
+        <div className="p-4 lg:p-6 pt-0 flex-none w-full">
           <form
             onSubmit={handleSendMessage}
-            className="relative bg-[#1e1e2e]/80 border border-[#ffffff26] rounded-2xl backdrop-blur-xl shadow-[0_4px_20px_rgba(0,0,0,0.2)] focus-within:border-[#667eea]/50 focus-within:shadow-[0_4px_20px_rgba(102,126,234,0.2)] transition-all overflow-hidden flex items-end"
+            className="relative bg-[#12121a]/90 border border-[#ffffff10] rounded-2xl backdrop-blur-xl shadow-lg shadow-black/20 focus-within:border-[#667eea]/40 focus-within:shadow-[0_8px_30px_rgba(102,126,234,0.15)] transition-all overflow-hidden flex items-end"
           >
-            <textarea
-              value={input}
-              onChange={(e) => setInput(e.target.value)}
-              onKeyDown={(e) => {
-                if (e.key === 'Enter' && !e.shiftKey) {
-                  e.preventDefault();
-                  handleSendMessage();
-                }
-              }}
-              placeholder={sessionId ? "Ask a question about the document..." : "Please upload a document before asking..."}
-              disabled={!sessionId || isLoading}
-              className="flex-1 max-h-48 min-h-[60px] p-4 bg-transparent outline-none resize-none text-white placeholder-gray-400 text-[15px]"
-              rows={1}
-            />
+            <div className="flex-1 relative">
+              <textarea
+                ref={textareaRef}
+                value={input}
+                onChange={(e) => setInput(e.target.value)}
+                onKeyDown={(e) => {
+                  if (e.key === 'Enter' && !e.shiftKey) {
+                    e.preventDefault();
+                    handleSendMessage();
+                  }
+                }}
+                placeholder={sessionId ? "Ask a question about your document..." : "Upload a document to start chatting..."}
+                disabled={!sessionId || isLoading}
+                className="w-full max-h-40 min-h-[60px] p-4 pr-12 bg-transparent outline-none resize-none text-white placeholder-gray-500 text-[15px] leading-relaxed disabled:opacity-50"
+                rows={1}
+              />
+              <div className="absolute bottom-3 right-3 text-[10px] text-gray-600 flex items-center gap-1.5">
+                {input.length > 0 && <span>{input.length} chars</span>}
+              </div>
+            </div>
             <button
               type="submit"
               disabled={!input.trim() || !sessionId || isLoading}
-              className="m-3 p-3 rounded-xl bg-gradient-to-tr from-[#667eea] to-[#764ba2] text-white disabled:opacity-50 disabled:cursor-not-allowed hover:shadow-lg transition-all focus:outline-none focus:ring-2 focus:ring-[#764ba2]/50 hover:scale-105 active:scale-95"
+              className="m-2 p-3.5 rounded-xl bg-gradient-to-tr from-[#667eea] to-[#764ba2] text-white shadow-lg shadow-[#667eea]/20 disabled:opacity-40 disabled:cursor-not-allowed hover:shadow-xl hover:shadow-[#667eea]/30 transition-all focus:outline-none focus:ring-2 focus:ring-[#764ba2]/50 hover:scale-105 active:scale-95"
             >
-              <Send className="w-5 h-5" />
+              {isLoading ? <Loader2 className="w-5 h-5 animate-spin" /> : <Send className="w-5 h-5" />}
             </button>
           </form>
-          <div className="text-center mt-3 text-xs text-gray-500 font-medium">
-            DocBot can make mistakes. Consider verifying important information.
+          <div className="text-center mt-3 text-xs text-gray-600 font-medium flex items-center justify-center gap-2">
+            <HelpCircle className="w-3 h-3" />
+            AI can make mistakes. Consider verifying important information.
           </div>
         </div>
 
