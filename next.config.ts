@@ -3,9 +3,10 @@ import type { NextConfig } from "next";
 const railwayBackendUrl = process.env.RAILWAY_BACKEND_URL;
 
 if (process.env.NODE_ENV === "production" && !railwayBackendUrl) {
-  throw new Error(
-    "[next.config.ts] RAILWAY_BACKEND_URL is not set. " +
-      "Set it as a build-time environment variable in your Vercel project settings."
+  console.warn(
+    "[next.config.ts] WARNING: RAILWAY_BACKEND_URL is not set. " +
+      "API requests will fall back to the Vercel serverless function. " +
+      "Set RAILWAY_BACKEND_URL in Vercel project settings to route to Railway."
   );
 }
 
