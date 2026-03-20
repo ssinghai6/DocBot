@@ -17,6 +17,10 @@ export const metadata: Metadata = {
   description: "Chat with your PDF documents using AI. Upload documents, ask questions, and get instant answers powered by Llama 3.3",
   keywords: ["AI", "document", "PDF", "chat", "Llama", "assistant", "OCR"],
   authors: [{ name: "Sanshrit Singhai" }],
+  icons: {
+    icon: "/favicon.svg",
+    shortcut: "/favicon.svg",
+  },
   openGraph: {
     title: "DocBot - AI Document Assistant",
     description: "Chat with your PDF documents using AI",
