@@ -344,7 +344,21 @@ RESPONSE STYLE: Be practical, action-oriented, and results-focused.""",
 
 @app.get("/api/health")
 def health_check():
-    return {"status": "DocBot API is running", "version": "1.1.0"}
+    db_status = "ok"
+    try:
+        conn = sqlite3.connect(DB_PATH)
+        conn.execute("SELECT 1")
+        conn.close()
+    except Exception:
+        db_status = "error"
+    payload = {
+        "status": "ok",
+        "version": "1.1.0",
+        "timestamp": datetime.utcnow().isoformat() + "Z",
+        "db": db_status,
+    }
+    status_code = 503 if db_status == "error" else 200
+    return JSONResponse(status_code=status_code, content=payload)
 
 @app.get("/api/personas")
 def get_personas():
