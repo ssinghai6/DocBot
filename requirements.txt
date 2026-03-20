@@ -12,3 +12,6 @@ python-dotenv
 pymupdf
 python-multipart
 langchain-huggingface
+asyncpg==0.30.0
+sqlalchemy[asyncio]>=2.0.0,<3.0.0
+psycopg2-binary==2.9.10

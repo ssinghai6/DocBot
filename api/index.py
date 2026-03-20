@@ -1,14 +1,20 @@
+from contextlib import asynccontextmanager
 from fastapi import FastAPI, File, UploadFile, Form, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse, StreamingResponse
 from pydantic import BaseModel
+from sqlalchemy.ext.asyncio import create_async_engine, AsyncSession, async_sessionmaker
+from sqlalchemy import (
+    MetaData, Table, Column, String, Text, Integer, DateTime,
+    func, select, insert, update, delete, text,
+)
 from typing import List, Dict, Any, Optional
 import os
+import sys
 import asyncio
 import logging
 import uuid
 import json
-import sqlite3
 import time
 from datetime import datetime
 from dotenv import load_dotenv
@@ -20,7 +26,7 @@ logger = logging.getLogger(__name__)
 
 load_dotenv()
 
-app = FastAPI(title="DocBot API", version="1.1.0")
+app = FastAPI(title="DocBot API", version="2.0.0", lifespan=lifespan)
 
 ALLOWED_ORIGINS = os.getenv("ALLOWED_ORIGINS", "http://localhost:3000").split(",")
 
@@ -36,8 +42,65 @@ def safe_error_message(error: Exception) -> str:
     """Sanitize error messages for client responses"""
     return "An internal error occurred. Please try again later."
 
-# Database setup for session history
-DB_PATH = "/tmp/docbot_sessions.db"
+# ---------------------------------------------------------------------------
+# Database setup — PostgreSQL via asyncpg
+# ---------------------------------------------------------------------------
+
+_raw_db_url = os.getenv("DATABASE_URL")
+if not _raw_db_url:
+    logging.getLogger(__name__).error(
+        "DATABASE_URL is not set. Provide a PostgreSQL connection string. Exiting."
+    )
+    sys.exit(1)
+
+DATABASE_URL: str = _raw_db_url.replace("postgresql://", "postgresql+asyncpg://", 1)
+
+engine = create_async_engine(
+    DATABASE_URL,
+    pool_size=5,
+    max_overflow=10,
+    pool_pre_ping=True,
+    echo=False,
+)
+
+async_session_factory = async_sessionmaker(engine, expire_on_commit=False)
+
+metadata = MetaData()
+
+sessions_table = Table(
+    "sessions", metadata,
+    Column("session_id", String, primary_key=True),
+    Column("created_at", DateTime(timezone=True), server_default=func.now(), nullable=False),
+    Column("updated_at", DateTime(timezone=True), server_default=func.now(), onupdate=func.now(), nullable=False),
+    Column("persona", String, server_default="Generalist"),
+    Column("file_count", Integer, server_default="0"),
+    Column("files_info", Text),
+)
+
+messages_table = Table(
+    "messages", metadata,
+    Column("id", Integer, primary_key=True, autoincrement=True),
+    Column("session_id", String, nullable=False, index=True),
+    Column("role", String, nullable=False),
+    Column("content", Text),
+    Column("sources", Text),
+    Column("timestamp", DateTime(timezone=True), server_default=func.now(), nullable=False),
+)
+
+
+async def init_db() -> None:
+    """Create tables idempotently on startup."""
+    async with engine.begin() as conn:
+        await conn.run_sync(metadata.create_all)
+    logger.info("Database tables verified / created (sessions, messages).")
+
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    await init_db()
+    yield
+    await engine.dispose()
+
 
 # Performance optimization: Cache for embeddings model
 _EMBEDDINGS_CACHE = None
@@ -55,35 +118,7 @@ def get_embeddings():
         )
     return _EMBEDDINGS_CACHE
 
-def init_db():
-    """Initialize SQLite database for session storage"""
-    conn = sqlite3.connect(DB_PATH)
-    cursor = conn.cursor()
-    cursor.execute('''
-        CREATE TABLE IF NOT EXISTS sessions (
-            session_id TEXT PRIMARY KEY,
-            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-            updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-            persona TEXT DEFAULT 'Generalist',
-            file_count INTEGER DEFAULT 0,
-            files_info TEXT
-        )
-    ''')
-    cursor.execute('''
-        CREATE TABLE IF NOT EXISTS messages (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            session_id TEXT,
-            role TEXT,
-            content TEXT,
-            sources TEXT,
-            timestamp TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-            FOREIGN KEY (session_id) REFERENCES sessions(session_id)
-        )
-    ''')
-    conn.commit()
-    conn.close()
 
-init_db()
 
 class ChatMessage(BaseModel):
     role: str
@@ -343,17 +378,17 @@ RESPONSE STYLE: Be practical, action-oriented, and results-focused.""",
 }
 
 @app.get("/api/health")
-def health_check():
+async def health_check():
     db_status = "ok"
     try:
-        conn = sqlite3.connect(DB_PATH)
-        conn.execute("SELECT 1")
-        conn.close()
-    except Exception:
+        async with engine.connect() as conn:
+            await conn.execute(text("SELECT 1"))
+    except Exception as exc:
+        logger.error("Health check DB error: %s", type(exc).__name__)
         db_status = "error"
     payload = {
         "status": "ok",
-        "version": "1.1.0",
+        "version": "2.0.0",
         "timestamp": datetime.utcnow().isoformat() + "Z",
         "db": db_status,
     }
@@ -446,14 +481,15 @@ async def upload_documents(
         VECTOR_STORES[session_id] = db
         
         # Store session in database
-        conn = sqlite3.connect(DB_PATH)
-        cursor = conn.cursor()
-        cursor.execute(
-            "INSERT INTO sessions (session_id, persona, file_count, files_info) VALUES (?, ?, ?, ?)",
-            (session_id, "Generalist", len(files_info), json.dumps(files_info))
-        )
-        conn.commit()
-        conn.close()
+        async with engine.begin() as conn:
+            await conn.execute(
+                insert(sessions_table).values(
+                    session_id=session_id,
+                    persona="Generalist",
+                    file_count=len(files_info),
+                    files_info=json.dumps(files_info),
+                )
+            )
         
         # Determine suggested persona based on file names + first ~5000 chars of extracted text
         suggested_persona = "Generalist"
@@ -635,29 +671,27 @@ async def chat(request: ChatRequest):
         
         # Store message in database
         try:
-            conn = sqlite3.connect(DB_PATH)
-            cursor = conn.cursor()
-            
-            # Store user message
-            cursor.execute(
-                "INSERT INTO messages (session_id, role, content) VALUES (?, ?, ?)",
-                (request.session_id, "user", request.message)
-            )
-            
-            # Store assistant message with citations
-            cursor.execute(
-                "INSERT INTO messages (session_id, role, content, sources) VALUES (?, ?, ?, ?)",
-                (request.session_id, "assistant", response["answer"], json.dumps(citations))
-            )
-            
-            # Update session persona if changed
-            cursor.execute(
-                "UPDATE sessions SET updated_at = CURRENT_TIMESTAMP, persona = ? WHERE session_id = ?",
-                (request.persona, request.session_id)
-            )
-            
-            conn.commit()
-            conn.close()
+            async with engine.begin() as conn:
+                await conn.execute(
+                    insert(messages_table).values(
+                        session_id=request.session_id,
+                        role="user",
+                        content=request.message,
+                    )
+                )
+                await conn.execute(
+                    insert(messages_table).values(
+                        session_id=request.session_id,
+                        role="assistant",
+                        content=response["answer"],
+                        sources=json.dumps(citations),
+                    )
+                )
+                await conn.execute(
+                    update(sessions_table)
+                    .where(sessions_table.c.session_id == request.session_id)
+                    .values(updated_at=func.now(), persona=request.persona)
+                )
         except Exception as db_error:
             logger.error(f"Database error: {db_error}")
         
@@ -676,79 +710,69 @@ async def chat(request: ChatRequest):
 # ===== Phase 1 Features: Session History & Export =====
 
 @app.get("/api/sessions")
-def list_sessions():
+async def list_sessions():
     """List all sessions"""
     try:
-        conn = sqlite3.connect(DB_PATH)
-        cursor = conn.cursor()
-        cursor.execute("""
-            SELECT session_id, created_at, updated_at, persona, file_count, files_info 
-            FROM sessions 
-            ORDER BY updated_at DESC
-            LIMIT 50
-        """)
-        sessions = []
-        for row in cursor.fetchall():
-            sessions.append({
-                "session_id": row[0],
-                "created_at": row[1],
-                "updated_at": row[2],
-                "persona": row[3],
-                "file_count": row[4],
-                "files_info": json.loads(row[5]) if row[5] else []
-            })
-        conn.close()
+        async with engine.connect() as conn:
+            result = await conn.execute(
+                select(sessions_table)
+                .order_by(sessions_table.c.updated_at.desc())
+                .limit(50)
+            )
+            rows = result.fetchall()
+        sessions = [
+            {
+                "session_id": row.session_id,
+                "created_at": row.created_at.isoformat() if row.created_at else None,
+                "updated_at": row.updated_at.isoformat() if row.updated_at else None,
+                "persona": row.persona,
+                "file_count": row.file_count,
+                "files_info": json.loads(row.files_info) if row.files_info else [],
+            }
+            for row in rows
+        ]
         return {"sessions": sessions}
     except Exception as e:
         logger.error(f"Error listing sessions: {e}")
         return {"sessions": [], "error": safe_error_message(e)}
 
 @app.get("/api/session/{session_id}")
-def get_session(session_id: str):
+async def get_session(session_id: str):
     """Get session details and messages"""
     try:
-        conn = sqlite3.connect(DB_PATH)
-        cursor = conn.cursor()
-        
-        # Get session info
-        cursor.execute("""
-            SELECT session_id, created_at, updated_at, persona, file_count, files_info 
-            FROM sessions WHERE session_id = ?
-        """, (session_id,))
-        row = cursor.fetchone()
-        
-        if not row:
-            conn.close()
-            raise HTTPException(status_code=404, detail="Session not found")
-        
+        async with engine.connect() as conn:
+            session_result = await conn.execute(
+                select(sessions_table).where(sessions_table.c.session_id == session_id)
+            )
+            session_row = session_result.fetchone()
+
+            if not session_row:
+                raise HTTPException(status_code=404, detail="Session not found")
+
+            msg_result = await conn.execute(
+                select(messages_table)
+                .where(messages_table.c.session_id == session_id)
+                .order_by(messages_table.c.timestamp.asc())
+            )
+            message_rows = msg_result.fetchall()
+
         session_info = {
-            "session_id": row[0],
-            "created_at": row[1],
-            "updated_at": row[2],
-            "persona": row[3],
-            "file_count": row[4],
-            "files_info": json.loads(row[5]) if row[5] else []
+            "session_id": session_row.session_id,
+            "created_at": session_row.created_at.isoformat() if session_row.created_at else None,
+            "updated_at": session_row.updated_at.isoformat() if session_row.updated_at else None,
+            "persona": session_row.persona,
+            "file_count": session_row.file_count,
+            "files_info": json.loads(session_row.files_info) if session_row.files_info else [],
         }
-        
-        # Get messages
-        cursor.execute("""
-            SELECT role, content, sources, timestamp 
-            FROM messages 
-            WHERE session_id = ?
-            ORDER BY timestamp ASC
-        """, (session_id,))
-        
-        messages = []
-        for row in cursor.fetchall():
-            messages.append({
-                "role": row[0],
-                "content": row[1],
-                "sources": json.loads(row[2]) if row[2] else [],
-                "timestamp": row[3]
-            })
-        
-        conn.close()
-        
+        messages = [
+            {
+                "role": row.role,
+                "content": row.content,
+                "sources": json.loads(row.sources) if row.sources else [],
+                "timestamp": row.timestamp.isoformat() if row.timestamp else None,
+            }
+            for row in message_rows
+        ]
         return {"session": session_info, "messages": messages}
     except HTTPException:
         raise
@@ -757,67 +781,59 @@ def get_session(session_id: str):
         raise HTTPException(status_code=500, detail=safe_error_message(e))
 
 @app.delete("/api/session/{session_id}")
-def delete_session(session_id: str):
+async def delete_session(session_id: str):
     """Delete a session and its messages"""
     try:
-        # Remove from vector store if exists
         if session_id in VECTOR_STORES:
             del VECTOR_STORES[session_id]
-        
-        conn = sqlite3.connect(DB_PATH)
-        cursor = conn.cursor()
-        cursor.execute("DELETE FROM messages WHERE session_id = ?", (session_id,))
-        cursor.execute("DELETE FROM sessions WHERE session_id = ?", (session_id,))
-        conn.commit()
-        conn.close()
-        
+
+        async with engine.begin() as conn:
+            await conn.execute(
+                delete(messages_table).where(messages_table.c.session_id == session_id)
+            )
+            await conn.execute(
+                delete(sessions_table).where(sessions_table.c.session_id == session_id)
+            )
+
         return {"message": "Session deleted successfully"}
     except Exception as e:
         logger.error(f"Error deleting session: {e}")
         raise HTTPException(status_code=500, detail=safe_error_message(e))
 
 @app.get("/api/export/{session_id}")
-def export_session(session_id: str, format: str = "txt"):
+async def export_session(session_id: str, format: str = "txt"):
     """Export session conversation"""
     try:
-        conn = sqlite3.connect(DB_PATH)
-        cursor = conn.cursor()
-        
-        # Get session info
-        cursor.execute("""
-            SELECT session_id, persona, files_info 
-            FROM sessions WHERE session_id = ?
-        """, (session_id,))
-        row = cursor.fetchone()
-        
-        if not row:
-            conn.close()
-            raise HTTPException(status_code=404, detail="Session not found")
-        
+        async with engine.connect() as conn:
+            sess_result = await conn.execute(
+                select(sessions_table).where(sessions_table.c.session_id == session_id)
+            )
+            sess_row = sess_result.fetchone()
+
+            if not sess_row:
+                raise HTTPException(status_code=404, detail="Session not found")
+
+            msg_result = await conn.execute(
+                select(messages_table)
+                .where(messages_table.c.session_id == session_id)
+                .order_by(messages_table.c.timestamp.asc())
+            )
+            message_rows = msg_result.fetchall()
+
         session_info = {
-            "session_id": row[0],
-            "persona": row[1],
-            "files_info": json.loads(row[2]) if row[2] else []
+            "session_id": sess_row.session_id,
+            "persona": sess_row.persona,
+            "files_info": json.loads(sess_row.files_info) if sess_row.files_info else [],
         }
-        
-        # Get messages
-        cursor.execute("""
-            SELECT role, content, sources, timestamp 
-            FROM messages 
-            WHERE session_id = ?
-            ORDER BY timestamp ASC
-        """, (session_id,))
-        
-        messages = []
-        for row in cursor.fetchall():
-            messages.append({
-                "role": row[0],
-                "content": row[1],
-                "sources": json.loads(row[2]) if row[2] else [],
-                "timestamp": row[3]
-            })
-        
-        conn.close()
+        messages = [
+            {
+                "role": row.role,
+                "content": row.content,
+                "sources": json.loads(row.sources) if row.sources else [],
+                "timestamp": row.timestamp.isoformat() if row.timestamp else None,
+            }
+            for row in message_rows
+        ]
         
         if format == "json":
             return {
@@ -883,21 +899,22 @@ Exported: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}
         raise HTTPException(status_code=500, detail=safe_error_message(e))
 
 @app.post("/api/session/{session_id}/update-persona")
-def update_session_persona(session_id: str, persona: str):
+async def update_session_persona(session_id: str, persona: str):
     """Update session persona"""
     try:
         if persona not in EXPERT_PERSONAS:
-            raise HTTPException(status_code=400, detail=f"Invalid persona. Available: {', '.join(EXPERT_PERSONAS.keys())}")
-        
-        conn = sqlite3.connect(DB_PATH)
-        cursor = conn.cursor()
-        cursor.execute(
-            "UPDATE sessions SET updated_at = CURRENT_TIMESTAMP, persona = ? WHERE session_id = ?",
-            (persona, session_id)
-        )
-        conn.commit()
-        conn.close()
-        
+            raise HTTPException(
+                status_code=400,
+                detail=f"Invalid persona. Available: {', '.join(EXPERT_PERSONAS.keys())}",
+            )
+
+        async with engine.begin() as conn:
+            await conn.execute(
+                update(sessions_table)
+                .where(sessions_table.c.session_id == session_id)
+                .values(updated_at=func.now(), persona=persona)
+            )
+
         return {"message": "Persona updated successfully", "persona": persona}
     except HTTPException:
         raise
@@ -915,19 +932,17 @@ async def test_persona_switch(request: PersonaTestRequest):
     """Test persona switching by getting the persona prompt without making an LLM call"""
     try:
         # Get session info
-        conn = sqlite3.connect(DB_PATH)
-        cursor = conn.cursor()
-        cursor.execute(
-            "SELECT session_id, persona FROM sessions WHERE session_id = ?",
-            (request.session_id,)
-        )
-        row = cursor.fetchone()
-        conn.close()
-        
+        async with engine.connect() as conn:
+            result = await conn.execute(
+                select(sessions_table.c.session_id, sessions_table.c.persona)
+                .where(sessions_table.c.session_id == request.session_id)
+            )
+            row = result.fetchone()
+
         if not row:
             raise HTTPException(status_code=404, detail="Session not found. Please upload documents first.")
-        
-        current_persona = row[1]
+
+        current_persona = row.persona
         
         # Get persona details
         if request.test_question:

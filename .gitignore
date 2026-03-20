@@ -46,7 +46,8 @@ venv/
 ENV/
 
 # env files (can opt-in for committing if needed)
-.env*
+.env
+.env.local
 
 # vercel
 .vercel
@@ -61,7 +62,6 @@ next-env.d.ts
 
 # confidential project planning docs
 project-tasks/
-scripts/
 CLAUDE.md
 DocBot_v2.txt
 *.txt
