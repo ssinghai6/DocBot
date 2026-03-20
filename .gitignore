@@ -58,3 +58,10 @@ next-env.d.ts
 
 # folder
 .opencode/
+
+# confidential project planning docs
+project-tasks/
+scripts/
+CLAUDE.md
+DocBot_v2.txt
+*.txt
