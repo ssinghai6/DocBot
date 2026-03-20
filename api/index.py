@@ -455,21 +455,50 @@ async def upload_documents(
         conn.commit()
         conn.close()
         
-        # Determine suggested persona based on file names/content
+        # Determine suggested persona based on file names + first ~1500 chars of extracted text
         suggested_persona = "Generalist"
         file_names_lower = " ".join([f["filename"].lower() for f in files_info])
-        
-        if any(word in file_names_lower for word in ["medical", "health", "clinical", "doctor", "patient"]):
+        doc_sample = " ".join([d.page_content for d in all_content[:3]])[:1500].lower()
+        combined_text = file_names_lower + " " + doc_sample
+
+        if any(word in combined_text for word in [
+            "medical", "health", "clinical", "doctor", "patient", "diagnosis",
+            "treatment", "symptom", "hospital", "prescription", "dosage",
+            "pathology", "surgery", "therapy", "disease", "chronic", "medication"
+        ]):
             suggested_persona = "Doctor"
-        elif any(word in file_names_lower for word in ["financial", "finance", "investment", "report", "quarterly", "annual"]):
-            suggested_persona = "Finance Expert"
-        elif any(word in file_names_lower for word in ["legal", "contract", "agreement", "terms", "policy"]):
-            suggested_persona = "Lawyer"
-        elif any(word in file_names_lower for word in ["technical", "spec", "engineering", "system"]):
-            suggested_persona = "Engineer"
-        elif any(word in file_names_lower for word in ["machine learning", "ai", "ml", "artificial intelligence", "research paper"]):
+        elif any(word in combined_text for word in [
+            "machine learning", "artificial intelligence", "neural network", "deep learning",
+            "dataset", "training", "classification", "regression", "nlp",
+            "computer vision", "transformer", "gradient", "overfitting",
+            "reinforcement learning", "embedding", "fine-tuning", "llm"
+        ]):
             suggested_persona = "AI/ML Expert"
-        elif any(word in file_names_lower for word in ["strategy", "consulting", "business plan", "proposal"]):
+        elif any(word in combined_text for word in [
+            "financial", "finance", "investment", "revenue", "profit", "loss",
+            "balance sheet", "income statement", "cash flow", "quarterly", "annual report",
+            "earnings", "dividend", "portfolio", "equity", "debt", "valuation",
+            "fiscal", "ebitda", "roi", "asset", "liability", "audit"
+        ]):
+            suggested_persona = "Finance Expert"
+        elif any(word in combined_text for word in [
+            "legal", "contract", "agreement", "terms", "policy", "clause",
+            "indemnity", "jurisdiction", "plaintiff", "defendant", "regulation",
+            "compliance", "statute", "arbitration", "intellectual property",
+            "copyright", "patent", "trademark", "gdpr", "litigation"
+        ]):
+            suggested_persona = "Lawyer"
+        elif any(word in combined_text for word in [
+            "technical", "specification", "engineering", "system design", "architecture",
+            "api", "database", "infrastructure", "deployment", "circuit", "firmware",
+            "mechanical", "structural", "electrical", "schematic", "protocol", "bandwidth"
+        ]):
+            suggested_persona = "Engineer"
+        elif any(word in combined_text for word in [
+            "strategy", "consulting", "business plan", "proposal", "market analysis",
+            "competitive", "stakeholder", "kpi", "roadmap", "go-to-market",
+            "swot", "operational", "transformation", "management"
+        ]):
             suggested_persona = "Consultant"
         
         return {
