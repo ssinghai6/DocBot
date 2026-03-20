@@ -318,10 +318,10 @@ export default function Home() {
       const data = await response.json();
       setSessionId(data.session_id);
 
-      if (data.suggested_persona) {
+      if (data.suggested_persona && data.suggested_persona !== "Generalist") {
         setSuggestedPersona(data.suggested_persona);
         setSelectedPersona(data.suggested_persona);
-        showToast("info", `Recommended ${data.suggested_persona} mode for your document`);
+        showToast("info", `Switched to ${data.suggested_persona} mode for your document`);
       } else {
         showToast("success", `Successfully processed ${files.length} document${files.length > 1 ? 's' : ''}`);
       }

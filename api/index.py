@@ -455,10 +455,10 @@ async def upload_documents(
         conn.commit()
         conn.close()
         
-        # Determine suggested persona based on file names + first ~1500 chars of extracted text
+        # Determine suggested persona based on file names + first ~5000 chars of extracted text
         suggested_persona = "Generalist"
         file_names_lower = " ".join([f["filename"].lower() for f in files_info])
-        doc_sample = " ".join([d.page_content for d in all_content[:3]])[:1500].lower()
+        doc_sample = " ".join([d.page_content for d in all_content[:6]])[:5000].lower()
         combined_text = file_names_lower + " " + doc_sample
 
         if any(word in combined_text for word in [
