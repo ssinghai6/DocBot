@@ -212,6 +212,7 @@ export default function Home() {
 
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const chatContainerRef = useRef<HTMLDivElement>(null);
+  const lastMessageRef = useRef<HTMLDivElement>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
 
@@ -229,8 +230,10 @@ export default function Home() {
   }, []);
 
   const scrollToBottom = () => {
-    if (chatContainerRef.current) {
-      chatContainerRef.current.scrollTop = chatContainerRef.current.scrollHeight;
+    if (lastMessageRef.current && chatContainerRef.current) {
+      const container = chatContainerRef.current;
+      const messageTop = lastMessageRef.current.offsetTop;
+      container.scrollTo({ top: messageTop - 16, behavior: "smooth" });
     }
   };
 
@@ -893,6 +896,7 @@ export default function Home() {
               {messages.map((msg, idx) => (
                 <div
                   key={idx}
+                  ref={idx === messages.length - 1 ? lastMessageRef : null}
                   className={`flex ${msg.role === "user" ? "justify-end" : "justify-start"} animate-in slide-in-from-bottom-2 duration-300`}
                 >
                   <div
