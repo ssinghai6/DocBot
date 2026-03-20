@@ -232,8 +232,10 @@ export default function Home() {
   const scrollToBottom = () => {
     if (lastMessageRef.current && chatContainerRef.current) {
       const container = chatContainerRef.current;
-      const messageTop = lastMessageRef.current.offsetTop;
-      container.scrollTo({ top: messageTop - 16, behavior: "smooth" });
+      const msgRect = lastMessageRef.current.getBoundingClientRect();
+      const containerRect = container.getBoundingClientRect();
+      const scrollOffset = msgRect.top - containerRect.top + container.scrollTop - 16;
+      container.scrollTo({ top: scrollOffset, behavior: "smooth" });
     }
   };
 
