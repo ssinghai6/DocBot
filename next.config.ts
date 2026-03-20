@@ -1,6 +1,7 @@
 import type { NextConfig } from "next";
 
-const railwayBackendUrl = process.env.RAILWAY_BACKEND_URL;
+const rawUrl = process.env.RAILWAY_BACKEND_URL?.trim();
+const railwayBackendUrl = rawUrl && !rawUrl.startsWith("http") ? `https://${rawUrl}` : rawUrl;
 
 if (process.env.NODE_ENV === "production" && !railwayBackendUrl) {
   console.warn(
