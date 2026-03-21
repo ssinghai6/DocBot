@@ -26,7 +26,7 @@ logger = logging.getLogger(__name__)
 
 load_dotenv()
 
-app = FastAPI(title="DocBot API", version="2.0.0", lifespan=lifespan)
+app = FastAPI(title="DocBot API", version="2.0.0")
 
 ALLOWED_ORIGINS = os.getenv("ALLOWED_ORIGINS", "http://localhost:3000").split(",")
 
@@ -104,6 +104,8 @@ async def lifespan(app: FastAPI):
     await init_db()
     yield
     await engine.dispose()
+
+app.router.lifespan_context = lifespan
 
 
 # Performance optimization: Cache for embeddings model
