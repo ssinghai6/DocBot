@@ -21,6 +21,9 @@ from dotenv import load_dotenv
 from io import BytesIO
 from functools import lru_cache
 
+from api import sandbox_service
+from api.sandbox_service import SandboxResult
+
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
@@ -1001,3 +1004,59 @@ def test_personas():
         "total_personas": len(EXPERT_PERSONAS),
         "message": "All 7 expert personas loaded and ready for testing"
     }
+
+# ---------------------------------------------------------------------------
+# E2B Sandbox execution route (DOCBOT-103)
+# ---------------------------------------------------------------------------
+
+class SandboxExecuteRequest(BaseModel):
+    code: str
+    session_id: Optional[str] = None
+
+
+@app.post("/api/sandbox/execute", response_model=SandboxResult)
+async def execute_sandbox(request: SandboxExecuteRequest) -> SandboxResult:
+    """Execute Python code in an isolated E2B sandbox.
+
+    The code runs in a fully isolated cloud container with no access to the
+    host server or internal network resources. Execution is capped at 25 s.
+    Charts produced by matplotlib are returned as base64 PNGs.
+
+    Request body
+    ------------
+    code        : Python source to execute (required)
+    session_id  : Caller session identifier for log correlation (optional)
+
+    Response (SandboxResult)
+    ------------------------
+    stdout           : Captured standard output
+    stderr           : Captured standard error
+    charts           : List of base64-encoded PNG strings
+    error            : Human-readable error message, or null on success
+    execution_time_ms: Wall-clock time for the sandbox run
+    """
+    log_prefix = f"[session={request.session_id}]" if request.session_id else "[anonymous]"
+    logger.info(
+        "%s Sandbox execution requested. code_length=%d",
+        log_prefix,
+        len(request.code),
+    )
+
+    try:
+        result = await sandbox_service.run_python(code=request.code)
+    except EnvironmentError as env_err:
+        # E2B_API_KEY not configured — surface clearly to the caller
+        logger.error("%s Sandbox environment error: %s", log_prefix, env_err)
+        raise HTTPException(status_code=503, detail=str(env_err))
+    except Exception as exc:
+        logger.error("%s Unexpected sandbox error: %s", log_prefix, exc)
+        raise HTTPException(status_code=500, detail=safe_error_message(exc))
+
+    logger.info(
+        "%s Sandbox finished. execution_time_ms=%d charts=%d has_error=%s",
+        log_prefix,
+        result.execution_time_ms,
+        len(result.charts),
+        result.error is not None,
+    )
+    return result
