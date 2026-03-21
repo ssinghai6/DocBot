@@ -53,7 +53,11 @@ if not _raw_db_url:
     )
     sys.exit(1)
 
-DATABASE_URL: str = _raw_db_url.replace("postgresql://", "postgresql+asyncpg://", 1)
+DATABASE_URL: str = (
+    _raw_db_url
+    .replace("postgresql://", "postgresql+asyncpg://", 1)
+    .replace("postgres://", "postgresql+asyncpg://", 1)
+)
 
 engine = create_async_engine(
     DATABASE_URL,
