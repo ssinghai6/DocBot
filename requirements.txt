@@ -16,3 +16,11 @@ asyncpg==0.30.0
 sqlalchemy[asyncio]>=2.0.0,<3.0.0
 psycopg2-binary==2.9.10
 e2b-code-interpreter>=1.0.0
+# DOCBOT-201: credential encryption
+cryptography>=41.0.0
+# DOCBOT-203: AST-based SQL validation
+sqlglot>=23.0.0
+# DOCBOT-205: MySQL connector (not mysqlclient — build issues on Railway)
+pymysql>=1.1.0
+# DOCBOT-207: CSV parsing and type inference
+pandas>=2.0.0

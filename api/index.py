@@ -6,7 +6,7 @@ from pydantic import BaseModel
 from sqlalchemy.ext.asyncio import create_async_engine, AsyncSession, async_sessionmaker
 from sqlalchemy import (
     MetaData, Table, Column, String, Text, Integer, DateTime,
-    func, select, insert, update, delete, text,
+    func, select, insert, update, delete, text, Boolean,
 )
 from typing import List, Dict, Any, Optional
 import os
@@ -94,17 +94,67 @@ messages_table = Table(
     Column("timestamp", DateTime(timezone=True), server_default=func.now(), nullable=False),
 )
 
+# ── EPIC-02: Database Connectivity tables ────────────────────────────────────
+
+db_connections_table = Table(
+    "db_connections", metadata,
+    Column("id", String, primary_key=True),            # UUID
+    Column("session_id", String, nullable=False, index=True),
+    Column("dialect", String, nullable=False),          # postgresql | mysql | sqlite
+    Column("host", String, nullable=False),
+    Column("port", Integer, nullable=False),
+    Column("dbname", String, nullable=False),
+    Column("credentials_blob", Text, nullable=False),   # Fernet-encrypted JSON
+    Column("created_at", DateTime(timezone=True), server_default=func.now(), nullable=False),
+)
+
+schema_cache_table = Table(
+    "schema_cache", metadata,
+    Column("connection_id", String, primary_key=True),  # FK → db_connections.id
+    Column("schema_json", Text, nullable=False),
+    Column("expires_at", DateTime(timezone=True), nullable=False),
+)
+
+query_history_table = Table(
+    "query_history", metadata,
+    Column("id", String, primary_key=True),             # UUID
+    Column("connection_id", String, nullable=False, index=True),
+    Column("nl_question", Text, nullable=False),
+    Column("sql_query", Text, nullable=False),
+    Column("result_summary", Text),
+    Column("created_at", DateTime(timezone=True), server_default=func.now(), nullable=False),
+)
+
+query_embeddings_table = Table(
+    "query_embeddings", metadata,
+    Column("query_id", String, primary_key=True),       # FK → query_history.id
+    Column("embedding_json", Text, nullable=False),     # JSON float array
+)
+
 
 async def init_db() -> None:
     """Create tables idempotently on startup."""
     async with engine.begin() as conn:
         await conn.run_sync(metadata.create_all)
-    logger.info("Database tables verified / created (sessions, messages).")
+    logger.info(
+        "Database tables verified / created "
+        "(sessions, messages, db_connections, schema_cache, query_history, query_embeddings)."
+    )
 
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     await init_db()
+    # Clean up any expired file uploads from previous runs
+    try:
+        from api.file_upload_service import cleanup_expired_uploads
+        removed = await cleanup_expired_uploads(
+            db_connections_table, schema_cache_table, async_session_factory
+        )
+        if removed:
+            logger.info("Startup cleanup: removed %d expired upload(s).", removed)
+    except Exception as exc:
+        logger.warning("Startup cleanup failed (non-fatal): %s", exc)
     yield
     await engine.dispose()
 
@@ -1004,6 +1054,230 @@ def test_personas():
         "total_personas": len(EXPERT_PERSONAS),
         "message": "All 7 expert personas loaded and ready for testing"
     }
+
+
+# =============================================================================
+# EPIC-02: Database Connectivity Routes
+# DOCBOT-201: connect / disconnect
+# DOCBOT-202: schema
+# DOCBOT-204: DB chat (streaming)
+# =============================================================================
+
+from api.db_service import (
+    DBConnectionRequest,
+    DBChatRequest,
+    QueryValidationError,
+    ConnectionNotFoundError,
+    ExecutionTimeoutError,
+    connect_database,
+    disconnect_database,
+    get_schema,
+    run_sql_pipeline,
+)
+
+
+class DisconnectRequest(BaseModel):
+    session_id: str
+
+
+@app.post("/api/db/connect")
+async def db_connect(request: DBConnectionRequest):
+    """
+    DOCBOT-201 — Validate credentials, encrypt, store, and return connection_id.
+    SSRF prevention and dialect validation are enforced by the Pydantic model.
+    """
+    try:
+        result = await connect_database(
+            request,
+            db_connections_table,
+            schema_cache_table,
+            async_session_factory,
+        )
+        return result
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+    except Exception as exc:
+        logger.error("db_connect error: %s", type(exc).__name__)
+        raise HTTPException(status_code=500, detail=safe_error_message(exc))
+
+
+@app.delete("/api/db/disconnect/{connection_id}")
+async def db_disconnect(connection_id: str, request: DisconnectRequest):
+    """
+    DOCBOT-201 — Remove a DB connection and invalidate its schema cache.
+    """
+    try:
+        await disconnect_database(
+            connection_id,
+            request.session_id,
+            db_connections_table,
+            schema_cache_table,
+            async_session_factory,
+        )
+        return {"message": "Connection removed successfully."}
+    except ConnectionNotFoundError as exc:
+        raise HTTPException(status_code=404, detail=str(exc))
+    except Exception as exc:
+        logger.error("db_disconnect error: %s", type(exc).__name__)
+        raise HTTPException(status_code=500, detail=safe_error_message(exc))
+
+
+@app.get("/api/db/schema/{connection_id}")
+async def db_schema(connection_id: str):
+    """
+    DOCBOT-202 — Return the cached (or freshly introspected) schema for a connection.
+    """
+    try:
+        schema = await get_schema(
+            connection_id,
+            db_connections_table,
+            schema_cache_table,
+            async_session_factory,
+        )
+        return {"connection_id": connection_id, "tables": schema}
+    except ConnectionNotFoundError as exc:
+        raise HTTPException(status_code=404, detail=str(exc))
+    except Exception as exc:
+        logger.error("db_schema error: %s", type(exc).__name__)
+        raise HTTPException(status_code=500, detail=safe_error_message(exc))
+
+
+@app.post("/api/db/chat")
+async def db_chat(request: DBChatRequest):
+    """
+    DOCBOT-204 — Natural language → SQL → execute → streamed answer.
+    Returns a StreamingResponse (text/event-stream) with SSE chunks:
+      1. metadata chunk  {type: "metadata", sql_query, explanation, result_preview, row_count, ...}
+      2. N token chunks  {type: "token", content: "..."}
+      3. done chunk      {type: "done"}
+    """
+    async def event_stream():
+        try:
+            async for chunk in run_sql_pipeline(
+                connection_id=request.connection_id,
+                question=request.question,
+                persona=request.persona,
+                db_connections_table=db_connections_table,
+                schema_cache_table=schema_cache_table,
+                query_history_table=query_history_table,
+                query_embeddings_table=query_embeddings_table,
+                async_session_factory=async_session_factory,
+                expert_personas=EXPERT_PERSONAS,
+            ):
+                yield chunk
+        except ConnectionNotFoundError as exc:
+            yield f"data: {json.dumps({'type': 'error', 'error_type': 'ConnectionNotFoundError', 'detail': str(exc)})}\n\n"
+        except QueryValidationError as exc:
+            yield f"data: {json.dumps({'type': 'error', 'error_type': 'QueryValidationError', 'detail': str(exc)})}\n\n"
+        except ExecutionTimeoutError as exc:
+            yield f"data: {json.dumps({'type': 'error', 'error_type': 'ExecutionTimeoutError', 'detail': str(exc)})}\n\n"
+        except Exception as exc:
+            logger.error("db_chat pipeline error: %s", type(exc).__name__)
+            yield f"data: {json.dumps({'type': 'error', 'error_type': 'InternalError', 'detail': 'An internal error occurred.'})}\n\n"
+
+    return StreamingResponse(event_stream(), media_type="text/event-stream")
+
+
+@app.get("/api/db/sessions")
+async def db_sessions():
+    """List all active DB connections (no credentials returned)."""
+    try:
+        async with engine.connect() as conn:
+            result = await conn.execute(
+                select(
+                    db_connections_table.c.id,
+                    db_connections_table.c.session_id,
+                    db_connections_table.c.dialect,
+                    db_connections_table.c.host,
+                    db_connections_table.c.port,
+                    db_connections_table.c.dbname,
+                    db_connections_table.c.created_at,
+                ).order_by(db_connections_table.c.created_at.desc())
+            )
+            rows = result.fetchall()
+
+        return {
+            "connections": [
+                {
+                    "connection_id": row.id,
+                    "session_id": row.session_id,
+                    "dialect": row.dialect,
+                    "host": row.host,
+                    "port": row.port,
+                    "dbname": row.dbname,
+                    "created_at": row.created_at.isoformat() if row.created_at else None,
+                }
+                for row in rows
+            ]
+        }
+    except Exception as exc:
+        logger.error("db_sessions error: %s", type(exc).__name__)
+        return {"connections": [], "error": safe_error_message(exc)}
+
+# =============================================================================
+# EPIC-02: File Upload Routes
+# DOCBOT-206: SQLite file upload
+# DOCBOT-207: CSV file upload
+# =============================================================================
+
+from api.file_upload_service import upload_sqlite, upload_csv
+
+
+@app.post("/api/db/upload")
+async def db_upload_sqlite(
+    file: UploadFile = File(...),
+    session_id: str = Form(...),
+):
+    """
+    DOCBOT-206 — Upload a .sqlite/.db file as a credential-free data source.
+    No connection string required. File is stored in /tmp with a 2-hour TTL.
+    Returns connection_id usable with POST /api/db/chat immediately.
+    """
+    try:
+        file_bytes = await file.read()
+        result = await upload_sqlite(
+            file_bytes=file_bytes,
+            original_filename=file.filename or "upload.sqlite",
+            session_id=session_id,
+            db_connections_table=db_connections_table,
+            schema_cache_table=schema_cache_table,
+            async_session_factory=async_session_factory,
+        )
+        return result
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+    except Exception as exc:
+        logger.error("db_upload_sqlite error: %s", type(exc).__name__)
+        raise HTTPException(status_code=500, detail=safe_error_message(exc))
+
+
+@app.post("/api/db/upload/csv")
+async def db_upload_csv(
+    file: UploadFile = File(...),
+    session_id: str = Form(...),
+):
+    """
+    DOCBOT-207 — Upload a .csv file as a queryable data source.
+    pandas converts it to a temp SQLite table with inferred types.
+    Returns connection_id usable with POST /api/db/chat immediately.
+    """
+    try:
+        file_bytes = await file.read()
+        result = await upload_csv(
+            file_bytes=file_bytes,
+            original_filename=file.filename or "upload.csv",
+            session_id=session_id,
+            db_connections_table=db_connections_table,
+            schema_cache_table=schema_cache_table,
+            async_session_factory=async_session_factory,
+        )
+        return result
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+    except Exception as exc:
+        logger.error("db_upload_csv error: %s", type(exc).__name__)
+        raise HTTPException(status_code=500, detail=safe_error_message(exc))
+
 
 # ---------------------------------------------------------------------------
 # E2B Sandbox execution route (DOCBOT-103)
