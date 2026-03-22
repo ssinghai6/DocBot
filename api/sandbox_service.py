@@ -18,6 +18,28 @@ from pydantic import BaseModel
 
 logger = logging.getLogger(__name__)
 
+# Injected before every execution to:
+#   1. Force the Agg (non-GUI) backend so matplotlib works in headless sandboxes
+#   2. Patch plt.show() to write base64-encoded PNGs to stdout prefixed with
+#      CHART_B64: so sandbox_service can extract them without relying on
+#      execution.results (which is empty in E2B v2 sync mode)
+_MATPLOTLIB_PREAMBLE = """\
+import matplotlib as _mpl
+_mpl.use('Agg')
+import matplotlib.pyplot as _plt
+import io as _io, base64 as _b64, sys as _sys
+
+_orig_show = _plt.show
+def _patched_show(*_args, **_kwargs):
+    buf = _io.BytesIO()
+    _plt.savefig(buf, format='png', bbox_inches='tight')
+    buf.seek(0)
+    _sys.stdout.write('CHART_B64:' + _b64.b64encode(buf.read()).decode() + '\\n')
+    _sys.stdout.flush()
+    _plt.close('all')
+_plt.show = _patched_show
+"""
+
 # ---------------------------------------------------------------------------
 # Result model
 # ---------------------------------------------------------------------------
@@ -50,25 +72,24 @@ def _get_api_key() -> str:
     return key
 
 
-def _extract_charts(results: list) -> list[str]:
-    """Pull base64-encoded PNGs out of E2B execution results.
+def _extract_charts(stdout_lines: list[str]) -> tuple[list[str], list[str]]:
+    """Separate CHART_B64: lines from regular stdout lines.
 
-    The e2b-code-interpreter SDK exposes a `.png` attribute on result objects
-    whenever a matplotlib figure (or any PNG-producing call) is captured.
-    The value is already a base64-encoded bytes string.
+    The _MATPLOTLIB_PREAMBLE patches plt.show() to write base64-encoded PNGs
+    to stdout prefixed with 'CHART_B64:'. This function splits those out so
+    charts end up in SandboxResult.charts and do not pollute SandboxResult.stdout.
+
+    Returns (clean_stdout_lines, chart_b64_strings).
     """
     charts: list[str] = []
-    for result in results:
-        png_data = getattr(result, "png", None)
-        if png_data is None:
-            continue
-        # png_data may be bytes or a base64 str depending on SDK version
-        if isinstance(png_data, (bytes, bytearray)):
-            charts.append(base64.b64encode(png_data).decode("utf-8"))
-        elif isinstance(png_data, str):
-            # Ensure it is clean base64 (strip any accidental whitespace)
-            charts.append(png_data.strip())
-    return charts
+    clean: list[str] = []
+    prefix = "CHART_B64:"
+    for line in stdout_lines:
+        if line.startswith(prefix):
+            charts.append(line[len(prefix):].strip())
+        else:
+            clean.append(line)
+    return clean, charts
 
 
 def _run_in_sandbox(code: str) -> SandboxResult:
@@ -81,20 +102,23 @@ def _run_in_sandbox(code: str) -> SandboxResult:
     # import errors surfaceable at call-time rather than module-load-time.
     from e2b_code_interpreter import Sandbox
 
-    api_key = _get_api_key()
+    # v2.x SDK reads E2B_API_KEY from environment automatically; validate it
+    # exists before creating the sandbox so the error is clear.
+    _get_api_key()
     sandbox: Optional[Sandbox] = None
     start_ms = int(time.monotonic() * 1000)
 
     try:
-        sandbox = Sandbox(api_key=api_key)
-        execution = sandbox.run_code(code)
+        sandbox = Sandbox.create()
+        # Prepend preamble so plt.show() auto-encodes charts to stdout
+        execution = sandbox.run_code(_MATPLOTLIB_PREAMBLE + code)
 
-        stdout_lines: list[str] = list(execution.logs.stdout or [])
+        raw_stdout: list[str] = list(execution.logs.stdout or [])
         stderr_lines: list[str] = list(execution.logs.stderr or [])
-        stdout = "\n".join(stdout_lines)
-        stderr = "\n".join(stderr_lines)
 
-        charts = _extract_charts(list(execution.results or []))
+        clean_stdout, charts = _extract_charts(raw_stdout)
+        stdout = "\n".join(clean_stdout)
+        stderr = "\n".join(stderr_lines)
 
         error_msg: Optional[str] = None
         if execution.error is not None:

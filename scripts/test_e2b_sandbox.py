@@ -165,7 +165,7 @@ async def _run_unit_tests() -> list[tuple[str, bool, str]]:
         t0 = time.monotonic()
         res = await run_python(TIMEOUT_CODE)
         elapsed = int((time.monotonic() - t0) * 1000)
-        ok, detail = _assert_error_contains(res, "timeout")
+        ok, detail = _assert_error_contains(res, "timed out")
         results.append((label, ok, detail or f"{elapsed}ms"))
     except Exception as exc:
         results.append((label, False, str(exc)))
