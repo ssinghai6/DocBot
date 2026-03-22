@@ -19,8 +19,11 @@ from cryptography.fernet import Fernet
 @pytest.fixture(autouse=True, scope="session")
 def set_test_env():
     """Inject required env vars for the entire test session."""
-    os.environ.setdefault("DB_ENCRYPTION_KEY", Fernet.generate_key().decode())
-    os.environ.setdefault("DATABASE_URL", "postgresql://fake:fake@localhost:5432/testdb")
+    # Use setdefault-style logic but treat empty string as unset (CI sets '' when secret missing)
+    if not os.environ.get("DB_ENCRYPTION_KEY"):
+        os.environ["DB_ENCRYPTION_KEY"] = Fernet.generate_key().decode()
+    if not os.environ.get("DATABASE_URL"):
+        os.environ["DATABASE_URL"] = "postgresql://fake:fake@localhost:5432/testdb"
 
 
 @pytest.fixture(scope="session")

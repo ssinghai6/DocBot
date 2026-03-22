@@ -114,13 +114,13 @@ class TestTypeInference:
         import pandas as pd
         df = pd.DataFrame({"name": ["Alice", "Bob", "Charlie"]})
         result = _infer_and_cast_columns(df)
-        assert result["name"].dtype == object
+        assert pd.api.types.is_string_dtype(result["name"])
 
     def test_mixed_type_column_stays_as_text(self):
         import pandas as pd
         df = pd.DataFrame({"mixed": ["1", "two", "3"]})
         result = _infer_and_cast_columns(df)
-        assert result["mixed"].dtype == object
+        assert pd.api.types.is_string_dtype(result["mixed"])
 
     def test_null_values_handled(self):
         import pandas as pd
