@@ -145,6 +145,16 @@ async def init_db() -> None:
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     await init_db()
+    # Clean up any expired file uploads from previous runs
+    try:
+        from api.file_upload_service import cleanup_expired_uploads
+        removed = await cleanup_expired_uploads(
+            db_connections_table, schema_cache_table, async_session_factory
+        )
+        if removed:
+            logger.info("Startup cleanup: removed %d expired upload(s).", removed)
+    except Exception as exc:
+        logger.warning("Startup cleanup failed (non-fatal): %s", exc)
     yield
     await engine.dispose()
 
@@ -1203,6 +1213,71 @@ async def db_sessions():
     except Exception as exc:
         logger.error("db_sessions error: %s", type(exc).__name__)
         return {"connections": [], "error": safe_error_message(exc)}
+
+# =============================================================================
+# EPIC-02: File Upload Routes
+# DOCBOT-206: SQLite file upload
+# DOCBOT-207: CSV file upload
+# =============================================================================
+
+from api.file_upload_service import upload_sqlite, upload_csv
+
+
+@app.post("/api/db/upload")
+async def db_upload_sqlite(
+    file: UploadFile = File(...),
+    session_id: str = Form(...),
+):
+    """
+    DOCBOT-206 — Upload a .sqlite/.db file as a credential-free data source.
+    No connection string required. File is stored in /tmp with a 2-hour TTL.
+    Returns connection_id usable with POST /api/db/chat immediately.
+    """
+    try:
+        file_bytes = await file.read()
+        result = await upload_sqlite(
+            file_bytes=file_bytes,
+            original_filename=file.filename or "upload.sqlite",
+            session_id=session_id,
+            db_connections_table=db_connections_table,
+            schema_cache_table=schema_cache_table,
+            async_session_factory=async_session_factory,
+        )
+        return result
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+    except Exception as exc:
+        logger.error("db_upload_sqlite error: %s", type(exc).__name__)
+        raise HTTPException(status_code=500, detail=safe_error_message(exc))
+
+
+@app.post("/api/db/upload/csv")
+async def db_upload_csv(
+    file: UploadFile = File(...),
+    session_id: str = Form(...),
+):
+    """
+    DOCBOT-207 — Upload a .csv file as a queryable data source.
+    pandas converts it to a temp SQLite table with inferred types.
+    Returns connection_id usable with POST /api/db/chat immediately.
+    """
+    try:
+        file_bytes = await file.read()
+        result = await upload_csv(
+            file_bytes=file_bytes,
+            original_filename=file.filename or "upload.csv",
+            session_id=session_id,
+            db_connections_table=db_connections_table,
+            schema_cache_table=schema_cache_table,
+            async_session_factory=async_session_factory,
+        )
+        return result
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+    except Exception as exc:
+        logger.error("db_upload_csv error: %s", type(exc).__name__)
+        raise HTTPException(status_code=500, detail=safe_error_message(exc))
+
 
 # ---------------------------------------------------------------------------
 # E2B Sandbox execution route (DOCBOT-103)
