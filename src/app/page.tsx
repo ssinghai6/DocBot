@@ -6,7 +6,7 @@ import remarkGfm from "remark-gfm"
 import {
   Send, Upload, File, Loader2, Trash2,
   Sparkles, Brain, BookOpen, Stethoscope,
-  TrendingUp, Code, Cpu, Scale, Briefcase,
+  TrendingUp, Code, Cpu, Scale, Briefcase, BarChart2,
   X, CheckCircle2, AlertCircle, Zap, ChevronDown,
   FileText, MessageSquare, Settings, Keyboard,
   Maximize2, Minimize2, Copy, Check, Info,
@@ -92,6 +92,13 @@ const EXPERT_PERSONAS: Record<string, {
     color: "text-[#06b6d4]",
     gradient: "from-[#06b6d4] to-[#0891b2]",
     accent: "#06b6d4"
+  },
+  "Data Analyst": {
+    icon: <BarChart2 className="w-5 h-5" />,
+    description: "Quantitative analysis with full SQL transparency and data quality flags",
+    color: "text-[#f97316]",
+    gradient: "from-[#f97316] to-[#ea580c]",
+    accent: "#f97316"
   },
 };
 
@@ -203,6 +210,17 @@ export default function Home() {
   const [deepVisualMode, setDeepVisualMode] = useState(false);
   const [deepResearch, setDeepResearch] = useState(false);
   const [sidebarOpen, setSidebarOpen] = useState(true);
+
+  // Database connection state
+  const [isDbConnected, setIsDbConnected] = useState(false);
+
+  // Called when a DB connection is successfully established.
+  // Auto-selects the Data Analyst persona only when the user has not already
+  // chosen a specific persona (i.e. still on the default Generalist).
+  const handleDbConnected = useCallback(() => {
+    setIsDbConnected(true);
+    setSelectedPersona(prev => (prev === "Generalist" ? "Data Analyst" : prev));
+  }, []);
 
   // File Upload State
   const [fileUploadState, setFileUploadState] = useState<FileUploadState>("idle");
