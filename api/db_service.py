@@ -335,6 +335,19 @@ async def get_schema(
     return schema
 
 
+def _get_columns_via_information_schema(engine, table_name: str) -> List[Dict[str, Any]]:
+    """Fallback column introspection using information_schema (no pg_collation needed)."""
+    try:
+        with engine.connect() as conn:
+            result = conn.execute(text(
+                "SELECT column_name, data_type FROM information_schema.columns "
+                "WHERE table_name = :t ORDER BY ordinal_position"
+            ), {"t": table_name})
+            return [{"name": row[0], "type": row[1]} for row in result]
+    except Exception:
+        return []
+
+
 async def _introspect_schema_from_url(sync_url: str, dialect: str) -> List[Dict[str, Any]]:
     """
     Use SQLAlchemy Inspector to return:
@@ -361,14 +374,16 @@ async def _introspect_schema_from_url(sync_url: str, dialect: str) -> List[Dict[
             table_names = table_names[:50]
             schema = []
             for tname in table_names:
-                columns = inspector.get_columns(tname)
-                schema.append({
-                    "name": tname,
-                    "columns": [
+                try:
+                    columns = inspector.get_columns(tname)
+                    col_list = [
                         {"name": col["name"], "type": str(col["type"])}
                         for col in columns
-                    ],
-                })
+                    ]
+                except Exception:
+                    # Fall back to information_schema for restricted users
+                    col_list = _get_columns_via_information_schema(engine, tname)
+                schema.append({"name": tname, "columns": col_list})
             return schema
         finally:
             engine.dispose()
