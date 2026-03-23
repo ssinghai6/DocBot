@@ -24,3 +24,5 @@ sqlglot>=23.0.0
 pymysql>=1.1.0
 # DOCBOT-207: CSV parsing and type inference
 pandas>=2.0.0
+# DOCBOT-301: Python code generation via Claude
+anthropic>=0.25.0

@@ -1355,3 +1355,53 @@ async def execute_sandbox(request: SandboxExecuteRequest) -> SandboxResult:
         result.error is not None,
     )
     return result
+
+
+# ---------------------------------------------------------------------------
+# Hybrid chat route (DOCBOT-402)
+# ---------------------------------------------------------------------------
+
+
+class HybridChatRequest(BaseModel):
+    question: str
+    session_id: str
+    connection_id: Optional[str] = None
+    persona: str = "Data Analyst"
+    has_docs: bool = True
+
+
+@app.post("/api/hybrid/chat")
+async def hybrid_chat_route(request: HybridChatRequest):
+    """DOCBOT-402 — Hybrid chat pipeline: intent classification → SQL + RAG → synthesis.
+
+    Returns a StreamingResponse (text/event-stream) with SSE chunks:
+      1. metadata chunk  {type: "metadata", intent, has_sql, has_docs}
+      2. N token chunks  {type: "token", content: "..."}
+      3. done chunk      {type: "done", citations: [...]}
+    """
+    from api.hybrid_service import hybrid_chat
+
+    async def event_stream():
+        try:
+            async for chunk in hybrid_chat(
+                question=request.question,
+                session_id=request.session_id,
+                connection_id=request.connection_id,
+                persona=request.persona,
+                has_docs=request.has_docs,
+                messages_table=messages_table,
+                sessions_table=sessions_table,
+                db_connections_table=db_connections_table,
+                schema_cache_table=schema_cache_table,
+                query_history_table=query_history_table,
+                query_embeddings_table=query_embeddings_table,
+                async_session_factory=async_session_factory,
+                expert_personas=EXPERT_PERSONAS,
+                vector_stores=VECTOR_STORES,
+            ):
+                yield chunk
+        except Exception as exc:
+            logger.error("hybrid_chat_route error: %s", type(exc).__name__)
+            yield f"data: {json.dumps({'type': 'error', 'detail': 'An internal error occurred.'})}\n\n"
+
+    return StreamingResponse(event_stream(), media_type="text/event-stream")

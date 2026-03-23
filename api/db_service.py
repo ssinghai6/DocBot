@@ -486,6 +486,29 @@ async def run_sql_pipeline(
 
     result_dicts = [dict(zip(column_names, row)) for row in rows]
 
+    # ── Step 6.5: Python code generation + E2B sandbox (DOCBOT-301/302) ──
+    # Only runs when >= 5 rows; failure never blocks the main pipeline.
+    if len(rows) >= 5:
+        try:
+            from api.sandbox_service import generate_analysis_code, run_python as run_sandbox
+
+            analysis_persona = (
+                expert_personas.get(persona, expert_personas.get("Generalist", {}))
+                .get("persona_def", "You are a helpful data analyst.")
+            )
+            analysis_code = await generate_analysis_code(
+                result_dicts=result_dicts[:50],
+                question=question,
+                persona_def=analysis_persona,
+            )
+            if analysis_code:
+                yield f"data: {json.dumps({'type': 'analysis_code', 'code': analysis_code})}\n\n"
+                sandbox_result = await run_sandbox(analysis_code)
+                for idx, chart_b64 in enumerate(sandbox_result.charts):
+                    yield f"data: {json.dumps({'type': 'chart', 'base64': chart_b64, 'index': idx})}\n\n"
+        except Exception as exc:
+            logger.warning("Code gen/sandbox step skipped: %s", exc)
+
     # ── Step 7: Answer generation (LLM call #3, streaming) ───────────────
     persona_def = (
         expert_personas.get(persona, expert_personas.get("Generalist", {}))
