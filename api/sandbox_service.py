@@ -14,7 +14,7 @@ import os
 import time
 from typing import Optional
 
-import anthropic
+import groq as groq_module
 
 from pydantic import BaseModel
 
@@ -164,7 +164,7 @@ async def generate_analysis_code(
     question: str,
     persona_def: str,
 ) -> Optional[str]:
-    """Generate Python analysis code for a SQL result set using Claude.
+    """Generate Python analysis code for a SQL result set using Qwen 2.5 Coder via Groq.
 
     Returns a Python code string suitable for run_python(), or None when
     fewer than 5 rows are available (not worth analysing) or on any error.
@@ -172,9 +172,9 @@ async def generate_analysis_code(
     if len(result_dicts) < 5:
         return None
 
-    api_key = os.getenv("ANTHROPIC_API_KEY")
+    api_key = os.getenv("groq_api_key")
     if not api_key:
-        logger.warning("generate_analysis_code: ANTHROPIC_API_KEY not set, skipping")
+        logger.warning("generate_analysis_code: groq_api_key not set, skipping")
         return None
 
     system_prompt = (
@@ -191,24 +191,31 @@ async def generate_analysis_code(
         "- Keep code under 60 lines"
     )
 
+    import json as _json
     sample = result_dicts[:50]
     user_message = (
         f"Question: {question}\n\n"
-        f"Data ({len(sample)} rows):\n{__import__('json').dumps(sample, default=str)}"
+        f"Data ({len(sample)} rows):\n{_json.dumps(sample, default=str)}"
     )
 
     try:
-        client = anthropic.AsyncAnthropic(api_key=api_key)
-        response = await client.messages.create(
-            model="claude-sonnet-4-6",
-            max_tokens=1500,
-            temperature=0,
-            system=system_prompt,
-            messages=[{"role": "user", "content": user_message}],
+        client = groq_module.Groq(api_key=api_key)
+        loop = asyncio.get_running_loop()
+        response = await loop.run_in_executor(
+            None,
+            lambda: client.chat.completions.create(
+                model="qwen-2.5-coder-32b",
+                messages=[
+                    {"role": "system", "content": system_prompt},
+                    {"role": "user", "content": user_message},
+                ],
+                max_tokens=1500,
+                temperature=0,
+            ),
         )
-        code = response.content[0].text.strip()
+        code = response.choices[0].message.content.strip()
 
-        # Strip markdown fences if the LLM adds them anyway
+        # Strip markdown fences if the model adds them anyway
         lines = code.splitlines()
         if lines and lines[0].startswith("```"):
             lines = lines[1:]
