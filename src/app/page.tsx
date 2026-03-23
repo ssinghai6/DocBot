@@ -287,6 +287,16 @@ export default function Home() {
   // Database connection state
   const [isDbConnected, setIsDbConnected] = useState(false);
   const [connectionId, setConnectionId] = useState<string | null>(null);
+  const [dbUploadState, setDbUploadState] = useState<"idle" | "uploading" | "connected" | "error">("idle");
+  const [dbFileName, setDbFileName] = useState<string | null>(null);
+
+  // Chat mode: "docs" → /api/chat, "database" → /api/db/chat, "hybrid" → /api/hybrid/chat
+  const [chatMode, setChatMode] = useState<"docs" | "database" | "hybrid">("docs");
+
+  // Stable anonymous session ID used when no PDF session exists yet
+  const anonymousSessionIdRef = useRef<string>(
+    typeof crypto !== "undefined" ? crypto.randomUUID() : Math.random().toString(36).substring(2)
+  );
 
   // Called when a DB connection is successfully established.
   // Auto-selects the Data Analyst persona only when the user has not already
@@ -294,8 +304,43 @@ export default function Home() {
   const handleDbConnected = useCallback((connId: string) => {
     setIsDbConnected(true);
     setConnectionId(connId);
+    setChatMode("database");
     setSelectedPersona(prev => (prev === "Generalist" ? "Data Analyst" : prev));
   }, []);
+
+  const handleDbDisconnect = useCallback(() => {
+    setIsDbConnected(false);
+    setConnectionId(null);
+    setDbFileName(null);
+    setDbUploadState("idle");
+    setChatMode("docs");
+    setSelectedPersona(prev => (prev === "Data Analyst" ? "Generalist" : prev));
+  }, []);
+
+  const handleDbUpload = async (file: File, type: "csv" | "sqlite") => {
+    setDbUploadState("uploading");
+    const formData = new FormData();
+    formData.append("file", file);
+    formData.append("session_id", sessionId ?? anonymousSessionIdRef.current);
+    try {
+      const endpoint = type === "csv" ? "/api/db/upload/csv" : "/api/db/upload";
+      const response = await fetch(endpoint, { method: "POST", body: formData });
+      if (!response.ok) {
+        const err = await response.json();
+        throw new Error(err.detail || "Upload failed");
+      }
+      const data = await response.json();
+      setDbFileName(file.name);
+      setDbUploadState("connected");
+      handleDbConnected(data.connection_id);
+      showToast("success", `Connected: ${file.name}`);
+    } catch (error: unknown) {
+      const msg = error instanceof Error ? error.message : "Upload failed";
+      setDbUploadState("error");
+      showToast("error", `DB upload failed: ${msg}`);
+      setTimeout(() => setDbUploadState("idle"), 3000);
+    }
+  };
 
   // File Upload State
   const [fileUploadState, setFileUploadState] = useState<FileUploadState>("idle");
@@ -478,7 +523,7 @@ export default function Home() {
     setIsLoading(true);
 
     // ── DB chat path: SSE streaming via /api/db/chat ──────────────────────
-    if (isDbConnected && connectionId) {
+    if (chatMode === "database" && connectionId) {
       try {
         const assistantMsg: Message = {
           role: "assistant",
@@ -557,6 +602,78 @@ export default function Home() {
         setMessages(prev => prev.map((m, i) =>
           i === prev.length - 1 && m.role === "assistant" && m.content === ""
             ? { ...m, content: "I encountered an error querying your database. Please try again." }
+            : m
+        ));
+      } finally {
+        setIsLoading(false);
+      }
+      return;
+    }
+
+    // ── Hybrid chat path: SSE streaming via /api/hybrid/chat ─────────────
+    if (chatMode === "hybrid" && connectionId && sessionId) {
+      try {
+        const assistantMsg: Message = { role: "assistant", content: "", timestamp: new Date(), charts: [] };
+        setMessages(prev => [...prev, assistantMsg]);
+
+        const response = await fetch("/api/hybrid/chat", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            question: userMsg.content,
+            session_id: sessionId,
+            connection_id: connectionId,
+            persona: selectedPersona,
+            has_docs: true,
+          }),
+        });
+
+        if (!response.ok || !response.body) throw new Error(`HTTP ${response.status}`);
+
+        const reader = response.body.getReader();
+        const decoder = new TextDecoder();
+        let buffer = "";
+
+        while (true) {
+          const { done, value } = await reader.read();
+          if (done) break;
+          buffer += decoder.decode(value, { stream: true });
+          const lines = buffer.split("\n");
+          buffer = lines.pop() ?? "";
+          for (const line of lines) {
+            if (!line.startsWith("data: ")) continue;
+            const jsonStr = line.slice(6).trim();
+            if (!jsonStr) continue;
+            try {
+              const chunk = JSON.parse(jsonStr);
+              if (chunk.type === "token") {
+                setMessages(prev => prev.map((m, i) =>
+                  i === prev.length - 1 ? { ...m, content: m.content + chunk.content } : m
+                ));
+              } else if (chunk.type === "metadata") {
+                setMessages(prev => prev.map((m, i) =>
+                  i === prev.length - 1 ? { ...m, sql: chunk.sql_query, explanation: chunk.explanation } : m
+                ));
+              } else if (chunk.type === "analysis_code") {
+                setMessages(prev => prev.map((m, i) =>
+                  i === prev.length - 1 ? { ...m, analysisCode: chunk.code } : m
+                ));
+              } else if (chunk.type === "chart") {
+                setMessages(prev => prev.map((m, i) =>
+                  i === prev.length - 1 ? { ...m, charts: [...(m.charts ?? []), chunk.base64] } : m
+                ));
+              } else if (chunk.type === "error") {
+                throw new Error(chunk.detail || "Hybrid query failed");
+              }
+            } catch { /* skip malformed SSE lines */ }
+          }
+        }
+      } catch (error: unknown) {
+        const msg = error instanceof Error ? error.message : "Unknown error";
+        showToast("error", `Error: ${msg}`);
+        setMessages(prev => prev.map((m, i) =>
+          i === prev.length - 1 && m.role === "assistant" && m.content === ""
+            ? { ...m, content: "I encountered an error with the hybrid query. Please try again." }
             : m
         ));
       } finally {
@@ -818,6 +935,86 @@ export default function Home() {
           )}
         </div>
 
+        {/* Database Connection Section (DOCBOT-304 / DB Panel) */}
+        <div className="mb-6">
+          <h3 className="text-sm font-semibold mb-3 text-white flex items-center gap-2">
+            <Database className="w-4 h-4 text-[#f97316]" />
+            Database
+            {isDbConnected && (
+              <span className="ml-auto text-[10px] text-[#10b981] font-medium flex items-center gap-1">
+                <div className="w-1.5 h-1.5 bg-[#10b981] rounded-full animate-pulse" />
+                Connected
+              </span>
+            )}
+          </h3>
+
+          {isDbConnected ? (
+            <div className="flex items-center gap-2 px-3 py-2.5 bg-[#10b981]/10 rounded-xl border border-[#10b981]/20 text-xs">
+              <Database className="w-3.5 h-3.5 text-[#10b981] shrink-0" />
+              <span className="truncate text-gray-300 flex-1">{dbFileName}</span>
+              <button
+                onClick={handleDbDisconnect}
+                className="text-gray-500 hover:text-red-400 transition-colors shrink-0"
+                title="Disconnect database"
+              >
+                <XCircle className="w-3.5 h-3.5" />
+              </button>
+            </div>
+          ) : (
+            <div className="space-y-2">
+              <label className={`flex items-center gap-2 px-3 py-2.5 rounded-xl border cursor-pointer transition-all text-xs ${
+                dbUploadState === "uploading"
+                  ? "border-[#f97316]/40 bg-[#f97316]/5 pointer-events-none"
+                  : dbUploadState === "error"
+                    ? "border-[#ef4444]/40 bg-[#ef4444]/5"
+                    : "border-[#ffffff10] bg-[#1a1a24]/50 hover:border-[#f97316]/40 hover:bg-[#f97316]/5"
+              }`}>
+                {dbUploadState === "uploading"
+                  ? <Loader2 className="w-3.5 h-3.5 text-[#f97316] animate-spin shrink-0" />
+                  : <Upload className="w-3.5 h-3.5 text-[#f97316] shrink-0" />
+                }
+                <span className="text-gray-400">Upload CSV</span>
+                <input
+                  type="file"
+                  className="hidden"
+                  accept=".csv"
+                  disabled={dbUploadState === "uploading"}
+                  onChange={(e) => {
+                    const file = e.target.files?.[0];
+                    if (file) handleDbUpload(file, "csv");
+                    e.target.value = "";
+                  }}
+                />
+              </label>
+
+              <label className={`flex items-center gap-2 px-3 py-2.5 rounded-xl border cursor-pointer transition-all text-xs ${
+                dbUploadState === "uploading"
+                  ? "border-[#f97316]/40 bg-[#f97316]/5 pointer-events-none"
+                  : dbUploadState === "error"
+                    ? "border-[#ef4444]/40 bg-[#ef4444]/5"
+                    : "border-[#ffffff10] bg-[#1a1a24]/50 hover:border-[#f97316]/40 hover:bg-[#f97316]/5"
+              }`}>
+                {dbUploadState === "uploading"
+                  ? <Loader2 className="w-3.5 h-3.5 text-[#f97316] animate-spin shrink-0" />
+                  : <Database className="w-3.5 h-3.5 text-[#f97316] shrink-0" />
+                }
+                <span className="text-gray-400">Upload SQLite / .db</span>
+                <input
+                  type="file"
+                  className="hidden"
+                  accept=".sqlite,.db,.sqlite3"
+                  disabled={dbUploadState === "uploading"}
+                  onChange={(e) => {
+                    const file = e.target.files?.[0];
+                    if (file) handleDbUpload(file, "sqlite");
+                    e.target.value = "";
+                  }}
+                />
+              </label>
+            </div>
+          )}
+        </div>
+
         {/* Persona Selection */}
         <div className="mb-6 flex-1">
           <h3 className="text-sm font-semibold mb-3 text-white flex items-center gap-2">
@@ -972,6 +1169,41 @@ export default function Home() {
                   persona={selectedPersona}
                   onClear={clearSession}
                 />
+
+                {/* DOCBOT-404: HybridModeToggle — shown when DB is connected */}
+                {isDbConnected && (
+                  <div className="flex items-center gap-0.5 p-1 bg-[#1a1a24]/80 rounded-xl border border-[#ffffff08]">
+                    {(["docs", "database", "hybrid"] as const).map((mode) => {
+                      const disabled =
+                        (mode === "docs" && !sessionId) ||
+                        (mode === "hybrid" && (!sessionId || !connectionId));
+                      const labels = { docs: "Docs", database: "Database", hybrid: "Hybrid" };
+                      const icons = {
+                        docs: <FileText className="w-3 h-3" />,
+                        database: <Database className="w-3 h-3" />,
+                        hybrid: <Layers className="w-3 h-3" />,
+                      };
+                      return (
+                        <button
+                          key={mode}
+                          onClick={() => !disabled && setChatMode(mode)}
+                          disabled={disabled}
+                          title={disabled ? `Upload a ${mode === "docs" ? "PDF" : "document and connect a database"} first` : undefined}
+                          className={`flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg text-xs font-medium transition-all ${
+                            chatMode === mode
+                              ? "bg-gradient-to-r from-[#667eea] to-[#764ba2] text-white shadow-sm"
+                              : disabled
+                                ? "text-gray-600 cursor-not-allowed"
+                                : "text-gray-400 hover:text-gray-200 hover:bg-[#ffffff08]"
+                          }`}
+                        >
+                          {icons[mode]}
+                          {labels[mode]}
+                        </button>
+                      );
+                    })}
+                  </div>
+                )}
                 {sessionId && messages.length > 0 && (
                   <div className="relative group">
                     <button className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs text-gray-300 bg-[#1a1a24]/60 border border-[#ffffff08] hover:border-[#667eea]/30 hover:bg-[#1a1a24]/80 transition-all">
@@ -1018,7 +1250,7 @@ export default function Home() {
 
         {/* Chat Output */}
         <div ref={chatContainerRef} className="flex-1 overflow-y-auto px-4 lg:px-6 pb-4 max-w-5xl mx-auto w-full">
-          {!sessionId && messages.length === 0 ? (
+          {!sessionId && !isDbConnected && messages.length === 0 ? (
             <div className="flex flex-col items-center justify-center h-full text-gray-500">
               <div className="relative">
                 <div className="w-24 h-24 rounded-3xl bg-gradient-to-br from-[#667eea]/20 to-[#764ba2]/20 flex items-center justify-center mb-6 animate-pulse">
@@ -1028,9 +1260,9 @@ export default function Home() {
                   <ArrowRight className="w-4 h-4 text-white" />
                 </div>
               </div>
-              <p className="text-xl font-medium text-gray-300 mb-2 text-center">Upload PDF documents to begin</p>
+              <p className="text-xl font-medium text-gray-300 mb-2 text-center">Upload a document or connect a database</p>
               <p className="text-sm text-gray-500 text-center max-w-md mb-6">
-                Drag and drop files or click the upload area. Your documents are processed securely and never leave your browser.
+                Upload PDFs to chat with documents, or upload a CSV/SQLite file to query your data with AI.
               </p>
 
               {/* Feature highlights */}
@@ -1040,32 +1272,46 @@ export default function Home() {
                   <span className="text-xs text-gray-400 text-center">Medical Docs</span>
                 </div>
                 <div className="flex flex-col items-center p-4 bg-[#12121a]/40 rounded-xl border border-[#ffffff06] max-w-[140px]">
-                  <TrendingUp className="w-6 h-6 text-[#f59e0b] mb-2" />
-                  <span className="text-xs text-gray-400 text-center">Financial Reports</span>
+                  <Database className="w-6 h-6 text-[#f97316] mb-2" />
+                  <span className="text-xs text-gray-400 text-center">CSV / SQLite</span>
                 </div>
                 <div className="flex flex-col items-center p-4 bg-[#12121a]/40 rounded-xl border border-[#ffffff06] max-w-[140px]">
-                  <Scale className="w-6 h-6 text-[#ef4444] mb-2" />
-                  <span className="text-xs text-gray-400 text-center">Legal Contracts</span>
+                  <Layers className="w-6 h-6 text-[#8b5cf6] mb-2" />
+                  <span className="text-xs text-gray-400 text-center">Hybrid Analysis</span>
                 </div>
               </div>
             </div>
-          ) : messages.length === 0 && sessionId ? (
+          ) : messages.length === 0 && (sessionId || isDbConnected) ? (
             <div className="flex flex-col items-center justify-center h-full text-gray-500">
               <div className="w-16 h-16 rounded-2xl bg-gradient-to-br from-[#667eea]/20 to-[#764ba2]/20 flex items-center justify-center mb-4">
                 <MessageSquare className="w-8 h-8 text-[#667eea]" />
               </div>
-              <p className="text-lg font-medium text-gray-300 mb-2">Ready to chat!</p>
-              <p className="text-sm text-gray-500">Ask me anything about your uploaded documents</p>
+              <p className="text-lg font-medium text-gray-300 mb-2">
+                {isDbConnected ? "Database connected — ready to query!" : "Ready to chat!"}
+              </p>
+              <p className="text-sm text-gray-500">
+                {isDbConnected
+                  ? `Ask questions about your data in ${chatMode} mode`
+                  : "Ask me anything about your uploaded documents"}
+              </p>
 
               {/* Suggested questions */}
               <div className="mt-8 grid gap-2 max-w-lg w-full">
                 <p className="text-xs text-gray-500 text-center mb-2">Try asking:</p>
-                {[
-                  "Summarize the main points of this document",
-                  "What are the key findings?",
-                  "Extract all tables and figures",
-                  "What are the action items?"
-                ].map((question, idx) => (
+                {(isDbConnected
+                  ? [
+                      "How many rows are in my dataset?",
+                      "Show me a summary of each column",
+                      "What are the top 10 records by value?",
+                      "Are there any missing or null values?",
+                    ]
+                  : [
+                      "Summarize the main points of this document",
+                      "What are the key findings?",
+                      "Extract all tables and figures",
+                      "What are the action items?",
+                    ]
+                ).map((question, idx) => (
                   <button
                     key={idx}
                     onClick={() => setInput(question)}
