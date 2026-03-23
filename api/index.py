@@ -82,6 +82,10 @@ sessions_table = Table(
     Column("persona", String, server_default="Generalist"),
     Column("file_count", Integer, server_default="0"),
     Column("files_info", Text),
+    # ── DOCBOT-502: Context Compression ──────────────────────────────────────
+    Column("context_summary", Text),
+    Column("last_compressed_at", DateTime(timezone=True)),
+    Column("message_count_at_compression", Integer, server_default="0"),
 )
 
 messages_table = Table(
@@ -163,6 +167,13 @@ async def init_db() -> None:
     """Create tables idempotently on startup."""
     async with engine.begin() as conn:
         await conn.run_sync(metadata.create_all)
+        # DOCBOT-502: add context-compression columns to existing sessions rows
+        for col_ddl in [
+            "ALTER TABLE sessions ADD COLUMN IF NOT EXISTS context_summary TEXT",
+            "ALTER TABLE sessions ADD COLUMN IF NOT EXISTS last_compressed_at TIMESTAMPTZ",
+            "ALTER TABLE sessions ADD COLUMN IF NOT EXISTS message_count_at_compression INTEGER DEFAULT 0",
+        ]:
+            await conn.execute(text(col_ddl))
     logger.info(
         "Database tables verified / created "
         "(sessions, messages, db_connections, schema_cache, query_history, "
@@ -811,13 +822,29 @@ async def chat(request: ChatRequest):
                 )
         except Exception as db_error:
             logger.error(f"Database error: {db_error}")
-        
+
+        # DOCBOT-502: trigger background context compression when threshold is hit
+        try:
+            from api.utils.context_compressor import should_compress, compress_session
+            groq_api_key = os.getenv("groq_api_key")
+            if groq_api_key and await should_compress(
+                request.session_id, messages_table, sessions_table, async_session_factory
+            ):
+                asyncio.ensure_future(
+                    compress_session(
+                        request.session_id, groq_api_key,
+                        messages_table, sessions_table, async_session_factory,
+                    )
+                )
+        except Exception as comp_err:
+            logger.warning("context compression trigger failed (non-fatal): %s", comp_err)
+
         return {
-            "role": "assistant", 
+            "role": "assistant",
             "content": response["answer"],
             "citations": citations
         }
-        
+
     except HTTPException:
         raise
     except Exception as e:
