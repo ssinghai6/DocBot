@@ -536,31 +536,39 @@ As a developer, I want an 8th "Data Analyst" persona in the persona system, so t
 
 ---
 
-#### DOCBOT-305: Advanced Analysis (Phase 2)
+#### DOCBOT-305: Advanced Charts & Visualization ✅ Done
 
 **Story**
-As Maya, I want the system to perform statistical forecasting on my data, so that I can see projected trends, not just historical summaries.
+As a user, I want to choose different chart types for my data analysis, see chart metadata captions, and zoom/download charts, so that I get the most informative visualization for each dataset.
 
 **Phase**: 2
 **Priority**: Should Have
-**Story Points**: 8
-**Dependencies**: DOCBOT-302
+**Story Points**: 5
+**Dependencies**: DOCBOT-103 (E2B sandbox)
+**Status**: ✅ Done (SCRUM-398, merged 2026-03-23)
 
 **Acceptance Criteria**
-- [ ] `statsmodels` and `scipy` available in E2B sandbox
-- [ ] For time-series data, system can generate a simple linear trend forecast
-- [ ] Forecast output includes confidence interval
-- [ ] System does not attempt forecasting on non-time-series data
-- [ ] Forecast chart labeled clearly with "Actual" vs. "Projected" series
+- [x] Chart type selector (auto/bar/line/scatter/heatmap/box/multi) visible above DB input
+- [x] `chart_type` param flows from frontend → API → `generate_analysis_code()`
+- [x] LLM receives chart-type-specific instructions for each type
+- [x] Generated code emits `CHART_META:{json}` stdout line after plt.show()
+- [x] Metadata (type, title, x_label, y_label, series_count) captured and returned in SSE stream
+- [x] ChartDisplay shows metadata caption row below chart
+- [x] Fullscreen zoom modal with Download PNG + Close buttons
 
 **Engineering Tasks**
 
-| # | Task | Role | Est. Hours |
-|---|------|------|-----------|
-| 1 | Update E2B sandbox template (or requirements) to include `statsmodels`, `scipy` | DevOps | 1h |
-| 2 | Add "time-series detection" logic to Python code generator (check for date columns) | Backend | 2h |
-| 3 | Add forecasting prompt branch in `generate_analysis_code()` for time-series data | Backend | 2h |
-| 4 | Test: 12-month revenue DataFrame → verify forecast chart with confidence bands generated | Backend | 2h |
+| # | Task | Role | Status |
+|---|------|------|--------|
+| 1 | Add `VALID_CHART_TYPES`, `ChartMetadata`, `chart_metadata` to `sandbox_service.py` | Backend | ✅ Done |
+| 2 | Extend `_extract_charts()` to parse `CHART_META:` stdout lines (3-tuple return) | Backend | ✅ Done |
+| 3 | Add `_chart_type_instructions()` with per-type LLM guidance | Backend | ✅ Done |
+| 4 | Update `generate_analysis_code()` to accept `chart_type` and require `CHART_META` output | Backend | ✅ Done |
+| 5 | Add `chart_type` to `DBChatRequest`; thread through `run_sql_pipeline()` | Backend | ✅ Done |
+| 6 | Include chart metadata in SSE `chart` chunks from `db_service.py` | Backend | ✅ Done |
+| 7 | Chart type selector pills in `page.tsx`; capture `chartMetas` from SSE | Frontend | ✅ Done |
+| 8 | `ChartDisplay` metadata caption + zoom modal + Download PNG | Frontend | ✅ Done |
+| 9 | 26 unit tests in `tests/unit/test_sandbox_service.py` | Testing | ✅ Done |
 
 ---
 
@@ -900,6 +908,8 @@ As a developer, I want LLM-generated table descriptions embedded and searchable,
 ---
 
 #### DOCBOT-504: Query History Panel UI
+
+**Status**: ✅ Done (SCRUM-397, merged 2026-03-23)
 
 **Story**
 As Sarah, I want to see a history of past queries with their natural language question and SQL snippet, so that I can re-run or refine previous analyses quickly.
@@ -1264,8 +1274,9 @@ As a DTC brand owner on Shopify, I want to connect my Shopify store to DocBot, s
 | Sprint 3 | DOCBOT-401, 402, 403, 404, 406 | 35 | ✅ Complete |
 | Phase 1 | All Phase 1 tickets | 122 | ✅ Complete |
 | Enterprise Add-on | DOCBOT-208 (Azure SQL / Entra auth) | 8 | ✅ Complete |
+| Phase 2 Sprint 1 | DOCBOT-501, 503, 502, 504, 305, 405 | 44 | ✅ Complete |
 
-**Total delivered**: 135 story points across 21 tickets + full test suite (131 tests) + GitHub Actions CI
+**Total delivered**: 179 story points across 27 tickets + full test suite (203 tests) + GitHub Actions CI
 
 ---
 
