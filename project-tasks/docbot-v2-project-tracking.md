@@ -876,6 +876,7 @@ As a developer, I want LLM-generated table descriptions embedded and searchable,
 **Priority**: Should Have
 **Story Points**: 8
 **Dependencies**: DOCBOT-202
+**Status**: ✅ Done (SCRUM-395, merged 2026-03-23)
 
 **Acceptance Criteria**
 - [ ] On DB connect, Groq generates a one-sentence description of each table from column names + 3 sample rows
