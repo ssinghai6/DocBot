@@ -96,7 +96,7 @@ class TestBuildConnectionURL:
 
     def test_postgresql_url(self):
         url = _build_connection_url("postgresql", "myhost.com", 5432, "mydb", "user", "pass")
-        assert url == "postgresql+psycopg2://user:pass@myhost.com:5432/mydb"
+        assert url == "postgresql+psycopg2://user:pass@myhost.com:5432/mydb?sslmode=prefer"
 
     def test_mysql_uses_pymysql_driver(self):
         url = _build_connection_url("mysql", "myhost.com", 3306, "mydb", "user", "pass")
