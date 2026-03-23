@@ -406,7 +406,8 @@ export default function Home() {
       });
       if (!response.ok) {
         const err = await response.json();
-        throw new Error(err.detail || "Connection failed");
+        const detail = typeof err.detail === "string" ? err.detail : JSON.stringify(err.detail) || "Connection failed";
+        throw new Error(detail);
       }
       const data = await response.json();
       setDbFileName(`${liveDbForm.dialect}://${liveDbForm.host}/${liveDbForm.dbname}`);
