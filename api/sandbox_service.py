@@ -14,6 +14,8 @@ import os
 import time
 from typing import Optional
 
+import groq as groq_module
+
 from pydantic import BaseModel
 
 logger = logging.getLogger(__name__)
@@ -150,6 +152,80 @@ def _run_in_sandbox(code: str) -> SandboxResult:
                 sandbox.kill()
             except Exception as teardown_err:
                 logger.warning("Failed to close sandbox cleanly: %s", teardown_err)
+
+
+# ---------------------------------------------------------------------------
+# DOCBOT-301: Python code generation
+# ---------------------------------------------------------------------------
+
+
+async def generate_analysis_code(
+    result_dicts: list[dict],
+    question: str,
+    persona_def: str,
+) -> Optional[str]:
+    """Generate Python analysis code for a SQL result set using Qwen 2.5 Coder via Groq.
+
+    Returns a Python code string suitable for run_python(), or None when
+    fewer than 5 rows are available (not worth analysing) or on any error.
+    """
+    if len(result_dicts) < 5:
+        return None
+
+    api_key = os.getenv("groq_api_key")
+    if not api_key:
+        logger.warning("generate_analysis_code: groq_api_key not set, skipping")
+        return None
+
+    system_prompt = (
+        "You are a Python data analyst. Given a question and a dataset, write Python code that:\n"
+        "1. Imports pandas, numpy, and matplotlib.pyplot as plt\n"
+        "2. Creates a DataFrame `df` from the provided data\n"
+        "3. Performs relevant analysis to answer the question\n"
+        "4. Creates at least one matplotlib chart and saves it with plt.savefig('chart_0.png')\n"
+        "5. Assigns a brief text summary to a variable named `result`\n\n"
+        "Rules:\n"
+        "- Output ONLY raw Python code, no markdown fences, no explanations\n"
+        "- Do not use plt.show()\n"
+        "- The chart filename must be 'chart_0.png'\n"
+        "- Keep code under 60 lines"
+    )
+
+    import json as _json
+    sample = result_dicts[:50]
+    user_message = (
+        f"Question: {question}\n\n"
+        f"Data ({len(sample)} rows):\n{_json.dumps(sample, default=str)}"
+    )
+
+    try:
+        client = groq_module.Groq(api_key=api_key)
+        loop = asyncio.get_running_loop()
+        response = await loop.run_in_executor(
+            None,
+            lambda: client.chat.completions.create(
+                model="qwen-2.5-coder-32b",
+                messages=[
+                    {"role": "system", "content": system_prompt},
+                    {"role": "user", "content": user_message},
+                ],
+                max_tokens=1500,
+                temperature=0,
+            ),
+        )
+        code = response.choices[0].message.content.strip()
+
+        # Strip markdown fences if the model adds them anyway
+        lines = code.splitlines()
+        if lines and lines[0].startswith("```"):
+            lines = lines[1:]
+        if lines and lines[-1].strip() == "```":
+            lines = lines[:-1]
+        return "\n".join(lines).strip()
+
+    except Exception as exc:
+        logger.warning("generate_analysis_code failed: %s", exc)
+        return None
 
 
 # ---------------------------------------------------------------------------

@@ -27,6 +27,10 @@ type Message = {
   content: string;
   timestamp?: Date;
   citations?: Citation[];
+  charts?: string[];       // base64 PNG strings from E2B analysis (DOCBOT-303)
+  analysisCode?: string;   // Python code block, collapsible (DOCBOT-303)
+  sql?: string;            // SQL query from metadata chunk
+  explanation?: string;    // SQL explanation from metadata chunk
 };
 
 type Toast = {
@@ -196,6 +200,75 @@ function SessionInfo({ sessionId, fileCount, persona, onClear }: {
   )
 }
 
+// Chart Display Component (DOCBOT-303)
+function ChartDisplay({ charts }: { charts: string[] }) {
+  const [expanded, setExpanded] = useState<number | null>(null);
+
+  if (!charts || charts.length === 0) return null;
+
+  return (
+    <div className="mt-3 space-y-2">
+      {charts.map((b64, i) => (
+        <div key={i} className="relative group">
+          <img
+            src={`data:image/png;base64,${b64}`}
+            alt={`Analysis chart ${i + 1}`}
+            className="rounded-lg border border-[#ffffff10] max-w-full cursor-pointer hover:opacity-90 transition-opacity"
+            onClick={() => setExpanded(i)}
+          />
+          <a
+            href={`data:image/png;base64,${b64}`}
+            download={`chart-${i + 1}.png`}
+            className="absolute top-2 right-2 opacity-0 group-hover:opacity-100 bg-[#12121a]/90 backdrop-blur-sm rounded-md px-2 py-1 text-xs text-gray-400 hover:text-gray-200 transition-opacity border border-[#ffffff10] flex items-center gap-1"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <Download className="w-3 h-3" />
+            Download
+          </a>
+        </div>
+      ))}
+      {expanded !== null && (
+        <div
+          className="fixed inset-0 bg-black/80 z-50 flex items-center justify-center p-4"
+          onClick={() => setExpanded(null)}
+        >
+          <img
+            src={`data:image/png;base64,${charts[expanded]}`}
+            alt="Chart full view"
+            className="max-w-full max-h-full rounded-lg"
+            onClick={(e) => e.stopPropagation()}
+          />
+        </div>
+      )}
+    </div>
+  );
+}
+
+// Collapsible Code Component (DOCBOT-303)
+function CollapsibleCode({ code }: { code: string }) {
+  const [open, setOpen] = useState(false);
+
+  return (
+    <div className="mt-2 border border-[#ffffff10] rounded-lg overflow-hidden text-sm">
+      <button
+        className="w-full flex items-center justify-between px-3 py-2 bg-[#1a1a24]/80 hover:bg-[#1a1a24] text-gray-500 hover:text-gray-300 text-xs font-mono transition-colors"
+        onClick={() => setOpen(o => !o)}
+      >
+        <span className="flex items-center gap-1.5">
+          <Terminal className="w-3 h-3" />
+          Analysis code
+        </span>
+        <ChevronDown className={`w-3 h-3 transition-transform ${open ? "rotate-180" : ""}`} />
+      </button>
+      {open && (
+        <pre className="p-3 overflow-x-auto bg-[#0a0a0f] text-[#10b981] text-xs leading-relaxed">
+          <code>{code}</code>
+        </pre>
+      )}
+    </div>
+  );
+}
+
 export default function Home() {
   const [messages, setMessages] = useState<Message[]>([]);
   const [input, setInput] = useState("");
@@ -213,12 +286,14 @@ export default function Home() {
 
   // Database connection state
   const [isDbConnected, setIsDbConnected] = useState(false);
+  const [connectionId, setConnectionId] = useState<string | null>(null);
 
   // Called when a DB connection is successfully established.
   // Auto-selects the Data Analyst persona only when the user has not already
   // chosen a specific persona (i.e. still on the default Generalist).
-  const handleDbConnected = useCallback(() => {
+  const handleDbConnected = useCallback((connId: string) => {
     setIsDbConnected(true);
+    setConnectionId(connId);
     setSelectedPersona(prev => (prev === "Generalist" ? "Data Analyst" : prev));
   }, []);
 
@@ -394,13 +469,103 @@ export default function Home() {
 
   const handleSendMessage = async (e?: React.FormEvent) => {
     if (e) e.preventDefault();
-    if (!input.trim() || !sessionId) return;
+    if (!input.trim()) return;
+    if (!sessionId && !isDbConnected) return;
 
     const userMsg: Message = { role: "user", content: input, timestamp: new Date() };
     setMessages(prev => [...prev, userMsg]);
     setInput("");
     setIsLoading(true);
 
+    // ── DB chat path: SSE streaming via /api/db/chat ──────────────────────
+    if (isDbConnected && connectionId) {
+      try {
+        const assistantMsg: Message = {
+          role: "assistant",
+          content: "",
+          timestamp: new Date(),
+          charts: [],
+        };
+        setMessages(prev => [...prev, assistantMsg]);
+
+        const response = await fetch("/api/db/chat", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            connection_id: connectionId,
+            question: userMsg.content,
+            persona: selectedPersona,
+            session_id: sessionId ?? "anonymous",
+          }),
+        });
+
+        if (!response.ok || !response.body) {
+          throw new Error(`HTTP ${response.status}`);
+        }
+
+        const reader = response.body.getReader();
+        const decoder = new TextDecoder();
+        let buffer = "";
+
+        while (true) {
+          const { done, value } = await reader.read();
+          if (done) break;
+
+          buffer += decoder.decode(value, { stream: true });
+          const lines = buffer.split("\n");
+          buffer = lines.pop() ?? "";
+
+          for (const line of lines) {
+            if (!line.startsWith("data: ")) continue;
+            const jsonStr = line.slice(6).trim();
+            if (!jsonStr) continue;
+
+            try {
+              const chunk = JSON.parse(jsonStr);
+              if (chunk.type === "token") {
+                setMessages(prev => prev.map((m, i) =>
+                  i === prev.length - 1 ? { ...m, content: m.content + chunk.content } : m
+                ));
+              } else if (chunk.type === "metadata") {
+                setMessages(prev => prev.map((m, i) =>
+                  i === prev.length - 1
+                    ? { ...m, sql: chunk.sql_query, explanation: chunk.explanation }
+                    : m
+                ));
+              } else if (chunk.type === "analysis_code") {
+                setMessages(prev => prev.map((m, i) =>
+                  i === prev.length - 1 ? { ...m, analysisCode: chunk.code } : m
+                ));
+              } else if (chunk.type === "chart") {
+                setMessages(prev => prev.map((m, i) =>
+                  i === prev.length - 1
+                    ? { ...m, charts: [...(m.charts ?? []), chunk.base64] }
+                    : m
+                ));
+              } else if (chunk.type === "error") {
+                throw new Error(chunk.detail || "Database query failed");
+              }
+            } catch {
+              // skip malformed SSE lines
+            }
+          }
+        }
+      } catch (error: unknown) {
+        const msg = error instanceof Error ? error.message : "Unknown error";
+        console.error("DB chat error:", error);
+        showToast("error", `Error: ${msg}`);
+        setMessages(prev => prev.map((m, i) =>
+          i === prev.length - 1 && m.role === "assistant" && m.content === ""
+            ? { ...m, content: "I encountered an error querying your database. Please try again." }
+            : m
+        ));
+      } finally {
+        setIsLoading(false);
+      }
+      return;
+    }
+
+    // ── Document chat path: buffered /api/chat ────────────────────────────
     try {
       const response = await fetch('/api/chat', {
         method: 'POST',
@@ -426,9 +591,10 @@ export default function Home() {
         citations: data.citations || [],
         timestamp: new Date()
       }]);
-    } catch (error: any) {
+    } catch (error: unknown) {
+      const msg = error instanceof Error ? error.message : "Unknown error";
       console.error("Chat error:", error);
-      showToast("error", `Error: ${error.message}`);
+      showToast("error", `Error: ${msg}`);
       setMessages(prev => [...prev, {
         role: "assistant",
         content: "I apologize, but I encountered an error processing your request. Please try again.",
@@ -978,6 +1144,16 @@ export default function Home() {
                       <p className="text-[15px] leading-relaxed whitespace-pre-wrap">{msg.content}</p>
                     )}
 
+                    {/* Analysis Code (DOCBOT-303) */}
+                    {msg.role === "assistant" && msg.analysisCode && (
+                      <CollapsibleCode code={msg.analysisCode} />
+                    )}
+
+                    {/* Charts (DOCBOT-303) */}
+                    {msg.role === "assistant" && msg.charts && msg.charts.length > 0 && (
+                      <ChartDisplay charts={msg.charts} />
+                    )}
+
                     {/* Citations */}
                     {msg.role === "assistant" && msg.citations && msg.citations.length > 0 && (
                       <div className="mt-4 pt-3 border-t border-[#ffffff08]">
@@ -1043,8 +1219,14 @@ export default function Home() {
                     handleSendMessage();
                   }
                 }}
-                placeholder={sessionId ? "Ask a question about your document..." : "Upload a document to start chatting..."}
-                disabled={!sessionId || isLoading}
+                placeholder={
+                  isDbConnected
+                    ? "Ask a question about your data..."
+                    : sessionId
+                    ? "Ask a question about your document..."
+                    : "Upload a document or connect a database to start..."
+                }
+                disabled={(!sessionId && !isDbConnected) || isLoading}
                 className="w-full max-h-40 min-h-[60px] p-4 pr-12 bg-transparent outline-none resize-none text-white placeholder-gray-500 text-[15px] leading-relaxed disabled:opacity-50"
                 rows={1}
               />
@@ -1054,7 +1236,7 @@ export default function Home() {
             </div>
             <button
               type="submit"
-              disabled={!input.trim() || !sessionId || isLoading}
+              disabled={!input.trim() || (!sessionId && !isDbConnected) || isLoading}
               className="m-2 p-3.5 rounded-xl bg-gradient-to-tr from-[#667eea] to-[#764ba2] text-white shadow-lg shadow-[#667eea]/20 disabled:opacity-40 disabled:cursor-not-allowed hover:shadow-xl hover:shadow-[#667eea]/30 transition-all focus:outline-none focus:ring-2 focus:ring-[#764ba2]/50 hover:scale-105 active:scale-95"
             >
               {isLoading ? <Loader2 className="w-5 h-5 animate-spin" /> : <Send className="w-5 h-5" />}
