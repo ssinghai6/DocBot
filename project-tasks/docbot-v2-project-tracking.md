@@ -750,32 +750,53 @@ As a developer, I want the document extraction pipeline to support non-financial
 
 ---
 
-#### DOCBOT-405: Multi-Step Planner (Phase 2)
+#### DOCBOT-405: Analytical Autopilot — Agentic Multi-Step Investigation (Phase 2)
 
 **Story**
-As Sarah, I want to ask complex multi-part questions that require several sequential steps to answer, so that I can get compound insights without asking multiple separate questions.
+As Maya (Finance Manager), I want to delegate a diagnostic objective like "Why are we at 87.5% of Q3 revenue target?" and have DocBot autonomously run the investigation — querying the database and cross-referencing uploaded documents across multiple steps — so that I get a diagnosis with ranked hypotheses, not just a single data point.
 
 **Phase**: 2
 **Priority**: Should Have
 **Story Points**: 13
-**Dependencies**: DOCBOT-402
+**Dependencies**: DOCBOT-402, DOCBOT-501
+
+**Design Rationale**
+This is DocBot's first agentic feature. The agent loops over the existing 7-step hybrid pipeline using a planner node. The SQL execution layer is unchanged — the agent controls retrieval strategy and step sequencing, never SQL execution directly. LangGraph is used over Claude Agent SDK because it supports hard step limits, explicit node/edge control, and integrates with the existing LangChain setup.
+
+**Architecture**
+```
+User objective
+  → [Planner node]    LLM decomposes into 3–5 investigation steps (one LLM call)
+  → [Executor loop]   Each step runs the existing 7-step hybrid pipeline
+  → [Synthesizer]     Aggregates step results into a ranked diagnosis
+
+Hard limits: max 5 steps · 90-second wall-clock timeout · partial answer fallback
+Lives in: api/agent_service.py (new module, not api/index.py)
+```
 
 **Acceptance Criteria**
-- [ ] Planner decomposes complex questions into a sequence of sub-steps (max 5)
-- [ ] Sub-steps can include: sql_query, doc_retrieve, python_analyze, synthesize
-- [ ] Each sub-step result is passed as context to the next step
-- [ ] User sees a "Thinking" progress indicator showing each step as it completes
-- [ ] Total execution time capped at 45 seconds; returns partial answer if exceeded
+- [ ] User can submit a diagnostic objective (e.g. "Diagnose the revenue miss") in addition to regular questions
+- [ ] Planner decomposes objective into ≤5 investigation steps (sql_query, doc_retrieve, python_analyze, synthesize)
+- [ ] Each step result is passed as context to the next step
+- [ ] Agent never executes SQL directly — all SQL goes through the existing 7-step pipeline with AST validation
+- [ ] Max 5 steps enforced via LangGraph `recursion_limit`; hard timeout at 90 seconds
+- [ ] Partial answer returned if timeout is hit (with "investigation incomplete" indicator)
+- [ ] UI shows a step-by-step "Thinking" progress panel — every step visible and auditable by the user
+- [ ] Final output: ranked hypotheses with supporting evidence + source citations per finding
+- [ ] All existing single-question hybrid queries are unaffected (agent path is gated behind intent detection)
 
 **Engineering Tasks**
 
 | # | Task | Role | Est. Hours |
 |---|------|------|-----------|
-| 1 | Design `PlannerStep` data model: `{step_type, description, dependencies, result}` | Backend | 1h |
-| 2 | Implement `plan_query()` LLM call that returns a JSON array of steps | Backend | 3h |
-| 3 | Implement sequential step executor with context threading | Backend | 4h |
-| 4 | Add streaming progress events via Server-Sent Events for step completion | Backend | 2h |
-| 5 | Create `ThinkingIndicator` frontend component showing active step | Frontend | 2h |
+| 1 | Create `api/agent_service.py` with LangGraph graph: PlannerNode → ExecutorNode (loop) → SynthesizerNode | Backend | 4h |
+| 2 | Implement `plan_investigation()`: one LLM call returning `[{step_type, description, sub_question}]` JSON | Backend | 2h |
+| 3 | Wire ExecutorNode to call existing `run_hybrid_pipeline()` per step with context threading | Backend | 3h |
+| 4 | Set `recursion_limit=5` in LangGraph config; implement 90s timeout with partial answer fallback | Backend | 1h |
+| 5 | Extend intent classifier (DOCBOT-401) to detect diagnostic intent vs. single-question intent | Backend | 2h |
+| 6 | Add POST /api/hybrid/investigate route in api/index.py (thin handler, calls agent_service) | Backend | 1h |
+| 7 | Stream step-completion events via SSE; create `InvestigationPanel` frontend component | Frontend | 3h |
+| 8 | Add `langraph>=0.2.0` to requirements.txt | Backend | 0.5h |
 
 ---
 
