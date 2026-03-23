@@ -3,27 +3,39 @@
 <p align="center">
   <img src="https://img.shields.io/badge/License-MIT-green.svg" alt="License">
   <img src="https://img.shields.io/badge/Python-3.12+-blue.svg" alt="Python">
-  <img src="https://img.shields.io/badge/Next.js-14+-black.svg" alt="Next.js">
+  <img src="https://img.shields.io/badge/Next.js-16+-black.svg" alt="Next.js">
+  <img src="https://img.shields.io/badge/FastAPI-0.115+-teal.svg" alt="FastAPI">
+  <img src="https://img.shields.io/badge/Tests-131 passing-brightgreen.svg" alt="Tests">
 </p>
 
-DocBot is an enterprise-grade AI-powered PDF assistant that combines advanced document processing with specialized AI personas to deliver accurate, domain-specific responses. Built with a modern high-performance architecture featuring Next.js and FastAPI, optimized for seamless deployment on Vercel.
+**Ask Anything About Your Data.**
 
-## Why DocBot
+DocBot is an AI-powered document + database analyst. Upload PDFs, connect a live database, or do both — get instant answers with source citations, SQL explanations, Python-generated charts, and discrepancy detection when your documents and data disagree.
 
-Extracting insights from documents shouldn't require manual searching or expensive enterprise solutions. DocBot uses Retrieval-Augmented Generation (RAG) to understand your documents and provide answers grounded in your actual content—with citations, in your preferred domain context.
+---
 
-**Problem**: Traditional PDF tools only search text; they don't understand context or synthesize information across pages.
+## What DocBot Does
 
-**Solution**: DocBot combines vision AI for visual document analysis with semantic search and specialized AI personas to answer complex questions with source-backed citations.
+| Capability | Description |
+|---|---|
+| **PDF Chat** | Upload PDFs, ask questions, get cited answers from 8 expert personas |
+| **Live Database Chat** | Connect PostgreSQL, MySQL, SQLite, or Azure SQL — ask in plain English, get SQL + results |
+| **Hybrid Mode** | One question answered from both your documents and your database in a single response |
+| **Discrepancy Detection** | Automatically flags when a number in your doc differs from what the DB shows |
+| **Python Analysis** | E2B sandbox executes pandas/matplotlib code and returns charts and statistical insights |
+| **Structured Extraction** | Pulls typed values (financial metrics, legal dates, medical measurements, research stats) from any document using Gemini 2.5 Flash |
+| **Azure SQL / Entra Auth** | Enterprise-grade Microsoft Entra (Azure AD) Service Principal authentication for Azure SQL |
+
+**Core differentiator**: Hybrid Docs+DB synthesis with discrepancy detection. No other tool does this.
+
+---
 
 ## Quick Start
 
-Get DocBot running in under 5 minutes:
-
 ```bash
 # 1. Clone and install
-git clone https://github.com/yourusername/docbot.git
-cd docbot
+git clone https://github.com/ssinghai6/DocBot.git
+cd DocBot
 npm install
 
 # 2. Set up Python environment
@@ -32,118 +44,148 @@ source .venv/bin/activate
 pip install -r requirements.txt
 
 # 3. Configure environment
-echo "groq_api_key=your_groq_api_key" > .env
+cp .env.example .env
+# Fill in your API keys (see Environment Variables below)
 
 # 4. Run both services
-npm run dev
+# Terminal 1 — Backend
+python3 -m uvicorn api.index:app --host 0.0.0.0 --port 8000 --reload
+
+# Terminal 2 — Frontend
+npm run dev -- --port 3000
 ```
 
-Open [http://localhost:3000](http://localhost:3000) to start chatting with your documents.
+Open [http://localhost:3000](http://localhost:3000)
 
-> **Note**: Get your free Groq API key at [console.groq.com](https://console.groq.com)
+---
 
 ## Features
 
 ### Expert Persona System
 
-Choose from 7 specialized AI personas, each optimized for different domains:
+8 specialized AI personas, each with domain-optimized prompts:
 
-| Persona | Use Case | Disclaimer |
-|---------|----------|------------|
-| **Generalist** | Broad questions, general summarization | None |
-| **Doctor** | Medical documents, research papers, clinical notes | Provides information only; not medical advice |
-| **Finance Expert** | Financial reports, statements, investment documents | Not financial advice; verify with professionals |
-| **Engineer** | Technical specifications, engineering documents | Technical reference only |
-| **AI/ML Expert** | AI/ML research papers, technical documentation | Technical reference only |
-| **Lawyer** | Legal documents, contracts, case law | Not legal advice; consult attorneys |
-| **Consultant** | Business documents, strategy papers, proposals | Strategic reference only |
+| Persona | Best For |
+|---|---|
+| **Generalist** | Broad questions, general summarization |
+| **Doctor** | Medical documents, clinical notes, lab reports |
+| **Finance Expert** | Financial reports, P&L, investor materials |
+| **Engineer** | Technical specs, architecture documents |
+| **AI/ML Expert** | Research papers, model cards, ML documentation |
+| **Lawyer** | Contracts, legal agreements, case summaries |
+| **Consultant** | Strategy documents, business proposals |
+| **Data Analyst** | Data-heavy documents, statistical analysis, BI reports |
 
-Each persona includes:
-- Domain-specific system prompts and response guidelines
-- Tailored retrieval strategies optimized for their domain
-- Appropriate disclaimers for regulated domains (medical/legal/finance)
+### Live Database Connectivity
 
-### Multi-Document Analysis
+Connect to your database and ask questions in plain English:
 
-Upload multiple PDFs in a single session. DocBot processes all documents together, enabling cross-document queries and comprehensive analysis across your entire document library.
+- **Supported dialects**: PostgreSQL, MySQL, SQLite, Azure SQL (Entra auth)
+- **SSRF protection**: All connection hosts validated against RFC 1918 private ranges before connecting
+- **Credential security**: Fernet-encrypted at rest; never logged, never passed to LLM context
+- **Schema introspection**: Auto-detects tables and columns; cached for performance
+- **Read-only enforcement**: 3-layer protection — LLM prompt + sqlglot AST validation + read-only transaction
+- **Result cap**: 500 rows, 15-second query timeout
 
-### Citation System
+### SQL Generation Pipeline (7 Bounded Steps)
 
-Every response includes verifiable citations:
-- Source filename
-- Page number(s)
-- Relevant text snippet
+```
+NL Question
+  → [1] Schema Retrieval     (cache → miss → introspect)
+  → [2] Table Selector       (LLM call #1)
+  → [3] Few-Shot Retrieval   (cosine similarity on stored queries)
+  → [4] SQL Generator        (LLM call #2)
+  → [5] SQL Validator        (sqlglot AST — deterministic, no LLM)
+  → [6] Executor             (SQLAlchemy, 15s timeout, 500 row cap)
+  → [7] Answer Generator     (LLM call #3, streaming)
+```
 
-Citations are clickable and take you directly to the source context.
+Max 3 LLM calls per query. No loops. Predictable latency and cost.
 
-### Session History & Management
+### Hybrid Mode
 
-- **Persistent storage**: SQLite database stores all conversation history
-- **Session management**: List, view, and delete past sessions via API
-- **Full context**: Resume conversations with complete message history
+Ask one question — DocBot queries both your uploaded documents and your live database and synthesizes a single answer with dual citations. When a number in your document differs from the database, `[DISCREPANCY]` markers appear automatically with the delta and percentage difference.
 
-### Export Functionality
+### Python Analysis via E2B
 
-Export any session in your preferred format:
-- **TXT**: Plain text for easy reading
-- **Markdown**: Formatted with headers and code blocks
-- **JSON**: Structured data for programmatic use
+After SQL execution, DocBot generates pandas/matplotlib code and runs it in an isolated E2B cloud sandbox:
+- Statistical summaries, trend analysis, correlations
+- Charts returned as base64-encoded PNG
+- Code displayed in a collapsible block for full transparency
+- Sandbox isolation: no network access, no filesystem persistence
 
-### Production-Ready UI
+### Structured Document Extraction
 
-A modern, dark-themed interface built for professional use:
+LangExtract + Gemini 2.5 Flash extracts typed, span-verified values from any document type:
 
-- **Purple/blue gradient** aesthetic with glassmorphism effects
-- **Card-based persona selector** with visual indicators for each domain
-- **Drag-and-drop file upload** with real-time progress states
-- **Toast notifications** for feedback (no browser alerts)
-- **Keyboard shortcuts**: `Ctrl+Enter` or `Cmd+Enter` to send messages
-- **Responsive design**: Works seamlessly on desktop and mobile
+| Document Type | Extracts |
+|---|---|
+| **Financial** | Revenue, ARR, margins, forecasts, EBITDA |
+| **Legal** | Effective dates, penalty amounts, contract duration, jurisdiction |
+| **Medical** | Blood pressure, glucose, medication doses, diagnoses |
+| **Research** | Sample size, p-values, effect sizes, confidence intervals |
+| **General** | Any key numeric or categorical fact grounded in the text |
+
+### Microsoft Entra (Azure AD) Authentication
+
+Connect to Azure SQL Database using Service Principal credentials — no username/password required:
+- Tenant ID + Client ID + Client Secret → token via `azure.identity`
+- Token injected via `SQL_COPT_SS_ACCESS_TOKEN` — credentials never appear in the connection string
+- ODBC Driver 18 for SQL Server included in Docker image
+
+---
 
 ## Architecture
 
 ```
 ┌─────────────────────────────────────────────────────────────┐
-│                     Next.js Frontend                        │
-│  (React, TailwindCSS, Lucide Icons, Framer Motion)         │
-└─────────────────────────┬───────────────────────────────────┘
-                          │ API Routes (/api/*)
-                          ▼
+│                    Next.js 16 Frontend                       │
+│         React 19, TailwindCSS 4, TypeScript                  │
+└──────────────────────────┬──────────────────────────────────┘
+                           │ /api/*
+                           ▼
 ┌─────────────────────────────────────────────────────────────┐
-│                    FastAPI Backend                          │
-│  ┌─────────────┐  ┌─────────────┐  ┌─────────────────────┐  │
-│  │   LangChain │  │   PyMuPDF   │  │   SQLite + FAISS    │  │
-│  │   (RAG)     │  │  (PDF OCR)  │  │  (Storage + Search) │  │
-│  └─────────────┘  └─────────────┘  └─────────────────────┘  │
-└─────────────────────────┬───────────────────────────────────┘
-                          │
-                          ▼
-                   ┌─────────────┐
-                   │    Groq     │
-                   │  (Llama 3)  │
-                   └─────────────┘
+│                FastAPI Backend (Railway)                      │
+│                                                              │
+│  ┌─────────────┐  ┌──────────────┐  ┌────────────────────┐  │
+│  │ db_service  │  │hybrid_service│  │ sandbox_service    │  │
+│  │ SQL pipeline│  │ RAG + intent │  │ E2B Python exec    │  │
+│  └─────────────┘  └──────────────┘  └────────────────────┘  │
+│  ┌─────────────────────────────────────────────────────────┐ │
+│  │               document_extractor                         │ │
+│  │         LangExtract + Gemini 2.5 Flash                  │ │
+│  └─────────────────────────────────────────────────────────┘ │
+│  ┌───────────────────────────────────────────────────────── ┐ │
+│  │  utils/  encryption · ssrf_validator · sql_validator     │ │
+│  │          embeddings · few_shot_store                     │ │
+│  └─────────────────────────────────────────────────────────┘ │
+└──────────────────────────┬──────────────────────────────────┘
+                           │
+              ┌────────────┼────────────┐
+              ▼            ▼            ▼
+         PostgreSQL      Groq         E2B
+         (Railway)   Llama/Qwen    Sandbox
 ```
 
-### Technology Stack
+### Tech Stack
 
 | Layer | Technology |
-|-------|------------|
-| Frontend | Next.js 14 (App Router), React, TailwindCSS |
-| Backend | Python FastAPI |
-| AI Inference | Groq (Llama 3.3, Llama 3.2 Vision) |
-| RAG Pipeline | LangChain, FAISS |
-| Document Processing | PyMuPDF (fitz) |
-| Storage | SQLite |
-| Embeddings | sentence-transformers |
+|---|---|
+| Frontend | Next.js 16, React 19, TailwindCSS 4, TypeScript |
+| Backend | FastAPI, Python 3.12, SQLAlchemy 2.x |
+| LLM — SQL + Hybrid | Groq Llama 3.3-70b |
+| LLM — Python codegen | Groq Qwen/qwen3-32b |
+| LLM — Doc extraction | Gemini 2.5 Flash (via LangExtract) |
+| Embeddings | sentence-transformers/all-MiniLM-L6-v2 (HuggingFace API) |
+| Vector Search | LangChain InMemoryVectorStore |
+| SQL Validation | sqlglot AST parsing |
+| Credential Encryption | Fernet (cryptography) |
+| DB Drivers | psycopg2, pymysql, pyodbc, azure-identity |
+| Python Sandbox | E2B Cloud |
+| Storage | PostgreSQL on Railway |
+| Deployment | Railway (backend), Vercel (frontend) |
 
-### RAG Configuration
-
-Optimized settings for accurate, fast retrieval:
-
-- **Chunk size**: 1500 characters
-- **Retrieval**: Top 8 chunks
-- **Score threshold**: 0.3 (filters low-quality matches)
-- **Cached embeddings**: Enabled for repeated documents
+---
 
 ## API Reference
 
@@ -152,117 +194,198 @@ Optimized settings for accurate, fast retrieval:
 ```bash
 POST /api/upload
 Content-Type: multipart/form-data
-
-# Request: Upload one or more PDF files
-# Response: { "documents": [...], "message": "..." }
+# Accepts: PDF files (multiple allowed)
+# Returns: { session_id, documents: [{filename, pages, ...}] }
 ```
 
-### Chat
+### Document Chat
 
 ```bash
-GET /api/chat?message=Your question&persona=doctor
-
-# Response:
+POST /api/chat
 {
-  "response": "AI answer with citations...",
-  "sources": [
-    {
-      "filename": "document.pdf",
-      "page": 3,
-      "text": "Relevant snippet..."
-    }
-  ],
-  "processing_time_ms": 1250
+  "session_id": "sess-abc123",
+  "message": "What is the ARR target for Q3?",
+  "persona": "Finance Expert"
+}
+# Returns: streaming SSE with { response, sources: [{filename, page, text}] }
+```
+
+### Database Connection
+
+```bash
+POST /api/db/connect
+{
+  "session_id": "sess-abc123",
+  "dialect": "postgresql",          # postgresql | mysql | sqlite | azure_sql
+  "host": "db.example.com",
+  "port": 5432,
+  "dbname": "mydb",
+  "user": "readonly_user",
+  "password": "..."
+}
+
+# For Azure SQL (Entra auth):
+{
+  "dialect": "azure_sql",
+  "host": "myserver.database.windows.net",
+  "port": 1433,
+  "dbname": "mydb",
+  "auth_type": "entra_sp",
+  "tenant_id": "...",
+  "client_id": "...",
+  "client_secret": "..."
 }
 ```
 
-### Personas
+### Database Chat
 
 ```bash
-GET /api/personas
-
-# Response: List of all personas with descriptions and capabilities
+POST /api/db/chat
+{
+  "connection_id": "conn-xyz",
+  "question": "What are the top 10 customers by revenue?",
+  "session_id": "sess-abc123",
+  "persona": "Data Analyst"
+}
+# Returns: { answer, sql, results, explanation, chart_base64? }
 ```
 
-### Sessions
+### Hybrid Chat
 
 ```bash
-# List all sessions
-GET /api/sessions
-
-# Get specific session
-GET /api/session/{id}
-
-# Delete session
-DELETE /api/session/{id}
+POST /api/hybrid/chat
+{
+  "session_id": "sess-abc123",
+  "connection_id": "conn-xyz",
+  "message": "Is the revenue in our board deck consistent with the database?",
+  "persona": "Finance Expert"
+}
+# Returns: streaming SSE; response includes [DISCREPANCY] markers when values differ
 ```
 
-### Export
+### Schema
 
 ```bash
-GET /api/export/{id}?format=markdown
-
-# Supported formats: txt, markdown, json
+GET /api/db/schema/{connection_id}
+# Returns: { tables: [{ name, columns: [{ name, type }] }] }
 ```
+
+---
 
 ## Environment Variables
 
 | Variable | Required | Description |
-|----------|----------|-------------|
-| `groq_api_key` | Yes | Your Groq API key (get one free at console.groq.com) |
+|---|---|---|
+| `groq_api_key` | Yes | Groq API key for Llama + Qwen inference |
+| `huggingface_api_key` | Yes | HuggingFace API for embeddings model |
+| `DATABASE_URL` | Yes | Railway PostgreSQL connection string |
+| `DB_ENCRYPTION_KEY` | Yes | Fernet key for credential encryption — generate with `cryptography.fernet.Fernet.generate_key()` |
+| `E2B_API_KEY` | Yes | E2B sandbox API key |
+| `GEMINI_API_KEY` | Yes | Gemini API key for LangExtract document extraction |
+| `ALLOWED_ORIGINS` | No | Comma-separated CORS origins (defaults to localhost:3000) |
 
-## Deployment
+Never commit `.env`. Never hardcode secrets.
 
-### Vercel (Recommended)
+---
 
-This repository is pre-configured for Vercel deployment:
-
-1. Push your code to a GitHub repository
-2. Import the project into Vercel
-3. Vercel automatically detects the Next.js frontend and FastAPI backend
-4. Add `groq_api_key` in Vercel project settings
-5. Deploy
-
-The FastAPI backend runs as Vercel Serverless Functions in the `/api` directory.
-
-### Local Development
+## Local Development
 
 ```bash
-# Terminal 1: Backend
+# Backend (Terminal 1)
 source .venv/bin/activate
 python3 -m uvicorn api.index:app --host 0.0.0.0 --port 8000 --reload
 
-# Terminal 2: Frontend
+# Frontend (Terminal 2)
 npm run dev -- --port 3000
 ```
 
-The Next.js app proxies `/api/*` requests to the backend on port 8000.
+Next.js proxies `/api/*` to `localhost:8000` in development.
 
-## Requirements
+---
 
-### Prerequisites
+## Testing
 
-- Node.js 18+
-- Python 3.12+
-- Groq API key (free at console.groq.com)
+```bash
+# Run all tests
+pytest tests/ -v
 
-### Python Dependencies
+# Unit tests only (no network, no DB, no API keys)
+pytest tests/unit/ -v
 
-See `requirements.txt` for the complete list. Key dependencies:
-- fastapi
-- uvicorn
-- langchain
-- langchain-groq
-- faiss-cpu
-- pymupdf
-- sentence-transformers
-- python-multipart
-- aiosqlite
+# CI command (skips external + postgres tests)
+pytest tests/ -v -m "not external and not postgres"
+```
+
+**131 tests passing** across:
+
+| File | Coverage |
+|---|---|
+| `tests/unit/test_ssrf_validator.py` | SSRF protection — private IPs, loopback, link-local |
+| `tests/unit/test_encryption.py` | Fernet credential encryption/decryption |
+| `tests/unit/test_sql_validator.py` | sqlglot AST validation — write query rejection |
+| `tests/unit/test_db_service_helpers.py` | Connection URL building, Entra token struct, Pydantic models |
+| `tests/unit/test_embeddings.py` | Embedding cosine similarity, few-shot retrieval |
+| `tests/integration/test_db_pipeline.py` | Full SQL pipeline against SQLite |
+| `tests/integration/test_file_upload_service.py` | PDF upload and chunk extraction |
+
+---
+
+## Deployment
+
+### Railway (Backend)
+
+The backend is containerized and deployed to Railway:
+
+```bash
+# Build and test locally
+docker build -t docbot .
+docker run -p 8000:8000 --env-file .env docbot
+
+# Deploy via Railway CLI
+railway up
+```
+
+The Dockerfile installs ODBC Driver 18 for SQL Server (required for Azure SQL connectivity).
+
+### Vercel (Frontend)
+
+```bash
+vercel deploy
+```
+
+Set all environment variables in the Railway and Vercel dashboards.
+
+---
+
+## Security
+
+- **SSRF prevention**: All DB connection hosts validated against RFC 1918, loopback (127.x, ::1), and link-local ranges before any network call
+- **SQL injection prevention**: sqlglot AST rejects any non-SELECT root statement — regex-free, bypass-resistant
+- **Read-only enforcement**: Three independent layers — LLM prompt, AST check, database transaction
+- **Credential encryption**: All DB credentials Fernet-encrypted before PostgreSQL storage; never logged or passed to LLMs
+- **Entra auth**: Azure SQL token injection via `SQL_COPT_SS_ACCESS_TOKEN`; no credentials in connection string
+
+---
+
+## Roadmap
+
+### Phase 2 (Next)
+- **DOCBOT-405**: Analytical Autopilot — LangGraph-based multi-step investigation agent ("Diagnose why we missed Q3")
+- **DOCBOT-305**: Advanced chart types and visualization options
+- **DOCBOT-501**: Session artifact store (persist DataFrames and charts across turns)
+- **DOCBOT-502**: Context compression for long sessions
+- **DOCBOT-503**: Schema-aware semantic table selection
+
+### Phase 3
+- BigQuery, Snowflake, Redshift connectors
+
+### Phase 4
+- Standing Monitors — proactive alerts when doc-defined conditions breach in live data
+- SSO / SAML integration
+- Audit logging
+
+---
 
 ## License
 
 MIT © [Sanshrit Singhai](https://github.com/ssinghai6)
-
-## Contributing
-
-Contributions are welcome! Please open an issue or submit a PR for any improvements.
