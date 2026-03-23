@@ -468,16 +468,15 @@ async def hybrid_chat(
     discrepancy_instruction = ""
     if intent == "hybrid" and doc_context and sql_metadata:
         discrepancy_instruction = (
-            "\n\nDISCREPANCY DETECTION: Compare numeric and factual values between the "
-            "document context and database results. If any genuine disagreement exists, "
-            "include a block using EXACTLY this format:\n"
-            "[DISCREPANCY]\n"
-            "Doc says: {value} [Source: filename, Page N]\n"
-            "DB shows: {value} [DB: table_name]\n"
-            "Delta: {absolute difference} ({percentage}%)\n"
-            "[/DISCREPANCY]\n"
-            "Rules: only flag real discrepancies — omit the block entirely when sources agree. "
-            "For non-numeric differences use 'N/A' for Delta."
+            "\n\nDISCREPANCY DETECTION: When the document and database results contain "
+            "conflicting numeric values for the same metric:\n"
+            "- Flag it explicitly with a [DISCREPANCY] marker\n"
+            "- Format: \"[DISCREPANCY] Doc says {doc_value} [Source: ...]. "
+            "DB shows {db_value} [DB: table]. Delta: {delta} ({pct}%)\"\n"
+            "- Also flag non-numeric inconsistencies (e.g. different time periods, "
+            "different categories)\n"
+            "- Do NOT say \"no discrepancy found\" unless the user explicitly asks\n"
+            "- If sources agree, simply synthesize without mentioning discrepancy"
         )
 
     prompt = (
@@ -487,7 +486,8 @@ async def hybrid_chat(
         f"{discrepancy_instruction}\n\n"
         f"Question: {question}"
         f"{extracted_section}"
-        f"{sql_section}{doc_section}\n\n"
+        f"\n\n[DOCUMENT CONTEXT]\n{doc_section}"
+        f"\n\n[DATABASE RESULTS]\n{sql_section}\n\n"
         "Answer:"
     )
 

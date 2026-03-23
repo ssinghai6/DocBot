@@ -470,6 +470,15 @@ export default function Home() {
     }
   }, [input]);
 
+  // Fall back to "docs" mode when the active mode's required source becomes unavailable
+  useEffect(() => {
+    if (chatMode === "database" && !connectionId) {
+      setChatMode("docs");
+    } else if (chatMode === "hybrid" && (!connectionId || !sessionId)) {
+      setChatMode("docs");
+    }
+  }, [connectionId, sessionId, chatMode]);
+
   // Keyboard shortcuts
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
@@ -1350,40 +1359,45 @@ export default function Home() {
                   onClear={clearSession}
                 />
 
-                {/* DOCBOT-404: HybridModeToggle — shown when DB is connected */}
-                {isDbConnected && (
-                  <div className="flex items-center gap-0.5 p-1 bg-[#1a1a24]/80 rounded-xl border border-[#ffffff08]">
-                    {(["docs", "database", "hybrid"] as const).map((mode) => {
-                      const disabled =
-                        (mode === "docs" && !sessionId) ||
-                        (mode === "hybrid" && (!sessionId || !connectionId));
-                      const labels = { docs: "Docs", database: "Database", hybrid: "Hybrid" };
-                      const icons = {
-                        docs: <FileText className="w-3 h-3" />,
-                        database: <Database className="w-3 h-3" />,
-                        hybrid: <Layers className="w-3 h-3" />,
-                      };
-                      return (
-                        <button
-                          key={mode}
-                          onClick={() => !disabled && setChatMode(mode)}
-                          disabled={disabled}
-                          title={disabled ? `Upload a ${mode === "docs" ? "PDF" : "document and connect a database"} first` : undefined}
-                          className={`flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg text-xs font-medium transition-all ${
-                            chatMode === mode
+                {/* DOCBOT-404: HybridModeToggle */}
+                <div className="flex items-center gap-0.5 p-1 bg-[#1a1a24]/80 rounded-xl border border-[#ffffff08]">
+                  {(["docs", "database", "hybrid"] as const).map((mode) => {
+                    const disabled =
+                      (mode === "database" && !connectionId) ||
+                      (mode === "hybrid" && (!connectionId || !sessionId));
+                    const labels = { docs: "Docs", database: "Database", hybrid: "Hybrid" };
+                    const icons = {
+                      docs: <FileText className="w-3 h-3" />,
+                      database: <Database className="w-3 h-3" />,
+                      hybrid: <Layers className="w-3 h-3" />,
+                    };
+                    return (
+                      <button
+                        key={mode}
+                        onClick={() => !disabled && setChatMode(mode)}
+                        title={
+                          mode === "database" && !connectionId
+                            ? "Connect a database first"
+                            : mode === "hybrid" && !connectionId
+                              ? "Connect a database first"
+                              : mode === "hybrid" && !sessionId
+                                ? "Upload a PDF first"
+                                : undefined
+                        }
+                        className={`flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg text-xs font-medium transition-all ${
+                          disabled
+                            ? "opacity-40 cursor-not-allowed pointer-events-none text-gray-400"
+                            : chatMode === mode
                               ? "bg-gradient-to-r from-[#667eea] to-[#764ba2] text-white shadow-sm"
-                              : disabled
-                                ? "text-gray-600 cursor-not-allowed"
-                                : "text-gray-400 hover:text-gray-200 hover:bg-[#ffffff08]"
-                          }`}
-                        >
-                          {icons[mode]}
-                          {labels[mode]}
-                        </button>
-                      );
-                    })}
-                  </div>
-                )}
+                              : "text-gray-400 hover:text-gray-200 hover:bg-[#ffffff08]"
+                        }`}
+                      >
+                        {icons[mode]}
+                        {labels[mode]}
+                      </button>
+                    );
+                  })}
+                </div>
                 {sessionId && messages.length > 0 && (
                   <div className="relative group">
                     <button className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs text-gray-300 bg-[#1a1a24]/60 border border-[#ffffff08] hover:border-[#667eea]/30 hover:bg-[#1a1a24]/80 transition-all">
