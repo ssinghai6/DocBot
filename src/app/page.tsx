@@ -22,15 +22,24 @@ type Citation = {
   text: string;
 };
 
+type ChartMeta = {
+  type: string;
+  title: string;
+  x_label: string;
+  y_label: string;
+  series_count: number;
+};
+
 type Message = {
   role: "user" | "assistant";
   content: string;
   timestamp?: Date;
   citations?: Citation[];
-  charts?: string[];       // base64 PNG strings from E2B analysis (DOCBOT-303)
-  analysisCode?: string;   // Python code block, collapsible (DOCBOT-303)
-  sql?: string;            // SQL query from metadata chunk
-  explanation?: string;    // SQL explanation from metadata chunk
+  charts?: string[];           // base64 PNG strings from E2B analysis
+  chartMetas?: ChartMeta[];    // DOCBOT-305: metadata per chart
+  analysisCode?: string;       // Python code block, collapsible
+  sql?: string;                // SQL query from metadata chunk
+  explanation?: string;        // SQL explanation from metadata chunk
 };
 
 type Toast = {
@@ -209,44 +218,88 @@ function SessionInfo({ sessionId, fileCount, persona, onClear }: {
   )
 }
 
-// Chart Display Component (DOCBOT-303)
-function ChartDisplay({ charts }: { charts: string[] }) {
+// Chart Display Component (DOCBOT-303 / DOCBOT-305)
+function ChartDisplay({ charts, chartMetas }: { charts: string[]; chartMetas?: (ChartMeta | null)[] }) {
   const [expanded, setExpanded] = useState<number | null>(null);
 
   if (!charts || charts.length === 0) return null;
 
   return (
-    <div className="mt-3 space-y-2">
-      {charts.map((b64, i) => (
-        <div key={i} className="relative group">
-          <img
-            src={`data:image/png;base64,${b64}`}
-            alt={`Analysis chart ${i + 1}`}
-            className="rounded-lg border border-[#ffffff10] max-w-full cursor-pointer hover:opacity-90 transition-opacity"
-            onClick={() => setExpanded(i)}
-          />
-          <a
-            href={`data:image/png;base64,${b64}`}
-            download={`chart-${i + 1}.png`}
-            className="absolute top-2 right-2 opacity-0 group-hover:opacity-100 bg-[#12121a]/90 backdrop-blur-sm rounded-md px-2 py-1 text-xs text-gray-400 hover:text-gray-200 transition-opacity border border-[#ffffff10] flex items-center gap-1"
-            onClick={(e) => e.stopPropagation()}
-          >
-            <Download className="w-3 h-3" />
-            Download
-          </a>
-        </div>
-      ))}
+    <div className="mt-3 space-y-3">
+      {charts.map((b64, i) => {
+        const meta = chartMetas?.[i];
+        return (
+          <div key={i} className="space-y-1">
+            <div className="relative group">
+              <img
+                src={`data:image/png;base64,${b64}`}
+                alt={meta?.title || `Analysis chart ${i + 1}`}
+                className="rounded-lg border border-[#ffffff10] max-w-full cursor-pointer hover:opacity-90 transition-opacity"
+                onClick={() => setExpanded(i)}
+              />
+              {/* Hover action bar */}
+              <div className="absolute top-2 right-2 opacity-0 group-hover:opacity-100 flex items-center gap-1 transition-opacity">
+                <button
+                  onClick={() => setExpanded(i)}
+                  className="bg-[#12121a]/90 backdrop-blur-sm rounded-md p-1.5 text-gray-400 hover:text-gray-200 border border-[#ffffff10]"
+                  title="Expand"
+                >
+                  <Maximize2 className="w-3 h-3" />
+                </button>
+                <a
+                  href={`data:image/png;base64,${b64}`}
+                  download={meta?.title ? `${meta.title.replace(/\s+/g, "_")}.png` : `chart-${i + 1}.png`}
+                  className="bg-[#12121a]/90 backdrop-blur-sm rounded-md px-2 py-1.5 text-xs text-gray-400 hover:text-gray-200 border border-[#ffffff10] flex items-center gap-1"
+                  onClick={(e) => e.stopPropagation()}
+                >
+                  <Download className="w-3 h-3" />
+                  PNG
+                </a>
+              </div>
+            </div>
+            {/* DOCBOT-305: metadata caption */}
+            {meta && (meta.title || meta.x_label || meta.y_label) && (
+              <div className="px-1 flex flex-wrap items-center gap-x-3 gap-y-0.5 text-[11px] text-gray-500">
+                {meta.title && <span className="font-medium text-gray-400">{meta.title}</span>}
+                {meta.x_label && <span>x: {meta.x_label}</span>}
+                {meta.y_label && <span>y: {meta.y_label}</span>}
+                {meta.series_count > 1 && <span>{meta.series_count} series</span>}
+              </div>
+            )}
+          </div>
+        );
+      })}
+
+      {/* Fullscreen zoom modal */}
       {expanded !== null && (
         <div
-          className="fixed inset-0 bg-black/80 z-50 flex items-center justify-center p-4"
+          className="fixed inset-0 bg-black/85 z-50 flex flex-col items-center justify-center p-4 gap-3"
           onClick={() => setExpanded(null)}
         >
           <img
             src={`data:image/png;base64,${charts[expanded]}`}
             alt="Chart full view"
-            className="max-w-full max-h-full rounded-lg"
+            className="max-w-full max-h-[85vh] rounded-lg"
             onClick={(e) => e.stopPropagation()}
           />
+          <div className="flex items-center gap-3">
+            <a
+              href={`data:image/png;base64,${charts[expanded]}`}
+              download={chartMetas?.[expanded]?.title
+                ? `${chartMetas[expanded]!.title.replace(/\s+/g, "_")}.png`
+                : `chart-${expanded + 1}.png`}
+              className="bg-[#1a1a24] border border-[#ffffff15] rounded-lg px-3 py-1.5 text-xs text-gray-300 hover:text-white flex items-center gap-1.5 transition-colors"
+              onClick={(e) => e.stopPropagation()}
+            >
+              <Download className="w-3 h-3" /> Download PNG
+            </a>
+            <button
+              onClick={() => setExpanded(null)}
+              className="bg-[#1a1a24] border border-[#ffffff15] rounded-lg px-3 py-1.5 text-xs text-gray-300 hover:text-white flex items-center gap-1.5 transition-colors"
+            >
+              <Minimize2 className="w-3 h-3" /> Close
+            </button>
+          </div>
         </div>
       )}
     </div>
@@ -350,6 +403,10 @@ export default function Home() {
   const [queryHistory, setQueryHistory] = useState<QueryHistoryItem[]>([]);
   const [historyOpen, setHistoryOpen] = useState(false);
   const [expandedHistoryId, setExpandedHistoryId] = useState<string | null>(null);
+
+  // DOCBOT-305: Advanced charts
+  const [chartType, setChartType] = useState<string>("auto");
+  const [zoomedChart, setZoomedChart] = useState<string | null>(null);
 
   // Chat mode: "docs" → /api/chat, "database" → /api/db/chat, "hybrid" → /api/hybrid/chat
   const [chatMode, setChatMode] = useState<"docs" | "database" | "hybrid">("docs");
@@ -703,6 +760,7 @@ export default function Home() {
             question: userMsg.content,
             persona: selectedPersona,
             session_id: sessionId ?? "anonymous",
+            chart_type: chartType,
           }),
         });
 
@@ -746,7 +804,11 @@ export default function Home() {
               } else if (chunk.type === "chart") {
                 setMessages(prev => prev.map((m, i) =>
                   i === prev.length - 1
-                    ? { ...m, charts: [...(m.charts ?? []), chunk.base64] }
+                    ? {
+                        ...m,
+                        charts: [...(m.charts ?? []), chunk.base64],
+                        chartMetas: [...(m.chartMetas ?? []), chunk.metadata ?? null],
+                      }
                     : m
                 ));
               } else if (chunk.type === "error") {
@@ -1793,7 +1855,7 @@ export default function Home() {
 
                     {/* Charts (DOCBOT-303) */}
                     {msg.role === "assistant" && msg.charts && msg.charts.length > 0 && (
-                      <ChartDisplay charts={msg.charts} />
+                      <ChartDisplay charts={msg.charts} chartMetas={msg.chartMetas} />
                     )}
 
                     {/* Citations */}
@@ -1846,6 +1908,25 @@ export default function Home() {
 
         {/* Input Area */}
         <div className="p-4 lg:p-6 pt-0 flex-none w-full">
+          {/* DOCBOT-305: Chart type selector — shown only when DB connected */}
+          {isDbConnected && (
+            <div className="flex items-center gap-2 mb-2 flex-wrap">
+              <span className="text-[11px] text-gray-500 shrink-0">Chart:</span>
+              {(["auto", "bar", "line", "scatter", "heatmap", "box", "multi"] as const).map((t) => (
+                <button
+                  key={t}
+                  onClick={() => setChartType(t)}
+                  className={`px-2 py-0.5 rounded-full text-[11px] border transition-all capitalize ${
+                    chartType === t
+                      ? "border-[#667eea]/60 bg-[#667eea]/15 text-[#a5b4fc]"
+                      : "border-[#ffffff10] text-gray-500 hover:text-gray-300 hover:border-[#ffffff20]"
+                  }`}
+                >
+                  {t}
+                </button>
+              ))}
+            </div>
+          )}
           <form
             onSubmit={handleSendMessage}
             className="relative bg-[#12121a]/90 border border-[#ffffff10] rounded-2xl backdrop-blur-xl shadow-lg shadow-black/20 focus-within:border-[#667eea]/40 focus-within:shadow-[0_8px_30px_rgba(102,126,234,0.15)] transition-all overflow-hidden flex items-end"
