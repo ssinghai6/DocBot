@@ -204,7 +204,7 @@ async def generate_analysis_code(
         response = await loop.run_in_executor(
             None,
             lambda: client.chat.completions.create(
-                model="qwen-2.5-coder-32b",
+                model="qwen/qwen3-32b",
                 messages=[
                     {"role": "system", "content": system_prompt},
                     {"role": "user", "content": user_message},
