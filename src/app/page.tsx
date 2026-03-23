@@ -41,6 +41,15 @@ type Toast = {
 
 type FileUploadState = "idle" | "dragover" | "uploading" | "success" | "error";
 
+// DOCBOT-504: Query History
+type QueryHistoryItem = {
+  id: string;
+  question: string;
+  sql: string;
+  executed_at: string | null;
+  row_count: number | null;
+};
+
 const EXPERT_PERSONAS: Record<string, {
   icon: React.ReactNode;
   description: string;
@@ -337,6 +346,11 @@ export default function Home() {
   const [entraSignInState, setEntraSignInState] = useState<"idle" | "signing_in" | "signed_in" | "error">("idle");
   const [liveDbError, setLiveDbError] = useState<string | null>(null);
 
+  // DOCBOT-504: Query history panel
+  const [queryHistory, setQueryHistory] = useState<QueryHistoryItem[]>([]);
+  const [historyOpen, setHistoryOpen] = useState(false);
+  const [expandedHistoryId, setExpandedHistoryId] = useState<string | null>(null);
+
   // Chat mode: "docs" → /api/chat, "database" → /api/db/chat, "hybrid" → /api/hybrid/chat
   const [chatMode, setChatMode] = useState<"docs" | "database" | "hybrid">("docs");
 
@@ -344,6 +358,18 @@ export default function Home() {
   const anonymousSessionIdRef = useRef<string>(
     typeof crypto !== "undefined" ? crypto.randomUUID() : Math.random().toString(36).substring(2)
   );
+
+  // DOCBOT-504: Load query history for a connection
+  const loadQueryHistory = useCallback(async (connId: string) => {
+    try {
+      const res = await fetch(`/api/db/history/${connId}?limit=20`);
+      if (!res.ok) return;
+      const data = await res.json();
+      setQueryHistory(data.history ?? []);
+    } catch {
+      // non-fatal — history panel just stays empty
+    }
+  }, []);
 
   // Called when a DB connection is successfully established.
   // Auto-selects the Data Analyst persona only when the user has not already
@@ -353,7 +379,8 @@ export default function Home() {
     setConnectionId(connId);
     setChatMode("database");
     setSelectedPersona(prev => (prev === "Generalist" ? "Data Analyst" : prev));
-  }, []);
+    loadQueryHistory(connId);
+  }, [loadQueryHistory]);
 
   const handleDbDisconnect = useCallback(() => {
     setIsDbConnected(false);
@@ -365,6 +392,8 @@ export default function Home() {
     setShowLiveDbForm(false);
     setLiveDbConnectState("idle");
     setLiveDbError(null);
+    setQueryHistory([]);
+    setHistoryOpen(false);
   }, []);
 
   const handleDbUpload = async (file: File, type: "csv" | "sqlite") => {
@@ -739,6 +768,8 @@ export default function Home() {
         ));
       } finally {
         setIsLoading(false);
+        // DOCBOT-504: refresh history after each query
+        if (connectionId) loadQueryHistory(connectionId);
       }
       return;
     }
@@ -1082,16 +1113,90 @@ export default function Home() {
           </h3>
 
           {isDbConnected ? (
-            <div className="flex items-center gap-2 px-3 py-2.5 bg-[#10b981]/10 rounded-xl border border-[#10b981]/20 text-xs">
-              <Database className="w-3.5 h-3.5 text-[#10b981] shrink-0" />
-              <span className="truncate text-gray-300 flex-1">{dbFileName}</span>
-              <button
-                onClick={handleDbDisconnect}
-                className="text-gray-500 hover:text-red-400 transition-colors shrink-0"
-                title="Disconnect database"
-              >
-                <XCircle className="w-3.5 h-3.5" />
-              </button>
+            <div className="space-y-2">
+              {/* Connected indicator */}
+              <div className="flex items-center gap-2 px-3 py-2.5 bg-[#10b981]/10 rounded-xl border border-[#10b981]/20 text-xs">
+                <Database className="w-3.5 h-3.5 text-[#10b981] shrink-0" />
+                <span className="truncate text-gray-300 flex-1">{dbFileName}</span>
+                <button
+                  onClick={handleDbDisconnect}
+                  className="text-gray-500 hover:text-red-400 transition-colors shrink-0"
+                  title="Disconnect database"
+                >
+                  <XCircle className="w-3.5 h-3.5" />
+                </button>
+              </div>
+
+              {/* DOCBOT-504: Query History Panel */}
+              <div className="rounded-xl border border-[#ffffff10] overflow-hidden">
+                <button
+                  onClick={() => setHistoryOpen(v => !v)}
+                  className="w-full flex items-center gap-2 px-3 py-2 text-xs text-gray-400 hover:text-white hover:bg-[#ffffff08] transition-colors"
+                >
+                  <Clock className="w-3.5 h-3.5 text-[#f97316] shrink-0" />
+                  <span className="flex-1 text-left font-medium">Query History</span>
+                  {queryHistory.length > 0 && (
+                    <span className="bg-[#f97316]/20 text-[#f97316] text-[10px] px-1.5 py-0.5 rounded-full font-medium">
+                      {queryHistory.length}
+                    </span>
+                  )}
+                  <ChevronDown className={`w-3 h-3 transition-transform ${historyOpen ? "rotate-180" : ""}`} />
+                </button>
+
+                {historyOpen && (
+                  <div className="border-t border-[#ffffff10] max-h-64 overflow-y-auto">
+                    {queryHistory.length === 0 ? (
+                      <p className="px-3 py-3 text-xs text-gray-500 text-center">No queries yet</p>
+                    ) : (
+                      queryHistory.map((item) => (
+                        <div key={item.id} className="border-b border-[#ffffff08] last:border-b-0">
+                          {/* Summary row */}
+                          <button
+                            className="w-full flex items-start gap-2 px-3 py-2 text-left hover:bg-[#ffffff06] transition-colors group"
+                            onClick={() => setExpandedHistoryId(expandedHistoryId === item.id ? null : item.id)}
+                          >
+                            <div className="flex-1 min-w-0">
+                              <p className="text-xs text-gray-300 truncate leading-snug">{item.question}</p>
+                              <div className="flex items-center gap-2 mt-0.5">
+                                {item.row_count != null && (
+                                  <span className="text-[10px] text-gray-500">
+                                    {item.row_count} row{item.row_count !== 1 ? "s" : ""}
+                                  </span>
+                                )}
+                                {item.executed_at && (
+                                  <span className="text-[10px] text-gray-600">
+                                    {new Date(item.executed_at).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}
+                                  </span>
+                                )}
+                              </div>
+                            </div>
+                            {/* Re-run button */}
+                            <button
+                              title="Re-run this query"
+                              className="shrink-0 opacity-0 group-hover:opacity-100 transition-opacity text-gray-500 hover:text-[#f97316] mt-0.5"
+                              onClick={(e) => {
+                                e.stopPropagation();
+                                setInput(item.question);
+                              }}
+                            >
+                              <ArrowRight className="w-3 h-3" />
+                            </button>
+                          </button>
+
+                          {/* Expanded SQL */}
+                          {expandedHistoryId === item.id && (
+                            <div className="px-3 pb-2">
+                              <pre className="text-[10px] text-gray-400 bg-[#0d0d14] rounded-lg p-2 overflow-x-auto whitespace-pre-wrap break-all leading-relaxed">
+                                {item.sql}
+                              </pre>
+                            </div>
+                          )}
+                        </div>
+                      ))
+                    )}
+                  </div>
+                )}
+              </div>
             </div>
           ) : (
             <div className="space-y-2">
