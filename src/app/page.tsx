@@ -244,6 +244,34 @@ function ChartDisplay({ charts }: { charts: string[] }) {
   );
 }
 
+// Discrepancy Block Component (DOCBOT-403)
+function DiscrepancyBlock({ content }: { content: string }) {
+  return (
+    <div className="mt-3 p-3 rounded-xl border border-[#f59e0b]/40 bg-[#f59e0b]/8">
+      <div className="flex items-center gap-2 mb-2">
+        <AlertTriangle className="w-4 h-4 text-[#f59e0b] shrink-0" />
+        <span className="text-xs font-semibold text-[#f59e0b] uppercase tracking-wider">Discrepancy Detected</span>
+      </div>
+      <div className="text-sm text-gray-300 whitespace-pre-line leading-relaxed font-mono text-xs">
+        {content.trim()}
+      </div>
+    </div>
+  );
+}
+
+// Parse message content into text segments and discrepancy blocks (DOCBOT-403)
+function renderMessageContent(content: string): React.ReactNode[] | null {
+  const parts = content.split(/\[DISCREPANCY\]([\s\S]*?)\[\/DISCREPANCY\]/g);
+  if (parts.length === 1) return null; // no discrepancy blocks — caller uses normal renderer
+  return parts.map((part, i) =>
+    i % 2 === 0
+      ? part.trim()
+        ? <ReactMarkdown key={i} remarkPlugins={[remarkGfm]}>{part}</ReactMarkdown>
+        : null
+      : <DiscrepancyBlock key={i} content={part} />
+  ).filter(Boolean);
+}
+
 // Collapsible Code Component (DOCBOT-303)
 function CollapsibleCode({ code }: { code: string }) {
   const [open, setOpen] = useState(false);
@@ -1371,7 +1399,7 @@ export default function Home() {
 
                     {/* Message Content */}
                     {msg.role === "assistant" ? (
-                      <div className="prose prose-invert prose-sm max-w-none 
+                      <div className="prose prose-invert prose-sm max-w-none
                         prose-p:leading-7 prose-p:text-gray-300
                         prose-headings:text-white prose-headings:font-semibold prose-headings:mt-0 prose-headings:mb-2
                         prose-strong:text-white prose-strong:font-medium
@@ -1382,9 +1410,11 @@ export default function Home() {
                         prose-blockquote:border-l-[#667eea] prose-blockquote:bg-[#1a1a24]/50 prose-blockquote:py-1 prose-blockquote:px-3 prose-blockquote:rounded-r-lg prose-blockquote:text-gray-400 prose-blockquote:not-italic
                         prose-code:text-[#764ba2] prose-code:bg-[#1a1a24]/60 prose-code:px-1.5 prose-code:py-0.5 prose-code:rounded prose-code:before:content-none prose-code:after:content-none
                         prose-pre:bg-[#1a1a24]/80 prose-pre:border prose-pre:border-[#ffffff08]">
-                        <ReactMarkdown remarkPlugins={[remarkGfm]}>
-                          {msg.content}
-                        </ReactMarkdown>
+                        {renderMessageContent(msg.content) ?? (
+                          <ReactMarkdown remarkPlugins={[remarkGfm]}>
+                            {msg.content}
+                          </ReactMarkdown>
+                        )}
                       </div>
                     ) : (
                       <p className="text-[15px] leading-relaxed whitespace-pre-wrap">{msg.content}</p>

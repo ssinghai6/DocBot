@@ -197,6 +197,10 @@ class Citation(BaseModel):
 
 VECTOR_STORES = {}
 
+# DOCBOT-406: in-memory store of span-verified financial fields per session
+# { session_id: list[ExtractedField] }
+EXTRACTED_FIELDS: dict = {}
+
 EXPERT_PERSONAS = {
     "Generalist": {
         "persona_def": """You are DocBot, a knowledgeable and versatile AI assistant helping users understand their documents.
@@ -559,7 +563,20 @@ async def upload_documents(
         db = InMemoryVectorStore.from_documents(splits, embeddings)
         index_time = time.time() - start_time
         VECTOR_STORES[session_id] = db
-        
+
+        # DOCBOT-406: run financial extraction in background (non-blocking)
+        full_text = " ".join(d.page_content for d in all_content)
+        from api.document_extractor import is_financial_document, extract_financial_fields
+        if is_financial_document(full_text):
+            logger.info("upload: financial document detected for session=%s — running extraction", session_id)
+            async def _run_extraction(sid: str, text: str) -> None:
+                groq_key = os.getenv("groq_api_key", "")
+                fields = await extract_financial_fields(text, sid, groq_key)
+                if fields:
+                    EXTRACTED_FIELDS[sid] = fields
+                    logger.info("upload: stored %d extracted fields for session=%s", len(fields), sid)
+            asyncio.create_task(_run_extraction(session_id, full_text))
+
         # Store session in database
         async with engine.begin() as conn:
             await conn.execute(
@@ -1398,6 +1415,7 @@ async def hybrid_chat_route(request: HybridChatRequest):
                 async_session_factory=async_session_factory,
                 expert_personas=EXPERT_PERSONAS,
                 vector_stores=VECTOR_STORES,
+                extracted_fields=EXTRACTED_FIELDS.get(request.session_id),
             ):
                 yield chunk
         except Exception as exc:

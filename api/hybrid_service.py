@@ -346,6 +346,7 @@ async def hybrid_chat(
     async_session_factory,
     expert_personas: dict,
     vector_stores: dict,
+    extracted_fields: list | None = None,
 ) -> AsyncGenerator[str, None]:
     """Hybrid chat pipeline: intent classification → SQL + RAG → synthesis.
 
@@ -455,11 +456,37 @@ async def hybrid_chat(
             "Cite document sources as [Source: filename, Page X]."
         )
 
+    # DOCBOT-406: include span-verified financial values when available
+    extracted_section = ""
+    if extracted_fields:
+        from api.document_extractor import format_extracted_fields_for_prompt
+        formatted = format_extracted_fields_for_prompt(extracted_fields)
+        if formatted:
+            extracted_section = f"\n\n{formatted}"
+
+    # DOCBOT-403: discrepancy detection instructions (only in hybrid mode)
+    discrepancy_instruction = ""
+    if intent == "hybrid" and doc_context and sql_metadata:
+        discrepancy_instruction = (
+            "\n\nDISCREPANCY DETECTION: Compare numeric and factual values between the "
+            "document context and database results. If any genuine disagreement exists, "
+            "include a block using EXACTLY this format:\n"
+            "[DISCREPANCY]\n"
+            "Doc says: {value} [Source: filename, Page N]\n"
+            "DB shows: {value} [DB: table_name]\n"
+            "Delta: {absolute difference} ({percentage}%)\n"
+            "[/DISCREPANCY]\n"
+            "Rules: only flag real discrepancies — omit the block entirely when sources agree. "
+            "For non-numeric differences use 'N/A' for Delta."
+        )
+
     prompt = (
         f"{persona_def}\n\n"
         f"Answer the following question using the context below. "
-        f"Be concise and accurate.{doc_note}{sql_note}\n\n"
+        f"Be concise and accurate.{doc_note}{sql_note}"
+        f"{discrepancy_instruction}\n\n"
         f"Question: {question}"
+        f"{extracted_section}"
         f"{sql_section}{doc_section}\n\n"
         "Answer:"
     )
