@@ -1211,7 +1211,7 @@ async def db_chat(request: DBChatRequest):
         except ExecutionTimeoutError as exc:
             yield f"data: {json.dumps({'type': 'error', 'error_type': 'ExecutionTimeoutError', 'detail': str(exc)})}\n\n"
         except Exception as exc:
-            logger.error("db_chat pipeline error: %s", type(exc).__name__)
+            logger.error("db_chat pipeline error: %s — %s", type(exc).__name__, exc, exc_info=True)
             yield f"data: {json.dumps({'type': 'error', 'error_type': 'InternalError', 'detail': 'An internal error occurred.'})}\n\n"
 
     return StreamingResponse(event_stream(), media_type="text/event-stream")
