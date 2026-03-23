@@ -327,13 +327,14 @@ export default function Home() {
     dbname: "",
     user: "",
     password: "",
-    tenantId: "",
-    clientId: "",
-    clientSecret: "",
   });
   const [showDbPassword, setShowDbPassword] = useState(false);
-  const [showClientSecret, setShowClientSecret] = useState(false);
   const [liveDbConnectState, setLiveDbConnectState] = useState<"idle" | "connecting" | "error">("idle");
+
+  // Entra interactive auth state
+  const [entraToken, setEntraToken] = useState<string | null>(null);
+  const [entraEmail, setEntraEmail] = useState<string | null>(null);
+  const [entraSignInState, setEntraSignInState] = useState<"idle" | "signing_in" | "signed_in" | "error">("idle");
   const [liveDbError, setLiveDbError] = useState<string | null>(null);
 
   // Chat mode: "docs" → /api/chat, "database" → /api/db/chat, "hybrid" → /api/hybrid/chat
@@ -399,14 +400,12 @@ export default function Home() {
       const body = isEntra
         ? {
             session_id: sessionId ?? anonymousSessionIdRef.current,
-            dialect: liveDbForm.dialect,
+            dialect: "azure_sql",
             host: liveDbForm.host,
             port: parseInt(liveDbForm.port, 10),
             dbname: liveDbForm.dbname,
-            auth_type: "entra_sp",
-            tenant_id: liveDbForm.tenantId,
-            client_id: liveDbForm.clientId,
-            client_secret: liveDbForm.clientSecret,
+            auth_type: "entra_interactive",
+            access_token: entraToken,
           }
         : {
             session_id: sessionId ?? anonymousSessionIdRef.current,
@@ -440,6 +439,32 @@ export default function Home() {
       setLiveDbError(msg);
     }
   };
+
+  const msalConfig = {
+    auth: {
+      clientId: process.env.NEXT_PUBLIC_AZURE_CLIENT_ID ?? "",
+      authority: "https://login.microsoftonline.com/common",
+      redirectUri: typeof window !== "undefined" ? window.location.origin : "",
+    },
+  };
+
+  async function handleMicrosoftSignIn() {
+    setEntraSignInState("signing_in");
+    try {
+      const { PublicClientApplication } = await import("@azure/msal-browser");
+      const msalInstance = new PublicClientApplication(msalConfig);
+      await msalInstance.initialize();
+      const result = await msalInstance.acquireTokenPopup({
+        scopes: ["https://database.windows.net/.default"],
+      });
+      setEntraToken(result.accessToken);
+      setEntraEmail(result.account?.username ?? "Microsoft Account");
+      setEntraSignInState("signed_in");
+    } catch (err) {
+      console.error("MSAL sign-in error:", err);
+      setEntraSignInState("error");
+    }
+  }
 
   // File Upload State
   const [fileUploadState, setFileUploadState] = useState<FileUploadState>("idle");
@@ -1148,16 +1173,17 @@ export default function Home() {
                         // Reset auth fields to prevent stale values across auth modes
                         user: "",
                         password: "",
-                        tenantId: "",
-                        clientId: "",
-                        clientSecret: "",
                       }));
+                      // Reset entra auth state when dialect changes
+                      setEntraToken(null);
+                      setEntraEmail(null);
+                      setEntraSignInState("idle");
                     }}
                     className="w-full px-3 py-2 rounded-lg bg-[#1a1a24] border border-[#ffffff10] text-gray-300 text-xs focus:outline-none focus:border-[#f97316]/40"
                   >
                     <option value="postgresql">PostgreSQL</option>
                     <option value="mysql">MySQL</option>
-                    <option value="azure_sql">Azure SQL (Entra)</option>
+                    <option value="azure_sql">Azure SQL (Microsoft Entra)</option>
                   </select>
 
                   <input
@@ -1185,7 +1211,41 @@ export default function Home() {
                     />
                   </div>
 
-                  {liveDbForm.dialect !== "azure_sql" ? (
+                  {liveDbForm.dialect === "azure_sql" ? (
+                    <div className="space-y-2">
+                      {entraSignInState === "signed_in" && entraEmail ? (
+                        <div className="flex items-center gap-2 px-3 py-2 rounded-lg bg-green-500/10 border border-green-500/20">
+                          <div className="w-2 h-2 rounded-full bg-green-400 flex-shrink-0" />
+                          <span className="text-xs text-green-400 truncate">{entraEmail}</span>
+                          <button
+                            type="button"
+                            onClick={() => { setEntraToken(null); setEntraEmail(null); setEntraSignInState("idle"); }}
+                            className="ml-auto text-gray-500 hover:text-gray-300 text-[10px]"
+                          >
+                            Change
+                          </button>
+                        </div>
+                      ) : (
+                        <button
+                          type="button"
+                          onClick={handleMicrosoftSignIn}
+                          disabled={entraSignInState === "signing_in" || !process.env.NEXT_PUBLIC_AZURE_CLIENT_ID}
+                          className="w-full flex items-center justify-center gap-2 px-3 py-2 rounded-lg bg-[#0078d4]/20 hover:bg-[#0078d4]/30 border border-[#0078d4]/30 text-[#4fc3f7] text-xs font-medium transition-all disabled:opacity-50 disabled:cursor-not-allowed"
+                        >
+                          {entraSignInState === "signing_in"
+                            ? <><Loader2 className="w-3.5 h-3.5 animate-spin" /> Signing in...</>
+                            : "Sign in with Microsoft"
+                          }
+                        </button>
+                      )}
+                      {entraSignInState === "error" && (
+                        <p className="text-[10px] text-red-400 px-1">Sign-in failed. Check your Azure AD app configuration.</p>
+                      )}
+                      {!process.env.NEXT_PUBLIC_AZURE_CLIENT_ID && (
+                        <p className="text-[10px] text-yellow-500/70 px-1">Set NEXT_PUBLIC_AZURE_CLIENT_ID to enable Microsoft sign-in.</p>
+                      )}
+                    </div>
+                  ) : (
                     <>
                       <input
                         type="text"
@@ -1211,39 +1271,6 @@ export default function Home() {
                         </button>
                       </div>
                     </>
-                  ) : (
-                    <>
-                      <input
-                        type="text"
-                        placeholder="Tenant ID"
-                        value={liveDbForm.tenantId}
-                        onChange={(e) => setLiveDbForm(f => ({ ...f, tenantId: e.target.value }))}
-                        className="w-full px-3 py-2 rounded-lg bg-[#1a1a24] border border-[#ffffff10] text-gray-300 text-xs placeholder-gray-600 focus:outline-none focus:border-[#f97316]/40"
-                      />
-                      <input
-                        type="text"
-                        placeholder="Client ID (Application ID)"
-                        value={liveDbForm.clientId}
-                        onChange={(e) => setLiveDbForm(f => ({ ...f, clientId: e.target.value }))}
-                        className="w-full px-3 py-2 rounded-lg bg-[#1a1a24] border border-[#ffffff10] text-gray-300 text-xs placeholder-gray-600 focus:outline-none focus:border-[#f97316]/40"
-                      />
-                      <div className="relative">
-                        <input
-                          type={showClientSecret ? "text" : "password"}
-                          placeholder="Client Secret"
-                          value={liveDbForm.clientSecret}
-                          onChange={(e) => setLiveDbForm(f => ({ ...f, clientSecret: e.target.value }))}
-                          className="w-full px-3 py-2 pr-8 rounded-lg bg-[#1a1a24] border border-[#ffffff10] text-gray-300 text-xs placeholder-gray-600 focus:outline-none focus:border-[#f97316]/40"
-                        />
-                        <button
-                          type="button"
-                          onClick={() => setShowClientSecret(v => !v)}
-                          className="absolute right-2 top-1/2 -translate-y-1/2 text-gray-500 hover:text-gray-300"
-                        >
-                          {showClientSecret ? <EyeOff className="w-3.5 h-3.5" /> : <Eye className="w-3.5 h-3.5" />}
-                        </button>
-                      </div>
-                    </>
                   )}
 
                   {liveDbError && (
@@ -1257,7 +1284,7 @@ export default function Home() {
                       !liveDbForm.host ||
                       !liveDbForm.dbname ||
                       (liveDbForm.dialect === "azure_sql"
-                        ? (!liveDbForm.tenantId || !liveDbForm.clientId || !liveDbForm.clientSecret)
+                        ? !entraToken
                         : !liveDbForm.user)
                     }
                     className="w-full flex items-center justify-center gap-2 px-3 py-2 rounded-lg bg-[#f97316]/20 hover:bg-[#f97316]/30 border border-[#f97316]/30 text-[#f97316] text-xs font-medium transition-all disabled:opacity-50 disabled:cursor-not-allowed"

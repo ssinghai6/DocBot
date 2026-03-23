@@ -1099,6 +1099,7 @@ from api.db_service import (
     QueryValidationError,
     ConnectionNotFoundError,
     ExecutionTimeoutError,
+    TokenExpiredError,
     connect_database,
     disconnect_database,
     get_schema,
@@ -1198,6 +1199,8 @@ async def db_chat(request: DBChatRequest):
                 yield chunk
         except ConnectionNotFoundError as exc:
             yield f"data: {json.dumps({'type': 'error', 'error_type': 'ConnectionNotFoundError', 'detail': str(exc)})}\n\n"
+        except TokenExpiredError as exc:
+            yield f"data: {json.dumps({'type': 'error', 'error_type': 'TokenExpiredError', **exc.detail})}\n\n"
         except QueryValidationError as exc:
             yield f"data: {json.dumps({'type': 'error', 'error_type': 'QueryValidationError', 'detail': str(exc)})}\n\n"
         except ExecutionTimeoutError as exc:

@@ -32,6 +32,7 @@ from api.utils.ssrf_validator import validate_ssrf
 from api.utils.encryption import encrypt_credentials, decrypt_credentials
 from api.utils.sql_validator import validate_and_sanitize_sql, QueryValidationError
 from api.utils.embeddings import find_similar_queries, embedding_to_json
+from api.utils.exceptions import TokenExpiredError
 
 logger = logging.getLogger(__name__)
 
@@ -79,6 +80,7 @@ __all__ = [
     "QueryValidationError",
     "ConnectionNotFoundError",
     "ExecutionTimeoutError",
+    "TokenExpiredError",
     "connect_database",
     "disconnect_database",
     "get_schema",
@@ -98,11 +100,14 @@ class DBConnectionRequest(BaseModel):
     dbname: str
     user: Optional[str] = None
     password: Optional[str] = None
-    # Entra Service Principal auth (azure_sql only)
+    # Entra auth (azure_sql only) — "entra_sp" or "entra_interactive"
     auth_type: Optional[str] = None
+    # entra_sp fields
     tenant_id: Optional[str] = None
     client_id: Optional[str] = None
     client_secret: Optional[str] = None
+    # entra_interactive field — pre-acquired MSAL access token (never logged)
+    access_token: Optional[str] = None
 
     @field_validator("dialect")
     @classmethod
@@ -123,15 +128,25 @@ class DBConnectionRequest(BaseModel):
     @model_validator(mode="after")
     def validate_auth_fields(self) -> "DBConnectionRequest":
         if self.dialect == "azure_sql":
-            if self.auth_type != "entra_sp":
-                raise ValueError("azure_sql dialect requires auth_type='entra_sp'")
-            missing = [f for f in ("tenant_id", "client_id", "client_secret")
-                       if not getattr(self, f)]
-            if missing:
+            if self.auth_type == "entra_sp":
+                missing = [f for f in ("tenant_id", "client_id", "client_secret")
+                           if not getattr(self, f)]
+                if missing:
+                    raise ValueError(
+                        f"azure_sql with entra_sp auth requires: {', '.join(missing)}"
+                    )
+            elif self.auth_type == "entra_interactive":
+                if not self.access_token:
+                    raise ValueError(
+                        "azure_sql with entra_interactive auth requires 'access_token'"
+                    )
+            else:
                 raise ValueError(
-                    f"azure_sql with entra_sp auth requires: {', '.join(missing)}"
+                    "azure_sql dialect requires auth_type='entra_sp' or 'entra_interactive'"
                 )
         else:
+            if self.access_token:
+                raise ValueError("access_token is only valid for entra_interactive auth_type")
             # SQLite doesn't require credentials — empty strings are valid
             if self.dialect != "sqlite" and (not self.user or self.password is None):
                 raise ValueError(
@@ -215,15 +230,47 @@ def _build_entra_connect_args(token: str) -> Dict[str, Any]:
     return {"attrs_before": {1256: token_struct}}
 
 
+def _parse_token_expiry(access_token: str) -> datetime:
+    """Extract the exp claim from a JWT without verifying the signature.
+
+    The token is validated by Azure SQL at connection time — we only need
+    the expiry timestamp to manage our own staleness check.
+    """
+    import base64
+    segments = access_token.split(".")
+    if len(segments) != 3:
+        raise ValueError("Malformed JWT: expected 3 segments")
+    payload_b64 = segments[1]
+    # Pad to multiple of 4 for base64 decoding
+    padding = 4 - len(payload_b64) % 4
+    if padding != 4:
+        payload_b64 += "=" * padding
+    try:
+        raw = base64.urlsafe_b64decode(payload_b64)
+        claims = json.loads(raw)
+    except Exception as exc:
+        raise ValueError(f"Failed to parse token payload: {exc}") from exc
+    if "exp" not in claims:
+        raise ValueError("JWT has no exp claim")
+    return datetime.fromtimestamp(int(claims["exp"]), tz=timezone.utc)
+
+
 def _resolve_connection(creds: Dict[str, Any]) -> tuple[str, Optional[Dict[str, Any]]]:
     """From decrypted credentials, return (sync_url, entra_connect_args).
     Sync — intended to be called inside run_in_executor for azure_sql."""
     dialect = creds["dialect"]
     if dialect == "azure_sql":
+        auth_type = creds.get("auth_type", "entra_sp")
+        url = _build_connection_url(dialect, creds["host"], creds["port"], creds["dbname"])
+        if auth_type == "entra_interactive":
+            expires_at = datetime.fromisoformat(creds["token_expires_at"])
+            if datetime.now(timezone.utc) >= expires_at - timedelta(minutes=5):
+                raise TokenExpiredError()
+            return url, _build_entra_connect_args(creds["access_token"])
+        # entra_sp path
         token = _get_entra_token(
             creds["tenant_id"], creds["client_id"], creds["client_secret"]
         )
-        url = _build_connection_url(dialect, creds["host"], creds["port"], creds["dbname"])
         return url, _build_entra_connect_args(token)
     url = _build_connection_url(
         dialect, creds["host"], creds["port"],
@@ -278,11 +325,20 @@ async def connect_database(
 
     entra_connect_args: Optional[Dict[str, Any]] = None
     if req.dialect == "azure_sql":
-        token = await _asyncio.get_event_loop().run_in_executor(
-            None, _get_entra_token, req.tenant_id, req.client_id, req.client_secret
-        )
-        entra_connect_args = _build_entra_connect_args(token)
         sync_url = _build_connection_url(req.dialect, req.host, req.port, req.dbname)
+        if req.auth_type == "entra_interactive":
+            try:
+                token_expires_at = _parse_token_expiry(req.access_token)  # type: ignore[arg-type]
+            except ValueError as exc:
+                raise ValueError(f"Invalid access token: {exc}") from exc
+            if datetime.now(timezone.utc) >= token_expires_at:
+                raise ValueError("Provided access token is already expired")
+            entra_connect_args = _build_entra_connect_args(req.access_token)  # type: ignore[arg-type]
+        else:
+            token = await _asyncio.get_event_loop().run_in_executor(
+                None, _get_entra_token, req.tenant_id, req.client_id, req.client_secret
+            )
+            entra_connect_args = _build_entra_connect_args(token)
     else:
         sync_url = _build_connection_url(
             req.dialect, req.host, req.port, req.dbname, req.user, req.password
@@ -291,12 +347,20 @@ async def connect_database(
     await _test_connection(sync_url, req.dialect, entra_connect_args)
 
     if req.dialect == "azure_sql":
-        creds_blob = encrypt_credentials({
-            "dialect": req.dialect, "host": req.host, "port": req.port,
-            "dbname": req.dbname, "auth_type": "entra_sp",
-            "tenant_id": req.tenant_id, "client_id": req.client_id,
-            "client_secret": req.client_secret,
-        })
+        if req.auth_type == "entra_interactive":
+            creds_blob = encrypt_credentials({
+                "dialect": req.dialect, "host": req.host, "port": req.port,
+                "dbname": req.dbname, "auth_type": "entra_interactive",
+                "access_token": req.access_token,
+                "token_expires_at": token_expires_at.isoformat(),  # type: ignore[possibly-undefined]
+            })
+        else:
+            creds_blob = encrypt_credentials({
+                "dialect": req.dialect, "host": req.host, "port": req.port,
+                "dbname": req.dbname, "auth_type": "entra_sp",
+                "tenant_id": req.tenant_id, "client_id": req.client_id,
+                "client_secret": req.client_secret,
+            })
     else:
         creds_blob = encrypt_credentials({
             "dialect": req.dialect,
