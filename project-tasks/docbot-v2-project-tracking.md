@@ -381,6 +381,36 @@ As Sarah, I want to upload a CSV file as a queryable data source, so that I can 
 
 ---
 
+#### DOCBOT-208: Microsoft Entra (Azure AD) Service Principal Auth for Azure SQL
+
+**Story**
+As an enterprise user, I want to connect to Azure SQL Database using Microsoft Entra Service Principal credentials (tenant_id, client_id, client_secret), so that I can query my organization's Azure SQL databases without exposing username/password credentials.
+
+**Phase**: 1 (Enterprise Add-on)
+**Priority**: Must Have (for enterprise tier)
+**Story Points**: 8
+**Dependencies**: DOCBOT-201 (Fernet encryption baseline)
+**Status**: ✅ Done
+
+**Acceptance Criteria**
+- [x] `azure_sql` added as a supported dialect with `mssql+pyodbc` driver
+- [x] ODBC Driver 18 for SQL Server installed in Docker image
+- [x] `DBConnectionRequest` accepts `auth_type`, `tenant_id`, `client_id`, `client_secret` fields with model validation
+- [x] `_get_entra_token()` acquires token via `azure.identity.ClientSecretCredential`; safe error messages only
+- [x] `_build_entra_connect_args()` encodes token as UTF-16-LE struct for `SQL_COPT_SS_ACCESS_TOKEN` (attr 1256)
+- [x] Connection URL contains no credentials (`mssql+pyodbc:///?odbc_connect=...`)
+- [x] Encryption at rest: SP credentials stored Fernet-encrypted alongside other connection credentials
+- [x] Frontend: Azure SQL option in dialect dropdown with conditional Tenant ID / Client ID / Client Secret fields
+- [x] 131 unit tests passing (including 15 new tests for Azure SQL/Entra)
+
+**Implementation Notes**
+- `_resolve_connection(creds)` dispatches to Entra or standard credential path for all dialects
+- Tokens re-acquired on every `get_schema()` / `run_sql_pipeline()` call (no server-side token cache; tokens valid 60–75 min)
+- `SET TRANSACTION ISOLATION LEVEL SNAPSHOT` used for read-only enforcement (Azure SQL doesn't support PostgreSQL's `SET TRANSACTION READ ONLY`)
+- `pyodbc>=5.0.0` and `azure-identity>=1.17.0` added to `requirements.txt`
+
+---
+
 ### EPIC-03: Analytical Loop (Python Execution)
 
 ---
@@ -1202,9 +1232,10 @@ As a DTC brand owner on Shopify, I want to connect my Shopify store to DocBot, s
 | Sprint 1 | DOCBOT-201, 202, 203, 204, 205, 206, 207 | 49 | ✅ Complete |
 | Sprint 2 | DOCBOT-301, 302, 303, 304 | 20 | ✅ Complete |
 | Sprint 3 | DOCBOT-401, 402, 403, 404, 406 | 35 | ✅ Complete |
-| Phase 1 | All Phase 1 tickets | 122 | ✅ Complete — Phase 2 next |
+| Phase 1 | All Phase 1 tickets | 122 | ✅ Complete |
+| Enterprise Add-on | DOCBOT-208 (Azure SQL / Entra auth) | 8 | ✅ Complete |
 
-**Total delivered**: 127 story points across 20 tickets + full test suite (116 tests) + GitHub Actions CI
+**Total delivered**: 135 story points across 21 tickets + full test suite (131 tests) + GitHub Actions CI
 
 ---
 
