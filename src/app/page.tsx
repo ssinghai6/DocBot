@@ -114,9 +114,9 @@ function ToastContainer({ toasts, onDismiss }: { toasts: Toast[]; onDismiss: (id
         <div
           key={toast.id}
           className={`flex items-start gap-3 p-4 rounded-xl border backdrop-blur-xl shadow-lg animate-in slide-in-from-right duration-300 ${toast.type === "success" ? "bg-[#10b981]/10 border-[#10b981]/30 text-[#10b981]" :
-              toast.type === "error" ? "bg-[#ef4444]/10 border-[#ef4444]/30 text-[#ef4444]" :
-                toast.type === "warning" ? "bg-[#f59e0b]/10 border-[#f59e0b]/30 text-[#f59e0b]" :
-                  "bg-[#3b82f6]/10 border-[#3b82f6]/30 text-[#3b82f6]"
+            toast.type === "error" ? "bg-[#ef4444]/10 border-[#ef4444]/30 text-[#ef4444]" :
+              toast.type === "warning" ? "bg-[#f59e0b]/10 border-[#f59e0b]/30 text-[#f59e0b]" :
+                "bg-[#3b82f6]/10 border-[#3b82f6]/30 text-[#3b82f6]"
             }`}
         >
           {toast.type === "success" && <CheckCircle2 className="w-5 h-5 shrink-0 mt-0.5" />}
@@ -1053,13 +1053,12 @@ export default function Home() {
           ) : (
             <div className="space-y-2">
               {/* CSV upload */}
-              <label className={`flex items-center gap-2 px-3 py-2.5 rounded-xl border cursor-pointer transition-all text-xs ${
-                dbUploadState === "uploading"
+              <label className={`flex items-center gap-2 px-3 py-2.5 rounded-xl border cursor-pointer transition-all text-xs ${dbUploadState === "uploading"
                   ? "border-[#f97316]/40 bg-[#f97316]/5 pointer-events-none"
                   : dbUploadState === "error"
                     ? "border-[#ef4444]/40 bg-[#ef4444]/5"
                     : "border-[#ffffff10] bg-[#1a1a24]/50 hover:border-[#f97316]/40 hover:bg-[#f97316]/5"
-              }`}>
+                }`}>
                 {dbUploadState === "uploading"
                   ? <Loader2 className="w-3.5 h-3.5 text-[#f97316] animate-spin shrink-0" />
                   : <Upload className="w-3.5 h-3.5 text-[#f97316] shrink-0" />
@@ -1079,13 +1078,12 @@ export default function Home() {
               </label>
 
               {/* SQLite upload */}
-              <label className={`flex items-center gap-2 px-3 py-2.5 rounded-xl border cursor-pointer transition-all text-xs ${
-                dbUploadState === "uploading"
+              <label className={`flex items-center gap-2 px-3 py-2.5 rounded-xl border cursor-pointer transition-all text-xs ${dbUploadState === "uploading"
                   ? "border-[#f97316]/40 bg-[#f97316]/5 pointer-events-none"
                   : dbUploadState === "error"
                     ? "border-[#ef4444]/40 bg-[#ef4444]/5"
                     : "border-[#ffffff10] bg-[#1a1a24]/50 hover:border-[#f97316]/40 hover:bg-[#f97316]/5"
-              }`}>
+                }`}>
                 {dbUploadState === "uploading"
                   ? <Loader2 className="w-3.5 h-3.5 text-[#f97316] animate-spin shrink-0" />
                   : <Database className="w-3.5 h-3.5 text-[#f97316] shrink-0" />
@@ -1230,8 +1228,8 @@ export default function Home() {
                   key={name}
                   onClick={() => setSelectedPersona(name)}
                   className={`group relative p-3 rounded-xl text-left transition-all duration-200 ${isSelected
-                      ? 'bg-gradient-to-br ' + data.gradient + ' shadow-lg scale-[1.02]'
-                      : 'bg-[#1a1a24]/50 border border-[#ffffff06] hover:border-[#ffffff15] hover:bg-[#1a1a24]/80'
+                    ? 'bg-gradient-to-br ' + data.gradient + ' shadow-lg scale-[1.02]'
+                    : 'bg-[#1a1a24]/50 border border-[#ffffff06] hover:border-[#ffffff15] hover:bg-[#1a1a24]/80'
                     }`}
                 >
                   <div className={`${isSelected ? 'text-white' : data.color} mb-1`}>
@@ -1338,7 +1336,7 @@ export default function Home() {
                   </h1>
                   <p className="text-gray-400 text-sm flex items-center gap-2">
                     <Terminal className="w-3 h-3" />
-                    Upload PDFs or connect a database — get instant answers
+                    Upload PDFs or connect a database
                   </p>
                 </div>
                 <div className="lg:hidden">
@@ -1384,13 +1382,12 @@ export default function Home() {
                                 ? "Upload a PDF first"
                                 : undefined
                         }
-                        className={`flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg text-xs font-medium transition-all ${
-                          disabled
+                        className={`flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg text-xs font-medium transition-all ${disabled
                             ? "opacity-40 cursor-not-allowed pointer-events-none text-gray-400"
                             : chatMode === mode
                               ? "bg-gradient-to-r from-[#667eea] to-[#764ba2] text-white shadow-sm"
                               : "text-gray-400 hover:text-gray-200 hover:bg-[#ffffff08]"
-                        }`}
+                          }`}
                       >
                         {icons[mode]}
                         {labels[mode]}
@@ -1494,17 +1491,17 @@ export default function Home() {
                 <p className="text-xs text-gray-500 text-center mb-2">Try asking:</p>
                 {(isDbConnected
                   ? [
-                      "How many rows are in my dataset?",
-                      "Show me a summary of each column",
-                      "What are the top 10 records by value?",
-                      "Are there any missing or null values?",
-                    ]
+                    "How many rows are in my dataset?",
+                    "Show me a summary of each column",
+                    "What are the top 10 records by value?",
+                    "Are there any missing or null values?",
+                  ]
                   : [
-                      "Summarize the main points of this document",
-                      "What are the key findings?",
-                      "Extract all tables and figures",
-                      "What are the action items?",
-                    ]
+                    "Summarize the main points of this document",
+                    "What are the key findings?",
+                    "Extract all tables and figures",
+                    "What are the action items?",
+                  ]
                 ).map((question, idx) => (
                   <button
                     key={idx}
@@ -1665,8 +1662,8 @@ export default function Home() {
                   isDbConnected
                     ? "Ask a question about your data..."
                     : sessionId
-                    ? "Ask a question about your document..."
-                    : "Upload a document or connect a database to start..."
+                      ? "Ask a question about your document..."
+                      : "Upload a document or connect a database to start..."
                 }
                 disabled={(!sessionId && !isDbConnected) || isLoading}
                 className="w-full max-h-40 min-h-[60px] p-4 pr-12 bg-transparent outline-none resize-none text-white placeholder-gray-500 text-[15px] leading-relaxed disabled:opacity-50"
