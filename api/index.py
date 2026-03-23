@@ -1133,9 +1133,10 @@ async def db_connect(request: DBConnectionRequest):
         )
         return result
     except ValueError as exc:
+        logger.warning("db_connect validation error: %s", exc)
         raise HTTPException(status_code=400, detail=str(exc))
     except Exception as exc:
-        logger.error("db_connect error: %s", type(exc).__name__)
+        logger.error("db_connect error: %s — %s", type(exc).__name__, exc)
         raise HTTPException(status_code=500, detail=safe_error_message(exc))
 
 

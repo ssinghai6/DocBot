@@ -26,8 +26,9 @@ def validate_ssrf(host: str) -> None:
     """
     try:
         resolved = socket.getaddrinfo(host, None)
-    except socket.gaierror as exc:
-        raise ValueError(f"Cannot resolve host '{host}': {exc}") from exc
+    except socket.gaierror:
+        # DNS resolution failed — log the host for debugging but don't expose it in the error
+        raise ValueError(f"Cannot resolve host. Please check the hostname is correct.")
 
     for info in resolved:
         raw_ip = info[4][0]
