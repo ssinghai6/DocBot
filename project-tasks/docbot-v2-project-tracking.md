@@ -381,10 +381,10 @@ As Sarah, I want to upload a CSV file as a queryable data source, so that I can 
 
 ---
 
-#### DOCBOT-208: Microsoft Entra (Azure AD) Service Principal Auth for Azure SQL
+#### DOCBOT-208: Microsoft Entra (Azure AD) Auth for Azure SQL
 
 **Story**
-As an enterprise user, I want to connect to Azure SQL Database using Microsoft Entra Service Principal credentials (tenant_id, client_id, client_secret), so that I can query my organization's Azure SQL databases without exposing username/password credentials.
+As an enterprise user, I want to connect to Azure SQL Database using Microsoft Entra authentication, so that I can query my organization's Azure SQL databases without exposing username/password credentials.
 
 **Phase**: 1 (Enterprise Add-on)
 **Priority**: Must Have (for enterprise tier)
@@ -400,14 +400,19 @@ As an enterprise user, I want to connect to Azure SQL Database using Microsoft E
 - [x] `_build_entra_connect_args()` encodes token as UTF-16-LE struct for `SQL_COPT_SS_ACCESS_TOKEN` (attr 1256)
 - [x] Connection URL contains no credentials (`mssql+pyodbc:///?odbc_connect=...`)
 - [x] Encryption at rest: SP credentials stored Fernet-encrypted alongside other connection credentials
-- [x] Frontend: Azure SQL option in dialect dropdown with conditional Tenant ID / Client ID / Client Secret fields
+- [x] Frontend: Azure SQL option in dialect dropdown with conditional Tenant ID / Client ID / Client Secret fields (SP flow)
 - [x] 131 unit tests passing (including 15 new tests for Azure SQL/Entra)
+- [x] `auth_type: entra_interactive` — accepts pre-acquired MSAL access token from frontend
+- [x] `_parse_token_expiry()` decodes JWT exp claim (stdlib only) for TTL storage
+- [x] `TokenExpiredError` raised when stored token within 5 min of expiry; caught in db/chat stream as `requires_reauth: true`
+- [x] Frontend: "Sign in with Microsoft" button via `@azure/msal-browser` replaces SP credential fields
+- [ ] **[BACKLOG]** End-to-end test with real Azure SQL database and Azure AD app registration (requires Azure account setup — `NEXT_PUBLIC_AZURE_CLIENT_ID`)
 
 **Implementation Notes**
-- `_resolve_connection(creds)` dispatches to Entra or standard credential path for all dialects
-- Tokens re-acquired on every `get_schema()` / `run_sql_pipeline()` call (no server-side token cache; tokens valid 60–75 min)
+- `_resolve_connection(creds)` dispatches to `entra_interactive`, `entra_sp`, or password path
+- Interactive tokens stored encrypted with `token_expires_at` ISO timestamp; re-auth triggered by frontend on 401
 - `SET TRANSACTION ISOLATION LEVEL SNAPSHOT` used for read-only enforcement (Azure SQL doesn't support PostgreSQL's `SET TRANSACTION READ ONLY`)
-- `pyodbc>=5.0.0` and `azure-identity>=1.17.0` added to `requirements.txt`
+- `pyodbc>=5.0.0`, `azure-identity>=1.17.0`, `@azure/msal-browser^5.6.1` added to deps
 
 ---
 
@@ -813,6 +818,7 @@ As a developer, I want DataFrames and charts generated in a session stored as ar
 **Priority**: Should Have
 **Story Points**: 8
 **Dependencies**: DOCBOT-302, DOCBOT-102
+**Status**: ✅ Done (SCRUM-394, merged 2026-03-23)
 
 **Acceptance Criteria**
 - [ ] Every query result DataFrame serialized to Parquet and stored in `session_artifacts` PostgreSQL table
