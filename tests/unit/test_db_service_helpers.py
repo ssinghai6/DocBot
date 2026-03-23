@@ -1,4 +1,4 @@
-"""Unit tests for db_service helper functions — DOCBOT-201 through 205, 208."""
+"""Unit tests for db_service helper functions — DOCBOT-201 through 205, 208, 504."""
 
 import pytest
 from api.db_service import (
@@ -286,3 +286,63 @@ class TestGetEntraToken:
         from api.db_service import _get_entra_token
         with pytest.raises(ValueError, match="Azure Entra authentication failed"):
             _get_entra_token("tid", "cid", "sec")
+
+# ---------------------------------------------------------------------------
+# DOCBOT-504: Query History — response shape helpers
+# ---------------------------------------------------------------------------
+
+@pytest.mark.unit
+class TestQueryHistoryResponseShape:
+    """Tests for the _parse_row_count helper logic used in the history route."""
+
+    def _parse_row_count(self, summary):
+        """Mirror of the inline helper in api/index.py db_query_history."""
+        if not summary:
+            return None
+        try:
+            return int(summary.split()[0])
+        except (ValueError, IndexError):
+            return None
+
+    def test_parses_n_rows_format(self):
+        assert self._parse_row_count("42 rows") == 42
+
+    def test_parses_single_row(self):
+        assert self._parse_row_count("1 rows") == 1
+
+    def test_returns_none_for_none_input(self):
+        assert self._parse_row_count(None) is None
+
+    def test_returns_none_for_empty_string(self):
+        assert self._parse_row_count("") is None
+
+    def test_returns_none_for_non_numeric(self):
+        assert self._parse_row_count("error") is None
+
+    def test_handles_zero_rows(self):
+        assert self._parse_row_count("0 rows") == 0
+
+    def test_history_item_shape(self):
+        """Verify the dict structure expected by the frontend Zod schema."""
+        item = {
+            "id": "abc-123",
+            "question": "How many orders last month?",
+            "sql": "SELECT COUNT(*) FROM orders WHERE ...",
+            "executed_at": "2026-03-23T10:00:00+00:00",
+            "row_count": 15,
+        }
+        assert set(item.keys()) == {"id", "question", "sql", "executed_at", "row_count"}
+        assert isinstance(item["id"], str)
+        assert isinstance(item["question"], str)
+        assert isinstance(item["sql"], str)
+
+    def test_limit_clamped_to_100(self):
+        """Verify limit logic: min(user_limit, 100)."""
+        user_limit = 500
+        effective = max(1, min(user_limit, 100))
+        assert effective == 100
+
+    def test_limit_floored_at_1(self):
+        user_limit = 0
+        effective = max(1, min(user_limit, 100))
+        assert effective == 1

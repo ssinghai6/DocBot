@@ -841,6 +841,8 @@ As a developer, I want DataFrames and charts generated in a session stored as ar
 
 #### DOCBOT-502: Context Compression
 
+**Status**: ✅ Done (SCRUM-396, merged 2026-03-23)
+
 **Story**
 As a developer, I want long conversation histories compressed before being sent to the LLM, so that sessions with many turns do not exceed the context window or incur excessive token costs.
 

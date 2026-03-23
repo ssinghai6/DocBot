@@ -1306,6 +1306,57 @@ async def db_sessions():
         logger.error("db_sessions error: %s", type(exc).__name__)
         return {"connections": [], "error": safe_error_message(exc)}
 
+# ── DOCBOT-504: Query History Panel ──────────────────────────────────────────
+
+@app.get("/api/db/history/{connection_id}")
+async def db_query_history(connection_id: str, limit: int = 20):
+    """Return the most recent queries for a DB connection.
+
+    Response shape (list):
+      { id, question, sql, executed_at, row_count }
+    """
+    try:
+        async with engine.connect() as conn:
+            result = await conn.execute(
+                select(
+                    query_history_table.c.id,
+                    query_history_table.c.nl_question,
+                    query_history_table.c.sql_query,
+                    query_history_table.c.result_summary,
+                    query_history_table.c.created_at,
+                )
+                .where(query_history_table.c.connection_id == connection_id)
+                .order_by(query_history_table.c.created_at.desc())
+                .limit(max(1, min(limit, 100)))
+            )
+            rows = result.fetchall()
+
+        def _parse_row_count(summary: str | None) -> int | None:
+            """Extract integer from e.g. '15 rows'."""
+            if not summary:
+                return None
+            try:
+                return int(summary.split()[0])
+            except (ValueError, IndexError):
+                return None
+
+        return {
+            "history": [
+                {
+                    "id": row.id,
+                    "question": row.nl_question,
+                    "sql": row.sql_query,
+                    "executed_at": row.created_at.isoformat() if row.created_at else None,
+                    "row_count": _parse_row_count(row.result_summary),
+                }
+                for row in rows
+            ]
+        }
+    except Exception as exc:
+        logger.error("db_query_history error: %s", type(exc).__name__)
+        return {"history": [], "error": safe_error_message(exc)}
+
+
 # =============================================================================
 # EPIC-02: File Upload Routes
 # DOCBOT-206: SQLite file upload
