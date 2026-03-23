@@ -134,7 +134,7 @@ def _build_connection_url(
         return f"sqlite:///{dbname}"
     url = f"{driver}://{user}:{password}@{host}:{port}/{dbname}"
     if dialect == "postgresql":
-        url += "?sslmode=require"
+        url += "?sslmode=prefer"
     return url
 
 
