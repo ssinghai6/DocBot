@@ -160,6 +160,7 @@ class DBChatRequest(BaseModel):
     question: str
     persona: str = "Generalist"
     session_id: str
+    chart_type: str = "auto"   # DOCBOT-305: "auto"|"bar"|"line"|"scatter"|"heatmap"|"box"|"multi"
 
 
 class DBChatResponse(BaseModel):
@@ -638,6 +639,7 @@ async def run_sql_pipeline(
     session_id: Optional[str] = None,
     session_artifacts_table: Optional[Table] = None,
     table_embeddings_table: Optional[Table] = None,
+    chart_type: str = "auto",
 ) -> AsyncGenerator[str, None]:
     """
     Execute the 7-step bounded SQL pipeline and yield SSE-formatted strings.
@@ -746,12 +748,18 @@ async def run_sql_pipeline(
                 result_dicts=result_dicts[:50],
                 question=question,
                 persona_def=analysis_persona,
+                chart_type=chart_type,
             )
             if analysis_code:
                 yield f"data: {_json_dumps({'type': 'analysis_code', 'code': analysis_code})}\n\n"
                 sandbox_result = await run_sandbox(analysis_code)
                 for idx, chart_b64 in enumerate(sandbox_result.charts):
-                    yield f"data: {_json_dumps({'type': 'chart', 'base64': chart_b64, 'index': idx})}\n\n"
+                    meta = (
+                        sandbox_result.chart_metadata[idx]
+                        if idx < len(sandbox_result.chart_metadata)
+                        else None
+                    )
+                    yield f"data: {_json_dumps({'type': 'chart', 'base64': chart_b64, 'index': idx, 'metadata': meta.model_dump() if meta else None})}\n\n"
 
                 # DOCBOT-501: Persist artifact (DataFrame + first chart) for session memory
                 if session_id and session_artifacts_table is not None:

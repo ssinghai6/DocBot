@@ -1253,6 +1253,7 @@ async def db_chat(request: DBChatRequest):
                 table_embeddings_table=table_embeddings_table,
                 async_session_factory=async_session_factory,
                 expert_personas=EXPERT_PERSONAS,
+                chart_type=request.chart_type,
             ):
                 yield chunk
         except ConnectionNotFoundError as exc:

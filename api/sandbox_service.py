@@ -20,6 +20,9 @@ from pydantic import BaseModel
 
 logger = logging.getLogger(__name__)
 
+# DOCBOT-305: supported chart types for validate + prompt routing
+VALID_CHART_TYPES = {"auto", "bar", "line", "scatter", "heatmap", "box", "multi"}
+
 # Injected before every execution to:
 #   1. Force the Agg (non-GUI) backend so matplotlib works in headless sandboxes
 #   2. Patch plt.show() to write base64-encoded PNGs to stdout prefixed with
@@ -47,6 +50,16 @@ _plt.show = _patched_show
 # ---------------------------------------------------------------------------
 
 
+class ChartMetadata(BaseModel):
+    """Metadata about a generated chart — extracted from sandbox stdout."""
+
+    type: str = "auto"
+    title: str = ""
+    x_label: str = ""
+    y_label: str = ""
+    series_count: int = 1
+
+
 class SandboxResult(BaseModel):
     """Structured output returned from every sandbox execution."""
 
@@ -57,6 +70,8 @@ class SandboxResult(BaseModel):
     # Human-readable error message when execution fails; None on success
     error: Optional[str]
     execution_time_ms: int
+    # DOCBOT-305: chart metadata extracted from CHART_META: stdout lines
+    chart_metadata: list[ChartMetadata] = []
 
 
 # ---------------------------------------------------------------------------
@@ -74,24 +89,36 @@ def _get_api_key() -> str:
     return key
 
 
-def _extract_charts(stdout_lines: list[str]) -> tuple[list[str], list[str]]:
-    """Separate CHART_B64: lines from regular stdout lines.
+def _extract_charts(
+    stdout_lines: list[str],
+) -> tuple[list[str], list[str], list[ChartMetadata]]:
+    """Separate CHART_B64: and CHART_META: lines from regular stdout lines.
 
     The _MATPLOTLIB_PREAMBLE patches plt.show() to write base64-encoded PNGs
-    to stdout prefixed with 'CHART_B64:'. This function splits those out so
-    charts end up in SandboxResult.charts and do not pollute SandboxResult.stdout.
+    to stdout prefixed with 'CHART_B64:'. DOCBOT-305 generated code also writes
+    'CHART_META:{...json...}' lines so callers receive structured chart info.
 
-    Returns (clean_stdout_lines, chart_b64_strings).
+    Returns (clean_stdout_lines, chart_b64_strings, chart_metadata_list).
     """
+    import json as _json
+
     charts: list[str] = []
+    metadata: list[ChartMetadata] = []
     clean: list[str] = []
-    prefix = "CHART_B64:"
+
     for line in stdout_lines:
-        if line.startswith(prefix):
-            charts.append(line[len(prefix):].strip())
+        if line.startswith("CHART_B64:"):
+            charts.append(line[len("CHART_B64:"):].strip())
+        elif line.startswith("CHART_META:"):
+            try:
+                raw = _json.loads(line[len("CHART_META:"):].strip())
+                metadata.append(ChartMetadata(**raw))
+            except Exception:
+                pass  # malformed metadata — silently skip
         else:
             clean.append(line)
-    return clean, charts
+
+    return clean, charts, metadata
 
 
 def _run_in_sandbox(code: str) -> SandboxResult:
@@ -118,7 +145,7 @@ def _run_in_sandbox(code: str) -> SandboxResult:
         raw_stdout: list[str] = list(execution.logs.stdout or [])
         stderr_lines: list[str] = list(execution.logs.stderr or [])
 
-        clean_stdout, charts = _extract_charts(raw_stdout)
+        clean_stdout, charts, chart_meta = _extract_charts(raw_stdout)
         stdout = "\n".join(clean_stdout)
         stderr = "\n".join(stderr_lines)
 
@@ -144,6 +171,7 @@ def _run_in_sandbox(code: str) -> SandboxResult:
             charts=charts,
             error=error_msg,
             execution_time_ms=elapsed_ms,
+            chart_metadata=chart_meta,
         )
 
     finally:
@@ -159,36 +187,85 @@ def _run_in_sandbox(code: str) -> SandboxResult:
 # ---------------------------------------------------------------------------
 
 
+def _chart_type_instructions(chart_type: str) -> str:
+    """Return chart-type-specific instructions for the code-gen prompt."""
+    instructions = {
+        "bar": (
+            "Create a bar chart. Use vertical bars unless there are many categories, "
+            "in which case use horizontal bars for readability."
+        ),
+        "line": (
+            "Create a line chart. Use markers if fewer than 20 data points."
+        ),
+        "scatter": (
+            "Create a scatter plot. Add a linear regression line (numpy polyfit) "
+            "if both axes are numeric."
+        ),
+        "heatmap": (
+            "Create a heatmap. If the data has numeric columns, compute a correlation "
+            "matrix with df.corr() and plot it using matplotlib imshow or seaborn heatmap. "
+            "Annotate cells with values."
+        ),
+        "box": (
+            "Create a box plot showing the distribution of numeric columns. "
+            "Use plt.boxplot or df.boxplot."
+        ),
+        "multi": (
+            "Create a 2x2 subplot grid (fig, axes = plt.subplots(2, 2, figsize=(12, 10))). "
+            "Fill each panel with the most informative chart for the data: "
+            "e.g. bar, line, scatter, box. Ensure tight_layout() is called."
+        ),
+    }
+    return instructions.get(chart_type, "Choose the most appropriate chart type for the data and question.")
+
+
 async def generate_analysis_code(
     result_dicts: list[dict],
     question: str,
     persona_def: str,
+    chart_type: str = "auto",
 ) -> Optional[str]:
     """Generate Python analysis code for a SQL result set using Qwen 2.5 Coder via Groq.
 
     Returns a Python code string suitable for run_python(), or None when
     fewer than 5 rows are available (not worth analysing) or on any error.
+
+    Parameters
+    ----------
+    chart_type : one of VALID_CHART_TYPES — controls which chart the LLM produces.
+                 "auto" lets the LLM choose the best chart for the data.
     """
     if len(result_dicts) < 5:
         return None
+
+    # Normalise and validate chart_type
+    chart_type = chart_type.lower() if chart_type else "auto"
+    if chart_type not in VALID_CHART_TYPES:
+        chart_type = "auto"
 
     api_key = os.getenv("groq_api_key")
     if not api_key:
         logger.warning("generate_analysis_code: groq_api_key not set, skipping")
         return None
 
+    chart_instructions = _chart_type_instructions(chart_type)
+
     system_prompt = (
         "You are a Python data analyst. Given a question and a dataset, write Python code that:\n"
-        "1. Imports pandas, numpy, and matplotlib.pyplot as plt\n"
+        "1. Imports pandas, numpy, matplotlib.pyplot as plt, and seaborn as sns if needed\n"
         "2. Creates a DataFrame `df` from the provided data\n"
         "3. Performs relevant analysis to answer the question\n"
-        "4. Creates at least one matplotlib chart and saves it with plt.savefig('chart_0.png')\n"
-        "5. Assigns a brief text summary to a variable named `result`\n\n"
+        f"4. CHART TYPE REQUIREMENT: {chart_instructions}\n"
+        "5. Calls plt.show() exactly once after creating the chart\n"
+        "6. Assigns a brief text summary to a variable named `result`\n"
+        "7. AFTER plt.show(), prints chart metadata in EXACTLY this format (one line):\n"
+        '   import json; print(\'CHART_META:\' + json.dumps({\'type\': \'<chart_type>\', '
+        "'title': '<chart_title>', 'x_label': '<x_axis_label>', "
+        "'y_label': '<y_axis_label>', 'series_count': <int>}))\n\n"
         "Rules:\n"
         "- Output ONLY raw Python code, no markdown fences, no explanations\n"
-        "- Do not use plt.show()\n"
-        "- The chart filename must be 'chart_0.png'\n"
-        "- Keep code under 60 lines"
+        "- Do NOT call plt.savefig() — use plt.show() only\n"
+        "- Keep code under 80 lines"
     )
 
     import json as _json
