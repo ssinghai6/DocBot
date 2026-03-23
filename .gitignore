@@ -59,6 +59,10 @@ next-env.d.ts
 
 # folder
 .opencode/
+.claude/
+
+# scripts (contain credentials)
+scripts/
 
 # confidential project planning docs
 project-tasks/
