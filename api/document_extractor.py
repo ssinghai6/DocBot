@@ -165,6 +165,7 @@ async def extract_financial_fields(
                 model_id="gemini-2.5-flash",
                 api_key=gemini_api_key,
                 show_progress=False,
+                max_workers=2,  # free tier: 10 RPM cap — stay well within limit
             ),
         )
 
