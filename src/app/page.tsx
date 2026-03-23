@@ -1333,12 +1333,12 @@ export default function Home() {
                 <div className="hidden lg:block">
                   <h1 className="text-2xl lg:text-3xl font-bold text-white mb-1 flex items-center gap-3">
                     <span className="bg-gradient-to-br from-[#667eea] to-[#764ba2] bg-clip-text text-transparent">
-                      Chat with Documents
+                      Ask Anything About Your Data
                     </span>
                   </h1>
                   <p className="text-gray-400 text-sm flex items-center gap-2">
                     <Terminal className="w-3 h-3" />
-                    Upload PDFs and ask questions
+                    Upload PDFs or connect a database — get instant answers
                   </p>
                 </div>
                 <div className="lg:hidden">
@@ -1347,7 +1347,7 @@ export default function Home() {
                       DocBot
                     </span>
                   </h1>
-                  <p className="text-gray-500 text-xs">AI Document Assistant</p>
+                  <p className="text-gray-500 text-xs">Docs · Databases · Hybrid</p>
                 </div>
               </div>
 
