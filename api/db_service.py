@@ -18,6 +18,7 @@ import os
 import time
 import uuid
 from datetime import datetime, timedelta, timezone
+from decimal import Decimal
 from typing import Any, AsyncGenerator, Dict, List, Optional
 
 from pydantic import BaseModel, field_validator
@@ -33,6 +34,16 @@ from api.utils.sql_validator import validate_and_sanitize_sql, QueryValidationEr
 from api.utils.embeddings import find_similar_queries, embedding_to_json
 
 logger = logging.getLogger(__name__)
+
+
+def _json_dumps(obj: Any) -> str:
+    """json.dumps that handles Decimal and other non-serializable DB types."""
+    def _default(o: Any) -> Any:
+        if isinstance(o, Decimal):
+            return float(o)
+        return str(o)
+    return json.dumps(obj, default=_default)
+
 
 # ---------------------------------------------------------------------------
 # Supported dialects
@@ -521,10 +532,10 @@ async def run_sql_pipeline(
                 persona_def=analysis_persona,
             )
             if analysis_code:
-                yield f"data: {json.dumps({'type': 'analysis_code', 'code': analysis_code})}\n\n"
+                yield f"data: {_json_dumps({'type': 'analysis_code', 'code': analysis_code})}\n\n"
                 sandbox_result = await run_sandbox(analysis_code)
                 for idx, chart_b64 in enumerate(sandbox_result.charts):
-                    yield f"data: {json.dumps({'type': 'chart', 'base64': chart_b64, 'index': idx})}\n\n"
+                    yield f"data: {_json_dumps({'type': 'chart', 'base64': chart_b64, 'index': idx})}\n\n"
         except Exception as exc:
             logger.warning("Code gen/sandbox step skipped: %s", exc)
 
@@ -545,7 +556,7 @@ async def run_sql_pipeline(
         "execution_time_ms": execution_time_ms,
         "sources": [t["name"] for t in schema_subset],
     }
-    yield f"data: {json.dumps(meta_chunk)}\n\n"
+    yield f"data: {_json_dumps(meta_chunk)}\n\n"
 
     # Persist query + embedding (non-blocking; failure is only a warning)
     query_id = str(uuid.uuid4())
@@ -557,9 +568,9 @@ async def run_sql_pipeline(
 
     # Stream answer tokens
     async for token in _stream_answer(question, validated_sql, result_dicts, persona_def):
-        yield f"data: {json.dumps({'type': 'token', 'content': token})}\n\n"
+        yield f"data: {_json_dumps({'type': 'token', 'content': token})}\n\n"
 
-    yield f"data: {json.dumps({'type': 'done'})}\n\n"
+    yield f"data: {_json_dumps({'type': 'done'})}\n\n"
 
 
 # ---------------------------------------------------------------------------
