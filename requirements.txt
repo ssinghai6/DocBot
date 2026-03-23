@@ -25,3 +25,5 @@ pymysql>=1.1.0
 # DOCBOT-207: CSV parsing and type inference
 pandas>=2.0.0
 # DOCBOT-301: Python code generation via Qwen 2.5 Coder on Groq (uses existing groq package)
+# DOCBOT-406: LangExtract for structured financial document extraction (Google, Gemini-backed)
+langextract
