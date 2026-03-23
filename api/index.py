@@ -131,6 +131,22 @@ query_embeddings_table = Table(
     Column("embedding_json", Text, nullable=False),     # JSON float array
 )
 
+# ── DOCBOT-501: Session Artifact Store ───────────────────────────────────────
+
+session_artifacts_table = Table(
+    "session_artifacts", metadata,
+    Column("id", String, primary_key=True),                # UUID
+    Column("session_id", String, nullable=False, index=True),
+    Column("turn_id", Integer, nullable=False),            # 1-based turn number
+    Column("artifact_type", String, nullable=False),       # 'dataframe'|'chart'|'sql_result'
+    Column("name", Text, nullable=False),
+    Column("data_json", Text),                             # records-orient JSON, max 500 rows
+    Column("chart_b64", Text),                             # base64 PNG, no data-URI prefix
+    Column("row_count", Integer),
+    Column("columns", Text),                               # JSON array of column names
+    Column("created_at", DateTime(timezone=True), server_default=func.now(), nullable=False),
+)
+
 
 async def init_db() -> None:
     """Create tables idempotently on startup."""
@@ -138,7 +154,8 @@ async def init_db() -> None:
         await conn.run_sync(metadata.create_all)
     logger.info(
         "Database tables verified / created "
-        "(sessions, messages, db_connections, schema_cache, query_history, query_embeddings)."
+        "(sessions, messages, db_connections, schema_cache, query_history, "
+        "query_embeddings, session_artifacts)."
     )
 
 
@@ -1189,10 +1206,12 @@ async def db_chat(request: DBChatRequest):
                 connection_id=request.connection_id,
                 question=request.question,
                 persona=request.persona,
+                session_id=request.session_id,
                 db_connections_table=db_connections_table,
                 schema_cache_table=schema_cache_table,
                 query_history_table=query_history_table,
                 query_embeddings_table=query_embeddings_table,
+                session_artifacts_table=session_artifacts_table,
                 async_session_factory=async_session_factory,
                 expert_personas=EXPERT_PERSONAS,
             ):
@@ -1368,6 +1387,29 @@ async def execute_sandbox(request: SandboxExecuteRequest) -> SandboxResult:
         result.error is not None,
     )
     return result
+
+
+# ---------------------------------------------------------------------------
+# Artifact routes (DOCBOT-501)
+# ---------------------------------------------------------------------------
+
+
+@app.get("/api/artifacts/{session_id}")
+async def list_session_artifacts(session_id: str):
+    """List all artifacts saved for a session (no data_json/chart_b64 — summaries only)."""
+    from api.artifact_service import list_artifacts
+    summaries = await list_artifacts(session_id, session_artifacts_table, async_session_factory)
+    return {"artifacts": [s.model_dump() for s in summaries]}
+
+
+@app.get("/api/artifacts/item/{artifact_id}")
+async def get_artifact_detail(artifact_id: str):
+    """Fetch a single artifact by ID, including full data_json and chart_b64."""
+    from api.artifact_service import get_artifact
+    detail = await get_artifact(artifact_id, session_artifacts_table, async_session_factory)
+    if detail is None:
+        raise HTTPException(status_code=404, detail="Artifact not found.")
+    return detail.model_dump()
 
 
 # ---------------------------------------------------------------------------

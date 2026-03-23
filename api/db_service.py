@@ -635,6 +635,8 @@ async def run_sql_pipeline(
     query_embeddings_table: Table,
     async_session_factory,
     expert_personas: Dict[str, Any],
+    session_id: Optional[str] = None,
+    session_artifacts_table: Optional[Table] = None,
 ) -> AsyncGenerator[str, None]:
     """
     Execute the 7-step bounded SQL pipeline and yield SSE-formatted strings.
@@ -712,6 +714,42 @@ async def run_sql_pipeline(
                 sandbox_result = await run_sandbox(analysis_code)
                 for idx, chart_b64 in enumerate(sandbox_result.charts):
                     yield f"data: {_json_dumps({'type': 'chart', 'base64': chart_b64, 'index': idx})}\n\n"
+
+                # DOCBOT-501: Persist artifact (DataFrame + first chart) for session memory
+                if session_id and session_artifacts_table is not None:
+                    from api.artifact_service import save_artifact
+                    # Determine turn_id from row count in query_history for this connection
+                    turn_id = 1
+                    try:
+                        async with async_session_factory() as _s:
+                            _r = await _s.execute(
+                                select(query_history_table)
+                                .where(query_history_table.c.connection_id == connection_id)
+                                .order_by(query_history_table.c.created_at.desc())
+                                .limit(1)
+                            )
+                            latest = _r.fetchone()
+                            if latest:
+                                # Use rowid-based count proxy: just count rows for this connection
+                                cnt_r = await _s.execute(
+                                    select(query_history_table.c.id)
+                                    .where(query_history_table.c.connection_id == connection_id)
+                                )
+                                turn_id = len(cnt_r.fetchall())
+                    except Exception:
+                        pass
+
+                    first_chart = sandbox_result.charts[0] if sandbox_result.charts else None
+                    await save_artifact(
+                        session_id=session_id,
+                        turn_id=turn_id,
+                        artifact_type="sql_result",
+                        name=question[:100],
+                        result_dicts=result_dicts,
+                        chart_b64=first_chart,
+                        session_artifacts_table=session_artifacts_table,
+                        async_session_factory=async_session_factory,
+                    )
         except Exception as exc:
             logger.warning("Code gen/sandbox step skipped: %s", exc)
 
