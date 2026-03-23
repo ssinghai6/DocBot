@@ -327,8 +327,12 @@ export default function Home() {
     dbname: "",
     user: "",
     password: "",
+    tenantId: "",
+    clientId: "",
+    clientSecret: "",
   });
   const [showDbPassword, setShowDbPassword] = useState(false);
+  const [showClientSecret, setShowClientSecret] = useState(false);
   const [liveDbConnectState, setLiveDbConnectState] = useState<"idle" | "connecting" | "error">("idle");
   const [liveDbError, setLiveDbError] = useState<string | null>(null);
 
@@ -391,18 +395,32 @@ export default function Home() {
     setLiveDbConnectState("connecting");
     setLiveDbError(null);
     try {
+      const isEntra = liveDbForm.dialect === "azure_sql";
+      const body = isEntra
+        ? {
+            session_id: sessionId ?? anonymousSessionIdRef.current,
+            dialect: liveDbForm.dialect,
+            host: liveDbForm.host,
+            port: parseInt(liveDbForm.port, 10),
+            dbname: liveDbForm.dbname,
+            auth_type: "entra_sp",
+            tenant_id: liveDbForm.tenantId,
+            client_id: liveDbForm.clientId,
+            client_secret: liveDbForm.clientSecret,
+          }
+        : {
+            session_id: sessionId ?? anonymousSessionIdRef.current,
+            dialect: liveDbForm.dialect,
+            host: liveDbForm.host,
+            port: parseInt(liveDbForm.port, 10),
+            dbname: liveDbForm.dbname,
+            user: liveDbForm.user,
+            password: liveDbForm.password,
+          };
       const response = await fetch("/api/db/connect", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          session_id: sessionId ?? anonymousSessionIdRef.current,
-          dialect: liveDbForm.dialect,
-          host: liveDbForm.host,
-          port: parseInt(liveDbForm.port, 10),
-          dbname: liveDbForm.dbname,
-          user: liveDbForm.user,
-          password: liveDbForm.password,
-        }),
+        body: JSON.stringify(body),
       });
       if (!response.ok) {
         const err = await response.json();
@@ -1123,13 +1141,23 @@ export default function Home() {
                       setLiveDbForm(f => ({
                         ...f,
                         dialect,
-                        port: dialect === "postgresql" ? "5432" : dialect === "mysql" ? "3306" : "0",
+                        port: dialect === "postgresql" ? "5432"
+                            : dialect === "mysql"      ? "3306"
+                            : dialect === "azure_sql"  ? "1433"
+                            : "0",
+                        // Reset auth fields to prevent stale values across auth modes
+                        user: "",
+                        password: "",
+                        tenantId: "",
+                        clientId: "",
+                        clientSecret: "",
                       }));
                     }}
                     className="w-full px-3 py-2 rounded-lg bg-[#1a1a24] border border-[#ffffff10] text-gray-300 text-xs focus:outline-none focus:border-[#f97316]/40"
                   >
                     <option value="postgresql">PostgreSQL</option>
                     <option value="mysql">MySQL</option>
+                    <option value="azure_sql">Azure SQL (Entra)</option>
                   </select>
 
                   <input
@@ -1157,30 +1185,66 @@ export default function Home() {
                     />
                   </div>
 
-                  <input
-                    type="text"
-                    placeholder="Username"
-                    value={liveDbForm.user}
-                    onChange={(e) => setLiveDbForm(f => ({ ...f, user: e.target.value }))}
-                    className="w-full px-3 py-2 rounded-lg bg-[#1a1a24] border border-[#ffffff10] text-gray-300 text-xs placeholder-gray-600 focus:outline-none focus:border-[#f97316]/40"
-                  />
-
-                  <div className="relative">
-                    <input
-                      type={showDbPassword ? "text" : "password"}
-                      placeholder="Password"
-                      value={liveDbForm.password}
-                      onChange={(e) => setLiveDbForm(f => ({ ...f, password: e.target.value }))}
-                      className="w-full px-3 py-2 pr-8 rounded-lg bg-[#1a1a24] border border-[#ffffff10] text-gray-300 text-xs placeholder-gray-600 focus:outline-none focus:border-[#f97316]/40"
-                    />
-                    <button
-                      type="button"
-                      onClick={() => setShowDbPassword(v => !v)}
-                      className="absolute right-2 top-1/2 -translate-y-1/2 text-gray-500 hover:text-gray-300"
-                    >
-                      {showDbPassword ? <EyeOff className="w-3.5 h-3.5" /> : <Eye className="w-3.5 h-3.5" />}
-                    </button>
-                  </div>
+                  {liveDbForm.dialect !== "azure_sql" ? (
+                    <>
+                      <input
+                        type="text"
+                        placeholder="Username"
+                        value={liveDbForm.user}
+                        onChange={(e) => setLiveDbForm(f => ({ ...f, user: e.target.value }))}
+                        className="w-full px-3 py-2 rounded-lg bg-[#1a1a24] border border-[#ffffff10] text-gray-300 text-xs placeholder-gray-600 focus:outline-none focus:border-[#f97316]/40"
+                      />
+                      <div className="relative">
+                        <input
+                          type={showDbPassword ? "text" : "password"}
+                          placeholder="Password"
+                          value={liveDbForm.password}
+                          onChange={(e) => setLiveDbForm(f => ({ ...f, password: e.target.value }))}
+                          className="w-full px-3 py-2 pr-8 rounded-lg bg-[#1a1a24] border border-[#ffffff10] text-gray-300 text-xs placeholder-gray-600 focus:outline-none focus:border-[#f97316]/40"
+                        />
+                        <button
+                          type="button"
+                          onClick={() => setShowDbPassword(v => !v)}
+                          className="absolute right-2 top-1/2 -translate-y-1/2 text-gray-500 hover:text-gray-300"
+                        >
+                          {showDbPassword ? <EyeOff className="w-3.5 h-3.5" /> : <Eye className="w-3.5 h-3.5" />}
+                        </button>
+                      </div>
+                    </>
+                  ) : (
+                    <>
+                      <input
+                        type="text"
+                        placeholder="Tenant ID"
+                        value={liveDbForm.tenantId}
+                        onChange={(e) => setLiveDbForm(f => ({ ...f, tenantId: e.target.value }))}
+                        className="w-full px-3 py-2 rounded-lg bg-[#1a1a24] border border-[#ffffff10] text-gray-300 text-xs placeholder-gray-600 focus:outline-none focus:border-[#f97316]/40"
+                      />
+                      <input
+                        type="text"
+                        placeholder="Client ID (Application ID)"
+                        value={liveDbForm.clientId}
+                        onChange={(e) => setLiveDbForm(f => ({ ...f, clientId: e.target.value }))}
+                        className="w-full px-3 py-2 rounded-lg bg-[#1a1a24] border border-[#ffffff10] text-gray-300 text-xs placeholder-gray-600 focus:outline-none focus:border-[#f97316]/40"
+                      />
+                      <div className="relative">
+                        <input
+                          type={showClientSecret ? "text" : "password"}
+                          placeholder="Client Secret"
+                          value={liveDbForm.clientSecret}
+                          onChange={(e) => setLiveDbForm(f => ({ ...f, clientSecret: e.target.value }))}
+                          className="w-full px-3 py-2 pr-8 rounded-lg bg-[#1a1a24] border border-[#ffffff10] text-gray-300 text-xs placeholder-gray-600 focus:outline-none focus:border-[#f97316]/40"
+                        />
+                        <button
+                          type="button"
+                          onClick={() => setShowClientSecret(v => !v)}
+                          className="absolute right-2 top-1/2 -translate-y-1/2 text-gray-500 hover:text-gray-300"
+                        >
+                          {showClientSecret ? <EyeOff className="w-3.5 h-3.5" /> : <Eye className="w-3.5 h-3.5" />}
+                        </button>
+                      </div>
+                    </>
+                  )}
 
                   {liveDbError && (
                     <p className="text-[10px] text-red-400 px-1">{liveDbError}</p>
@@ -1188,7 +1252,14 @@ export default function Home() {
 
                   <button
                     onClick={handleLiveDbConnect}
-                    disabled={liveDbConnectState === "connecting" || !liveDbForm.host || !liveDbForm.dbname || !liveDbForm.user}
+                    disabled={
+                      liveDbConnectState === "connecting" ||
+                      !liveDbForm.host ||
+                      !liveDbForm.dbname ||
+                      (liveDbForm.dialect === "azure_sql"
+                        ? (!liveDbForm.tenantId || !liveDbForm.clientId || !liveDbForm.clientSecret)
+                        : !liveDbForm.user)
+                    }
                     className="w-full flex items-center justify-center gap-2 px-3 py-2 rounded-lg bg-[#f97316]/20 hover:bg-[#f97316]/30 border border-[#f97316]/30 text-[#f97316] text-xs font-medium transition-all disabled:opacity-50 disabled:cursor-not-allowed"
                   >
                     {liveDbConnectState === "connecting"

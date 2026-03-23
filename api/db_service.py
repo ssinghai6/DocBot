@@ -21,7 +21,7 @@ from datetime import datetime, timedelta, timezone
 from decimal import Decimal
 from typing import Any, AsyncGenerator, Dict, List, Optional
 
-from pydantic import BaseModel, field_validator
+from pydantic import BaseModel, field_validator, model_validator
 from sqlalchemy import (
     Column, DateTime, Integer, MetaData, String, Table, Text,
     func, insert, select, text, update, delete,
@@ -49,12 +49,13 @@ def _json_dumps(obj: Any) -> str:
 # Supported dialects
 # ---------------------------------------------------------------------------
 
-SUPPORTED_DIALECTS = {"postgresql", "mysql", "sqlite"}
+SUPPORTED_DIALECTS = {"postgresql", "mysql", "sqlite", "azure_sql"}
 
 _DIALECT_DRIVER = {
     "postgresql": "postgresql+psycopg2",
-    "mysql": "mysql+pymysql",
-    "sqlite": "sqlite",
+    "mysql":      "mysql+pymysql",
+    "sqlite":     "sqlite",
+    "azure_sql":  "mssql+pyodbc",
 }
 
 # ---------------------------------------------------------------------------
@@ -95,8 +96,13 @@ class DBConnectionRequest(BaseModel):
     host: str
     port: int
     dbname: str
-    user: str
-    password: str
+    user: Optional[str] = None
+    password: Optional[str] = None
+    # Entra Service Principal auth (azure_sql only)
+    auth_type: Optional[str] = None
+    tenant_id: Optional[str] = None
+    client_id: Optional[str] = None
+    client_secret: Optional[str] = None
 
     @field_validator("dialect")
     @classmethod
@@ -113,6 +119,25 @@ class DBConnectionRequest(BaseModel):
     def host_must_pass_ssrf(cls, v: str) -> str:
         validate_ssrf(v)
         return v
+
+    @model_validator(mode="after")
+    def validate_auth_fields(self) -> "DBConnectionRequest":
+        if self.dialect == "azure_sql":
+            if self.auth_type != "entra_sp":
+                raise ValueError("azure_sql dialect requires auth_type='entra_sp'")
+            missing = [f for f in ("tenant_id", "client_id", "client_secret")
+                       if not getattr(self, f)]
+            if missing:
+                raise ValueError(
+                    f"azure_sql with entra_sp auth requires: {', '.join(missing)}"
+                )
+        else:
+            # SQLite doesn't require credentials — empty strings are valid
+            if self.dialect != "sqlite" and (not self.user or self.password is None):
+                raise ValueError(
+                    f"dialect '{self.dialect}' requires 'user' and 'password' fields"
+                )
+        return self
 
 
 class DBChatRequest(BaseModel):
@@ -138,15 +163,73 @@ class DBChatResponse(BaseModel):
 
 
 def _build_connection_url(
-    dialect: str, host: str, port: int, dbname: str, user: str, password: str
+    dialect: str, host: str, port: int, dbname: str,
+    user: str = "", password: str = "",
 ) -> str:
     driver = _DIALECT_DRIVER[dialect]
     if dialect == "sqlite":
         return f"sqlite:///{dbname}"
+    if dialect == "azure_sql":
+        odbc_str = (
+            f"Driver={{ODBC Driver 18 for SQL Server}};"
+            f"Server={host},{port};Database={dbname};"
+            "Encrypt=yes;TrustServerCertificate=no;Connection Timeout=10;"
+        )
+        return f"mssql+pyodbc:///?odbc_connect={odbc_str}"
     url = f"{driver}://{user}:{password}@{host}:{port}/{dbname}"
     if dialect == "postgresql":
         url += "?sslmode=prefer"
     return url
+
+
+def _get_entra_token(tenant_id: str, client_id: str, client_secret: str) -> str:
+    """Acquire Azure SQL access token via Service Principal. Sync — run in executor."""
+    try:
+        from azure.identity import ClientSecretCredential
+    except ImportError as exc:
+        raise RuntimeError(
+            "azure-identity package is not installed. "
+            "Add 'azure-identity>=1.17.0' to requirements.txt and rebuild the container."
+        ) from exc
+    try:
+        credential = ClientSecretCredential(
+            tenant_id=tenant_id,
+            client_id=client_id,
+            client_secret=client_secret,
+        )
+        token = credential.get_token("https://database.windows.net/.default")
+        return token.token
+    except Exception as exc:
+        logger.error("Entra token acquisition failed (credentials redacted)")
+        raise ValueError(
+            "Azure Entra authentication failed. "
+            "Please verify tenant_id, client_id, and client_secret."
+        ) from exc
+
+
+def _build_entra_connect_args(token: str) -> Dict[str, Any]:
+    """Build pyodbc connect_args for Azure SQL token auth (SQL_COPT_SS_ACCESS_TOKEN=1256)."""
+    import struct
+    token_bytes = token.encode("utf-16-le")
+    token_struct = struct.pack(f"<I{len(token_bytes)}s", len(token_bytes), token_bytes)
+    return {"attrs_before": {1256: token_struct}}
+
+
+def _resolve_connection(creds: Dict[str, Any]) -> tuple[str, Optional[Dict[str, Any]]]:
+    """From decrypted credentials, return (sync_url, entra_connect_args).
+    Sync — intended to be called inside run_in_executor for azure_sql."""
+    dialect = creds["dialect"]
+    if dialect == "azure_sql":
+        token = _get_entra_token(
+            creds["tenant_id"], creds["client_id"], creds["client_secret"]
+        )
+        url = _build_connection_url(dialect, creds["host"], creds["port"], creds["dbname"])
+        return url, _build_entra_connect_args(token)
+    url = _build_connection_url(
+        dialect, creds["host"], creds["port"],
+        creds["dbname"], creds["user"], creds["password"],
+    )
+    return url, None
 
 
 def _get_groq_client():
@@ -190,21 +273,39 @@ async def connect_database(
       5. Introspect schema → populate schema_cache with 24h TTL.
       6. Return connection_id + schema summary.
     """
+    import asyncio as _asyncio
     connection_id = str(uuid.uuid4())
 
-    sync_url = _build_connection_url(
-        req.dialect, req.host, req.port, req.dbname, req.user, req.password
-    )
-    await _test_connection(sync_url, req.dialect)
+    entra_connect_args: Optional[Dict[str, Any]] = None
+    if req.dialect == "azure_sql":
+        token = await _asyncio.get_event_loop().run_in_executor(
+            None, _get_entra_token, req.tenant_id, req.client_id, req.client_secret
+        )
+        entra_connect_args = _build_entra_connect_args(token)
+        sync_url = _build_connection_url(req.dialect, req.host, req.port, req.dbname)
+    else:
+        sync_url = _build_connection_url(
+            req.dialect, req.host, req.port, req.dbname, req.user, req.password
+        )
 
-    creds_blob = encrypt_credentials({
-        "dialect": req.dialect,
-        "host": req.host,
-        "port": req.port,
-        "dbname": req.dbname,
-        "user": req.user,
-        "password": req.password,
-    })
+    await _test_connection(sync_url, req.dialect, entra_connect_args)
+
+    if req.dialect == "azure_sql":
+        creds_blob = encrypt_credentials({
+            "dialect": req.dialect, "host": req.host, "port": req.port,
+            "dbname": req.dbname, "auth_type": "entra_sp",
+            "tenant_id": req.tenant_id, "client_id": req.client_id,
+            "client_secret": req.client_secret,
+        })
+    else:
+        creds_blob = encrypt_credentials({
+            "dialect": req.dialect,
+            "host": req.host,
+            "port": req.port,
+            "dbname": req.dbname,
+            "user": req.user,
+            "password": req.password,
+        })
 
     async with async_session_factory() as session:
         async with session.begin():
@@ -220,7 +321,7 @@ async def connect_database(
                 )
             )
 
-    schema = await _introspect_schema_from_url(sync_url, req.dialect)
+    schema = await _introspect_schema_from_url(sync_url, req.dialect, entra_connect_args)
     schema_json = json.dumps(schema)
     expires_at = datetime.now(timezone.utc) + timedelta(hours=24)
 
@@ -318,11 +419,11 @@ async def get_schema(
         raise ConnectionNotFoundError(f"Connection '{connection_id}' not found.")
 
     creds = decrypt_credentials(conn_row.credentials_blob)
-    sync_url = _build_connection_url(
-        creds["dialect"], creds["host"], creds["port"],
-        creds["dbname"], creds["user"], creds["password"],
+    import asyncio as _asyncio
+    sync_url, entra_connect_args = await _asyncio.get_event_loop().run_in_executor(
+        None, _resolve_connection, creds
     )
-    schema = await _introspect_schema_from_url(sync_url, creds["dialect"])
+    schema = await _introspect_schema_from_url(sync_url, creds["dialect"], entra_connect_args)
     schema_json = json.dumps(schema)
     expires_at = datetime.now(timezone.utc) + timedelta(hours=24)
 
@@ -359,7 +460,10 @@ def _get_columns_via_information_schema(engine, table_name: str) -> List[Dict[st
         return []
 
 
-async def _introspect_schema_from_url(sync_url: str, dialect: str) -> List[Dict[str, Any]]:
+async def _introspect_schema_from_url(
+    sync_url: str, dialect: str,
+    entra_connect_args: Optional[Dict[str, Any]] = None,
+) -> List[Dict[str, Any]]:
     """
     Use SQLAlchemy Inspector to return:
       [{"name": "table", "columns": [{"name": "col", "type": "VARCHAR"}]}]
@@ -371,7 +475,9 @@ async def _introspect_schema_from_url(sync_url: str, dialect: str) -> List[Dict[
 
     def _sync_introspect() -> List[Dict[str, Any]]:
         connect_args: Dict[str, Any] = {}
-        if dialect != "sqlite":
+        if dialect == "azure_sql":
+            connect_args = entra_connect_args or {}
+        elif dialect != "sqlite":
             connect_args["connect_timeout"] = 10
 
         engine = create_engine(sync_url, connect_args=connect_args)
@@ -418,14 +524,20 @@ def _sort_tables_by_row_estimate_pg(engine, table_names: List[str]) -> List[str]
         return table_names
 
 
-async def _test_connection(sync_url: str, dialect: str) -> None:
+async def _test_connection(
+    sync_url: str,
+    dialect: str,
+    entra_connect_args: Optional[Dict[str, Any]] = None,
+) -> None:
     """Run SELECT 1 to verify credentials. Sanitises any exception before re-raising."""
     import asyncio
     from sqlalchemy import create_engine
 
     def _sync_test() -> None:
         connect_args: Dict[str, Any] = {}
-        if dialect != "sqlite":
+        if dialect == "azure_sql":
+            connect_args = entra_connect_args or {}
+        elif dialect != "sqlite":
             connect_args["connect_timeout"] = 10
 
         engine = create_engine(sync_url, connect_args=connect_args)
@@ -507,11 +619,11 @@ async def run_sql_pipeline(
 
     # ── Step 6: Execute ───────────────────────────────────────────────────
     creds = decrypt_credentials(conn_row.credentials_blob)
-    sync_url = _build_connection_url(
-        creds["dialect"], creds["host"], creds["port"],
-        creds["dbname"], creds["user"], creds["password"],
+    import asyncio as _asyncio
+    sync_url, entra_connect_args = await _asyncio.get_event_loop().run_in_executor(
+        None, _resolve_connection, creds
     )
-    rows, column_names = await _execute_query(validated_sql, sync_url, dialect)
+    rows, column_names = await _execute_query(validated_sql, sync_url, dialect, entra_connect_args)
     execution_time_ms = int(time.time() * 1000) - start_ms
 
     result_dicts = [dict(zip(column_names, row)) for row in rows]
@@ -716,7 +828,8 @@ async def _generate_sql(
 
 
 async def _execute_query(
-    sql: str, sync_url: str, dialect: str
+    sql: str, sync_url: str, dialect: str,
+    entra_connect_args: Optional[Dict[str, Any]] = None,
 ):
     """
     Execute *sql* with read-only enforcement, 15s timeout, 500-row cap.
@@ -724,6 +837,7 @@ async def _execute_query(
     Layer 3 of the 3-layer read-only enforcement:
       - PostgreSQL: SET TRANSACTION READ ONLY + statement_timeout = 15000ms
       - MySQL:      SET SESSION TRANSACTION READ ONLY  (DOCBOT-205)
+      - azure_sql:  SET TRANSACTION ISOLATION LEVEL SNAPSHOT
       - SQLite:     no write ops possible via SELECT-only validated SQL
 
     Returns (rows, column_names).
@@ -733,7 +847,9 @@ async def _execute_query(
 
     def _sync_execute():
         connect_args: Dict[str, Any] = {}
-        if dialect != "sqlite":
+        if dialect == "azure_sql":
+            connect_args = entra_connect_args or {}
+        elif dialect != "sqlite":
             connect_args["connect_timeout"] = 15
 
         engine = create_engine(sync_url, connect_args=connect_args)
@@ -744,6 +860,8 @@ async def _execute_query(
                     conn.execute(text("SET LOCAL statement_timeout = '15000'"))
                 elif dialect == "mysql":
                     conn.execute(text("SET SESSION TRANSACTION READ ONLY"))
+                elif dialect == "azure_sql":
+                    conn.execute(text("SET TRANSACTION ISOLATION LEVEL SNAPSHOT"))
 
                 result = conn.execute(text(sql))
                 rows = result.fetchmany(500)

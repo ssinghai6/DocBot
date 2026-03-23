@@ -1,4 +1,4 @@
-"""Unit tests for db_service helper functions — DOCBOT-201 through 205."""
+"""Unit tests for db_service helper functions — DOCBOT-201 through 205, 208."""
 
 import pytest
 from api.db_service import (
@@ -156,3 +156,133 @@ class TestBuildExplanation:
     def test_empty_schema_fallback(self):
         expl = _build_explanation("SELECT 1", [])
         assert "database" in expl
+
+
+# ---------------------------------------------------------------------------
+# DOCBOT-208: Azure SQL / Entra auth tests
+# ---------------------------------------------------------------------------
+
+@pytest.mark.unit
+class TestBuildConnectionURLAzureSQL:
+    def test_uses_mssql_pyodbc_driver(self):
+        url = _build_connection_url("azure_sql", "myserver.database.windows.net", 1433, "mydb")
+        assert "mssql+pyodbc" in url
+
+    def test_contains_odbc_driver_18(self):
+        url = _build_connection_url("azure_sql", "myserver.database.windows.net", 1433, "mydb")
+        assert "ODBC Driver 18 for SQL Server" in url
+
+    def test_contains_server_and_database(self):
+        url = _build_connection_url("azure_sql", "myserver.database.windows.net", 1433, "mydb")
+        assert "myserver.database.windows.net,1433" in url
+        assert "mydb" in url
+
+    def test_no_credentials_in_url(self):
+        url = _build_connection_url("azure_sql", "myserver.database.windows.net", 1433, "mydb")
+        # No @ before the ? (credentials would appear as user:pass@host)
+        base = url.split("?odbc_connect=")[0]
+        assert "@" not in base
+
+    def test_encryption_flags_present(self):
+        url = _build_connection_url("azure_sql", "myserver.database.windows.net", 1433, "mydb")
+        assert "Encrypt=yes" in url
+        assert "TrustServerCertificate=no" in url
+
+
+@pytest.mark.unit
+class TestBuildEntraConnectArgs:
+    def test_returns_attrs_before_key(self):
+        from api.db_service import _build_entra_connect_args
+        args = _build_entra_connect_args("fake_token")
+        assert "attrs_before" in args
+        assert 1256 in args["attrs_before"]
+
+    def test_value_is_bytes(self):
+        from api.db_service import _build_entra_connect_args
+        args = _build_entra_connect_args("fake_token")
+        assert isinstance(args["attrs_before"][1256], bytes)
+
+    def test_struct_has_correct_length_prefix(self):
+        import struct
+        from api.db_service import _build_entra_connect_args
+        token = "test_token"
+        args = _build_entra_connect_args(token)
+        raw = args["attrs_before"][1256]
+        token_bytes = token.encode("utf-16-le")
+        length = struct.unpack("<I", raw[:4])[0]
+        assert length == len(token_bytes)
+        assert raw[4:] == token_bytes
+
+
+@pytest.mark.unit
+class TestDBConnectionRequestAzureSQL:
+    def test_azure_sql_in_supported_dialects(self):
+        from api.db_service import SUPPORTED_DIALECTS
+        assert "azure_sql" in SUPPORTED_DIALECTS
+
+    def test_valid_entra_sp_request(self):
+        req = DBConnectionRequest(
+            session_id="s", dialect="azure_sql",
+            host="8.8.8.8", port=1433, dbname="mydb",
+            auth_type="entra_sp",
+            tenant_id="tid", client_id="cid", client_secret="sec",
+        )
+        assert req.dialect == "azure_sql"
+        assert req.auth_type == "entra_sp"
+
+    def test_missing_auth_type_rejected(self):
+        with pytest.raises(ValidationError):
+            DBConnectionRequest(
+                session_id="s", dialect="azure_sql",
+                host="8.8.8.8", port=1433, dbname="mydb",
+                tenant_id="tid", client_id="cid", client_secret="sec",
+            )
+
+    def test_missing_tenant_id_rejected(self):
+        with pytest.raises(ValidationError):
+            DBConnectionRequest(
+                session_id="s", dialect="azure_sql",
+                host="8.8.8.8", port=1433, dbname="mydb",
+                auth_type="entra_sp",
+                client_id="cid", client_secret="sec",
+            )
+
+    def test_missing_client_secret_rejected(self):
+        with pytest.raises(ValidationError):
+            DBConnectionRequest(
+                session_id="s", dialect="azure_sql",
+                host="8.8.8.8", port=1433, dbname="mydb",
+                auth_type="entra_sp",
+                tenant_id="tid", client_id="cid",
+            )
+
+
+@pytest.mark.unit
+class TestGetEntraToken:
+    def test_raises_runtime_error_when_azure_identity_missing(self, monkeypatch):
+        import builtins
+        real_import = builtins.__import__
+        def mock_import(name, *args, **kwargs):
+            if "azure.identity" in name:
+                raise ImportError("No module named 'azure.identity'")
+            return real_import(name, *args, **kwargs)
+        monkeypatch.setattr(builtins, "__import__", mock_import)
+        from api.db_service import _get_entra_token
+        with pytest.raises(RuntimeError, match="azure-identity package is not installed"):
+            _get_entra_token("tid", "cid", "sec")
+
+    def test_raises_value_error_on_auth_failure(self, monkeypatch):
+        import sys
+        import types
+        mock_azure = types.ModuleType("azure")
+        mock_identity = types.ModuleType("azure.identity")
+        class FakeCredential:
+            def __init__(self, **kwargs): pass
+            def get_token(self, scope): raise Exception("auth failed")
+        mock_identity.ClientSecretCredential = FakeCredential
+        mock_azure.identity = mock_identity
+        monkeypatch.setitem(sys.modules, "azure", mock_azure)
+        monkeypatch.setitem(sys.modules, "azure.identity", mock_identity)
+        from api.db_service import _get_entra_token
+        with pytest.raises(ValueError, match="Azure Entra authentication failed"):
+            _get_entra_token("tid", "cid", "sec")
