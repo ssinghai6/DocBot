@@ -197,7 +197,7 @@ class Citation(BaseModel):
 
 VECTOR_STORES = {}
 
-# DOCBOT-406: in-memory store of span-verified financial fields per session
+# SCRUM-391: in-memory store of span-verified extracted fields per session (any doc type)
 # { session_id: list[ExtractedField] }
 EXTRACTED_FIELDS: dict = {}
 
@@ -555,14 +555,15 @@ async def upload_documents(
         index_time = time.time() - start_time
         VECTOR_STORES[session_id] = db
 
-        # DOCBOT-406: run financial extraction in background (non-blocking)
+        # SCRUM-391: run structured extraction for any extractable document type
         full_text = " ".join(d.page_content for d in all_content)
-        from api.document_extractor import is_financial_document, extract_financial_fields
-        if is_financial_document(full_text):
-            logger.info("upload: financial document detected for session=%s — running extraction", session_id)
+        from api.document_extractor import is_extractable_document, extract_document_fields, detect_document_type
+        if is_extractable_document(full_text):
+            doc_type = detect_document_type(full_text)
+            logger.info("upload: %s document detected for session=%s — running extraction", doc_type, session_id)
             async def _run_extraction(sid: str, text: str) -> None:
                 gemini_key = os.getenv("GEMINI_API_KEY", "")
-                fields = await extract_financial_fields(text, sid, gemini_key)
+                fields = await extract_document_fields(text, sid, gemini_key)
                 if fields:
                     EXTRACTED_FIELDS[sid] = fields
                     logger.info("upload: stored %d extracted fields for session=%s", len(fields), sid)
