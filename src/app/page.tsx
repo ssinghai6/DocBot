@@ -318,6 +318,20 @@ export default function Home() {
   const [dbUploadState, setDbUploadState] = useState<"idle" | "uploading" | "connected" | "error">("idle");
   const [dbFileName, setDbFileName] = useState<string | null>(null);
 
+  // Live DB connection form state
+  const [showLiveDbForm, setShowLiveDbForm] = useState(false);
+  const [liveDbForm, setLiveDbForm] = useState({
+    dialect: "postgresql",
+    host: "",
+    port: "5432",
+    dbname: "",
+    user: "",
+    password: "",
+  });
+  const [showDbPassword, setShowDbPassword] = useState(false);
+  const [liveDbConnectState, setLiveDbConnectState] = useState<"idle" | "connecting" | "error">("idle");
+  const [liveDbError, setLiveDbError] = useState<string | null>(null);
+
   // Chat mode: "docs" → /api/chat, "database" → /api/db/chat, "hybrid" → /api/hybrid/chat
   const [chatMode, setChatMode] = useState<"docs" | "database" | "hybrid">("docs");
 
@@ -343,6 +357,9 @@ export default function Home() {
     setDbUploadState("idle");
     setChatMode("docs");
     setSelectedPersona(prev => (prev === "Data Analyst" ? "Generalist" : prev));
+    setShowLiveDbForm(false);
+    setLiveDbConnectState("idle");
+    setLiveDbError(null);
   }, []);
 
   const handleDbUpload = async (file: File, type: "csv" | "sqlite") => {
@@ -367,6 +384,41 @@ export default function Home() {
       setDbUploadState("error");
       showToast("error", `DB upload failed: ${msg}`);
       setTimeout(() => setDbUploadState("idle"), 3000);
+    }
+  };
+
+  const handleLiveDbConnect = async () => {
+    setLiveDbConnectState("connecting");
+    setLiveDbError(null);
+    try {
+      const response = await fetch("/api/db/connect", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          session_id: sessionId ?? anonymousSessionIdRef.current,
+          dialect: liveDbForm.dialect,
+          host: liveDbForm.host,
+          port: parseInt(liveDbForm.port, 10),
+          dbname: liveDbForm.dbname,
+          user: liveDbForm.user,
+          password: liveDbForm.password,
+        }),
+      });
+      if (!response.ok) {
+        const err = await response.json();
+        throw new Error(err.detail || "Connection failed");
+      }
+      const data = await response.json();
+      setDbFileName(`${liveDbForm.dialect}://${liveDbForm.host}/${liveDbForm.dbname}`);
+      setDbUploadState("connected");
+      setShowLiveDbForm(false);
+      setLiveDbConnectState("idle");
+      handleDbConnected(data.connection_id);
+      showToast("success", `Connected to ${liveDbForm.dbname}`);
+    } catch (error: unknown) {
+      const msg = error instanceof Error ? error.message : "Connection failed";
+      setLiveDbConnectState("error");
+      setLiveDbError(msg);
     }
   };
 
@@ -990,6 +1042,7 @@ export default function Home() {
             </div>
           ) : (
             <div className="space-y-2">
+              {/* CSV upload */}
               <label className={`flex items-center gap-2 px-3 py-2.5 rounded-xl border cursor-pointer transition-all text-xs ${
                 dbUploadState === "uploading"
                   ? "border-[#f97316]/40 bg-[#f97316]/5 pointer-events-none"
@@ -1015,6 +1068,7 @@ export default function Home() {
                 />
               </label>
 
+              {/* SQLite upload */}
               <label className={`flex items-center gap-2 px-3 py-2.5 rounded-xl border cursor-pointer transition-all text-xs ${
                 dbUploadState === "uploading"
                   ? "border-[#f97316]/40 bg-[#f97316]/5 pointer-events-none"
@@ -1039,6 +1093,103 @@ export default function Home() {
                   }}
                 />
               </label>
+
+              {/* Live DB connect toggle */}
+              <button
+                onClick={() => { setShowLiveDbForm(v => !v); setLiveDbError(null); }}
+                className="w-full flex items-center gap-2 px-3 py-2.5 rounded-xl border border-[#ffffff10] bg-[#1a1a24]/50 hover:border-[#f97316]/40 hover:bg-[#f97316]/5 transition-all text-xs text-gray-400"
+              >
+                <RefreshCw className="w-3.5 h-3.5 text-[#f97316] shrink-0" />
+                <span>Connect Live DB</span>
+                <ChevronDown className={`w-3 h-3 ml-auto transition-transform ${showLiveDbForm ? "rotate-180" : ""}`} />
+              </button>
+
+              {/* Live DB form */}
+              {showLiveDbForm && (
+                <div className="space-y-2 pt-1">
+                  {/* Dialect selector */}
+                  <select
+                    value={liveDbForm.dialect}
+                    onChange={(e) => {
+                      const dialect = e.target.value;
+                      setLiveDbForm(f => ({
+                        ...f,
+                        dialect,
+                        port: dialect === "postgresql" ? "5432" : dialect === "mysql" ? "3306" : "0",
+                      }));
+                    }}
+                    className="w-full px-3 py-2 rounded-lg bg-[#1a1a24] border border-[#ffffff10] text-gray-300 text-xs focus:outline-none focus:border-[#f97316]/40"
+                  >
+                    <option value="postgresql">PostgreSQL</option>
+                    <option value="mysql">MySQL</option>
+                  </select>
+
+                  <input
+                    type="text"
+                    placeholder="Host"
+                    value={liveDbForm.host}
+                    onChange={(e) => setLiveDbForm(f => ({ ...f, host: e.target.value }))}
+                    className="w-full px-3 py-2 rounded-lg bg-[#1a1a24] border border-[#ffffff10] text-gray-300 text-xs placeholder-gray-600 focus:outline-none focus:border-[#f97316]/40"
+                  />
+
+                  <div className="flex gap-2">
+                    <input
+                      type="number"
+                      placeholder="Port"
+                      value={liveDbForm.port}
+                      onChange={(e) => setLiveDbForm(f => ({ ...f, port: e.target.value }))}
+                      className="w-20 px-3 py-2 rounded-lg bg-[#1a1a24] border border-[#ffffff10] text-gray-300 text-xs placeholder-gray-600 focus:outline-none focus:border-[#f97316]/40"
+                    />
+                    <input
+                      type="text"
+                      placeholder="Database name"
+                      value={liveDbForm.dbname}
+                      onChange={(e) => setLiveDbForm(f => ({ ...f, dbname: e.target.value }))}
+                      className="flex-1 px-3 py-2 rounded-lg bg-[#1a1a24] border border-[#ffffff10] text-gray-300 text-xs placeholder-gray-600 focus:outline-none focus:border-[#f97316]/40"
+                    />
+                  </div>
+
+                  <input
+                    type="text"
+                    placeholder="Username"
+                    value={liveDbForm.user}
+                    onChange={(e) => setLiveDbForm(f => ({ ...f, user: e.target.value }))}
+                    className="w-full px-3 py-2 rounded-lg bg-[#1a1a24] border border-[#ffffff10] text-gray-300 text-xs placeholder-gray-600 focus:outline-none focus:border-[#f97316]/40"
+                  />
+
+                  <div className="relative">
+                    <input
+                      type={showDbPassword ? "text" : "password"}
+                      placeholder="Password"
+                      value={liveDbForm.password}
+                      onChange={(e) => setLiveDbForm(f => ({ ...f, password: e.target.value }))}
+                      className="w-full px-3 py-2 pr-8 rounded-lg bg-[#1a1a24] border border-[#ffffff10] text-gray-300 text-xs placeholder-gray-600 focus:outline-none focus:border-[#f97316]/40"
+                    />
+                    <button
+                      type="button"
+                      onClick={() => setShowDbPassword(v => !v)}
+                      className="absolute right-2 top-1/2 -translate-y-1/2 text-gray-500 hover:text-gray-300"
+                    >
+                      {showDbPassword ? <EyeOff className="w-3.5 h-3.5" /> : <Eye className="w-3.5 h-3.5" />}
+                    </button>
+                  </div>
+
+                  {liveDbError && (
+                    <p className="text-[10px] text-red-400 px-1">{liveDbError}</p>
+                  )}
+
+                  <button
+                    onClick={handleLiveDbConnect}
+                    disabled={liveDbConnectState === "connecting" || !liveDbForm.host || !liveDbForm.dbname || !liveDbForm.user}
+                    className="w-full flex items-center justify-center gap-2 px-3 py-2 rounded-lg bg-[#f97316]/20 hover:bg-[#f97316]/30 border border-[#f97316]/30 text-[#f97316] text-xs font-medium transition-all disabled:opacity-50 disabled:cursor-not-allowed"
+                  >
+                    {liveDbConnectState === "connecting"
+                      ? <><Loader2 className="w-3.5 h-3.5 animate-spin" /> Connecting...</>
+                      : <><Database className="w-3.5 h-3.5" /> Connect</>
+                    }
+                  </button>
+                </div>
+              )}
             </div>
           )}
         </div>
@@ -1177,7 +1328,7 @@ export default function Home() {
                   </h1>
                   <p className="text-gray-400 text-sm flex items-center gap-2">
                     <Terminal className="w-3 h-3" />
-                    Powered by <span className="text-[#667eea] font-semibold">Llama 3.3</span> • Upload PDFs and ask questions
+                    Upload PDFs and ask questions
                   </p>
                 </div>
                 <div className="lg:hidden">
