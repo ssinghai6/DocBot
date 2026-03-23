@@ -132,7 +132,10 @@ def _build_connection_url(
     driver = _DIALECT_DRIVER[dialect]
     if dialect == "sqlite":
         return f"sqlite:///{dbname}"
-    return f"{driver}://{user}:{password}@{host}:{port}/{dbname}"
+    url = f"{driver}://{user}:{password}@{host}:{port}/{dbname}"
+    if dialect == "postgresql":
+        url += "?sslmode=require"
+    return url
 
 
 def _get_groq_client():
@@ -346,8 +349,6 @@ async def _introspect_schema_from_url(sync_url: str, dialect: str) -> List[Dict[
         connect_args: Dict[str, Any] = {}
         if dialect != "sqlite":
             connect_args["connect_timeout"] = 10
-        if dialect == "postgresql":
-            connect_args["sslmode"] = "require"
 
         engine = create_engine(sync_url, connect_args=connect_args)
         try:
@@ -400,8 +401,6 @@ async def _test_connection(sync_url: str, dialect: str) -> None:
         connect_args: Dict[str, Any] = {}
         if dialect != "sqlite":
             connect_args["connect_timeout"] = 10
-        if dialect == "postgresql":
-            connect_args["sslmode"] = "require"
 
         engine = create_engine(sync_url, connect_args=connect_args)
         try:
@@ -413,6 +412,7 @@ async def _test_connection(sync_url: str, dialect: str) -> None:
     try:
         await asyncio.get_event_loop().run_in_executor(None, _sync_test)
     except Exception as exc:
+        logger.error("DB connection test failed: %s", exc)
         raise ValueError(
             "Database connection test failed. Please verify your credentials and host."
         ) from exc
@@ -709,8 +709,6 @@ async def _execute_query(
         connect_args: Dict[str, Any] = {}
         if dialect != "sqlite":
             connect_args["connect_timeout"] = 15
-        if dialect == "postgresql":
-            connect_args["sslmode"] = "require"
 
         engine = create_engine(sync_url, connect_args=connect_args)
         try:
