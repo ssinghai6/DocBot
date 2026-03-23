@@ -9,6 +9,9 @@ class QueryValidationError(Exception):
     """Raised when generated SQL fails AST validation."""
 
 
+_DIALECT_ALIASES = {"postgresql": "postgres"}
+
+
 def validate_and_sanitize_sql(sql: str, dialect: Optional[str] = None) -> str:
     """
     Parse *sql* with sqlglot, enforce SELECT-only, inject LIMIT if absent.
@@ -19,6 +22,7 @@ def validate_and_sanitize_sql(sql: str, dialect: Optional[str] = None) -> str:
         QueryValidationError: with a user-safe reason string.
             The *invalid SQL is never included* in the error message.
     """
+    dialect = _DIALECT_ALIASES.get(dialect, dialect)
     try:
         statements = sqlglot.parse(sql, dialect=dialect)
     except sqlglot.errors.ParseError as exc:
