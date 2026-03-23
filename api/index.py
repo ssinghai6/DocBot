@@ -570,8 +570,8 @@ async def upload_documents(
         if is_financial_document(full_text):
             logger.info("upload: financial document detected for session=%s — running extraction", session_id)
             async def _run_extraction(sid: str, text: str) -> None:
-                groq_key = os.getenv("groq_api_key", "")
-                fields = await extract_financial_fields(text, sid, groq_key)
+                gemini_key = os.getenv("GEMINI_API_KEY", "")
+                fields = await extract_financial_fields(text, sid, gemini_key)
                 if fields:
                     EXTRACTED_FIELDS[sid] = fields
                     logger.info("upload: stored %d extracted fields for session=%s", len(fields), sid)
