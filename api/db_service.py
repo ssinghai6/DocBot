@@ -637,6 +637,7 @@ async def run_sql_pipeline(
     expert_personas: Dict[str, Any],
     session_id: Optional[str] = None,
     session_artifacts_table: Optional[Table] = None,
+    table_embeddings_table: Optional[Table] = None,
 ) -> AsyncGenerator[str, None]:
     """
     Execute the 7-step bounded SQL pipeline and yield SSE-formatted strings.
@@ -653,8 +654,45 @@ async def run_sql_pipeline(
         connection_id, db_connections_table, schema_cache_table, async_session_factory
     )
 
-    # ── Step 2: Table selector (LLM call #1) ─────────────────────────────
-    selected_tables = await _select_relevant_tables(question, schema)
+    # DOCBOT-503: Background upsert of table embeddings (non-blocking)
+    if table_embeddings_table is not None:
+        import asyncio as _asyncio
+        embeddings_model_for_tables = _get_embeddings_model()
+        try:
+            from api.utils.table_selector import upsert_table_embeddings
+            _asyncio.ensure_future(upsert_table_embeddings(
+                connection_id=connection_id,
+                schema=schema,
+                embeddings_model=embeddings_model_for_tables,
+                table_embeddings_table=table_embeddings_table,
+                async_session_factory=async_session_factory,
+            ))
+        except Exception:
+            pass  # never block the pipeline
+
+    # ── Step 2: Table selector — semantic first, LLM fallback ────────────
+    selected_tables: List[str] = []
+
+    # DOCBOT-503: Try semantic similarity against stored table embeddings first
+    if table_embeddings_table is not None:
+        try:
+            from api.utils.table_selector import select_relevant_tables
+            embeddings_model_for_q = _get_embeddings_model()
+            selected_tables = await select_relevant_tables(
+                question=question,
+                connection_id=connection_id,
+                embeddings_model=embeddings_model_for_q,
+                table_embeddings_table=table_embeddings_table,
+                async_session_factory=async_session_factory,
+                top_k=5,
+            )
+        except Exception as _exc:
+            logger.warning("Semantic table selection failed, using LLM: %s", _exc)
+
+    # Fall back to LLM table selector when semantic path returns nothing
+    if not selected_tables:
+        selected_tables = await _select_relevant_tables(question, schema)
+
     schema_subset = [t for t in schema if t["name"] in set(selected_tables)]
     if not schema_subset:
         schema_subset = schema[:10]

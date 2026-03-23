@@ -131,6 +131,17 @@ query_embeddings_table = Table(
     Column("embedding_json", Text, nullable=False),     # JSON float array
 )
 
+# ── DOCBOT-503: Schema-Aware Semantic Table Selection ────────────────────────
+
+table_embeddings_table = Table(
+    "table_embeddings", metadata,
+    Column("connection_id", String, nullable=False, primary_key=True),
+    Column("table_name", String, nullable=False, primary_key=True),
+    Column("embedding", Text, nullable=False),      # JSON float array (384 dims)
+    Column("schema_summary", Text, nullable=False), # "table(col1 type, col2 type, ...)"
+    Column("updated_at", DateTime(timezone=True), server_default=func.now(), nullable=False),
+)
+
 # ── DOCBOT-501: Session Artifact Store ───────────────────────────────────────
 
 session_artifacts_table = Table(
@@ -155,7 +166,7 @@ async def init_db() -> None:
     logger.info(
         "Database tables verified / created "
         "(sessions, messages, db_connections, schema_cache, query_history, "
-        "query_embeddings, session_artifacts)."
+        "query_embeddings, session_artifacts, table_embeddings)."
     )
 
 
@@ -1212,6 +1223,7 @@ async def db_chat(request: DBChatRequest):
                 query_history_table=query_history_table,
                 query_embeddings_table=query_embeddings_table,
                 session_artifacts_table=session_artifacts_table,
+                table_embeddings_table=table_embeddings_table,
                 async_session_factory=async_session_factory,
                 expert_personas=EXPERT_PERSONAS,
             ):
