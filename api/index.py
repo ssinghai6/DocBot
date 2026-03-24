@@ -6,7 +6,7 @@ from pydantic import BaseModel
 from sqlalchemy.ext.asyncio import create_async_engine, AsyncSession, async_sessionmaker
 from sqlalchemy import (
     MetaData, Table, Column, String, Text, Integer, DateTime,
-    func, select, insert, update, delete, text, Boolean, LargeBinary,
+    func, select, insert, update, delete, text, Boolean,
 )
 from typing import List, Dict, Any, Optional
 import os
@@ -213,8 +213,10 @@ async def init_db() -> None:
         ]:
             await conn.execute(text(col_ddl))
         # DOCBOT-602: install immutability trigger on audit_log (idempotent)
-        from api.audit_service import IMMUTABILITY_TRIGGER_DDL
-        await conn.execute(text(IMMUTABILITY_TRIGGER_DDL))
+        # Execute each DDL statement separately — asyncpg rejects multi-statement strings
+        from api.audit_service import IMMUTABILITY_TRIGGER_STATEMENTS
+        for stmt in IMMUTABILITY_TRIGGER_STATEMENTS:
+            await conn.execute(text(stmt))
     logger.info(
         "Database tables verified / created "
         "(sessions, messages, db_connections, schema_cache, query_history, "
