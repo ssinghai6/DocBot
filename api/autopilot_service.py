@@ -89,10 +89,17 @@ async def _planner_node(state: AutopilotState) -> dict:
         "≤5 concrete investigation steps. Each step must be answerable with ONE tool:\n"
         "  - sql_query: run a SQL query against the connected database\n"
         "  - doc_search: search uploaded PDF documents\n"
-        "  - python_analysis: run Python analysis / charts on a prior SQL result\n\n"
+        "  - python_analysis: run Python / generate charts — ONLY after a sql_query step has fetched data\n\n"
+        "CRITICAL RULES:\n"
+        "1. If the question asks for a chart, heatmap, plot, or visualisation, the step BEFORE it "
+        "MUST be a sql_query step that fetches the required data. Never start with python_analysis.\n"
+        "2. Write each step as a clear action verb phrase, e.g. 'Fetch revenue by region for Q3.' "
+        "or 'Generate a heatmap of the correlation matrix.' — NOT 'Query data for heatmap generation'.\n"
+        "3. For chart/visualisation questions with no other analysis needed, use exactly 2 steps: "
+        "first a sql_query fetch step, then a python_analysis visualisation step.\n\n"
         "Return ONLY a JSON array of short step strings (no keys, no explanation), e.g.:\n"
-        '["Query total revenue by region for Q3.", "Identify top 3 products by revenue.", '
-        '"Visualise revenue trend as a bar chart."]'
+        '["Fetch total revenue by region for Q3.", "Identify top 3 products by revenue.", '
+        '"Generate a bar chart of revenue trend."]'
     )
 
     try:
@@ -136,11 +143,25 @@ async def _planner_node(state: AutopilotState) -> dict:
 
 
 def _select_tool(step: str) -> str:
-    """Choose sql_query | doc_search | python_analysis based on step wording."""
+    """Choose sql_query | doc_search | python_analysis based on step wording.
+
+    Data-fetch verbs (query/fetch/get/retrieve/select/find) always win over
+    visualisation keywords so "Fetch data for heatmap" stays sql_query.
+    """
     s = step.lower()
-    if any(k in s for k in ("chart", "plot", "visuali", "correlat", "distribut",
-                             "forecast", "python", "analys", "scatter", "heatmap",
-                             "regression", "trend")):
+    # Data-fetch verbs take priority — these are SQL steps even if chart words present
+    DATA_FETCH = ("fetch ", "retrieve ", "get ", "select ", "find ", "query ", "calculate ",
+                  "compute ", "count ", "sum ", "aggregate ", "identify ")
+    if any(s.startswith(k) or f" {k}" in s for k in DATA_FETCH):
+        # Only override to python_analysis if the step is PURELY about visualisation
+        # (no data-fetch verb AND chart keyword present)
+        pass  # fall through to explicit chart check below with fetch-verb guard
+    PYTHON_KEYWORDS = ("chart", "plot", "visuali", "correlat", "distribut",
+                       "python", "scatter", "heatmap", "regression", "generate a ",
+                       "create a ", "draw ")
+    has_chart = any(k in s for k in PYTHON_KEYWORDS)
+    has_fetch = any(s.startswith(k) or f" {k}" in s for k in DATA_FETCH)
+    if has_chart and not has_fetch:
         return "python_analysis"
     if any(k in s for k in ("document", "report", "pdf", "file", "upload",
                              "manual", "policy", "contract", "according to")):

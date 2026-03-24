@@ -107,6 +107,20 @@ class TestSelectTool:
     def test_case_insensitive(self):
         assert _select_tool("CHART of top products") == "python_analysis"
 
+    def test_fetch_verb_beats_chart_keyword(self):
+        """'Fetch data for heatmap' should stay sql_query — fetch verb wins."""
+        assert _select_tool("Fetch data for heatmap generation") == "sql_query"
+
+    def test_retrieve_with_chart_keyword_is_sql(self):
+        assert _select_tool("Retrieve revenue data for scatter plot") == "sql_query"
+
+    def test_generate_heatmap_without_fetch_is_python(self):
+        """'Generate a heatmap' with no fetch verb → python_analysis."""
+        assert _select_tool("Generate a heatmap of the correlation matrix") == "python_analysis"
+
+    def test_create_chart_without_fetch_is_python(self):
+        assert _select_tool("Create a line chart of the results") == "python_analysis"
+
 
 # ---------------------------------------------------------------------------
 # _should_continue()
