@@ -34,16 +34,26 @@ _mpl.use('Agg')
 import matplotlib.pyplot as _plt
 import io as _io, base64 as _b64, sys as _sys
 
+def _flush_open_figures():
+    \"\"\"Capture any matplotlib figures that are still open and write to stdout.\"\"\"
+    for _fnum in _plt.get_fignums():
+        _fig = _plt.figure(_fnum)
+        _buf = _io.BytesIO()
+        _fig.savefig(_buf, format='png', bbox_inches='tight', dpi=150)
+        _buf.seek(0)
+        _sys.stdout.write('CHART_B64:' + _b64.b64encode(_buf.read()).decode() + '\\n')
+        _sys.stdout.flush()
+    _plt.close('all')
+
 _orig_show = _plt.show
 def _patched_show(*_args, **_kwargs):
-    buf = _io.BytesIO()
-    _plt.savefig(buf, format='png', bbox_inches='tight')
-    buf.seek(0)
-    _sys.stdout.write('CHART_B64:' + _b64.b64encode(buf.read()).decode() + '\\n')
-    _sys.stdout.flush()
-    _plt.close('all')
+    _flush_open_figures()
 _plt.show = _patched_show
 """
+
+# Appended after every execution — captures figures that were created but
+# never shown (e.g. code that calls savefig() to a file, or forgets plt.show())
+_MATPLOTLIB_SUFFIX = "\n# --- auto-capture any remaining open figures ---\n_flush_open_figures()\n"
 
 # ---------------------------------------------------------------------------
 # Result model
@@ -139,10 +149,14 @@ def _run_in_sandbox(code: str) -> SandboxResult:
 
     try:
         sandbox = Sandbox.create()
-        # Prepend preamble so plt.show() auto-encodes charts to stdout
-        execution = sandbox.run_code(_MATPLOTLIB_PREAMBLE + code)
+        # Prepend preamble + append suffix so all figures are captured
+        full_code = _MATPLOTLIB_PREAMBLE + code + _MATPLOTLIB_SUFFIX
+        execution = sandbox.run_code(full_code)
 
-        raw_stdout: list[str] = list(execution.logs.stdout or [])
+        # Join all stdout chunks then split by newline — handles SDKs that
+        # buffer output in chunks rather than line-by-line
+        raw_stdout_joined = "".join(execution.logs.stdout or [])
+        raw_stdout: list[str] = raw_stdout_joined.splitlines()
         stderr_lines: list[str] = list(execution.logs.stderr or [])
 
         clean_stdout, charts, chart_meta = _extract_charts(raw_stdout)
@@ -155,7 +169,12 @@ def _run_in_sandbox(code: str) -> SandboxResult:
             name = getattr(execution.error, "name", "ExecutionError")
             value = getattr(execution.error, "value", str(execution.error))
             error_msg = f"{name}: {value}"
-            logger.warning("Sandbox execution error: %s", name)
+            logger.warning("Sandbox execution error: %s: %s", name, value[:300])
+
+        logger.info(
+            "Sandbox stdout_lines=%d chart_b64_lines=%d stderr_bytes=%d error=%s",
+            len(raw_stdout), len(charts), len(stderr), error_msg,
+        )
 
         elapsed_ms = int(time.monotonic() * 1000) - start_ms
         logger.info(
