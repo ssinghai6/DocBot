@@ -40,6 +40,7 @@ type Message = {
   analysisCode?: string;       // Python code block, collapsible
   sql?: string;                // SQL query from metadata chunk
   explanation?: string;        // SQL explanation from metadata chunk
+  autopilotSteps?: AutopilotStep[];  // DOCBOT-405: persisted investigation steps
 };
 
 type Toast = {
@@ -766,6 +767,8 @@ export default function Home() {
       setAutopilotRunning(true);
       setAutopilotSteps([]);
       setAutopilotPlan([]);
+      // Local accumulator — avoids stale closure when reading state inside SSE handler
+      const localSteps: AutopilotStep[] = [];
       try {
         const response = await fetch("/api/autopilot/run", {
           method: "POST",
@@ -818,6 +821,7 @@ export default function Home() {
                   chart_b64: data.chart_b64 ?? null,
                   error: data.error ?? null,
                 };
+                localSteps.push(stepEntry);
                 setAutopilotSteps(prev => [...prev, stepEntry]);
 
               } else if (data.type === "answer") {
@@ -831,7 +835,17 @@ export default function Home() {
                 });
 
               } else if (data.type === "done") {
-                // citations could be used here if needed
+                // Attach completed steps (with charts) to the message so they persist after run
+                if (localSteps.length > 0) {
+                  setMessages(prev => {
+                    const updated = [...prev];
+                    const last = updated[updated.length - 1];
+                    if (last?.role === "assistant") {
+                      updated[updated.length - 1] = { ...last, autopilotSteps: [...localSteps] };
+                    }
+                    return updated;
+                  });
+                }
 
               } else if (data.type === "warning" || data.type === "error") {
                 setMessages(prev => {
@@ -1997,6 +2011,49 @@ export default function Home() {
                     {/* Charts (DOCBOT-303) */}
                     {msg.role === "assistant" && msg.charts && msg.charts.length > 0 && (
                       <ChartDisplay charts={msg.charts} chartMetas={msg.chartMetas} />
+                    )}
+
+                    {/* DOCBOT-405: Autopilot investigation steps — persisted after run completes */}
+                    {msg.role === "assistant" && msg.autopilotSteps && msg.autopilotSteps.length > 0 && (
+                      <div className="mt-3 pt-3 border-t border-[#ffffff08] space-y-2">
+                        <div className="flex items-center gap-1.5 mb-2">
+                          <Wand2 className="w-3 h-3 text-[#a5b4fc]" />
+                          <span className="text-[11px] font-semibold text-gray-400 uppercase tracking-wider">
+                            Investigation Steps
+                          </span>
+                          <span className="text-[10px] text-gray-600 ml-1">
+                            ({msg.autopilotSteps.length})
+                          </span>
+                        </div>
+                        {msg.autopilotSteps.map((step) => (
+                          <div key={step.step_num} className="bg-[#ffffff04] rounded-xl p-2.5 text-xs border border-[#ffffff08]">
+                            <div className="flex items-center gap-1.5 mb-1.5">
+                              <span className={`px-1.5 py-0.5 rounded text-[9px] font-semibold uppercase tracking-wide ${
+                                step.tool === "sql_query"       ? "bg-[#0ea5e9]/20 text-[#38bdf8]" :
+                                step.tool === "doc_search"      ? "bg-[#f59e0b]/20 text-[#fbbf24]" :
+                                                                  "bg-[#10b981]/20 text-[#34d399]"
+                              }`}>
+                                {step.tool.replace("_", " ")}
+                              </span>
+                              <span className="text-gray-500 truncate flex-1">{step.step_label}</span>
+                            </div>
+                            {step.content && (
+                              <p className="text-gray-400 leading-relaxed">{step.content}</p>
+                            )}
+                            {step.chart_b64 && (
+                              <div className="mt-2">
+                                <ChartDisplay
+                                  charts={[step.chart_b64]}
+                                  chartMetas={undefined}
+                                />
+                              </div>
+                            )}
+                            {step.error && (
+                              <p className="text-red-400 mt-1 text-[11px]">⚠ {step.error}</p>
+                            )}
+                          </div>
+                        ))}
+                      </div>
                     )}
 
                     {/* Citations */}
