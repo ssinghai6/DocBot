@@ -13,7 +13,8 @@ import {
   Clock, Hash, Wand2, Layers, ArrowRight,
   Terminal, Database, Eye, EyeOff, RefreshCw,
   Menu, XCircle, AlertTriangle, HelpCircle,
-  Download, FileJson, FileText as FileTxt
+  Download, FileJson, FileText as FileTxt,
+  UserCog
 } from "lucide-react"
 
 type Citation = {
@@ -41,6 +42,8 @@ type Message = {
   sql?: string;                // SQL query from metadata chunk
   explanation?: string;        // SQL explanation from metadata chunk
   autopilotSteps?: AutopilotStep[];  // DOCBOT-405: persisted investigation steps
+  agentPersona?: string;       // DOCBOT-802: which persona handled this message
+  agentPersonas?: string[];    // DOCBOT-802: for hybrid messages with multiple personas
 };
 
 type Toast = {
@@ -77,62 +80,124 @@ const EXPERT_PERSONAS: Record<string, {
   color: string;
   gradient: string;
   accent: string;
+  response_format: "finance" | "clinical" | "legal" | "technical" | "research" | "consulting" | "data" | "general";
+  detection_keywords: { primary: string[]; secondary: string[] };
+  tool_preference: "sql_first" | "rag_first" | "balanced";
+  output_conventions: {
+    number_format: "currency" | "percentage" | "raw";
+    disclaimer_position: "header" | "footer" | null;
+    highlight_pattern: string | null;
+    accent_color: string;
+  };
 }> = {
   Generalist: {
     icon: <Sparkles className="w-5 h-5" />,
     description: "Balanced, general-purpose assistant for any document",
     color: "text-[#667eea]",
     gradient: "from-[#667eea] to-[#764ba2]",
-    accent: "#667eea"
+    accent: "#667eea",
+    response_format: "general",
+    detection_keywords: { primary: [], secondary: [] },
+    tool_preference: "balanced",
+    output_conventions: { number_format: "raw", disclaimer_position: null, highlight_pattern: null, accent_color: "#667eea" },
   },
   Doctor: {
     icon: <Stethoscope className="w-5 h-5" />,
     description: "Medical & healthcare perspective - analyze clinical documents",
     color: "text-[#10b981]",
     gradient: "from-[#10b981] to-[#059669]",
-    accent: "#10b981"
+    accent: "#10b981",
+    response_format: "clinical",
+    detection_keywords: {
+      primary: ["diagnosis", "patient", "clinical", "symptom", "treatment", "prescription", "dosage", "pathology", "surgery", "chronic", "medication", "lab result", "vital"],
+      secondary: ["health", "medical", "hospital", "therapy", "disease", "physician", "nursing", "drug"],
+    },
+    tool_preference: "rag_first",
+    output_conventions: { number_format: "raw", disclaimer_position: "header", highlight_pattern: "\\b(WARNING|CRITICAL|CONTRAINDICATED|ABNORMAL|RED FLAG)\\b", accent_color: "#10b981" },
   },
   "Finance Expert": {
     icon: <TrendingUp className="w-5 h-5" />,
     description: "Financial & investment analysis - parse reports & statements",
     color: "text-[#f59e0b]",
     gradient: "from-[#f59e0b] to-[#d97706]",
-    accent: "#f59e0b"
+    accent: "#f59e0b",
+    response_format: "finance",
+    detection_keywords: {
+      primary: ["revenue", "profit", "ebitda", "balance sheet", "cash flow", "earnings", "quarterly", "annual report", "valuation", "roi", "equity", "debt", "dividend", "fiscal", "margin"],
+      secondary: ["financial", "investment", "forecast", "budget", "growth", "expense", "asset", "liability", "audit", "fund"],
+    },
+    tool_preference: "sql_first",
+    output_conventions: { number_format: "currency", disclaimer_position: "footer", highlight_pattern: null, accent_color: "#f59e0b" },
   },
   Engineer: {
     icon: <Code className="w-5 h-5" />,
     description: "Technical & engineering focus - documentation & specs",
     color: "text-[#3b82f6]",
     gradient: "from-[#3b82f6] to-[#2563eb]",
-    accent: "#3b82f6"
+    accent: "#3b82f6",
+    response_format: "technical",
+    detection_keywords: {
+      primary: ["specification", "architecture", "api", "circuit", "firmware", "schematic", "protocol", "bandwidth", "latency", "deployment", "infrastructure", "algorithm", "system design", "mechanical", "structural"],
+      secondary: ["technical", "engineering", "component", "interface", "dependency", "compliance", "standard", "tolerance", "performance"],
+    },
+    tool_preference: "balanced",
+    output_conventions: { number_format: "raw", disclaimer_position: null, highlight_pattern: null, accent_color: "#3b82f6" },
   },
   "AI/ML Expert": {
     icon: <Cpu className="w-5 h-5" />,
     description: "AI, ML & data science insights - research papers & models",
     color: "text-[#8b5cf6]",
     gradient: "from-[#8b5cf6] to-[#7c3aed]",
-    accent: "#8b5cf6"
+    accent: "#8b5cf6",
+    response_format: "research",
+    detection_keywords: {
+      primary: ["neural network", "transformer", "llm", "embedding", "gradient", "fine-tuning", "training data", "overfitting", "accuracy", "benchmark", "dataset", "classification", "nlp", "computer vision"],
+      secondary: ["machine learning", "deep learning", "artificial intelligence", "model", "inference", "pipeline", "feature", "epoch", "loss function", "attention"],
+    },
+    tool_preference: "balanced",
+    output_conventions: { number_format: "percentage", disclaimer_position: null, highlight_pattern: null, accent_color: "#8b5cf6" },
   },
   Lawyer: {
     icon: <Scale className="w-5 h-5" />,
     description: "Legal analysis & compliance - contracts & policies",
     color: "text-[#ef4444]",
     gradient: "from-[#ef4444] to-[#dc2626]",
-    accent: "#ef4444"
+    accent: "#ef4444",
+    response_format: "legal",
+    detection_keywords: {
+      primary: ["contract", "agreement", "clause", "jurisdiction", "indemnity", "liability", "plaintiff", "defendant", "arbitration", "statute", "copyright", "patent", "gdpr", "compliance"],
+      secondary: ["legal", "regulation", "policy", "obligation", "intellectual property", "breach", "penalty", "dispute"],
+    },
+    tool_preference: "rag_first",
+    output_conventions: { number_format: "raw", disclaimer_position: "footer", highlight_pattern: "\\b(RISK|WARNING|VOID|BREACH|PENALTY|PROHIBITED|LIMITATION OF LIABILITY)\\b", accent_color: "#ef4444" },
   },
   Consultant: {
     icon: <Briefcase className="w-5 h-5" />,
     description: "Strategic business advisory - strategy & planning",
     color: "text-[#06b6d4]",
     gradient: "from-[#06b6d4] to-[#0891b2]",
-    accent: "#06b6d4"
+    accent: "#06b6d4",
+    response_format: "consulting",
+    detection_keywords: {
+      primary: ["strategy", "roadmap", "kpi", "go-to-market", "swot", "stakeholder", "competitive analysis", "market share", "transformation", "business case"],
+      secondary: ["consulting", "business plan", "proposal", "operational", "market analysis", "management", "growth", "change management"],
+    },
+    tool_preference: "balanced",
+    output_conventions: { number_format: "raw", disclaimer_position: null, highlight_pattern: null, accent_color: "#06b6d4" },
   },
   "Data Analyst": {
     icon: <BarChart2 className="w-5 h-5" />,
     description: "Quantitative analysis with full SQL transparency and data quality flags",
     color: "text-[#f97316]",
     gradient: "from-[#f97316] to-[#ea580c]",
-    accent: "#f97316"
+    accent: "#f97316",
+    response_format: "data",
+    detection_keywords: {
+      primary: ["query", "sql", "table", "row", "column", "count", "average", "group by", "join", "aggregate", "null", "outlier", "distribution", "chart"],
+      secondary: ["data", "database", "metric", "percentage", "total", "filter", "report", "dashboard", "correlation", "summarize"],
+    },
+    tool_preference: "sql_first",
+    output_conventions: { number_format: "raw", disclaimer_position: null, highlight_pattern: "\\b(NULL|ERROR|WARNING|OUTLIER|MISSING)\\b", accent_color: "#f97316" },
   },
 };
 
@@ -333,6 +398,94 @@ function DiscrepancyBlock({ content }: { content: string }) {
   );
 }
 
+// DOCBOT-802: Client-side keyword router — returns the best-matching persona and confidence
+function routeQuestion(
+  question: string,
+  chatMode: string,
+  isDbConnected: boolean,
+  hasDocSession: boolean,
+  personas: typeof EXPERT_PERSONAS
+): { persona: string; confidence: "high" | "medium" | "low" } {
+  const q = question.toLowerCase();
+
+  let bestPersona = "Generalist";
+  let bestScore = 0;
+  let secondScore = 0;
+
+  for (const [name, config] of Object.entries(personas)) {
+    if (name === "Generalist") continue;
+
+    let score = 0;
+    for (const kw of config.detection_keywords.primary) {
+      const regex = new RegExp(`\\b${kw.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}\\b`, "i");
+      if (regex.test(q)) score += 3;
+    }
+    for (const kw of config.detection_keywords.secondary) {
+      const regex = new RegExp(`\\b${kw.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}\\b`, "i");
+      if (regex.test(q)) score += 1;
+    }
+
+    if (score > bestScore) {
+      secondScore = bestScore;
+      bestScore = score;
+      bestPersona = name;
+    } else if (score > secondScore) {
+      secondScore = score;
+    }
+  }
+
+  if (bestScore === 0) return { persona: "Generalist", confidence: "low" };
+
+  let confidence: "high" | "medium" | "low";
+  if (bestScore >= 6 && bestScore - secondScore > 1) {
+    confidence = "high";
+  } else if (bestScore >= 3) {
+    confidence = "medium";
+  } else {
+    confidence = "low";
+  }
+
+  // Context tie-break: when top two are very close and DB is connected, prefer Data Analyst
+  if (bestScore - secondScore <= 1 && isDbConnected && bestPersona !== "Data Analyst") {
+    // intentional no-op: keep bestPersona as-is, let tool_preference handle mode biasing
+  }
+
+  // Suppress unused-variable warnings for params used only for future tie-breaking
+  void chatMode;
+  void hasDocSession;
+
+  return { persona: bestPersona, confidence };
+}
+
+// DOCBOT-805: Pre-process message content based on agent persona conventions
+function applyAgentFormatting(content: string, agentPersona: string | undefined): string {
+  if (!agentPersona) return content;
+  const conf = EXPERT_PERSONAS[agentPersona as keyof typeof EXPERT_PERSONAS];
+  if (!conf) return content;
+
+  let processed = content;
+
+  // Apply highlight_pattern: wrap matches in bold
+  if (conf.output_conventions.highlight_pattern) {
+    try {
+      const re = new RegExp(conf.output_conventions.highlight_pattern, "g");
+      processed = processed.replace(re, "**$&**");
+    } catch {
+      // invalid regex — skip
+    }
+  }
+
+  // Clinical: style Medical Disclaimer block
+  if (conf.response_format === "clinical") {
+    processed = processed.replace(
+      /## Medical Disclaimer\n/g,
+      "\n---\n> **Medical Disclaimer**\n>\n> "
+    );
+  }
+
+  return processed;
+}
+
 // Parse message content into text segments and discrepancy blocks (DOCBOT-403)
 function renderMessageContent(content: string): React.ReactNode[] | null {
   const parts = content.split(/\[DISCREPANCY\]([\s\S]*?)\[\/DISCREPANCY\]/g);
@@ -344,6 +497,41 @@ function renderMessageContent(content: string): React.ReactNode[] | null {
         : null
       : <DiscrepancyBlock key={i} content={part} />
   ).filter(Boolean);
+}
+
+// DOCBOT-805: Agent-aware message content renderer
+function AgentMessageContent({ msg }: { msg: Message }) {
+  const agentConf = msg.agentPersona ? EXPERT_PERSONAS[msg.agentPersona as keyof typeof EXPERT_PERSONAS] : undefined;
+  const responseFormat = agentConf?.response_format;
+  const processedContent = applyAgentFormatting(msg.content, msg.agentPersona);
+  const wrapperClass = [
+    "prose prose-invert prose-sm max-w-none",
+    "prose-p:leading-7 prose-p:text-gray-300",
+    "prose-headings:text-white prose-headings:font-semibold prose-headings:mt-0 prose-headings:mb-2",
+    "prose-strong:text-white prose-strong:font-medium",
+    "prose-ul:text-gray-300 prose-ul:my-2 prose-li:my-1",
+    "prose-ol:text-gray-300 prose-ol:my-2 prose-li:my-1",
+    "prose-li:marker:text-[#667eea]",
+    "prose-a:text-[#667eea] prose-a:no-underline hover:prose-a:underline",
+    "prose-blockquote:border-l-[#667eea] prose-blockquote:bg-[#1a1a24]/50 prose-blockquote:py-1 prose-blockquote:px-3 prose-blockquote:rounded-r-lg prose-blockquote:text-gray-400 prose-blockquote:not-italic",
+    "prose-code:text-[#764ba2] prose-code:bg-[#1a1a24]/60 prose-code:px-1.5 prose-code:py-0.5 prose-code:rounded prose-code:before:content-none prose-code:after:content-none",
+    "prose-pre:bg-[#1a1a24]/80 prose-pre:border prose-pre:border-[#ffffff08]",
+    responseFormat === "finance" ? "agent-finance" : "",
+    responseFormat === "legal" ? "agent-legal" : "",
+    responseFormat === "clinical" ? "agent-clinical" : "",
+  ].filter(Boolean).join(" ");
+  const financeStyle: React.CSSProperties | undefined = responseFormat === "finance"
+    ? { borderLeft: "3px solid rgba(245,158,11,0.3)", paddingLeft: "0.75rem" }
+    : undefined;
+  return (
+    <div className={wrapperClass} style={financeStyle}>
+      {renderMessageContent(processedContent) ?? (
+        <ReactMarkdown remarkPlugins={[remarkGfm]}>
+          {processedContent}
+        </ReactMarkdown>
+      )}
+    </div>
+  );
 }
 
 // Collapsible Code Component (DOCBOT-303)
@@ -385,6 +573,8 @@ export default function Home() {
   const [deepVisualMode, setDeepVisualMode] = useState(false);
   const [deepResearch, setDeepResearch] = useState(false);
   const [sidebarOpen, setSidebarOpen] = useState(true);
+  // DOCBOT-802: Auto-routing mode — when true, routeQuestion() picks the persona per message
+  const [isAutoMode, setIsAutoMode] = useState(true);
 
   // Database connection state
   const [isDbConnected, setIsDbConnected] = useState(false);
@@ -766,6 +956,18 @@ export default function Home() {
     setInput("");
     setIsLoading(true);
 
+    // ── DOCBOT-802: Auto-routing — pick persona and optionally bias chat mode ──
+    let personaToSend = selectedPersona;
+    if (isAutoMode) {
+      const routing = routeQuestion(input, chatMode, isDbConnected, !!sessionId, EXPERT_PERSONAS);
+      if (routing.confidence !== "low") {
+        personaToSend = routing.persona;
+        const pref = EXPERT_PERSONAS[routing.persona as keyof typeof EXPERT_PERSONAS]?.tool_preference;
+        if (pref === "sql_first" && isDbConnected) setChatMode("database");
+        else if (pref === "rag_first" && sessionId) setChatMode("docs");
+      }
+    }
+
     // ── DOCBOT-405: Autopilot path ─────────────────────────────────────────
     if (chatMode === "database" && connectionId && autopilotMode) {
       setAutopilotRunning(true);
@@ -780,7 +982,7 @@ export default function Home() {
           body: JSON.stringify({
             connection_id: connectionId,
             question: userMsg.content,
-            persona: selectedPersona,
+            persona: personaToSend,
             session_id: sessionId ?? "anonymous",
           }),
         });
@@ -793,6 +995,7 @@ export default function Home() {
           content: "",
           timestamp: new Date(),
           charts: [],
+          agentPersona: personaToSend,
         };
         setMessages(prev => [...prev, assistantMsg]);
 
@@ -890,6 +1093,7 @@ export default function Home() {
           content: "",
           timestamp: new Date(),
           charts: [],
+          agentPersona: personaToSend,
         };
         setMessages(prev => [...prev, assistantMsg]);
 
@@ -899,7 +1103,7 @@ export default function Home() {
           body: JSON.stringify({
             connection_id: connectionId,
             question: userMsg.content,
-            persona: selectedPersona,
+            persona: personaToSend,
             session_id: sessionId ?? "anonymous",
             chart_type: chartType,
           }),
@@ -980,7 +1184,7 @@ export default function Home() {
     // ── Hybrid chat path: SSE streaming via /api/hybrid/chat ─────────────
     if (chatMode === "hybrid" && connectionId && sessionId) {
       try {
-        const assistantMsg: Message = { role: "assistant", content: "", timestamp: new Date(), charts: [] };
+        const assistantMsg: Message = { role: "assistant", content: "", timestamp: new Date(), charts: [], agentPersona: personaToSend };
         setMessages(prev => [...prev, assistantMsg]);
 
         const response = await fetch("/api/hybrid/chat", {
@@ -990,7 +1194,7 @@ export default function Home() {
             question: userMsg.content,
             session_id: sessionId,
             connection_id: connectionId,
-            persona: selectedPersona,
+            persona: personaToSend,
             has_docs: true,
           }),
         });
@@ -1058,7 +1262,7 @@ export default function Home() {
           session_id: sessionId,
           message: userMsg.content,
           history: messages,
-          persona: selectedPersona,
+          persona: personaToSend,
           deep_research: deepResearch
         })
       });
@@ -1073,7 +1277,8 @@ export default function Home() {
         role: "assistant",
         content: data.content,
         citations: data.citations || [],
-        timestamp: new Date()
+        timestamp: new Date(),
+        agentPersona: personaToSend,
       }]);
     } catch (error: unknown) {
       const msg = error instanceof Error ? error.message : "Unknown error";
@@ -1628,10 +1833,10 @@ export default function Home() {
 
         {/* Persona Selection */}
         <div className="mb-6 flex-1">
-          <h3 className="text-sm font-semibold mb-3 text-white flex items-center gap-2">
-            <Wand2 className="w-4 h-4 text-[#764ba2]" />
-            Expert Mode
-          </h3>
+          <div className="flex items-center gap-2 mb-3">
+            <Sparkles className="w-4 h-4 text-[#667eea]" />
+            <span className="text-xs font-semibold text-gray-400 uppercase tracking-wider">Expert Mode</span>
+          </div>
 
           {suggestedPersona && suggestedPersona !== "Generalist" && (
             <div className="bg-[#667eea]/10 border border-[#667eea]/20 p-3 rounded-xl mb-3 text-sm flex items-start gap-2">
@@ -1643,41 +1848,81 @@ export default function Home() {
             </div>
           )}
 
-          {/* Persona Cards Grid */}
-          <div className="grid grid-cols-2 gap-2">
-            {Object.entries(EXPERT_PERSONAS).map(([name, data]) => {
-              const isSelected = selectedPersona === name;
-              return (
-                <button
-                  key={name}
-                  onClick={() => setSelectedPersona(name)}
-                  className={`group relative p-3 rounded-xl text-left transition-all duration-200 ${isSelected
-                    ? 'bg-gradient-to-br ' + data.gradient + ' shadow-lg scale-[1.02]'
-                    : 'bg-[#1a1a24]/50 border border-[#ffffff06] hover:border-[#ffffff15] hover:bg-[#1a1a24]/80'
-                    }`}
-                >
-                  <div className={`${isSelected ? 'text-white' : data.color} mb-1`}>
-                    {data.icon}
-                  </div>
-                  <div className={`text-xs font-medium ${isSelected ? 'text-white' : 'text-gray-300'}`}>
-                    {name}
-                  </div>
-                  {isSelected && (
-                    <div className="absolute top-2 right-2">
-                      <CheckCircle2 className="w-3 h-3 text-white" />
-                    </div>
-                  )}
-                </button>
-              );
-            })}
+          {/* AUTO / Manual toggle */}
+          <div className="flex gap-2 mb-3">
+            <button
+              onClick={() => setIsAutoMode(true)}
+              className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-medium transition-all ${
+                isAutoMode
+                  ? "bg-[#667eea]/20 text-[#667eea] border border-[#667eea]/40"
+                  : "bg-white/5 text-gray-400 border border-white/10 hover:bg-white/10"
+              }`}
+            >
+              <Wand2 className="w-3 h-3" />
+              AUTO
+            </button>
+            <button
+              onClick={() => { setIsAutoMode(false); }}
+              className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-medium transition-all ${
+                !isAutoMode
+                  ? "bg-white/10 text-gray-200 border border-white/20"
+                  : "bg-white/5 text-gray-400 border border-white/10 hover:bg-white/10"
+              }`}
+            >
+              <UserCog className="w-3 h-3" />
+              Manual
+            </button>
           </div>
 
-          <div className="mt-3 p-3 bg-[#1a1a24]/30 rounded-xl border border-[#ffffff06]">
-            <p className="text-xs text-gray-400 flex items-start gap-2">
-              <Info className="w-3 h-3 mt-0.5 shrink-0 text-[#667eea]" />
-              {EXPERT_PERSONAS[selectedPersona]?.description}
-            </p>
-          </div>
+          {isAutoMode ? (
+            <p className="text-[11px] text-gray-500 mb-3">Routing automatically based on your question</p>
+          ) : (
+            <div>
+              {/* Persona Cards Grid — preserved in Manual Override section */}
+              <div className="grid grid-cols-2 gap-2 mb-2">
+                {Object.entries(EXPERT_PERSONAS).map(([name, data]) => {
+                  const isSelected = selectedPersona === name;
+                  return (
+                    <button
+                      key={name}
+                      onClick={() => setSelectedPersona(name)}
+                      className={`group relative p-3 rounded-xl text-left transition-all duration-200 ${isSelected
+                        ? 'bg-gradient-to-br ' + data.gradient + ' shadow-lg scale-[1.02]'
+                        : 'bg-[#1a1a24]/50 border border-[#ffffff06] hover:border-[#ffffff15] hover:bg-[#1a1a24]/80'
+                        }`}
+                    >
+                      <div className={`${isSelected ? 'text-white' : data.color} mb-1`}>
+                        {data.icon}
+                      </div>
+                      <div className={`text-xs font-medium ${isSelected ? 'text-white' : 'text-gray-300'}`}>
+                        {name}
+                      </div>
+                      {isSelected && (
+                        <div className="absolute top-2 right-2">
+                          <CheckCircle2 className="w-3 h-3 text-white" />
+                        </div>
+                      )}
+                    </button>
+                  );
+                })}
+              </div>
+              <button
+                onClick={() => setIsAutoMode(true)}
+                className="text-[10px] text-[#667eea] hover:underline mt-1"
+              >
+                ↩ Reset to Auto
+              </button>
+            </div>
+          )}
+
+          {!isAutoMode && (
+            <div className="mt-3 p-3 bg-[#1a1a24]/30 rounded-xl border border-[#ffffff06]">
+              <p className="text-xs text-gray-400 flex items-start gap-2">
+                <Info className="w-3 h-3 mt-0.5 shrink-0 text-[#667eea]" />
+                {EXPERT_PERSONAS[selectedPersona]?.description}
+              </p>
+            </div>
+          )}
         </div>
 
         {/* Deep Research Toggle */}
@@ -1959,7 +2204,36 @@ export default function Home() {
                         <div className="w-6 h-6 rounded-lg bg-gradient-to-br from-[#667eea] to-[#764ba2] flex items-center justify-center">
                           <Brain className="w-3 h-3 text-white" />
                         </div>
-                        <span className="text-xs font-medium text-gray-400">DocBot</span>
+                        {/* DOCBOT-804: Dynamic agent badge */}
+                        {(() => {
+                          const agentName = msg.agentPersona ?? "DocBot";
+                          const agentConf = EXPERT_PERSONAS[agentName as keyof typeof EXPERT_PERSONAS];
+                          const accentColor = agentConf?.output_conventions?.accent_color ?? "#667eea";
+
+                          if (msg.agentPersonas && msg.agentPersonas.length > 1) {
+                            return (
+                              <div className="flex items-center gap-1">
+                                {msg.agentPersonas.map((ap) => {
+                                  const conf = EXPERT_PERSONAS[ap as keyof typeof EXPERT_PERSONAS];
+                                  const color = conf?.output_conventions?.accent_color ?? "#667eea";
+                                  return (
+                                    <span key={ap} className="text-[10px] px-2 py-0.5 rounded-full font-medium"
+                                      style={{ backgroundColor: color + "20", color, border: `1px solid ${color}40` }}>
+                                      {ap}
+                                    </span>
+                                  );
+                                })}
+                              </div>
+                            );
+                          }
+
+                          return (
+                            <span className="text-[10px] px-2 py-0.5 rounded-full font-medium"
+                              style={{ backgroundColor: accentColor + "20", color: accentColor, border: `1px solid ${accentColor}40` }}>
+                              {agentName}
+                            </span>
+                          );
+                        })()}
                         {msg.timestamp && (
                           <>
                             <span className="text-[10px] text-gray-600">•</span>
@@ -2004,23 +2278,7 @@ export default function Home() {
                           </div>
                         </div>
                       ) : (
-                      <div className="prose prose-invert prose-sm max-w-none
-                        prose-p:leading-7 prose-p:text-gray-300
-                        prose-headings:text-white prose-headings:font-semibold prose-headings:mt-0 prose-headings:mb-2
-                        prose-strong:text-white prose-strong:font-medium
-                        prose-ul:text-gray-300 prose-ul:my-2 prose-li:my-1
-                        prose-ol:text-gray-300 prose-ol:my-2 prose-li:my-1
-                        prose-li:marker:text-[#667eea]
-                        prose-a:text-[#667eea] prose-a:no-underline hover:prose-a:underline
-                        prose-blockquote:border-l-[#667eea] prose-blockquote:bg-[#1a1a24]/50 prose-blockquote:py-1 prose-blockquote:px-3 prose-blockquote:rounded-r-lg prose-blockquote:text-gray-400 prose-blockquote:not-italic
-                        prose-code:text-[#764ba2] prose-code:bg-[#1a1a24]/60 prose-code:px-1.5 prose-code:py-0.5 prose-code:rounded prose-code:before:content-none prose-code:after:content-none
-                        prose-pre:bg-[#1a1a24]/80 prose-pre:border prose-pre:border-[#ffffff08]">
-                        {renderMessageContent(msg.content) ?? (
-                          <ReactMarkdown remarkPlugins={[remarkGfm]}>
-                            {msg.content}
-                          </ReactMarkdown>
-                        )}
-                      </div>
+                        <AgentMessageContent msg={msg} />
                       )
                     ) : (
                       <p className="text-[15px] leading-relaxed whitespace-pre-wrap">{msg.content}</p>
