@@ -52,16 +52,17 @@ Every story is only "done" when ALL of the following are true. No exceptions.
 
 ## 2. Epic Structure
 
-| Epic ID | Epic Name | Phase(s) | Description |
-|---------|-----------|----------|-------------|
-| EPIC-01 | Infrastructure Migration | 0 | Move backend to Railway, PostgreSQL session store, E2B integration |
-| EPIC-02 | Database Connectivity | 1, 3 | DB connections, SQL generation pipeline, query execution |
-| EPIC-03 | Analytical Loop (Python) | 1, 2 | Python code execution via E2B, chart rendering, analysis |
-| EPIC-04 | Hybrid Intelligence | 1, 2 | Cross-source synthesis, discrepancy detection, planner/router |
-| EPIC-05 | Memory and Context | 2 | Session artifacts, context compression, multi-hop queries |
-| EPIC-06 | Enterprise Readiness | 4 | SSO, RBAC, audit logging, PII masking, on-premise |
-| EPIC-07 | Commerce Connectors | 4+ | Marketplace API integrations (Amazon SP-API, Shopify), unified commerce schema, multi-tenant RLS, background sync |
-| EPIC-08 | Smart Agent Auto-Routing | 3 | Replace static persona picker with intelligent per-question agent routing, structured output contracts, per-agent response rendering |
+| Epic ID | Epic Name | Phase(s) | Status | Description |
+|---------|-----------|----------|--------|-------------|
+| EPIC-01 | Infrastructure Migration | 0 | ✅ Done | Move backend to Railway, PostgreSQL session store, E2B integration |
+| EPIC-02 | Database Connectivity | 1, 3 | ✅ Done | DB connections, SQL generation pipeline, query execution |
+| EPIC-03 | Analytical Loop (Python) | 1, 2 | ✅ Done | Python code execution via E2B, chart rendering, analysis |
+| EPIC-04 | Hybrid Intelligence | 1, 2 | ✅ Done | Cross-source synthesis, discrepancy detection, planner/router |
+| EPIC-05 | Memory and Context | 2 | ✅ Done | Session artifacts, context compression, multi-hop queries |
+| EPIC-06 | Enterprise Readiness | 4 | 🔜 Planned | SSO, RBAC, audit logging, PII masking, on-premise |
+| EPIC-07 | Commerce Connectors | 4+ | 🔜 Planned | Marketplace API integrations (Amazon SP-API, Shopify), unified commerce schema, multi-tenant RLS, background sync |
+| EPIC-08 | Smart Agent Auto-Routing | 3 | ✅ Done | Replace static persona picker with intelligent per-question agent routing, per-agent badges and rendering |
+| EPIC-09 | LangGraph Deep Research | 3+ | ✅ Done | Multi-step reasoning graph replacing single-shot Deep Research prompt — query planner, parallel retrieval, gap detection, streaming synthesis |
 
 ---
 
@@ -1419,9 +1420,65 @@ As a user, I want Finance Expert responses to show styled metric tables, Lawyer 
 
 ---
 
+### EPIC-09: LangGraph Deep Research
+
+---
+
+#### DOCBOT-901: LangGraph Deep Research State Machine Core
+
+**Story**
+As a user enabling Deep Research, I want DocBot to decompose my question, search across multiple focused sub-questions, detect coverage gaps, and synthesize a comprehensive answer — instead of a single-shot LLM response.
+
+**Phase**: 3+
+**Priority**: Must Have
+**Story Points**: 8
+**Dependencies**: None
+**Status**: ✅ Done (SCRUM-405/409, merged 2026-03-24)
+
+---
+
+#### DOCBOT-902: Streaming Queue Bridge + /api/chat Wiring
+
+**Story**
+As a developer, I want the Deep Research graph to stream progress events and answer tokens over the existing SSE transport so the user sees live step updates and token streaming instead of a blank wait.
+
+**Phase**: 3+
+**Priority**: Must Have
+**Story Points**: 5
+**Dependencies**: DOCBOT-901
+**Status**: ✅ Done (SCRUM-410, merged 2026-03-24)
+
+---
+
+#### DOCBOT-903: Frontend Deep Research Progress Strip UI
+
+**Story**
+As a user in Deep Research mode, I want to see a live progress strip showing which step the graph is on (planning, searching, evaluating, composing) so I understand what's happening instead of watching a spinner.
+
+**Phase**: 3+
+**Priority**: Must Have
+**Story Points**: 3
+**Dependencies**: DOCBOT-902
+**Status**: ✅ Done (SCRUM-411, merged 2026-03-24)
+
+---
+
+#### DOCBOT-904: Unit + Integration Tests for Deep Research
+
+**Story**
+As a developer, I want comprehensive unit tests for `_parse_json_list` and `gap_router` so that CI catches regressions in the core graph logic without requiring API keys.
+
+**Phase**: 3+
+**Priority**: Must Have
+**Story Points**: 3
+**Dependencies**: DOCBOT-901
+**Status**: ✅ Done (SCRUM-412, merged 2026-03-24)
+
+---
+
 ## 4. Sprint Plan — Phase 0 + Phase 1
 
-### Current Status (as of 2026-03-23)
+### Current Status (as of 2026-03-24)
 
 | Sprint | Tickets | Points | Status |
 |--------|---------|--------|--------|
@@ -1434,14 +1491,37 @@ As a user, I want Finance Expert responses to show styled metric tables, Lawyer 
 | Phase 2 Sprint 1 | DOCBOT-501, 503, 502, 504, 305, 405 | 44 | ✅ Complete |
 | Phase 2 Bug Fixes | Chart rendering (Qwen3 `<think>` strip), Autopilot auto-detect nudge | — | ✅ Complete |
 | Phase 3 Sprint 1 | DOCBOT-801, 802, 803, 804, 805 | 18 | ✅ Complete |
+| Phase 3 Fixes | Persona format contract removal, routing fallback fix, AcroForm RAG fix, SSE streaming, parallel retrieval | — | ✅ Complete |
+| EPIC-09 Sprint 1 | DOCBOT-901, 902, 903, 904 | 19 | ✅ Complete |
 
-**Total delivered**: 179 story points across 27 tickets + full test suite (232 tests) + GitHub Actions CI
+**Total delivered**: 198 story points across 31 tickets + full test suite (263 tests) + GitHub Actions CI
 
-**Phase 2 Complete** — All 6 Phase 2 tickets shipped and merged to `main`. Two post-ship bugs resolved:
+---
+
+**Phase 2 Complete** — All 6 Phase 2 tickets shipped. Two post-ship bugs resolved:
 - Fixed DB chat charts not rendering (Qwen3 `<think>` blocks in generated Python broke E2B sandbox execution)
 - Added Autopilot auto-detect nudge (keyword-triggered suggestion banner above input)
 
-**Phase 3 Complete** — EPIC-08: Smart Agent Auto-Routing (DOCBOT-801–805, 18 points). Replaced static persona picker with intelligent per-question routing (routeQuestion() keyword scorer), structured output contracts per agent (OUTPUT FORMAT CONTRACT in persona_def), AUTO/Manual sidebar toggle, colored agent badges on messages, and per-agent response rendering (Finance tables, Lawyer highlights, Doctor callouts).
+**Phase 3 Complete** — EPIC-08: Smart Agent Auto-Routing (DOCBOT-801–805, 18 points). Replaced static persona picker with intelligent per-question routing (routeQuestion() keyword scorer), AUTO/Manual sidebar toggle, colored agent badges on messages, per-agent response rendering.
+
+**Phase 3 Post-Ship Fixes (2026-03-24)**:
+- Removed rigid OUTPUT FORMAT CONTRACT from all personas — was forcing identical rigid sections on every response. Personas now tone-only; Deep Research toggle enables structured output.
+- Fixed routing fallback: low-confidence routing now falls back to Generalist (not upload-recommended persona)
+- Fixed AcroForm field extraction: fillable PDFs (LCA, I-9, tax forms) now have widget values extracted before chunking — was invisible to `fitz.get_text()`
+- Added `api/utils/query_expansion.py`: static synonym expansion for short queries (no LLM calls) — "His position?" now searches 6 parallel variants
+- Converted `/api/chat` from buffered JSON to SSE streaming — eliminates Railway 30s timeout on Deep Research
+- Parallelized multi-query retrieval via `ThreadPoolExecutor + asyncio.gather` — reduced retrieval latency ~75%
+
+**EPIC-09 Complete — LangGraph Deep Research (DOCBOT-901–904, 19 points)**:
+Replaced single-shot `DEEP_RESEARCH_ADDON` prompt with a proper 5-node LangGraph state machine:
+- `query_planner` (LLM #1): decomposes question into 3–5 focused sub-questions
+- `parallel_retriever`: concurrent vector search per sub-question using synonym expansion
+- `evidence_evaluator`: deterministic coverage scoring — identifies gaps
+- `gap_router`: loops back to retriever if gaps exist and iterations < 2 (0 LLM calls)
+- `synthesizer` (LLM #2): streams comprehensive structured answer with per-section citations
+- asyncio.Queue bridge streams progress events + tokens to frontend in real time
+- Frontend progress strip: 🧠 → 🔍 → ✅ → 📝 with live step messages
+- Max 2 LLM calls per request (hard ceiling)
 
 ---
 
