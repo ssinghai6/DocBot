@@ -5,7 +5,7 @@
   <img src="https://img.shields.io/badge/Python-3.12+-blue.svg" alt="Python">
   <img src="https://img.shields.io/badge/Next.js-16+-black.svg" alt="Next.js">
   <img src="https://img.shields.io/badge/FastAPI-0.115+-teal.svg" alt="FastAPI">
-  <img src="https://img.shields.io/badge/Tests-232 passing-brightgreen.svg" alt="Tests">
+  <img src="https://img.shields.io/badge/Tests-344 passing-brightgreen.svg" alt="Tests">
 </p>
 
 **Ask Anything About Your Data.**
@@ -25,6 +25,10 @@ DocBot is an AI-powered document + database analyst. Upload PDFs, connect a live
 | **Python Analysis + Charts** | E2B sandbox executes pandas/matplotlib code and returns charts — bar, line, scatter, heatmap, box, multi-panel |
 | **Structured Extraction** | Pulls typed values (financial metrics, legal dates, medical measurements) from any document using Gemini 2.5 Flash |
 | **Azure SQL / Entra Auth** | Enterprise Microsoft Entra (Azure AD) Service Principal authentication for Azure SQL |
+| **SAML 2.0 SSO** | SP-initiated SSO with Okta, Azure AD, or any SAML 2.0 IdP; JIT user provisioning on first login |
+| **Role-Based Access Control** | Three-tier roles (viewer / analyst / admin) enforced as FastAPI dependencies; admin UI for role management |
+| **Append-Only Audit Log** | Immutable PostgreSQL audit trail for all queries, logins, uploads, and connection events with CSV export |
+| **PII Masking** | Auto-detects and redacts names, emails, phone numbers, SSNs, credit cards before LLM synthesis |
 | **Session Artifact Store** | DataFrames and charts from every query persisted in PostgreSQL; referenceable across turns |
 | **Context Compression** | Sessions with 20+ messages automatically summarized so long conversations stay fast and cheap |
 | **Schema-Aware Table Selection** | Question embeddings matched against table embeddings (cosine similarity) so the right tables are always selected — even with cryptic names like `cust_ord_hdr_rec` |
@@ -183,6 +187,56 @@ Connect to Azure SQL Database using Service Principal credentials — no usernam
 - Token injected via `SQL_COPT_SS_ACCESS_TOKEN` — credentials never appear in the connection string
 - ODBC Driver 18 for SQL Server included in Docker image
 
+### Enterprise SSO (SAML 2.0)
+
+SP-initiated SAML 2.0 SSO with any standards-compliant IdP (Okta, Azure AD, Google Workspace):
+
+- JIT user provisioning — users created on first login; no pre-registration needed
+- Session tokens stored in PostgreSQL with configurable TTL (default 8 hours)
+- Session cookie is `HttpOnly; SameSite=Lax` — no token exposure to JavaScript
+- SP metadata available at `GET /api/auth/saml/metadata` for IdP registration
+- App stays fully functional without an IdP configured (open mode)
+
+### Role-Based Access Control (RBAC)
+
+Three-tier role hierarchy enforced as FastAPI `Depends` dependencies:
+
+| Role | Permissions |
+|---|---|
+| **viewer** | Read query results and documents |
+| **analyst** | Run queries, manage own DB connections, upload documents (default for JIT-provisioned users) |
+| **admin** | Full access — audit log, user management, all connections |
+
+- Role enforcement is a no-op when SAML is not configured (open mode)
+- Admins can promote/demote users via the Admin Panel or `PATCH /admin/users/{user_id}/role`
+- Admin self-demotion guard prevents accidental lockout
+
+### Append-Only Audit Log
+
+Every security-relevant event written to an immutable PostgreSQL table:
+
+| Event | Logged When |
+|---|---|
+| `query` | SQL/NL query executed against a live DB connection |
+| `db_connect` | New database connection created |
+| `db_disconnect` | Database connection removed |
+| `upload` | File uploaded (PDF, CSV, SQLite) |
+| `login` | SSO login (SAML ACS success) |
+| `logout` | Session logout |
+
+- PostgreSQL `BEFORE UPDATE OR DELETE` trigger enforces immutability at the DB level
+- Admin export: `GET /admin/audit-log?format=csv` for compliance downloads
+- Writes are fire-and-forget — audit failures never block request handlers
+
+### PII Masking
+
+Sensitive data detected and redacted before it reaches the LLM:
+
+- Detects: full names, email addresses, phone numbers (US + international), SSNs, credit card numbers
+- Masks with typed placeholders: `[NAME]`, `[EMAIL]`, `[PHONE]`, `[SSN]`, `[CC_NUMBER]`
+- Runs on DB query results before answer generation
+- Configurable: can be toggled per-request via `mask_pii: true/false` in the request body
+
 ---
 
 ## Architecture
@@ -204,12 +258,17 @@ Connect to Azure SQL Database using Service Principal credentials — no usernam
 │  ┌─────────────┐  ┌──────────────┐  ┌────────────────────┐  │
 │  │autopilot_   │  │artifact_     │  │document_extractor  │  │
 │  │service      │  │service       │  │LangExtract+Gemini  │  │
-│  │(LangGraph)  │  │(DOCBOT-501)  │  │                    │  │
+│  │(LangGraph)  │  │              │  │                    │  │
+│  └─────────────┘  └──────────────┘  └────────────────────┘  │
+│  ┌─────────────┐  ┌──────────────┐  ┌────────────────────┐  │
+│  │auth_service │  │rbac_service  │  │audit_service       │  │
+│  │SAML 2.0 SSO │  │viewer/analyst│  │append-only log     │  │
+│  │JIT provision│  │/admin roles  │  │immutability trigger│  │
 │  └─────────────┘  └──────────────┘  └────────────────────┘  │
 │  ┌─────────────────────────────────────────────────────────┐ │
 │  │  utils/  encryption · ssrf_validator · sql_validator    │ │
 │  │          embeddings · few_shot_store · table_selector   │ │
-│  │          context_compressor                             │ │
+│  │          context_compressor · pii_masking               │ │
 │  └─────────────────────────────────────────────────────────┘ │
 └──────────────────────────┬──────────────────────────────────┘
                            │
@@ -233,6 +292,9 @@ Connect to Azure SQL Database using Service Principal credentials — no usernam
 | Vector Search | LangChain InMemoryVectorStore + PostgreSQL table_embeddings |
 | SQL Validation | sqlglot AST parsing |
 | Credential Encryption | Fernet (cryptography) |
+| SSO / Auth | python3-saml (SAML 2.0), HttpOnly session cookies |
+| RBAC | FastAPI Depends pattern, IntEnum role hierarchy |
+| PII Detection | spaCy NER + regex patterns |
 | DB Drivers | psycopg2, pymysql, pyodbc, azure-identity |
 | Python Sandbox | E2B Cloud |
 | Storage | PostgreSQL on Railway |
@@ -358,6 +420,53 @@ GET /api/db/schema/{connection_id}
 # Returns: { tables: [{ name, columns: [{ name, type }] }] }
 ```
 
+### Authentication (SSO)
+
+```bash
+# Initiate SSO login — redirects to IdP
+GET /api/auth/saml/login
+
+# SAML Assertion Consumer Service (IdP POSTs here)
+POST /api/auth/saml/acs
+# On success: sets HttpOnly docbot_session cookie, redirects to frontend
+
+# SP metadata for IdP registration
+GET /api/auth/saml/metadata
+
+# Current user info
+GET /api/auth/me
+# Returns: { authenticated: true, user: { id, email, name, role } }
+# Or:      { authenticated: false, saml_configured: false }
+
+# Logout (clears session cookie)
+POST /api/auth/logout
+```
+
+### Admin — User Management (admin role required)
+
+```bash
+# List all users
+GET /admin/users
+# Returns: { users: [{ id, email, name, role, provider, last_login_at }] }
+
+# Update a user's role
+PATCH /admin/users/{user_id}/role
+{ "role": "analyst" }    # viewer | analyst | admin
+# Returns: { success: true, user_id, new_role }
+```
+
+### Admin — Audit Log (admin role required)
+
+```bash
+# Paginated audit log viewer
+GET /admin/audit-log?limit=50&offset=0&event_type=login
+# Returns: { events: [{ id, event_type, session_id, user_id, detail, metadata_json, occurred_at }], total }
+
+# Download as CSV
+GET /admin/audit-log?format=csv
+# Returns: text/csv attachment
+```
+
 ---
 
 ## Environment Variables
@@ -371,8 +480,19 @@ GET /api/db/schema/{connection_id}
 | `E2B_API_KEY` | Yes | E2B sandbox API key |
 | `GEMINI_API_KEY` | Yes | Gemini API key for LangExtract document extraction |
 | `ALLOWED_ORIGINS` | No | Comma-separated CORS origins (defaults to localhost:3000) |
+| `FRONTEND_URL` | No | Frontend base URL for SAML redirect after login (defaults to http://localhost:3000) |
+| `SESSION_TTL_HOURS` | No | SSO session lifetime in hours (default: 8) |
+| `SAML_SP_ENTITY_ID` | SSO | SP Entity ID — e.g. `https://docbot.example.com` |
+| `SAML_SP_ACS_URL` | SSO | ACS callback URL — e.g. `https://docbot.example.com/api/auth/saml/acs` |
+| `SAML_IDP_ENTITY_ID` | SSO | IdP Entity ID from your IdP metadata |
+| `SAML_IDP_SSO_URL` | SSO | IdP SSO redirect URL |
+| `SAML_IDP_X509_CERT` | SSO | IdP public certificate (base64, no headers) |
+| `SAML_SP_X509_CERT` | SSO opt | SP certificate for signed requests |
+| `SAML_SP_PRIVATE_KEY` | SSO opt | SP private key for signed requests |
 
 Never commit `.env`. Never hardcode secrets.
+
+> **SSO setup**: Set all `SAML_*` variables to enable SSO. When unset, the app runs in open mode — all role checks pass and the login UI is hidden.
 
 ---
 
@@ -404,7 +524,7 @@ pytest tests/unit/ -v
 pytest tests/ -v -m "not external and not postgres"
 ```
 
-**232 tests passing** across:
+**344 tests passing** across:
 
 | File | Coverage |
 |---|---|
@@ -418,6 +538,16 @@ pytest tests/ -v -m "not external and not postgres"
 | `tests/unit/test_context_compressor.py` | Compression thresholds, summary injection, bypass |
 | `tests/unit/test_sandbox_service.py` | Chart type routing, metadata extraction, `<think>` stripping |
 | `tests/unit/test_autopilot_service.py` | Planner decomposition, executor routing, hard limits, SSE serialization |
+| `tests/unit/test_hybrid_service.py` | Intent classification, hybrid synthesis, discrepancy detection |
+| `tests/unit/test_hybrid_chat.py` | Hybrid chat routing, dual-citation format |
+| `tests/unit/test_personas.py` | Persona def completeness, response format contracts |
+| `tests/unit/test_code_generation.py` | Python codegen prompt construction, chart type injection |
+| `tests/unit/test_query_expansion.py` | NL query expansion, synonym injection |
+| `tests/unit/test_deep_research_service.py` | Multi-source research orchestration, citation dedup |
+| `tests/unit/test_pii_masking.py` | Name/email/phone/SSN/CC detection and redaction |
+| `tests/unit/test_auth_service.py` | SAML settings builder, session CRUD, JIT provisioning |
+| `tests/unit/test_audit_service.py` | Event types, DB write, fire-and-forget dispatcher, immutability DDL |
+| `tests/unit/test_rbac_service.py` | Role hierarchy, `require_role` dependency, wire-up |
 | `tests/integration/test_db_pipeline.py` | Full SQL pipeline against SQLite |
 | `tests/integration/test_file_upload_service.py` | PDF upload and chunk extraction |
 | `tests/integration/test_artifact_service.py` | SQLite-backed artifact round-trip |
@@ -459,6 +589,10 @@ Set all environment variables in the Railway and Vercel dashboards.
 - **Credential encryption**: All DB credentials Fernet-encrypted before PostgreSQL storage; never logged or passed to LLMs
 - **Entra auth**: Azure SQL token injection via `SQL_COPT_SS_ACCESS_TOKEN`; no credentials in connection string
 - **Autopilot hard limits**: Max 5 iterations and 90-second wall-clock timeout prevent runaway LLM loops
+- **SAML assertion validation**: `python3-saml` validates signatures, conditions, and recipient before trusting any assertion
+- **HttpOnly session cookies**: Session tokens inaccessible to JavaScript; `SameSite=Lax` prevents CSRF
+- **Immutable audit log**: PostgreSQL `BEFORE UPDATE OR DELETE` trigger blocks any modification of audit records at the DB level
+- **PII masking**: Personally identifiable information detected and redacted before reaching the LLM
 
 ---
 
@@ -467,12 +601,12 @@ Set all environment variables in the Railway and Vercel dashboards.
 ### Phase 3 (Next)
 - BigQuery, Snowflake, Redshift connectors
 - CSV / Google Sheets file upload as queryable data source
+- Smart Agent Auto-Routing — client-side keyword scoring selects the right expert persona automatically
 
 ### Phase 4
 - Standing Monitors — proactive alerts when doc-defined conditions breach in live data
-- SSO / SAML integration
-- Audit logging
-- PII masking before LLM synthesis
+- Multi-tenant workspace isolation
+- Scheduled reports and digest emails
 
 ---
 
