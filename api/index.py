@@ -110,6 +110,7 @@ db_connections_table = Table(
     Column("port", Integer, nullable=False),
     Column("dbname", String, nullable=False),
     Column("credentials_blob", Text, nullable=False),   # Fernet-encrypted JSON
+    Column("pii_masking_enabled", Boolean, server_default="false", nullable=False),  # DOCBOT-604
     Column("created_at", DateTime(timezone=True), server_default=func.now(), nullable=False),
 )
 

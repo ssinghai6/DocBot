@@ -100,6 +100,9 @@ class DBConnectionRequest(BaseModel):
     dbname: str
     user: Optional[str] = None
     password: Optional[str] = None
+    # PII masking — DOCBOT-604
+    pii_masking_enabled: bool = False
+
     # Entra auth (azure_sql only) — "entra_sp" or "entra_interactive"
     auth_type: Optional[str] = None
     # entra_sp fields
@@ -383,6 +386,7 @@ async def connect_database(
                     port=req.port,
                     dbname=req.dbname,
                     credentials_blob=creds_blob,
+                    pii_masking_enabled=req.pii_masking_enabled,
                 )
             )
 
@@ -733,6 +737,14 @@ async def run_sql_pipeline(
     execution_time_ms = int(time.time() * 1000) - start_ms
 
     result_dicts = [dict(zip(column_names, row)) for row in rows]
+
+    # ── Step 6.1: PII masking (DOCBOT-604) ───────────────────────────────
+    if conn_row.pii_masking_enabled:
+        from api.utils.pii_masking import mask_rows, detect_pii_summary
+        pii_found = detect_pii_summary(result_dicts)
+        if any(pii_found.values()):
+            logger.info("PII detected and masked — %s", pii_found)
+        result_dicts = mask_rows(result_dicts)
 
     # ── Step 6.5: Python code generation + E2B sandbox (DOCBOT-301/302) ──
     # Only runs when >= 5 rows; failure never blocks the main pipeline.
