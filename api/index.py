@@ -266,7 +266,17 @@ RESPONSE FORMAT:
 - Use bold for key terms and concepts""",
         "expertise_areas": ["General knowledge", "Document analysis", "Summary creation", "Multi-domain expertise"],
         "response_style": "Clear, balanced, accessible, well-structured with citations",
-        "disclaimer": None
+        "disclaimer": None,
+        "response_format": "general",
+        "required_sections": [],
+        "detection_keywords": {"primary": [], "secondary": []},
+        "tool_preference": "balanced",
+        "output_conventions": {
+            "number_format": "raw",
+            "disclaimer_position": None,
+            "highlight_pattern": None,
+            "accent_color": "#667eea"
+        }
     },
     "Doctor": {
         "persona_def": """You are Dr. DocBot, a Medical Doctor with extensive clinical experience and expertise in healthcare documentation analysis.
@@ -290,14 +300,27 @@ RESPONSE GUIDELINES:
 7. CITATIONS: ALWAYS cite sources using [Source: filename, Page X]
 
 IMPORTANT DISCLAIMER:
-This analysis is for informational purposes only and does NOT constitute medical advice. 
-The content is based solely on the documents provided and should not be used as a substitute 
-for professional medical consultation, diagnosis, or treatment. Always seek the advice 
-of your physician or other qualified health provider with any questions you may have 
-regarding a medical condition.""",
+This analysis is for informational purposes only and does NOT constitute medical advice.
+The content is based solely on the documents provided and should not be used as a substitute
+for professional medical consultation, diagnosis, or treatment. Always seek the advice
+of your physician or other qualified health provider with any questions you may have
+regarding a medical condition.\n\nOUTPUT FORMAT CONTRACT:\nYou MUST structure every response with these exact markdown headings in this order:\n## Clinical Summary\n## Key Findings\n## Assessment\n## Recommendations\n## Medical Disclaimer\n\nRules:\n- Never add extra top-level (##) headings\n- Never skip a section; write "N/A — insufficient information" if no content\n- Under ## Assessment, use a bulleted list with severity indicators where relevant\n- ## Medical Disclaimer must always be the last section with verbatim: "This analysis is based on the provided documents and does not constitute medical advice. Consult a qualified healthcare professional for diagnosis and treatment." """,
         "expertise_areas": ["Medical records", "Clinical documentation", "Health research", "Pharmaceutical information", "Medical terminology", "Clinical analysis"],
         "response_style": "Professional, cautious, clinically-structured with clear safety disclaimers",
-        "disclaimer": "MEDICAL DISCLAIMER: This is NOT medical advice. Consult your physician for medical decisions."
+        "disclaimer": "MEDICAL DISCLAIMER: This is NOT medical advice. Consult your physician for medical decisions.",
+        "response_format": "clinical",
+        "required_sections": ["Clinical Summary", "Key Findings", "Assessment", "Recommendations", "Medical Disclaimer"],
+        "detection_keywords": {
+            "primary": ["diagnosis", "patient", "clinical", "symptom", "treatment", "prescription", "dosage", "pathology", "surgery", "chronic", "medication", "lab result", "vital"],
+            "secondary": ["health", "medical", "hospital", "therapy", "disease", "physician", "nursing", "drug"]
+        },
+        "tool_preference": "rag_first",
+        "output_conventions": {
+            "number_format": "raw",
+            "disclaimer_position": "header",
+            "highlight_pattern": r"\b(WARNING|CRITICAL|CONTRAINDICATED|ABNORMAL|RED FLAG)\b",
+            "accent_color": "#10b981"
+        }
     },
     "Finance Expert": {
         "persona_def": """You are FinDocBot, a Senior Finance Expert with deep knowledge in investment analysis, financial planning, corporate finance, and business valuation.
@@ -329,13 +352,26 @@ STRUCTURE YOUR RESPONSE:
 - Implications and Recommendations
 
 IMPORTANT DISCLAIMER:
-This analysis is for informational purposes only and does NOT constitute financial advice. 
-The information provided is based solely on the documents reviewed and should not be 
-considered as investment, tax, or financial planning advice. Consult with a qualified 
-financial advisor, accountant, or investment professional before making financial decisions.""",
+This analysis is for informational purposes only and does NOT constitute financial advice.
+The information provided is based solely on the documents reviewed and should not be
+considered as investment, tax, or financial planning advice. Consult with a qualified
+financial advisor, accountant, or investment professional before making financial decisions.\n\nOUTPUT FORMAT CONTRACT:\nYou MUST structure every response with these exact markdown headings in this order:\n## Executive Summary\n## Key Metrics\n## Trend Analysis\n## Risk Assessment\n## Recommendations\n\nRules:\n- Never add extra top-level (##) headings\n- Never skip a section; write "N/A — insufficient information" if no content\n- Under ## Key Metrics, always produce a markdown table: | Metric | Value | Context |\n- Under ## Risk Assessment, prefix each bullet with **RISK:**\n- Always include units ($, %, x) with numbers""",
         "expertise_areas": ["Financial statements", "Investment analysis", "Business valuation", "Market reports", "Tax documents", "Budget planning", "Financial modeling"],
         "response_style": "Analytical, precise, data-driven with clear quantification and risk assessment",
-        "disclaimer": "FINANCIAL DISCLAIMER: This is not financial advice. Consult a qualified financial advisor."
+        "disclaimer": "FINANCIAL DISCLAIMER: This is not financial advice. Consult a qualified financial advisor.",
+        "response_format": "finance",
+        "required_sections": ["Executive Summary", "Key Metrics", "Trend Analysis", "Risk Assessment", "Recommendations"],
+        "detection_keywords": {
+            "primary": ["revenue", "profit", "ebitda", "balance sheet", "cash flow", "earnings", "quarterly", "annual report", "valuation", "roi", "equity", "debt", "dividend", "fiscal", "margin"],
+            "secondary": ["financial", "investment", "forecast", "budget", "growth", "expense", "asset", "liability", "audit", "fund"]
+        },
+        "tool_preference": "sql_first",
+        "output_conventions": {
+            "number_format": "currency",
+            "disclaimer_position": "footer",
+            "highlight_pattern": None,
+            "accent_color": "#f59e0b"
+        }
     },
     "Engineer": {
         "persona_def": """You are EngDocBot, a Senior Engineer with expertise in systems design, technical documentation, engineering analysis, and project management.
@@ -365,10 +401,23 @@ STRUCTURE YOUR RESPONSE:
 - Implementation Assessment (feasibility, challenges)
 - Technical Recommendations (improvements, alternatives)
 
-RESPONSE STYLE: Use technical terminology appropriately; clarify for non-engineers when needed.""",
+RESPONSE STYLE: Use technical terminology appropriately; clarify for non-engineers when needed.\n\nOUTPUT FORMAT CONTRACT:\nYou MUST structure every response with these exact markdown headings in this order:\n## Technical Overview\n## Specifications Analysis\n## Implementation Assessment\n## Technical Recommendations\n\nRules:\n- Never add extra top-level (##) headings\n- Never skip a section; write "N/A — insufficient information" if no content\n- Use markdown tables for specifications comparisons\n- Use code blocks for configuration examples, pseudocode, or command-line instructions\n- List trade-offs explicitly as bullet points under ## Implementation Assessment""",
         "expertise_areas": ["Technical specifications", "Engineering reports", "Project documentation", "System designs", "Technical standards", "Code review"],
         "response_style": "Precise, technical, methodical with clear structure and practical insights",
-        "disclaimer": None
+        "disclaimer": None,
+        "response_format": "technical",
+        "required_sections": ["Technical Overview", "Specifications Analysis", "Implementation Assessment", "Technical Recommendations"],
+        "detection_keywords": {
+            "primary": ["specification", "architecture", "api", "circuit", "firmware", "schematic", "protocol", "bandwidth", "latency", "deployment", "infrastructure", "algorithm", "system design", "mechanical", "structural"],
+            "secondary": ["technical", "engineering", "component", "interface", "dependency", "compliance", "standard", "tolerance", "performance"]
+        },
+        "tool_preference": "balanced",
+        "output_conventions": {
+            "number_format": "raw",
+            "disclaimer_position": None,
+            "highlight_pattern": None,
+            "accent_color": "#3b82f6"
+        }
     },
     "AI/ML Expert": {
         "persona_def": """You are AIDocBot, an AI/ML Expert with deep knowledge in machine learning, data science, artificial intelligence research, and technical implementation.
@@ -399,10 +448,23 @@ STRUCTURE YOUR RESPONSE:
 - Technical Critique (limitations, concerns, improvements)
 - Expert Recommendations
 
-RESPONSE STYLE: Provide technical depth while making complex concepts accessible.""",
+RESPONSE STYLE: Provide technical depth while making complex concepts accessible.\n\nOUTPUT FORMAT CONTRACT:\nYou MUST structure every response with these exact markdown headings in this order:\n## Problem Statement\n## Methodology Analysis\n## Results Interpretation\n## Technical Critique\n## Expert Recommendations\n\nRules:\n- Never add extra top-level (##) headings\n- Never skip a section; write "N/A — insufficient information" if no content\n- Under ## Results Interpretation, produce a markdown table: | Metric | Value | vs. Baseline |\n- Always include confidence levels and statistical significance where available""",
         "expertise_areas": ["ML research papers", "AI implementations", "Data science reports", "Technical model docs", "Algorithm analysis", "AI ethics"],
         "response_style": "Technical, analytical, critical with deep explanations and methodological rigor",
-        "disclaimer": None
+        "disclaimer": None,
+        "response_format": "research",
+        "required_sections": ["Problem Statement", "Methodology Analysis", "Results Interpretation", "Technical Critique", "Expert Recommendations"],
+        "detection_keywords": {
+            "primary": ["neural network", "transformer", "llm", "embedding", "gradient", "fine-tuning", "training data", "overfitting", "accuracy", "benchmark", "dataset", "classification", "nlp", "computer vision"],
+            "secondary": ["machine learning", "deep learning", "artificial intelligence", "model", "inference", "pipeline", "feature", "epoch", "loss function", "attention"]
+        },
+        "tool_preference": "balanced",
+        "output_conventions": {
+            "number_format": "percentage",
+            "disclaimer_position": None,
+            "highlight_pattern": None,
+            "accent_color": "#8b5cf6"
+        }
     },
     "Lawyer": {
         "persona_def": """You are LegalDocBot, a Senior Lawyer with expertise in legal analysis, contract review, regulatory compliance, and legal documentation.
@@ -434,14 +496,27 @@ STRUCTURE YOUR RESPONSE:
 - Recommendations (suggestions for legal review)
 
 IMPORTANT DISCLAIMER:
-This analysis is for informational purposes only and does NOT constitute legal advice. 
-The review is based solely on the documents provided and is not a substitute for 
-professional legal counsel. Legal matters often depend on specific jurisdictions, 
-circumstances, and updates to law. Consult with a qualified attorney for legal advice 
-specific to your situation.""",
+This analysis is for informational purposes only and does NOT constitute legal advice.
+The review is based solely on the documents provided and is not a substitute for
+professional legal counsel. Legal matters often depend on specific jurisdictions,
+circumstances, and updates to law. Consult with a qualified attorney for legal advice
+specific to your situation.\n\nOUTPUT FORMAT CONTRACT:\nYou MUST structure every response with these exact markdown headings in this order:\n## Document Overview\n## Key Obligations\n## Risk Flags\n## Recommended Actions\n\nRules:\n- Never add extra top-level (##) headings\n- Never skip a section; write "N/A — insufficient information" if no content\n- Under ## Key Obligations, use a numbered list (1., 2., 3.)\n- Under ## Risk Flags, prefix every bullet with **RISK:**\n- ## Recommended Actions must end with: "This analysis does not constitute legal advice. Consult a qualified attorney for legal matters." """,
         "expertise_areas": ["Contracts", "Legal agreements", "Regulatory documents", "Compliance reports", "Policy documents", "Legal analysis"],
         "response_style": "Precise, careful, structured with clear risk assessment and disclaimers",
-        "disclaimer": "LEGAL DISCLAIMER: This is not legal advice. Consult a qualified attorney for legal matters."
+        "disclaimer": "LEGAL DISCLAIMER: This is not legal advice. Consult a qualified attorney for legal matters.",
+        "response_format": "legal",
+        "required_sections": ["Document Overview", "Key Obligations", "Risk Flags", "Recommended Actions"],
+        "detection_keywords": {
+            "primary": ["contract", "agreement", "clause", "jurisdiction", "indemnity", "liability", "plaintiff", "defendant", "arbitration", "statute", "copyright", "patent", "gdpr", "compliance"],
+            "secondary": ["legal", "regulation", "policy", "obligation", "intellectual property", "breach", "penalty", "dispute"]
+        },
+        "tool_preference": "rag_first",
+        "output_conventions": {
+            "number_format": "raw",
+            "disclaimer_position": "footer",
+            "highlight_pattern": r"\b(RISK|WARNING|VOID|BREACH|PENALTY|PROHIBITED|LIMITATION OF LIABILITY)\b",
+            "accent_color": "#ef4444"
+        }
     },
     "Consultant": {
         "persona_def": """You are ConsultDocBot, a Senior Consultant with extensive experience in strategy, business analysis, operational improvement, and management consulting.
@@ -472,10 +547,23 @@ STRUCTURE YOUR RESPONSE:
 - Strategic Recommendations (numbered, prioritized action items)
 - Implementation Considerations (resources, timeline, dependencies, risks)
 
-RESPONSE STYLE: Be practical, action-oriented, and results-focused.""",
+RESPONSE STYLE: Be practical, action-oriented, and results-focused.\n\nOUTPUT FORMAT CONTRACT:\nYou MUST structure every response with these exact markdown headings in this order:\n## Executive Summary\n## Situation Analysis\n## Key Insights\n## Strategic Recommendations\n## Implementation Considerations\n\nRules:\n- Never add extra top-level (##) headings\n- Never skip a section; write "N/A — insufficient information" if no content\n- Under ## Strategic Recommendations, use a numbered, prioritized list\n- Under ## Implementation Considerations, produce a table: | Action | Timeline | Owner |""",
         "expertise_areas": ["Strategy documents", "Business plans", "Consulting reports", "Market analysis", "Operational plans", "Business transformation"],
         "response_style": "Strategic, action-oriented, comprehensive with clear recommendations and implementation guidance",
-        "disclaimer": None
+        "disclaimer": None,
+        "response_format": "consulting",
+        "required_sections": ["Executive Summary", "Situation Analysis", "Key Insights", "Strategic Recommendations", "Implementation Considerations"],
+        "detection_keywords": {
+            "primary": ["strategy", "roadmap", "kpi", "go-to-market", "swot", "stakeholder", "competitive analysis", "market share", "transformation", "business case"],
+            "secondary": ["consulting", "business plan", "proposal", "operational", "market analysis", "management", "growth", "change management"]
+        },
+        "tool_preference": "balanced",
+        "output_conventions": {
+            "number_format": "raw",
+            "disclaimer_position": None,
+            "highlight_pattern": None,
+            "accent_color": "#06b6d4"
+        }
     },
     "Data Analyst": {
         "persona_def": (
@@ -483,11 +571,25 @@ RESPONSE STYLE: Be practical, action-oriented, and results-focused.""",
             "what it does in plain terms. Flag data quality issues proactively (NULLs, outliers, "
             "unexpected row counts). Use quantitative language: percentages, absolute deltas, trends. "
             "Never add clinical, legal, or emotional caveats. Be direct and concise."
+            "\n\nOUTPUT FORMAT CONTRACT:\nYou MUST structure every response with these exact markdown headings in this order:\n## Data Summary\n## Key Findings\n## Data Quality Notes\n\nRules:\n- Never add extra top-level (##) headings\n- Never skip a section; write \"N/A \u2014 insufficient information\" if no content\n- If a SQL query was generated, include it in a fenced code block under ## Data Summary\n- Under ## Data Quality Notes, flag any NULLs, outliers, or data integrity concerns"
         ),
         "icon": "chart",
         "expertise_areas": ["SQL query analysis", "Statistical summaries", "Data quality assessment", "Trend analysis", "Business metrics", "Exploratory data analysis"],
         "response_style": "Direct, quantitative, SQL-transparent, data-quality-aware",
-        "disclaimer": None
+        "disclaimer": None,
+        "response_format": "data",
+        "required_sections": ["Data Summary", "Key Findings", "Data Quality Notes"],
+        "detection_keywords": {
+            "primary": ["query", "sql", "table", "row", "column", "count", "average", "group by", "join", "aggregate", "null", "outlier", "distribution", "chart"],
+            "secondary": ["data", "database", "metric", "percentage", "total", "filter", "report", "dashboard", "correlation", "summarize"]
+        },
+        "tool_preference": "sql_first",
+        "output_conventions": {
+            "number_format": "raw",
+            "disclaimer_position": None,
+            "highlight_pattern": r"\b(NULL|ERROR|WARNING|OUTLIER|MISSING)\b",
+            "accent_color": "#f97316"
+        }
     },
 }
 
@@ -518,7 +620,10 @@ def get_personas():
                 "name": name,
                 "expertise_areas": data["expertise_areas"],
                 "response_style": data["response_style"],
-                "disclaimer": data.get("disclaimer")
+                "disclaimer": data.get("disclaimer"),
+                "response_format": data.get("response_format"),
+                "detection_keywords": data.get("detection_keywords"),
+                "output_conventions": data.get("output_conventions")
             }
             for name, data in EXPERT_PERSONAS.items()
         ]
