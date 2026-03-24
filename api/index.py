@@ -895,6 +895,25 @@ async def chat(request: ChatRequest):
         raise HTTPException(status_code=500, detail="Groq API key not configured")
 
     async def event_stream():
+        # ── Deep Research path: LangGraph multi-step reasoning graph ─────────
+        if request.deep_research:
+            try:
+                from api.deep_research_service import run_deep_research
+                persona_data = EXPERT_PERSONAS.get(request.persona, EXPERT_PERSONAS["Generalist"])
+                async for sse_line in run_deep_research(
+                    question=request.message,
+                    session_id=request.session_id,
+                    persona_def=persona_data["persona_def"],
+                    vector_store=VECTOR_STORES[request.session_id],
+                    groq_api_key=groq_api_key,
+                ):
+                    yield sse_line
+            except Exception as e:
+                logger.exception("Deep Research error:")
+                yield f"data: {json.dumps({'type': 'error', 'detail': safe_error_message(e)})}\n\n"
+            return
+
+        # ── Standard single-shot path ─────────────────────────────────────────
         from langchain_groq import ChatGroq
         from langchain_core.prompts import ChatPromptTemplate, MessagesPlaceholder
         from langchain_core.messages import HumanMessage, AIMessage
