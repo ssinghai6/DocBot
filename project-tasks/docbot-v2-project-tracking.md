@@ -1433,7 +1433,7 @@ As a user, I want Finance Expert responses to show styled metric tables, Lawyer 
 | Enterprise Add-on | DOCBOT-208 (Azure SQL / Entra auth) | 8 | ✅ Complete |
 | Phase 2 Sprint 1 | DOCBOT-501, 503, 502, 504, 305, 405 | 44 | ✅ Complete |
 | Phase 2 Bug Fixes | Chart rendering (Qwen3 `<think>` strip), Autopilot auto-detect nudge | — | ✅ Complete |
-| Phase 3 Sprint 1 | DOCBOT-801, 802, 803, 804, 805 | 18 | 🔵 In Planning |
+| Phase 3 Sprint 1 | DOCBOT-801, 802, 803, 804, 805 | 18 | ✅ Complete |
 
 **Total delivered**: 179 story points across 27 tickets + full test suite (232 tests) + GitHub Actions CI
 
@@ -1441,7 +1441,7 @@ As a user, I want Finance Expert responses to show styled metric tables, Lawyer 
 - Fixed DB chat charts not rendering (Qwen3 `<think>` blocks in generated Python broke E2B sandbox execution)
 - Added Autopilot auto-detect nudge (keyword-triggered suggestion banner above input)
 
-**Phase 3 (in planning)** — EPIC-08: Smart Agent Auto-Routing (DOCBOT-801–805, 18 points). Replaces static persona picker with intelligent per-question routing, structured output contracts, per-agent response rendering.
+**Phase 3 Complete** — EPIC-08: Smart Agent Auto-Routing (DOCBOT-801–805, 18 points). Replaced static persona picker with intelligent per-question routing (routeQuestion() keyword scorer), structured output contracts per agent (OUTPUT FORMAT CONTRACT in persona_def), AUTO/Manual sidebar toggle, colored agent badges on messages, and per-agent response rendering (Finance tables, Lawyer highlights, Doctor callouts).
 
 ---
 
