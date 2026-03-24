@@ -347,6 +347,7 @@ async def hybrid_chat(
     expert_personas: dict,
     vector_stores: dict,
     extracted_fields: list | None = None,
+    deep_research: bool = False,
 ) -> AsyncGenerator[str, None]:
     """Hybrid chat pipeline: intent classification → SQL + RAG → synthesis.
 
@@ -428,6 +429,10 @@ async def hybrid_chat(
         expert_personas.get(persona, expert_personas.get("Generalist", {}))
         .get("persona_def", "You are a helpful data analyst.")
     )
+
+    if deep_research:
+        from api.index import DEEP_RESEARCH_ADDON
+        persona_def = persona_def + DEEP_RESEARCH_ADDON
 
     doc_note = ""
     sql_note = ""
