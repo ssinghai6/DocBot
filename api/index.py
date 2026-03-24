@@ -1552,3 +1552,54 @@ async def hybrid_chat_route(request: HybridChatRequest):
             yield f"data: {json.dumps({'type': 'error', 'detail': 'An internal error occurred.'})}\n\n"
 
     return StreamingResponse(event_stream(), media_type="text/event-stream")
+
+
+# ---------------------------------------------------------------------------
+# DOCBOT-405: Analytical Autopilot
+# ---------------------------------------------------------------------------
+
+
+class AutopilotRequest(BaseModel):
+    session_id: str
+    connection_id: str
+    question: str
+    persona: str = "Generalist"
+
+
+@app.post("/api/autopilot/run")
+async def autopilot_run(request: AutopilotRequest):
+    """DOCBOT-405 — Analytical Autopilot: plan → execute (≤5 steps) → synthesise.
+
+    Returns a StreamingResponse (text/event-stream) with SSE chunks:
+      {type: "plan",    steps: [...], content: "N steps planned"}
+      {type: "step",    step_num, tool, step_label, content, artifact_id?, chart_b64?, error?}
+      {type: "answer",  content: "<markdown answer>"}
+      {type: "done",    citations: [...]}
+      {type: "warning", content: "..."}   -- non-fatal (e.g. timeout)
+      {type: "error",   content: "..."}   -- fatal abort
+    """
+    from api.autopilot_service import run_autopilot
+
+    async def event_stream():
+        try:
+            async for chunk in run_autopilot(
+                question=request.question,
+                session_id=request.session_id,
+                connection_id=request.connection_id,
+                persona=request.persona,
+                db_connections_table=db_connections_table,
+                schema_cache_table=schema_cache_table,
+                query_history_table=query_history_table,
+                query_embeddings_table=query_embeddings_table,
+                session_artifacts_table=session_artifacts_table,
+                table_embeddings_table=table_embeddings_table,
+                async_session_factory=async_session_factory,
+                expert_personas=EXPERT_PERSONAS,
+                vector_stores=VECTOR_STORES,
+            ):
+                yield chunk
+        except Exception as exc:
+            logger.error("autopilot_run error: %s", type(exc).__name__)
+            yield f"data: {json.dumps({'type': 'error', 'content': 'An internal error occurred.'})}\n\n"
+
+    return StreamingResponse(event_stream(), media_type="text/event-stream")
