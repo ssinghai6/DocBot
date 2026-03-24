@@ -829,7 +829,7 @@ export default function Home() {
     const handleKeyDown = (e: KeyboardEvent) => {
       // Ctrl/Cmd + Enter to send
       if ((e.ctrlKey || e.metaKey) && e.key === 'Enter') {
-        if (input.trim() && sessionId && !isLoading) {
+        if (input.trim() && (sessionId || isDbConnected) && !isLoading) {
           handleSendMessage();
         }
       }
@@ -842,7 +842,7 @@ export default function Home() {
 
     window.addEventListener('keydown', handleKeyDown);
     return () => window.removeEventListener('keydown', handleKeyDown);
-  }, [input, sessionId, isLoading]);
+  }, [input, sessionId, isDbConnected, isLoading]);
 
   const handleFileUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
     if (!e.target.files || e.target.files.length === 0) return;
@@ -1260,7 +1260,29 @@ export default function Home() {
     }
 
     // ── Document chat path: SSE streaming /api/chat ──────────────────────
+    // Guard: this path requires an active PDF session. If only a DB is
+    // connected (no PDF uploaded) we must not fall through here — the DB
+    // path above would have already returned. If we somehow reach this
+    // point without a session ID, bail out cleanly.
+    if (!sessionId) {
+      setIsLoading(false);
+      showToast("error", "Please upload a PDF document before chatting.");
+      return;
+    }
+
     try {
+      // Pre-push an empty assistant message so tokens are appended to the
+      // correct bubble. Without this the stream tokens would be appended to
+      // the last user message, causing raw markdown to appear inside the
+      // user's bubble instead of a proper assistant response.
+      const assistantMsg: Message = {
+        role: "assistant",
+        content: "",
+        timestamp: new Date(),
+        agentPersona: personaToSend,
+      };
+      setMessages(prev => [...prev, assistantMsg]);
+
       const response = await fetch('/api/chat', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
