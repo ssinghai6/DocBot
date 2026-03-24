@@ -965,6 +965,9 @@ export default function Home() {
         const pref = EXPERT_PERSONAS[routing.persona as keyof typeof EXPERT_PERSONAS]?.tool_preference;
         if (pref === "sql_first" && isDbConnected) setChatMode("database");
         else if (pref === "rag_first" && sessionId) setChatMode("docs");
+      } else {
+        // Low confidence: fall back to Generalist rather than the upload-recommended persona
+        personaToSend = "Generalist";
       }
     }
 
@@ -1196,6 +1199,7 @@ export default function Home() {
             connection_id: connectionId,
             persona: personaToSend,
             has_docs: true,
+            deep_research: deepResearch,
           }),
         });
 
