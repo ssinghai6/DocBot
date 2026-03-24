@@ -292,6 +292,10 @@ async def generate_analysis_code(
         )
         code = response.choices[0].message.content.strip()
 
+        # Strip <think>...</think> reasoning blocks emitted by Qwen 3
+        import re as _re
+        code = _re.sub(r"<think>.*?</think>", "", code, flags=_re.DOTALL).strip()
+
         # Strip markdown fences if the model adds them anyway
         lines = code.splitlines()
         if lines and lines[0].startswith("```"):
