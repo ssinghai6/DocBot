@@ -1257,7 +1257,7 @@ export default function Home() {
       return;
     }
 
-    // ── Document chat path: buffered /api/chat ────────────────────────────
+    // ── Document chat path: SSE streaming /api/chat ──────────────────────
     try {
       const response = await fetch('/api/chat', {
         method: 'POST',
@@ -1271,28 +1271,47 @@ export default function Home() {
         })
       });
 
-      if (!response.ok) {
-        const errData = await response.json();
-        throw new Error(errData.detail || "Failed to send message");
-      }
+      if (!response.ok || !response.body) throw new Error(`HTTP ${response.status}`);
 
-      const data = await response.json();
-      setMessages(prev => [...prev, {
-        role: "assistant",
-        content: data.content,
-        citations: data.citations || [],
-        timestamp: new Date(),
-        agentPersona: personaToSend,
-      }]);
+      const reader = response.body.getReader();
+      const decoder = new TextDecoder();
+      let buffer = "";
+
+      while (true) {
+        const { done, value } = await reader.read();
+        if (done) break;
+        buffer += decoder.decode(value, { stream: true });
+        const lines = buffer.split("\n");
+        buffer = lines.pop() ?? "";
+        for (const line of lines) {
+          if (!line.startsWith("data: ")) continue;
+          const jsonStr = line.slice(6).trim();
+          if (!jsonStr) continue;
+          try {
+            const chunk = JSON.parse(jsonStr);
+            if (chunk.type === "token") {
+              setMessages(prev => prev.map((m, i) =>
+                i === prev.length - 1 ? { ...m, content: m.content + chunk.content } : m
+              ));
+            } else if (chunk.type === "citations") {
+              setMessages(prev => prev.map((m, i) =>
+                i === prev.length - 1 ? { ...m, citations: chunk.citations } : m
+              ));
+            } else if (chunk.type === "error") {
+              throw new Error(chunk.detail || "Chat failed");
+            }
+          } catch { /* skip malformed SSE lines */ }
+        }
+      }
     } catch (error: unknown) {
       const msg = error instanceof Error ? error.message : "Unknown error";
       console.error("Chat error:", error);
       showToast("error", `Error: ${msg}`);
-      setMessages(prev => [...prev, {
-        role: "assistant",
-        content: "I apologize, but I encountered an error processing your request. Please try again.",
-        timestamp: new Date()
-      }]);
+      setMessages(prev => prev.map((m, i) =>
+        i === prev.length - 1 && m.role === "assistant" && m.content === ""
+          ? { ...m, content: "I encountered an error processing your request. Please try again." }
+          : m
+      ));
     } finally {
       setIsLoading(false);
     }
