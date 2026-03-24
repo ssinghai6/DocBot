@@ -1,0 +1,124 @@
+# DocBot — On-Premise Docker Compose Stack (DOCBOT-605)
+#
+# Quick start:
+#   cp .env.example .env          # then fill in your API keys
+#   docker compose up -d
+#
+# With Ollama (fully air-gapped, no Groq required):
+#   DOCBOT_LLM_PROVIDER=ollama docker compose --profile ollama up -d
+#
+# Services:
+#   postgres   — PostgreSQL 15 (session store, connection registry, audit log)
+#   backend    — FastAPI on port 8000
+#   frontend   — Next.js on port 3000
+#   ollama     — (optional) local LLM server; activate with --profile ollama
+
+services:
+
+  # ── PostgreSQL ─────────────────────────────────────────────────────────────
+  postgres:
+    image: postgres:15-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-docbot}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-docbot_secret}
+      POSTGRES_DB: ${POSTGRES_DB:-docbot}
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-docbot} -d ${POSTGRES_DB:-docbot}"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    networks:
+      - docbot_net
+
+  # ── FastAPI backend ────────────────────────────────────────────────────────
+  backend:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    restart: unless-stopped
+    depends_on:
+      postgres:
+        condition: service_healthy
+    environment:
+      # PostgreSQL — automatically wired to the postgres service above
+      DATABASE_URL: postgresql://${POSTGRES_USER:-docbot}:${POSTGRES_PASSWORD:-docbot_secret}@postgres:5432/${POSTGRES_DB:-docbot}
+
+      # LLM provider — "groq" (default) or "ollama"
+      DOCBOT_LLM_PROVIDER: ${DOCBOT_LLM_PROVIDER:-groq}
+
+      # Groq (required when DOCBOT_LLM_PROVIDER=groq)
+      groq_api_key: ${GROQ_API_KEY:-}
+
+      # Ollama (required when DOCBOT_LLM_PROVIDER=ollama)
+      OLLAMA_BASE_URL: ${OLLAMA_BASE_URL:-http://ollama:11434}
+      OLLAMA_MODEL: ${OLLAMA_MODEL:-llama3.1:8b}
+
+      # HuggingFace embeddings
+      huggingface_api_key: ${HUGGINGFACE_API_KEY:-}
+
+      # Credential encryption key — MUST be set; generate with:
+      #   python -c "from cryptography.fernet import Fernet; print(Fernet.generate_key().decode())"
+      DB_ENCRYPTION_KEY: ${DB_ENCRYPTION_KEY}
+
+      # E2B sandbox (optional — Python analysis feature)
+      E2B_API_KEY: ${E2B_API_KEY:-}
+
+      # CORS — allow the frontend container
+      ALLOWED_ORIGINS: ${ALLOWED_ORIGINS:-http://localhost:3000}
+
+      PORT: "8000"
+    ports:
+      - "${BACKEND_PORT:-8000}:8000"
+    healthcheck:
+      test: ["CMD-SHELL", "curl -f http://localhost:8000/api/health || exit 1"]
+      interval: 15s
+      timeout: 10s
+      retries: 5
+      start_period: 30s
+    networks:
+      - docbot_net
+
+  # ── Next.js frontend ───────────────────────────────────────────────────────
+  frontend:
+    build:
+      context: .
+      dockerfile: Dockerfile.frontend
+    restart: unless-stopped
+    depends_on:
+      backend:
+        condition: service_healthy
+    environment:
+      # Points the Next.js proxy at the backend service
+      RAILWAY_BACKEND_URL: http://backend:8000
+
+      # Azure AD (optional — only needed for Azure SQL / Entra auth)
+      NEXT_PUBLIC_AZURE_CLIENT_ID: ${NEXT_PUBLIC_AZURE_CLIENT_ID:-}
+    ports:
+      - "${FRONTEND_PORT:-3000}:3000"
+    networks:
+      - docbot_net
+
+  # ── Ollama (optional — activate with --profile ollama) ────────────────────
+  ollama:
+    image: ollama/ollama:latest
+    profiles: ["ollama"]
+    restart: unless-stopped
+    volumes:
+      - ollama_data:/root/.ollama
+    ports:
+      - "11434:11434"
+    networks:
+      - docbot_net
+    # Pull the default model on first start
+    entrypoint: ["/bin/sh", "-c", "ollama serve & sleep 5 && ollama pull ${OLLAMA_MODEL:-llama3.1:8b} && wait"]
+
+volumes:
+  postgres_data:
+  ollama_data:
+
+networks:
+  docbot_net:
+    driver: bridge
