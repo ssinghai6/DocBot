@@ -99,6 +99,28 @@ messages_table = Table(
     Column("timestamp", DateTime(timezone=True), server_default=func.now(), nullable=False),
 )
 
+# ── EPIC-06: SSO / Auth tables (DOCBOT-601) ──────────────────────────────────
+
+users_table = Table(
+    "users", metadata,
+    Column("id", String, primary_key=True),                # UUID
+    Column("email", String, nullable=False, unique=True, index=True),
+    Column("name", String, nullable=False),
+    Column("provider", String, nullable=False),            # okta | azure_ad | saml
+    Column("role", String, server_default="analyst", nullable=False),  # viewer | analyst | admin
+    Column("last_login_at", DateTime(timezone=True)),
+    Column("created_at", DateTime(timezone=True), server_default=func.now(), nullable=False),
+)
+
+user_sessions_table = Table(
+    "user_sessions", metadata,
+    Column("id", String, primary_key=True),                # UUID
+    Column("user_id", String, nullable=False, index=True), # FK → users.id
+    Column("token", String, nullable=False, unique=True, index=True),
+    Column("expires_at", DateTime(timezone=True), nullable=False),
+    Column("created_at", DateTime(timezone=True), server_default=func.now(), nullable=False),
+)
+
 # ── EPIC-02: Database Connectivity tables ────────────────────────────────────
 
 db_connections_table = Table(
@@ -1870,3 +1892,134 @@ async def autopilot_run(request: AutopilotRequest):
             yield f"data: {json.dumps({'type': 'error', 'content': 'An internal error occurred.'})}\n\n"
 
     return StreamingResponse(event_stream(), media_type="text/event-stream")
+
+
+# ── EPIC-06: SSO / SAML Auth routes (DOCBOT-601) ─────────────────────────────
+
+from fastapi import Request, Response
+from fastapi.responses import RedirectResponse
+
+
+def _build_saml_request_data(request: Request, post_data: dict | None = None) -> dict:
+    """Convert a FastAPI Request into the dict python3-saml expects."""
+    return {
+        "https": "on" if request.url.scheme == "https" else "off",
+        "http_host": request.headers.get("host", request.url.hostname),
+        "script_name": request.url.path,
+        "get_data": dict(request.query_params),
+        "post_data": post_data or {},
+    }
+
+
+@app.get("/api/auth/saml/metadata")
+async def saml_metadata(request: Request):
+    """SP metadata endpoint — give this URL to your IdP (Okta / Azure AD)."""
+    from api.auth_service import get_sp_metadata, is_saml_configured
+    if not is_saml_configured():
+        raise HTTPException(
+            status_code=503,
+            detail="SAML is not configured. Set SAML_SP_ENTITY_ID, SAML_SP_ACS_URL, "
+                   "SAML_IDP_ENTITY_ID, SAML_IDP_SSO_URL, SAML_IDP_X509_CERT.",
+        )
+    metadata, error = get_sp_metadata()
+    if error:
+        raise HTTPException(status_code=500, detail=f"SP metadata error: {error}")
+    return Response(content=metadata, media_type="application/xml")
+
+
+@app.get("/api/auth/saml/login")
+async def saml_login(request: Request):
+    """Initiate SP-initiated SSO — redirects the browser to the IdP login page."""
+    from api.auth_service import build_saml_auth, is_saml_configured
+    if not is_saml_configured():
+        raise HTTPException(status_code=503, detail="SAML is not configured.")
+    try:
+        auth = build_saml_auth(_build_saml_request_data(request))
+        sso_url = auth.login()
+        return RedirectResponse(url=sso_url, status_code=302)
+    except Exception as exc:
+        logger.error("SAML login initiation failed: %s", exc)
+        raise HTTPException(status_code=500, detail="SSO initiation failed.")
+
+
+@app.post("/api/auth/saml/acs")
+async def saml_acs(request: Request, response: Response):
+    """Assertion Consumer Service — IdP POSTs the SAML response here.
+
+    On success: creates session, sets HttpOnly cookie, redirects to frontend.
+    On failure: returns 401.
+    """
+    from api.auth_service import (
+        build_saml_auth, process_acs, jit_provision_user,
+        create_user_session, is_saml_configured,
+    )
+    if not is_saml_configured():
+        raise HTTPException(status_code=503, detail="SAML is not configured.")
+
+    form = await request.form()
+    post_data = dict(form)
+
+    try:
+        auth = build_saml_auth(_build_saml_request_data(request, post_data))
+        attrs = process_acs(auth)
+    except ValueError as exc:
+        logger.warning("SAML ACS validation failed: %s", exc)
+        raise HTTPException(status_code=401, detail=str(exc))
+    except Exception as exc:
+        logger.error("SAML ACS unexpected error: %s", exc)
+        raise HTTPException(status_code=500, detail="SSO processing error.")
+
+    try:
+        user_id = await jit_provision_user(attrs, users_table, async_session_factory)
+        token = await create_user_session(user_id, user_sessions_table, async_session_factory)
+    except Exception as exc:
+        logger.error("Session creation failed after SSO: %s", exc)
+        raise HTTPException(status_code=500, detail="Session creation failed.")
+
+    frontend_url = os.getenv("FRONTEND_URL", "http://localhost:3000")
+    redirect = RedirectResponse(url=f"{frontend_url}/?sso=success", status_code=302)
+    redirect.set_cookie(
+        key="docbot_session",
+        value=token,
+        httponly=True,
+        secure=request.url.scheme == "https",
+        samesite="lax",
+        max_age=int(os.getenv("SESSION_TTL_HOURS", "8")) * 3600,
+        path="/",
+    )
+    logger.info("SSO login success: %s (%s)", attrs["email"], attrs["provider"])
+    return redirect
+
+
+@app.get("/api/auth/me")
+async def auth_me(request: Request):
+    """Return the currently authenticated user, or 401 if not logged in."""
+    from api.auth_service import get_user_from_session
+    token = request.cookies.get("docbot_session")
+    if not token:
+        raise HTTPException(status_code=401, detail="Not authenticated.")
+    user = await get_user_from_session(token, user_sessions_table, users_table, async_session_factory)
+    if not user:
+        raise HTTPException(status_code=401, detail="Session expired or invalid.")
+    return {
+        "id": user.id,
+        "email": user.email,
+        "name": user.name,
+        "role": user.role,
+        "provider": user.provider,
+    }
+
+
+@app.post("/api/auth/logout")
+async def auth_logout(request: Request):
+    """Invalidate the current session cookie."""
+    from api.auth_service import delete_session
+    token = request.cookies.get("docbot_session")
+    if token:
+        try:
+            await delete_session(token, user_sessions_table, async_session_factory)
+        except Exception as exc:
+            logger.warning("Session deletion error (ignored): %s", exc)
+    resp = JSONResponse({"status": "logged_out"})
+    resp.delete_cookie(key="docbot_session", path="/")
+    return resp
