@@ -3,6 +3,7 @@
 import React, { useState, useRef, useEffect, useCallback } from "react"
 import ReactMarkdown from "react-markdown"
 import remarkGfm from "remark-gfm"
+import { z } from "zod"
 import {
   Send, Upload, File, Loader2, Trash2,
   Sparkles, Brain, BookOpen, Stethoscope,
@@ -14,8 +15,52 @@ import {
   Terminal, Database, Eye, EyeOff, RefreshCw,
   Menu, XCircle, AlertTriangle, HelpCircle,
   Download, FileJson, FileText as FileTxt,
-  UserCog
+  UserCog, LogOut, ShieldCheck, Users, ClipboardList,
+  Filter, ChevronRight, Shield
 } from "lucide-react"
+
+// ── Zod schemas for API response validation ──────────────────────────────────
+
+const AuthMeSchema = z.object({
+  id: z.string(),
+  email: z.string(),
+  name: z.string(),
+  role: z.enum(["viewer", "analyst", "admin"]),
+  provider: z.string(),
+});
+type AuthUser = z.infer<typeof AuthMeSchema>;
+
+const AdminUserSchema = z.object({
+  id: z.string(),
+  email: z.string(),
+  name: z.string(),
+  role: z.enum(["viewer", "analyst", "admin"]),
+  provider: z.string(),
+  last_login_at: z.string().nullable(),
+  created_at: z.string().nullable(),
+});
+type AdminUser = z.infer<typeof AdminUserSchema>;
+
+const AdminUsersResponseSchema = z.object({
+  count: z.number(),
+  users: z.array(AdminUserSchema),
+});
+
+const AuditEventSchema = z.object({
+  id: z.string(),
+  event_type: z.string(),
+  session_id: z.string().nullable(),
+  user_id: z.string().nullable(),
+  detail: z.string().nullable(),
+  metadata_json: z.string().nullable(),
+  occurred_at: z.string().nullable(),
+});
+type AuditEvent = z.infer<typeof AuditEventSchema>;
+
+const AuditLogResponseSchema = z.object({
+  count: z.number(),
+  events: z.array(AuditEventSchema),
+});
 
 type Citation = {
   source: string;
@@ -625,6 +670,20 @@ export default function Home() {
   // Chat mode: "docs" → /api/chat, "database" → /api/db/chat, "hybrid" → /api/hybrid/chat
   const [chatMode, setChatMode] = useState<"docs" | "database" | "hybrid">("docs");
 
+  // ── DOCBOT-606: Auth / SSO state ──────────────────────────────────────────
+  const [authUser, setAuthUser] = useState<AuthUser | null>(null);
+  const [samlConfigured, setSamlConfigured] = useState(false);
+  const [authChecked, setAuthChecked] = useState(false);
+
+  // ── DOCBOT-606: Admin panel state ─────────────────────────────────────────
+  const [adminPanelOpen, setAdminPanelOpen] = useState(false);
+  const [adminTab, setAdminTab] = useState<"users" | "audit">("users");
+  const [adminUsers, setAdminUsers] = useState<AdminUser[]>([]);
+  const [adminUsersLoading, setAdminUsersLoading] = useState(false);
+  const [auditEvents, setAuditEvents] = useState<AuditEvent[]>([]);
+  const [auditLoading, setAuditLoading] = useState(false);
+  const [auditEventTypeFilter, setAuditEventTypeFilter] = useState<string>("all");
+
   // Stable anonymous session ID used when no PDF session exists yet
   const anonymousSessionIdRef = useRef<string>(
     typeof crypto !== "undefined" ? crypto.randomUUID() : Math.random().toString(36).substring(2)
@@ -795,6 +854,124 @@ export default function Home() {
   const dismissToast = useCallback((id: string) => {
     setToasts(prev => prev.filter(t => t.id !== id));
   }, []);
+
+  // ── DOCBOT-606: Check auth on mount ──────────────────────────────────────
+  useEffect(() => {
+    const checkAuth = async () => {
+      try {
+        const res = await fetch("/api/auth/me", { credentials: "include" });
+        if (res.ok) {
+          const data = await res.json();
+          const parsed = AuthMeSchema.safeParse(data);
+          if (parsed.success) setAuthUser(parsed.data);
+        } else if (res.status === 401) {
+          const metaRes = await fetch("/api/auth/saml/metadata");
+          setSamlConfigured(metaRes.status !== 503);
+        }
+      } catch {
+        // network error — stay in open mode
+      } finally {
+        setAuthChecked(true);
+      }
+    };
+    checkAuth();
+  }, []); // eslint-disable-line react-hooks/exhaustive-deps
+
+  // ── DOCBOT-606: Handle SSO logout ─────────────────────────────────────────
+  const handleLogout = useCallback(async () => {
+    try {
+      await fetch("/api/auth/logout", { method: "POST", credentials: "include" });
+    } catch {
+      // ignore
+    }
+    setAuthUser(null);
+    showToast("info", "Signed out");
+  }, [showToast]);
+
+  // ── DOCBOT-606: Load admin users ──────────────────────────────────────────
+  const loadAdminUsers = useCallback(async () => {
+    setAdminUsersLoading(true);
+    try {
+      const res = await fetch("/admin/users", { credentials: "include" });
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+      const data = await res.json();
+      const parsed = AdminUsersResponseSchema.safeParse(data);
+      if (parsed.success) setAdminUsers(parsed.data.users);
+    } catch (err) {
+      showToast("error", `Failed to load users: ${err instanceof Error ? err.message : String(err)}`);
+    } finally {
+      setAdminUsersLoading(false);
+    }
+  }, [showToast]);
+
+  // ── DOCBOT-606: Load audit log ────────────────────────────────────────────
+  const loadAuditLog = useCallback(async (eventType?: string) => {
+    setAuditLoading(true);
+    try {
+      const params = new URLSearchParams({ limit: "200" });
+      if (eventType && eventType !== "all") params.set("event_type", eventType);
+      const res = await fetch(`/admin/audit-log?${params.toString()}`, { credentials: "include" });
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+      const data = await res.json();
+      const parsed = AuditLogResponseSchema.safeParse(data);
+      if (parsed.success) setAuditEvents(parsed.data.events);
+    } catch (err) {
+      showToast("error", `Failed to load audit log: ${err instanceof Error ? err.message : String(err)}`);
+    } finally {
+      setAuditLoading(false);
+    }
+  }, [showToast]);
+
+  // ── DOCBOT-606: Update user role ──────────────────────────────────────────
+  const updateUserRole = useCallback(async (userId: string, role: string) => {
+    try {
+      const res = await fetch(`/admin/users/${userId}/role`, {
+        method: "PATCH",
+        credentials: "include",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ role }),
+      });
+      if (!res.ok) {
+        const err = await res.json();
+        throw new Error(err.detail || `HTTP ${res.status}`);
+      }
+      setAdminUsers(prev =>
+        prev.map(u => u.id === userId ? { ...u, role: role as AdminUser["role"] } : u)
+      );
+      showToast("success", "Role updated");
+    } catch (err) {
+      showToast("error", `Role update failed: ${err instanceof Error ? err.message : String(err)}`);
+    }
+  }, [showToast]);
+
+  // ── DOCBOT-606: Export audit log as CSV ───────────────────────────────────
+  const exportAuditLogCsv = useCallback(async () => {
+    try {
+      const params = new URLSearchParams({ format: "csv", limit: "5000" });
+      if (auditEventTypeFilter !== "all") params.set("event_type", auditEventTypeFilter);
+      const res = await fetch(`/admin/audit-log?${params.toString()}`, { credentials: "include" });
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+      const blob = await res.blob();
+      const url = window.URL.createObjectURL(blob);
+      const a = document.createElement("a");
+      a.href = url;
+      a.download = "audit_log.csv";
+      document.body.appendChild(a);
+      a.click();
+      window.URL.revokeObjectURL(url);
+      document.body.removeChild(a);
+      showToast("success", "Audit log exported");
+    } catch (err) {
+      showToast("error", `Export failed: ${err instanceof Error ? err.message : String(err)}`);
+    }
+  }, [auditEventTypeFilter, showToast]);
+
+  // When admin panel opens, load data for the active tab
+  useEffect(() => {
+    if (!adminPanelOpen) return;
+    if (adminTab === "users") loadAdminUsers();
+    else loadAuditLog(auditEventTypeFilter);
+  }, [adminPanelOpen, adminTab]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const scrollToBottom = () => {
     if (lastMessageRef.current && chatContainerRef.current) {
@@ -1435,7 +1612,7 @@ export default function Home() {
         fixed lg:relative h-full
       `}>
         {/* Logo */}
-        <div className="flex items-center gap-3 mb-6">
+        <div className="flex items-center gap-3 mb-4">
           <div className="w-10 h-10 rounded-xl bg-gradient-to-br from-[#667eea] to-[#764ba2] flex items-center justify-center shadow-lg shadow-[#667eea]/20">
             <Brain className="w-5 h-5 text-white" />
           </div>
@@ -1447,6 +1624,57 @@ export default function Home() {
             <p className="text-xs text-gray-500">Document Intelligence</p>
           </div>
         </div>
+
+        {/* ── DOCBOT-606: SSO Auth widget ───────────────────────────────── */}
+        {authChecked && (
+          <div className="mb-5">
+            {authUser ? (
+              /* Authenticated — show user info + logout */
+              <div className="flex items-center gap-2 px-3 py-2.5 bg-[#1a1a24]/70 rounded-xl border border-[#ffffff08]">
+                <div className="w-7 h-7 rounded-lg bg-gradient-to-br from-[#667eea]/30 to-[#764ba2]/30 flex items-center justify-center shrink-0">
+                  <ShieldCheck className="w-3.5 h-3.5 text-[#a5b4fc]" />
+                </div>
+                <div className="flex-1 min-w-0">
+                  <p className="text-xs font-medium text-gray-200 truncate">{authUser.email}</p>
+                  <span className={`inline-block mt-0.5 text-[9px] px-1.5 py-0.5 rounded-full font-semibold uppercase tracking-wide ${
+                    authUser.role === "admin"
+                      ? "bg-[#f59e0b]/20 text-[#fbbf24]"
+                      : authUser.role === "analyst"
+                      ? "bg-[#10b981]/20 text-[#34d399]"
+                      : "bg-[#3b82f6]/20 text-[#60a5fa]"
+                  }`}>
+                    {authUser.role}
+                  </span>
+                </div>
+                {authUser.role === "admin" && (
+                  <button
+                    onClick={() => setAdminPanelOpen(true)}
+                    className="p-1.5 rounded-lg hover:bg-[#ffffff10] text-gray-500 hover:text-[#f59e0b] transition-colors"
+                    title="Admin panel"
+                  >
+                    <Shield className="w-3.5 h-3.5" />
+                  </button>
+                )}
+                <button
+                  onClick={handleLogout}
+                  className="p-1.5 rounded-lg hover:bg-red-500/10 text-gray-500 hover:text-red-400 transition-colors"
+                  title="Sign out"
+                >
+                  <LogOut className="w-3.5 h-3.5" />
+                </button>
+              </div>
+            ) : samlConfigured ? (
+              /* SAML configured but not signed in — show Sign In button */
+              <a
+                href="/api/auth/saml/login"
+                className="flex items-center justify-center gap-2 w-full px-3 py-2.5 rounded-xl bg-[#667eea]/15 hover:bg-[#667eea]/25 border border-[#667eea]/30 text-[#a5b4fc] text-xs font-medium transition-all"
+              >
+                <ShieldCheck className="w-4 h-4" />
+                Sign in with SSO
+              </a>
+            ) : null /* SAML not configured — open mode, hide auth UI */}
+          </div>
+        )}
 
         {/* Document Upload Section */}
         <div className="mb-6">
@@ -2608,6 +2836,255 @@ export default function Home() {
         </div>
 
       </main>
+
+      {/* ── DOCBOT-606: Admin Panel Modal ───────────────────────────────── */}
+      {adminPanelOpen && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4">
+          {/* Backdrop */}
+          <div
+            className="absolute inset-0 bg-black/70 backdrop-blur-sm"
+            onClick={() => setAdminPanelOpen(false)}
+          />
+
+          <div className="relative z-10 w-full max-w-4xl max-h-[85vh] flex flex-col bg-[#12121a] border border-[#ffffff10] rounded-2xl shadow-2xl overflow-hidden">
+            {/* Header */}
+            <div className="flex items-center gap-3 px-5 py-4 border-b border-[#ffffff08] shrink-0">
+              <div className="w-8 h-8 rounded-lg bg-[#f59e0b]/20 flex items-center justify-center">
+                <Shield className="w-4 h-4 text-[#f59e0b]" />
+              </div>
+              <div>
+                <h2 className="text-sm font-semibold text-white">Admin Panel</h2>
+                <p className="text-[11px] text-gray-500">User management &amp; audit log</p>
+              </div>
+              <div className="ml-auto flex items-center gap-2">
+                {/* Tab switcher */}
+                <div className="flex gap-1 p-1 bg-[#1a1a24] rounded-lg border border-[#ffffff08]">
+                  <button
+                    onClick={() => setAdminTab("users")}
+                    className={`flex items-center gap-1.5 px-3 py-1.5 rounded-md text-xs font-medium transition-all ${
+                      adminTab === "users"
+                        ? "bg-[#667eea]/20 text-[#a5b4fc] border border-[#667eea]/30"
+                        : "text-gray-400 hover:text-gray-200 hover:bg-[#ffffff08]"
+                    }`}
+                  >
+                    <Users className="w-3 h-3" />
+                    Users
+                  </button>
+                  <button
+                    onClick={() => { setAdminTab("audit"); loadAuditLog(auditEventTypeFilter); }}
+                    className={`flex items-center gap-1.5 px-3 py-1.5 rounded-md text-xs font-medium transition-all ${
+                      adminTab === "audit"
+                        ? "bg-[#667eea]/20 text-[#a5b4fc] border border-[#667eea]/30"
+                        : "text-gray-400 hover:text-gray-200 hover:bg-[#ffffff08]"
+                    }`}
+                  >
+                    <ClipboardList className="w-3 h-3" />
+                    Audit Log
+                  </button>
+                </div>
+                <button
+                  onClick={() => setAdminPanelOpen(false)}
+                  className="p-1.5 rounded-lg hover:bg-[#ffffff10] text-gray-500 hover:text-gray-200 transition-colors"
+                >
+                  <X className="w-4 h-4" />
+                </button>
+              </div>
+            </div>
+
+            {/* Body */}
+            <div className="flex-1 overflow-y-auto">
+              {adminTab === "users" && (
+                <div className="p-5">
+                  <div className="flex items-center justify-between mb-4">
+                    <p className="text-xs text-gray-400">
+                      {adminUsersLoading ? "Loading…" : `${adminUsers.length} user${adminUsers.length !== 1 ? "s" : ""}`}
+                    </p>
+                    <button
+                      onClick={loadAdminUsers}
+                      disabled={adminUsersLoading}
+                      className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs text-gray-400 hover:text-gray-200 bg-[#1a1a24] border border-[#ffffff08] hover:border-[#ffffff15] transition-all disabled:opacity-50"
+                    >
+                      <RefreshCw className={`w-3 h-3 ${adminUsersLoading ? "animate-spin" : ""}`} />
+                      Refresh
+                    </button>
+                  </div>
+
+                  {adminUsersLoading ? (
+                    <div className="flex items-center justify-center py-12">
+                      <Loader2 className="w-6 h-6 text-[#667eea] animate-spin" />
+                    </div>
+                  ) : adminUsers.length === 0 ? (
+                    <div className="flex flex-col items-center justify-center py-12 text-gray-500">
+                      <Users className="w-8 h-8 mb-3 opacity-40" />
+                      <p className="text-sm">No users found</p>
+                    </div>
+                  ) : (
+                    <div className="overflow-x-auto">
+                      <table className="w-full text-sm">
+                        <thead>
+                          <tr className="border-b border-[#ffffff08]">
+                            <th className="text-left text-[11px] font-semibold text-gray-500 uppercase tracking-wider pb-2 pr-4">User</th>
+                            <th className="text-left text-[11px] font-semibold text-gray-500 uppercase tracking-wider pb-2 pr-4">Provider</th>
+                            <th className="text-left text-[11px] font-semibold text-gray-500 uppercase tracking-wider pb-2 pr-4">Last Login</th>
+                            <th className="text-left text-[11px] font-semibold text-gray-500 uppercase tracking-wider pb-2">Role</th>
+                          </tr>
+                        </thead>
+                        <tbody className="divide-y divide-[#ffffff06]">
+                          {adminUsers.map((user) => (
+                            <tr key={user.id} className="hover:bg-[#ffffff03] transition-colors">
+                              <td className="py-3 pr-4">
+                                <div>
+                                  <p className="text-xs font-medium text-gray-200 truncate max-w-[200px]">{user.email}</p>
+                                  <p className="text-[10px] text-gray-500 truncate max-w-[200px]">{user.name}</p>
+                                </div>
+                              </td>
+                              <td className="py-3 pr-4">
+                                <span className="text-[11px] text-gray-400 capitalize">{user.provider}</span>
+                              </td>
+                              <td className="py-3 pr-4">
+                                <span className="text-[11px] text-gray-500">
+                                  {user.last_login_at
+                                    ? new Date(user.last_login_at).toLocaleDateString([], { month: "short", day: "numeric", year: "numeric" })
+                                    : "Never"}
+                                </span>
+                              </td>
+                              <td className="py-3">
+                                <select
+                                  value={user.role}
+                                  onChange={(e) => {
+                                    // Prevent self-demotion of current user
+                                    if (authUser?.id === user.id && e.target.value !== "admin") {
+                                      showToast("warning", "You cannot change your own role");
+                                      return;
+                                    }
+                                    updateUserRole(user.id, e.target.value);
+                                  }}
+                                  className="text-[11px] px-2 py-1 rounded-lg bg-[#1a1a24] border border-[#ffffff10] text-gray-300 focus:outline-none focus:border-[#667eea]/40 cursor-pointer"
+                                >
+                                  <option value="viewer">viewer</option>
+                                  <option value="analyst">analyst</option>
+                                  <option value="admin">admin</option>
+                                </select>
+                              </td>
+                            </tr>
+                          ))}
+                        </tbody>
+                      </table>
+                    </div>
+                  )}
+                </div>
+              )}
+
+              {adminTab === "audit" && (
+                <div className="p-5">
+                  <div className="flex items-center gap-3 mb-4 flex-wrap">
+                    {/* Event type filter */}
+                    <div className="flex items-center gap-2">
+                      <Filter className="w-3.5 h-3.5 text-gray-500 shrink-0" />
+                      <select
+                        value={auditEventTypeFilter}
+                        onChange={(e) => {
+                          setAuditEventTypeFilter(e.target.value);
+                          loadAuditLog(e.target.value);
+                        }}
+                        className="text-xs px-2.5 py-1.5 rounded-lg bg-[#1a1a24] border border-[#ffffff10] text-gray-300 focus:outline-none focus:border-[#667eea]/40"
+                      >
+                        <option value="all">All events</option>
+                        <option value="login">login</option>
+                        <option value="logout">logout</option>
+                        <option value="upload">upload</option>
+                        <option value="query">query</option>
+                        <option value="db_connect">db_connect</option>
+                        <option value="db_disconnect">db_disconnect</option>
+                      </select>
+                    </div>
+                    <p className="text-xs text-gray-500 flex-1">
+                      {auditLoading ? "Loading…" : `${auditEvents.length} event${auditEvents.length !== 1 ? "s" : ""}`}
+                    </p>
+                    <button
+                      onClick={exportAuditLogCsv}
+                      className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs text-gray-400 hover:text-gray-200 bg-[#1a1a24] border border-[#ffffff08] hover:border-[#ffffff15] transition-all"
+                    >
+                      <Download className="w-3 h-3" />
+                      Export CSV
+                    </button>
+                    <button
+                      onClick={() => loadAuditLog(auditEventTypeFilter)}
+                      disabled={auditLoading}
+                      className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs text-gray-400 hover:text-gray-200 bg-[#1a1a24] border border-[#ffffff08] hover:border-[#ffffff15] transition-all disabled:opacity-50"
+                    >
+                      <RefreshCw className={`w-3 h-3 ${auditLoading ? "animate-spin" : ""}`} />
+                    </button>
+                  </div>
+
+                  {auditLoading ? (
+                    <div className="flex items-center justify-center py-12">
+                      <Loader2 className="w-6 h-6 text-[#667eea] animate-spin" />
+                    </div>
+                  ) : auditEvents.length === 0 ? (
+                    <div className="flex flex-col items-center justify-center py-12 text-gray-500">
+                      <ClipboardList className="w-8 h-8 mb-3 opacity-40" />
+                      <p className="text-sm">No events found</p>
+                    </div>
+                  ) : (
+                    <div className="overflow-x-auto">
+                      <table className="w-full text-sm">
+                        <thead>
+                          <tr className="border-b border-[#ffffff08]">
+                            <th className="text-left text-[11px] font-semibold text-gray-500 uppercase tracking-wider pb-2 pr-3">Time</th>
+                            <th className="text-left text-[11px] font-semibold text-gray-500 uppercase tracking-wider pb-2 pr-3">Event</th>
+                            <th className="text-left text-[11px] font-semibold text-gray-500 uppercase tracking-wider pb-2 pr-3">Detail</th>
+                            <th className="text-left text-[11px] font-semibold text-gray-500 uppercase tracking-wider pb-2">Session</th>
+                          </tr>
+                        </thead>
+                        <tbody className="divide-y divide-[#ffffff06]">
+                          {auditEvents.map((ev) => {
+                            const eventColors: Record<string, string> = {
+                              login: "bg-[#10b981]/20 text-[#34d399]",
+                              logout: "bg-[#6b7280]/20 text-[#9ca3af]",
+                              upload: "bg-[#3b82f6]/20 text-[#60a5fa]",
+                              query: "bg-[#8b5cf6]/20 text-[#a78bfa]",
+                              db_connect: "bg-[#f59e0b]/20 text-[#fbbf24]",
+                              db_disconnect: "bg-[#ef4444]/20 text-[#f87171]",
+                            };
+                            const colorClass = eventColors[ev.event_type] ?? "bg-[#ffffff10] text-gray-400";
+                            return (
+                              <tr key={ev.id} className="hover:bg-[#ffffff03] transition-colors">
+                                <td className="py-2.5 pr-3 whitespace-nowrap">
+                                  <span className="text-[11px] text-gray-500">
+                                    {ev.occurred_at
+                                      ? new Date(ev.occurred_at).toLocaleString([], { month: "short", day: "numeric", hour: "2-digit", minute: "2-digit" })
+                                      : "—"}
+                                  </span>
+                                </td>
+                                <td className="py-2.5 pr-3">
+                                  <span className={`text-[10px] px-2 py-0.5 rounded-full font-semibold uppercase tracking-wide ${colorClass}`}>
+                                    {ev.event_type}
+                                  </span>
+                                </td>
+                                <td className="py-2.5 pr-3 max-w-[220px]">
+                                  <p className="text-[11px] text-gray-400 truncate" title={ev.detail ?? ""}>
+                                    {ev.detail || "—"}
+                                  </p>
+                                </td>
+                                <td className="py-2.5">
+                                  <span className="text-[10px] text-gray-600 font-mono">
+                                    {ev.session_id ? ev.session_id.slice(0, 8) + "…" : "—"}
+                                  </span>
+                                </td>
+                              </tr>
+                            );
+                          })}
+                        </tbody>
+                      </table>
+                    </div>
+                  )}
+                </div>
+              )}
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }
