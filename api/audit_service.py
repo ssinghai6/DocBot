@@ -118,37 +118,52 @@ def log_event(
 # ---------------------------------------------------------------------------
 # Immutability trigger DDL
 # ---------------------------------------------------------------------------
+# Kept as a list of individual statements — asyncpg rejects multi-statement
+# strings, so each DO block must be executed in its own conn.execute() call.
 
-IMMUTABILITY_TRIGGER_DDL = """
-DO $$
-BEGIN
-    IF NOT EXISTS (
-        SELECT 1 FROM pg_proc p
-        JOIN pg_namespace n ON n.oid = p.pronamespace
-        WHERE p.proname = 'audit_log_immutable'
-          AND n.nspname = 'public'
-    ) THEN
-        CREATE FUNCTION public.audit_log_immutable()
-        RETURNS TRIGGER LANGUAGE plpgsql AS
-        $fn$
-        BEGIN
-            RAISE EXCEPTION 'audit_log rows are immutable — UPDATE and DELETE are not allowed';
-        END;
-        $fn$;
-    END IF;
-END
-$$;
+IMMUTABILITY_TRIGGER_STATEMENTS: list[str] = [
+    # Step 1 — create the trigger function if it doesn't already exist
+    """
+    DO $outer$
+    BEGIN
+        IF NOT EXISTS (
+            SELECT 1 FROM pg_proc p
+            JOIN pg_namespace n ON n.oid = p.pronamespace
+            WHERE p.proname = 'audit_log_immutable'
+              AND n.nspname = 'public'
+        ) THEN
+            EXECUTE $body$
+                CREATE FUNCTION public.audit_log_immutable()
+                RETURNS TRIGGER LANGUAGE plpgsql AS $$
+                BEGIN
+                    RAISE EXCEPTION 'audit_log rows are immutable';
+                END;
+                $$
+            $body$;
+        END IF;
+    END
+    $outer$
+    """,
+    # Step 2 — attach the trigger to audit_log if not already attached
+    """
+    DO $outer$
+    BEGIN
+        IF NOT EXISTS (
+            SELECT 1 FROM pg_trigger t
+            JOIN pg_class c ON c.oid = t.tgrelid
+            WHERE t.tgname = 'audit_log_no_mutate'
+              AND c.relname = 'audit_log'
+        ) THEN
+            EXECUTE $body$
+                CREATE TRIGGER audit_log_no_mutate
+                BEFORE UPDATE OR DELETE ON audit_log
+                FOR EACH ROW EXECUTE FUNCTION public.audit_log_immutable()
+            $body$;
+        END IF;
+    END
+    $outer$
+    """,
+]
 
-DO $$
-BEGIN
-    IF NOT EXISTS (
-        SELECT 1 FROM pg_trigger
-        WHERE tgname = 'audit_log_no_mutate'
-    ) THEN
-        CREATE TRIGGER audit_log_no_mutate
-        BEFORE UPDATE OR DELETE ON audit_log
-        FOR EACH ROW EXECUTE FUNCTION public.audit_log_immutable();
-    END IF;
-END
-$$;
-"""
+# Kept for backwards-compat with any code that imported the old name
+IMMUTABILITY_TRIGGER_DDL = "\n".join(IMMUTABILITY_TRIGGER_STATEMENTS)
