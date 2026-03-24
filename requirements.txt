@@ -30,3 +30,5 @@ langextract
 # DOCBOT-208: Azure SQL / Microsoft Entra Service Principal auth
 pyodbc>=5.0.0
 azure-identity>=1.17.0
+# DOCBOT-405: Analytical Autopilot — LangGraph state machine
+langgraph>=0.2.0
