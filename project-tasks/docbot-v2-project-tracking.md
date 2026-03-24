@@ -763,7 +763,7 @@ As a developer, I want the document extraction pipeline to support non-financial
 
 ---
 
-#### DOCBOT-405: Analytical Autopilot — Agentic Multi-Step Investigation (Phase 2)
+#### DOCBOT-405: Analytical Autopilot — Agentic Multi-Step Investigation (Phase 2) ✅ Done
 
 **Story**
 As Maya (Finance Manager), I want to delegate a diagnostic objective like "Why are we at 87.5% of Q3 revenue target?" and have DocBot autonomously run the investigation — querying the database and cross-referencing uploaded documents across multiple steps — so that I get a diagnosis with ranked hypotheses, not just a single data point.
@@ -772,6 +772,7 @@ As Maya (Finance Manager), I want to delegate a diagnostic objective like "Why a
 **Priority**: Should Have
 **Story Points**: 13
 **Dependencies**: DOCBOT-402, DOCBOT-501
+**Status**: ✅ Done (SCRUM-399, merged 2026-03-23)
 
 **Design Rationale**
 This is DocBot's first agentic feature. The agent loops over the existing 7-step hybrid pipeline using a planner node. The SQL execution layer is unchanged — the agent controls retrieval strategy and step sequencing, never SQL execution directly. LangGraph is used over Claude Agent SDK because it supports hard step limits, explicit node/edge control, and integrates with the existing LangChain setup.
@@ -800,16 +801,20 @@ Lives in: api/agent_service.py (new module, not api/index.py)
 
 **Engineering Tasks**
 
-| # | Task | Role | Est. Hours |
-|---|------|------|-----------|
-| 1 | Create `api/agent_service.py` with LangGraph graph: PlannerNode → ExecutorNode (loop) → SynthesizerNode | Backend | 4h |
-| 2 | Implement `plan_investigation()`: one LLM call returning `[{step_type, description, sub_question}]` JSON | Backend | 2h |
-| 3 | Wire ExecutorNode to call existing `run_hybrid_pipeline()` per step with context threading | Backend | 3h |
-| 4 | Set `recursion_limit=5` in LangGraph config; implement 90s timeout with partial answer fallback | Backend | 1h |
-| 5 | Extend intent classifier (DOCBOT-401) to detect diagnostic intent vs. single-question intent | Backend | 2h |
-| 6 | Add POST /api/hybrid/investigate route in api/index.py (thin handler, calls agent_service) | Backend | 1h |
-| 7 | Stream step-completion events via SSE; create `InvestigationPanel` frontend component | Frontend | 3h |
-| 8 | Add `langraph>=0.2.0` to requirements.txt | Backend | 0.5h |
+| # | Task | Role | Status |
+|---|------|------|--------|
+| 1 | `api/autopilot_service.py`: LangGraph StateGraph (PlannerNode → ExecutorNode loop → SynthesizerNode) | Backend | ✅ Done |
+| 2 | `_select_tool()` heuristic routes steps to sql_query / doc_search / python_analysis | Backend | ✅ Done |
+| 3 | `make_executor_node()` captures all DB tables/session factories via closure | Backend | ✅ Done |
+| 4 | MAX_ITERATIONS=5 enforced via `_should_continue()`; TOTAL_TIMEOUT_S=90 wall-clock guard | Backend | ✅ Done |
+| 5 | Executor saves sql_result and chart artifacts via `artifact_service.save_artifact()` | Backend | ✅ Done |
+| 6 | `_planner_node()` and `_synthesizer_node()` graceful fallbacks when groq_api_key absent | Backend | ✅ Done |
+| 7 | `POST /api/autopilot/run` SSE route; `AutopilotRequest` Pydantic model in `api/index.py` | Backend | ✅ Done |
+| 8 | `langgraph>=0.2.0` added to `requirements.txt` | Backend | ✅ Done |
+| 9 | Frontend: `AutopilotStep` type; autopilotMode/Running/Steps/Plan state; toggle button | Frontend | ✅ Done |
+| 10 | Frontend: `/api/autopilot/run` SSE path in `handleSendMessage` (takes priority when ON) | Frontend | ✅ Done |
+| 11 | Frontend: live step-by-step progress panel (plan + completed steps + tool badges + charts) | Frontend | ✅ Done |
+| 12 | 29 unit tests in `tests/unit/test_autopilot_service.py` | Testing | ✅ Done |
 
 ---
 
