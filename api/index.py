@@ -1172,6 +1172,18 @@ async def db_connect(request: DBConnectionRequest):
     DOCBOT-201 — Validate credentials, encrypt, store, and return connection_id.
     SSRF prevention and dialect validation are enforced by the Pydantic model.
     """
+    # SQLite local-file connections only work when the file exists on the server.
+    # On Railway (or any remote deployment), the user's local .db file is not accessible.
+    # Direct them to use the file-upload endpoint (/api/db/upload-sqlite) instead.
+    if request.dialect == "sqlite":
+        raise HTTPException(
+            status_code=400,
+            detail=(
+                "SQLite local file connections are not supported on the hosted deployment — "
+                "the server cannot access files on your machine. "
+                "Please use the 'Upload SQLite file' option to upload your .db file directly."
+            ),
+        )
     try:
         result = await connect_database(
             request,
