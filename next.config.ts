@@ -16,6 +16,8 @@ const productionDestination = railwayBackendUrl
   : "/api/index";
 
 const nextConfig: NextConfig = {
+  // Required for Docker standalone build (DOCBOT-605)
+  output: process.env.DOCKER_BUILD ? "standalone" : undefined,
   async rewrites() {
     return [
       {
