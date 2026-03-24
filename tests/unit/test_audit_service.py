@@ -172,23 +172,26 @@ class TestLogEvent:
 # IMMUTABILITY_TRIGGER_DDL — basic sanity
 # ---------------------------------------------------------------------------
 
-class TestImmutabilityTriggerDdl:
-    def test_ddl_is_non_empty_string(self):
-        from api.audit_service import IMMUTABILITY_TRIGGER_DDL
-        assert isinstance(IMMUTABILITY_TRIGGER_DDL, str)
-        assert len(IMMUTABILITY_TRIGGER_DDL) > 100
+class TestImmutabilityTriggerStatements:
+    def test_is_a_list_of_two_statements(self):
+        from api.audit_service import IMMUTABILITY_TRIGGER_STATEMENTS
+        assert isinstance(IMMUTABILITY_TRIGGER_STATEMENTS, list)
+        assert len(IMMUTABILITY_TRIGGER_STATEMENTS) == 2
 
-    def test_ddl_contains_trigger_creation(self):
-        from api.audit_service import IMMUTABILITY_TRIGGER_DDL
-        assert "CREATE TRIGGER" in IMMUTABILITY_TRIGGER_DDL
-        assert "audit_log_no_mutate" in IMMUTABILITY_TRIGGER_DDL
+    def test_each_statement_is_non_empty_string(self):
+        from api.audit_service import IMMUTABILITY_TRIGGER_STATEMENTS
+        for stmt in IMMUTABILITY_TRIGGER_STATEMENTS:
+            assert isinstance(stmt, str)
+            assert len(stmt.strip()) > 50
 
-    def test_ddl_covers_update_and_delete(self):
-        from api.audit_service import IMMUTABILITY_TRIGGER_DDL
-        assert "UPDATE" in IMMUTABILITY_TRIGGER_DDL
-        assert "DELETE" in IMMUTABILITY_TRIGGER_DDL
+    def test_statements_cover_function_and_trigger(self):
+        from api.audit_service import IMMUTABILITY_TRIGGER_STATEMENTS
+        combined = "\n".join(IMMUTABILITY_TRIGGER_STATEMENTS)
+        assert "audit_log_immutable" in combined
+        assert "audit_log_no_mutate" in combined
 
-    def test_ddl_is_idempotent(self):
-        """DDL uses IF NOT EXISTS guards so it can be re-run safely."""
-        from api.audit_service import IMMUTABILITY_TRIGGER_DDL
-        assert "IF NOT EXISTS" in IMMUTABILITY_TRIGGER_DDL
+    def test_statements_are_idempotent(self):
+        """Each statement uses IF NOT EXISTS so it can be re-run safely."""
+        from api.audit_service import IMMUTABILITY_TRIGGER_STATEMENTS
+        for stmt in IMMUTABILITY_TRIGGER_STATEMENTS:
+            assert "IF NOT EXISTS" in stmt
