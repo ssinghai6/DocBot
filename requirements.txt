@@ -32,3 +32,5 @@ pyodbc>=5.0.0
 azure-identity>=1.17.0
 # DOCBOT-405: Analytical Autopilot — LangGraph state machine
 langgraph>=0.2.0
+# DOCBOT-601: SAML 2.0 SSO (Okta, Azure AD)
+python3-saml>=1.16.0
