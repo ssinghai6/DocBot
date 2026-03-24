@@ -6,7 +6,7 @@ from pydantic import BaseModel
 from sqlalchemy.ext.asyncio import create_async_engine, AsyncSession, async_sessionmaker
 from sqlalchemy import (
     MetaData, Table, Column, String, Text, Integer, DateTime,
-    func, select, insert, update, delete, text, Boolean,
+    func, select, insert, update, delete, text, Boolean, LargeBinary,
 )
 from typing import List, Dict, Any, Optional
 import os
@@ -97,6 +97,20 @@ messages_table = Table(
     Column("content", Text),
     Column("sources", Text),
     Column("timestamp", DateTime(timezone=True), server_default=func.now(), nullable=False),
+)
+
+# ── EPIC-06: Audit Log table (DOCBOT-602) ────────────────────────────────────
+
+audit_log_table = Table(
+    "audit_log", metadata,
+    Column("id", String, primary_key=True),                    # UUID
+    Column("event_type", String, nullable=False, index=True),  # AuditEventType value
+    Column("session_id", String, index=True),                  # DocBot session ID (nullable)
+    Column("user_id", String, index=True),                     # SSO user ID (nullable)
+    Column("detail", Text),                                    # human-readable description
+    Column("metadata_json", Text),                             # extra structured JSON
+    Column("occurred_at", DateTime(timezone=True), nullable=False, index=True,
+           server_default=func.now()),
 )
 
 # ── EPIC-06: SSO / Auth tables (DOCBOT-601) ──────────────────────────────────
@@ -198,10 +212,13 @@ async def init_db() -> None:
             "ALTER TABLE sessions ADD COLUMN IF NOT EXISTS message_count_at_compression INTEGER DEFAULT 0",
         ]:
             await conn.execute(text(col_ddl))
+        # DOCBOT-602: install immutability trigger on audit_log (idempotent)
+        from api.audit_service import IMMUTABILITY_TRIGGER_DDL
+        await conn.execute(text(IMMUTABILITY_TRIGGER_DDL))
     logger.info(
         "Database tables verified / created "
         "(sessions, messages, db_connections, schema_cache, query_history, "
-        "query_embeddings, session_artifacts, table_embeddings)."
+        "query_embeddings, session_artifacts, table_embeddings, audit_log)."
     )
 
 
@@ -886,6 +903,17 @@ async def upload_documents(
 
         suggested_persona = max(scores, key=lambda k: scores[k]) if scores else "Generalist"
         
+        # DOCBOT-602: audit upload event
+        from api.audit_service import log_event, AuditEventType
+        log_event(
+            AuditEventType.upload,
+            audit_log_table,
+            async_session_factory,
+            session_id=session_id,
+            detail=", ".join(f["name"] for f in files_info),
+            metadata={"file_count": len(files_info), "chunks": len(splits)},
+        )
+
         return {
             "session_id": session_id,
             "message": "Documents processed successfully",
@@ -894,7 +922,7 @@ async def upload_documents(
             "chunks_created": len(splits),
             "processing_time_seconds": round(index_time, 2)
         }
-        
+
     except HTTPException:
         raise
     except Exception as e:
@@ -1466,6 +1494,16 @@ async def db_connect(request: DBConnectionRequest):
             schema_cache_table,
             async_session_factory,
         )
+        # DOCBOT-602: audit connection event (never log password — only host/dialect)
+        from api.audit_service import log_event, AuditEventType
+        log_event(
+            AuditEventType.db_connect,
+            audit_log_table,
+            async_session_factory,
+            session_id=request.session_id,
+            detail=f"{request.host}:{request.port}/{request.dbname}",
+            metadata={"dialect": request.dialect, "connection_id": result.get("connection_id")},
+        )
         return result
     except ValueError as exc:
         logger.warning("db_connect validation error: %s", exc)
@@ -1487,6 +1525,15 @@ async def db_disconnect(connection_id: str, request: DisconnectRequest):
             db_connections_table,
             schema_cache_table,
             async_session_factory,
+        )
+        # DOCBOT-602: audit disconnect event
+        from api.audit_service import log_event, AuditEventType
+        log_event(
+            AuditEventType.db_disconnect,
+            audit_log_table,
+            async_session_factory,
+            session_id=request.session_id,
+            detail=connection_id,
         )
         return {"message": "Connection removed successfully."}
     except ConnectionNotFoundError as exc:
@@ -1526,6 +1573,16 @@ async def db_chat(request: DBChatRequest):
       3. done chunk      {type: "done"}
     """
     async def event_stream():
+        # DOCBOT-602: audit query event (fire before stream so it's captured even if stream errors)
+        from api.audit_service import log_event, AuditEventType
+        log_event(
+            AuditEventType.query,
+            audit_log_table,
+            async_session_factory,
+            session_id=request.session_id,
+            detail=request.question[:500],
+            metadata={"connection_id": request.connection_id, "persona": request.persona},
+        )
         try:
             async for chunk in run_sql_pipeline(
                 connection_id=request.connection_id,
@@ -1988,6 +2045,16 @@ async def saml_acs(request: Request, response: Response):
         path="/",
     )
     logger.info("SSO login success: %s (%s)", attrs["email"], attrs["provider"])
+    # DOCBOT-602: audit login event
+    from api.audit_service import log_event, AuditEventType
+    log_event(
+        AuditEventType.login,
+        audit_log_table,
+        async_session_factory,
+        user_id=user_id,
+        detail=attrs["email"],
+        metadata={"provider": attrs["provider"]},
+    )
     return redirect
 
 
@@ -2020,6 +2087,87 @@ async def auth_logout(request: Request):
             await delete_session(token, user_sessions_table, async_session_factory)
         except Exception as exc:
             logger.warning("Session deletion error (ignored): %s", exc)
+        # DOCBOT-602: audit logout event
+        from api.audit_service import log_event, AuditEventType
+        log_event(
+            AuditEventType.logout,
+            audit_log_table,
+            async_session_factory,
+            detail="logout",
+        )
     resp = JSONResponse({"status": "logged_out"})
     resp.delete_cookie(key="docbot_session", path="/")
     return resp
+
+
+# ---------------------------------------------------------------------------
+# DOCBOT-602: Audit log admin endpoint
+# ---------------------------------------------------------------------------
+
+@app.get("/admin/audit-log")
+async def get_audit_log(
+    event_type: Optional[str] = None,
+    session_id: Optional[str] = None,
+    user_id: Optional[str] = None,
+    limit: int = 500,
+    format: str = "json",
+):
+    """Return recent audit log entries.
+
+    Query params:
+        event_type  — filter by event type (query|upload|login|logout|db_connect|db_disconnect)
+        session_id  — filter by DocBot session
+        user_id     — filter by SSO user
+        limit       — max rows (default 500, max 5000)
+        format      — "json" (default) or "csv"
+
+    Note: In production, protect this endpoint behind RBAC middleware (DOCBOT-603).
+    """
+    import csv
+    from io import StringIO
+
+    limit = min(limit, 5000)
+
+    stmt = select(audit_log_table).order_by(audit_log_table.c.occurred_at.desc()).limit(limit)
+    if event_type:
+        stmt = stmt.where(audit_log_table.c.event_type == event_type)
+    if session_id:
+        stmt = stmt.where(audit_log_table.c.session_id == session_id)
+    if user_id:
+        stmt = stmt.where(audit_log_table.c.user_id == user_id)
+
+    async with async_session_factory() as db:
+        result = await db.execute(stmt)
+        rows = result.fetchall()
+
+    if format == "csv":
+        buf = StringIO()
+        writer = csv.writer(buf)
+        writer.writerow(["id", "event_type", "session_id", "user_id", "detail", "metadata_json", "occurred_at"])
+        for row in rows:
+            writer.writerow([
+                row.id, row.event_type, row.session_id or "",
+                row.user_id or "", row.detail or "",
+                row.metadata_json or "", row.occurred_at.isoformat() if row.occurred_at else "",
+            ])
+        return StreamingResponse(
+            iter([buf.getvalue()]),
+            media_type="text/csv",
+            headers={"Content-Disposition": "attachment; filename=audit_log.csv"},
+        )
+
+    return {
+        "count": len(rows),
+        "events": [
+            {
+                "id": row.id,
+                "event_type": row.event_type,
+                "session_id": row.session_id,
+                "user_id": row.user_id,
+                "detail": row.detail,
+                "metadata_json": row.metadata_json,
+                "occurred_at": row.occurred_at.isoformat() if row.occurred_at else None,
+            }
+            for row in rows
+        ],
+    }
