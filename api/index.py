@@ -1,5 +1,5 @@
 from contextlib import asynccontextmanager
-from fastapi import FastAPI, File, UploadFile, Form, HTTPException
+from fastapi import FastAPI, File, UploadFile, Form, HTTPException, Depends
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse, StreamingResponse
 from pydantic import BaseModel
@@ -200,6 +200,15 @@ session_artifacts_table = Table(
     Column("created_at", DateTime(timezone=True), server_default=func.now(), nullable=False),
 )
 
+# ── EPIC-06: RBAC dependencies (DOCBOT-603) ──────────────────────────────────
+# Imported here so Depends() objects can be declared at module level.
+# require_role() checks is_saml_configured() at request time — safe to import early.
+from api.rbac_service import require_role, UserRole  # noqa: E402
+
+_rbac_viewer  = Depends(require_role(UserRole.viewer))
+_rbac_analyst = Depends(require_role(UserRole.analyst))
+_rbac_admin   = Depends(require_role(UserRole.admin))
+
 
 async def init_db() -> None:
     """Create tables idempotently on startup."""
@@ -227,6 +236,9 @@ async def init_db() -> None:
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     await init_db()
+    # DOCBOT-603: wire RBAC module-level table references
+    from api.rbac_service import wire_rbac
+    wire_rbac(users_table, user_sessions_table, async_session_factory)
     # Clean up any expired file uploads from previous runs
     try:
         from api.file_upload_service import cleanup_expired_uploads
@@ -1472,10 +1484,11 @@ class DisconnectRequest(BaseModel):
 
 
 @app.post("/api/db/connect")
-async def db_connect(request: DBConnectionRequest):
+async def db_connect(request: DBConnectionRequest, _user=_rbac_analyst):
     """
     DOCBOT-201 — Validate credentials, encrypt, store, and return connection_id.
     SSRF prevention and dialect validation are enforced by the Pydantic model.
+    Requires analyst role or above (DOCBOT-603).
     """
     # SQLite local-file connections only work when the file exists on the server.
     # On Railway (or any remote deployment), the user's local .db file is not accessible.
@@ -1516,9 +1529,10 @@ async def db_connect(request: DBConnectionRequest):
 
 
 @app.delete("/api/db/disconnect/{connection_id}")
-async def db_disconnect(connection_id: str, request: DisconnectRequest):
+async def db_disconnect(connection_id: str, request: DisconnectRequest, _user=_rbac_analyst):
     """
     DOCBOT-201 — Remove a DB connection and invalidate its schema cache.
+    Requires analyst role or above (DOCBOT-603).
     """
     try:
         await disconnect_database(
@@ -1717,6 +1731,7 @@ from api.file_upload_service import upload_sqlite, upload_csv
 async def db_upload_sqlite(
     file: UploadFile = File(...),
     session_id: str = Form(...),
+    _user=_rbac_analyst,
 ):
     """
     DOCBOT-206 — Upload a .sqlite/.db file as a credential-free data source.
@@ -1745,6 +1760,7 @@ async def db_upload_sqlite(
 async def db_upload_csv(
     file: UploadFile = File(...),
     session_id: str = Form(...),
+    _user=_rbac_analyst,
 ):
     """
     DOCBOT-207 — Upload a .csv file as a queryable data source.
@@ -2113,6 +2129,7 @@ async def get_audit_log(
     user_id: Optional[str] = None,
     limit: int = 500,
     format: str = "json",
+    _user=_rbac_admin,
 ):
     """Return recent audit log entries.
 
@@ -2173,3 +2190,66 @@ async def get_audit_log(
             for row in rows
         ],
     }
+
+
+# ---------------------------------------------------------------------------
+# DOCBOT-603: Admin user management routes
+# ---------------------------------------------------------------------------
+
+class RoleUpdateRequest(BaseModel):
+    role: str  # "viewer" | "analyst" | "admin"
+
+
+@app.get("/admin/users")
+async def list_users(_user=_rbac_admin):
+    """Return all users with their roles. Requires admin role."""
+    async with async_session_factory() as db:
+        result = await db.execute(
+            select(users_table).order_by(users_table.c.created_at.desc())
+        )
+        rows = result.fetchall()
+    return {
+        "count": len(rows),
+        "users": [
+            {
+                "id": row.id,
+                "email": row.email,
+                "name": row.name,
+                "role": row.role,
+                "provider": row.provider,
+                "last_login_at": row.last_login_at.isoformat() if row.last_login_at else None,
+                "created_at": row.created_at.isoformat() if row.created_at else None,
+            }
+            for row in rows
+        ],
+    }
+
+
+@app.patch("/admin/users/{user_id}/role")
+async def update_user_role(
+    user_id: str,
+    body: RoleUpdateRequest,
+    _user=_rbac_admin,
+):
+    """Assign a new role to a user. Requires admin role."""
+    valid_roles = {r.name for r in UserRole}
+    if body.role not in valid_roles:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Invalid role '{body.role}'. Must be one of: {', '.join(sorted(valid_roles))}",
+        )
+    async with async_session_factory() as db:
+        result = await db.execute(select(users_table).where(users_table.c.id == user_id))
+        target = result.fetchone()
+    if not target:
+        raise HTTPException(status_code=404, detail="User not found.")
+
+    async with async_session_factory() as db:
+        async with db.begin():
+            await db.execute(
+                update(users_table)
+                .where(users_table.c.id == user_id)
+                .values(role=body.role)
+            )
+    logger.info("Admin role update: user %s → %s", target.email, body.role)
+    return {"user_id": user_id, "email": target.email, "new_role": body.role}
