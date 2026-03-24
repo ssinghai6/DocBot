@@ -61,6 +61,7 @@ Every story is only "done" when ALL of the following are true. No exceptions.
 | EPIC-05 | Memory and Context | 2 | Session artifacts, context compression, multi-hop queries |
 | EPIC-06 | Enterprise Readiness | 4 | SSO, RBAC, audit logging, PII masking, on-premise |
 | EPIC-07 | Commerce Connectors | 4+ | Marketplace API integrations (Amazon SP-API, Shopify), unified commerce schema, multi-tenant RLS, background sync |
+| EPIC-08 | Smart Agent Auto-Routing | 3 | Replace static persona picker with intelligent per-question agent routing, structured output contracts, per-agent response rendering |
 
 ---
 
@@ -1267,6 +1268,157 @@ As a DTC brand owner on Shopify, I want to connect my Shopify store to DocBot, s
 
 ---
 
+---
+
+### EPIC-08: Smart Agent Auto-Routing
+
+---
+
+#### DOCBOT-801: Extend EXPERT_PERSONAS with Structured Output Contracts
+
+**Story**
+As a developer, I want each expert persona to define a structured output contract (required sections, detection keywords, output conventions) so that LLM responses are consistently structured per agent and can be rendered differently in the frontend.
+
+**Phase**: 3
+**Priority**: Must Have
+**Story Points**: 3
+**Dependencies**: None
+
+**Acceptance Criteria**
+- [ ] All 8 personas in `EXPERT_PERSONAS` have 5 new fields: `response_format`, `required_sections`, `detection_keywords`, `tool_preference`, `output_conventions`
+- [ ] Each `persona_def` string ends with an OUTPUT FORMAT CONTRACT block that mandates section order and formatting rules
+- [ ] Finance Expert responses include `## Key Metrics` table; Lawyer responses include `## Risk Flags` with `**RISK:**` prefixes; Doctor responses include `## Medical Disclaimer`
+- [ ] `/api/personas` route exposes `response_format`, `detection_keywords`, and `output_conventions` in its JSON response
+- [ ] No changes to any service file logic — only `EXPERT_PERSONAS` data and route response payload
+
+**Engineering Tasks**
+
+| # | Task | Role | Est. Hours |
+|---|------|------|-----------|
+| 1 | Add `response_format`, `required_sections`, `detection_keywords`, `tool_preference`, `output_conventions` fields to all 8 personas in `api/index.py` | Backend | 1.5h |
+| 2 | Append OUTPUT FORMAT CONTRACT block to each `persona_def` string with agent-specific section rules | Backend | 1h |
+| 3 | Update `/api/personas` route response to include new fields | Backend | 0.5h |
+| 4 | Manual test: ask Finance Expert a financial question — verify `## Key Metrics` table appears in response | Full-stack | 0.5h |
+
+---
+
+#### DOCBOT-802: Client-Side Question Routing Function + Auto/Manual Mode State
+
+**Story**
+As a user, I want DocBot to automatically detect the best expert for my question so that I get a domain-appropriate response without having to pre-select a persona.
+
+**Phase**: 3
+**Priority**: Must Have
+**Story Points**: 5
+**Dependencies**: DOCBOT-801
+
+**Acceptance Criteria**
+- [ ] `routeQuestion(question, chatMode, isDbConnected, hasDocSession)` function exists in frontend and scores keywords against each persona's `detection_keywords`
+- [ ] Confidence thresholds: score ≥ 6 = "high", score ≥ 3 = "medium", score < 3 = "low" (no routing change)
+- [ ] `isAutoMode` state (default: `true`) controls whether routing overrides manual selection
+- [ ] `Message` type extended with `agentPersona?: string` and `agentPersonas?: string[]`
+- [ ] Each assistant message tagged with the persona that answered it
+- [ ] "high" or "medium" confidence routes auto-selected persona to the API; "low" keeps current selection
+- [ ] `tool_preference: "sql_first"` biases chatMode to "database" when DB is connected; `"rag_first"` biases to "docs"
+
+**Engineering Tasks**
+
+| # | Task | Role | Est. Hours |
+|---|------|------|-----------|
+| 1 | Extend frontend `EXPERT_PERSONAS` constant with new fields mirrored from backend | Frontend | 0.5h |
+| 2 | Write `routeQuestion()` weighted keyword scorer function | Frontend | 1h |
+| 3 | Add `isAutoMode` state and extend `Message` type with `agentPersona` | Frontend | 0.5h |
+| 4 | Insert routing call in `handleSend` before API request; tag assistant message with persona used | Frontend | 1h |
+| 5 | Console.log test: verify Finance/Lawyer/AI routing via browser console before wiring UI | Frontend | 0.5h |
+
+---
+
+#### DOCBOT-803: Sidebar Auto/Override UX Transformation
+
+**Story**
+As a user, I want the Expert Mode sidebar to default to "Auto" routing so that I don't need to manually pick a persona, but I can still override to a specific agent when I want.
+
+**Phase**: 3
+**Priority**: Must Have
+**Story Points**: 3
+**Dependencies**: DOCBOT-802
+
+**Acceptance Criteria**
+- [ ] Sidebar Expert Mode section shows AUTO / Manual toggle pills instead of the bare 2×4 grid
+- [ ] AUTO mode is active by default on page load
+- [ ] Existing 2×4 persona grid is collapsed inside a "Manual Override" expandable section
+- [ ] Clicking a persona card in Manual Override: sets `isAutoMode = false` and pins that persona
+- [ ] "Reset to Auto" link appears when a persona is manually pinned; click resets to Auto mode
+- [ ] No functional regression — `selectedPersona` state and API `persona:` field still work correctly
+
+**Engineering Tasks**
+
+| # | Task | Role | Est. Hours |
+|---|------|------|-----------|
+| 1 | Replace sidebar persona section heading with AUTO / Manual pill toggle (Wand2 / UserCog icons) | Frontend | 1h |
+| 2 | Wrap existing 2×4 grid in collapsible "Manual Override" div, collapsed when `isAutoMode = true` | Frontend | 0.5h |
+| 3 | Add "Reset to Auto" small link below grid; show only when `!isAutoMode` | Frontend | 0.5h |
+| 4 | Test: Auto mode → ask question → correct agent routes. Manual pin → ask question → pinned agent used. Reset → auto resumes. | Frontend | 0.5h |
+
+---
+
+#### DOCBOT-804: Per-Message Agent Badge Display
+
+**Story**
+As a user, I want to see which expert agent answered each message so that I understand why the response style and structure differs from other messages.
+
+**Phase**: 3
+**Priority**: Must Have
+**Story Points**: 2
+**Dependencies**: DOCBOT-802
+
+**Acceptance Criteria**
+- [ ] Each assistant message header shows a colored pill badge with the agent's name (e.g., "Finance Expert" in amber, "Lawyer" in red, "Doctor" in green)
+- [ ] Badge color comes from `output_conventions.accent_color` for the agent that answered
+- [ ] Hybrid queries (both doc + DB agents) show two side-by-side badges
+- [ ] Badge does not appear on user messages
+- [ ] If `agentPersona` is undefined (legacy messages), falls back to "DocBot" label
+
+**Engineering Tasks**
+
+| # | Task | Role | Est. Hours |
+|---|------|------|-----------|
+| 1 | Replace static "DocBot" span in message header with dynamic agent badge component | Frontend | 1h |
+| 2 | Handle `agentPersonas` array case (hybrid): render two badges side by side | Frontend | 0.5h |
+| 3 | Visual test: send messages in Auto mode for 3 different domains — verify correct badge color per response | Frontend | 0.5h |
+
+---
+
+#### DOCBOT-805: Per-Agent Response Rendering
+
+**Story**
+As a user, I want Finance Expert responses to show styled metric tables, Lawyer responses to highlight risk items, and Doctor responses to visually separate the medical disclaimer, so that each expert's output is immediately recognizable and easier to scan.
+
+**Phase**: 3
+**Priority**: Should Have
+**Story Points**: 5
+**Dependencies**: DOCBOT-801, DOCBOT-804
+
+**Acceptance Criteria**
+- [ ] Finance Expert: `## Key Metrics` table header row has amber background tint
+- [ ] Lawyer: text matching the risk highlight pattern (`RISK`, `WARNING`, `BREACH`, `PENALTY`, etc.) rendered with red-tinted background highlight
+- [ ] Doctor: `## Medical Disclaimer` section rendered in a green left-border callout box rather than plain markdown
+- [ ] Data Analyst: SQL fenced code block under `## SQL Query` uses existing collapsible code component
+- [ ] All other agents: standard ReactMarkdown rendering (no visual change)
+- [ ] Per-agent rendering is applied only when `msg.agentPersona` is set and `response_format !== "general"`
+
+**Engineering Tasks**
+
+| # | Task | Role | Est. Hours |
+|---|------|------|-----------|
+| 1 | Extend `renderMessageContent` to detect `msg.agentPersona` and apply per-format pre-processing | Frontend | 1h |
+| 2 | Finance: add wrapper div with `agent-finance` class; Tailwind `prose` override for table header amber | Frontend | 1h |
+| 3 | Lawyer: apply `highlight_pattern` regex over content, wrap matches in `<mark>` with red-tinted style | Frontend | 1h |
+| 4 | Doctor: detect `## Medical Disclaimer` heading + content, wrap in styled callout div | Frontend | 0.5h |
+| 5 | Visual test each format: Finance table, Lawyer highlights, Doctor disclaimer box, Data SQL block | Frontend | 1h |
+
+---
+
 ## 4. Sprint Plan — Phase 0 + Phase 1
 
 ### Current Status (as of 2026-03-23)
@@ -1281,12 +1433,15 @@ As a DTC brand owner on Shopify, I want to connect my Shopify store to DocBot, s
 | Enterprise Add-on | DOCBOT-208 (Azure SQL / Entra auth) | 8 | ✅ Complete |
 | Phase 2 Sprint 1 | DOCBOT-501, 503, 502, 504, 305, 405 | 44 | ✅ Complete |
 | Phase 2 Bug Fixes | Chart rendering (Qwen3 `<think>` strip), Autopilot auto-detect nudge | — | ✅ Complete |
+| Phase 3 Sprint 1 | DOCBOT-801, 802, 803, 804, 805 | 18 | 🔵 In Planning |
 
 **Total delivered**: 179 story points across 27 tickets + full test suite (232 tests) + GitHub Actions CI
 
 **Phase 2 Complete** — All 6 Phase 2 tickets shipped and merged to `main`. Two post-ship bugs resolved:
 - Fixed DB chat charts not rendering (Qwen3 `<think>` blocks in generated Python broke E2B sandbox execution)
 - Added Autopilot auto-detect nudge (keyword-triggered suggestion banner above input)
+
+**Phase 3 (in planning)** — EPIC-08: Smart Agent Auto-Routing (DOCBOT-801–805, 18 points). Replaces static persona picker with intelligent per-question routing, structured output contracts, per-agent response rendering.
 
 ---
 
