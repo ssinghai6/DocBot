@@ -1986,6 +1986,24 @@ export default function Home() {
 
                     {/* Message Content */}
                     {msg.role === "assistant" ? (
+                      msg.content === "" && isLoading ? (
+                        /* Thinking animation — shown while waiting for first token */
+                        <div className="flex flex-col gap-2.5 py-1">
+                          <div className="flex items-center gap-2">
+                            <div className="flex items-center gap-1.5">
+                              <div className="w-2 h-2 rounded-full bg-[#667eea] animate-bounce" style={{ animationDelay: "0ms", animationDuration: "1s" }} />
+                              <div className="w-2 h-2 rounded-full bg-[#764ba2] animate-bounce" style={{ animationDelay: "180ms", animationDuration: "1s" }} />
+                              <div className="w-2 h-2 rounded-full bg-[#8b5cf6] animate-bounce" style={{ animationDelay: "360ms", animationDuration: "1s" }} />
+                            </div>
+                            <span className="text-xs text-gray-500 animate-pulse">Thinking…</span>
+                          </div>
+                          <div className="space-y-2 opacity-40">
+                            <div className="h-2.5 rounded-full bg-gradient-to-r from-[#667eea]/30 to-transparent animate-pulse" style={{ width: "72%", animationDelay: "0ms" }} />
+                            <div className="h-2.5 rounded-full bg-gradient-to-r from-[#667eea]/20 to-transparent animate-pulse" style={{ width: "55%", animationDelay: "200ms" }} />
+                            <div className="h-2.5 rounded-full bg-gradient-to-r from-[#667eea]/10 to-transparent animate-pulse" style={{ width: "40%", animationDelay: "400ms" }} />
+                          </div>
+                        </div>
+                      ) : (
                       <div className="prose prose-invert prose-sm max-w-none
                         prose-p:leading-7 prose-p:text-gray-300
                         prose-headings:text-white prose-headings:font-semibold prose-headings:mt-0 prose-headings:mb-2
@@ -2003,6 +2021,7 @@ export default function Home() {
                           </ReactMarkdown>
                         )}
                       </div>
+                      )
                     ) : (
                       <p className="text-[15px] leading-relaxed whitespace-pre-wrap">{msg.content}</p>
                     )}
