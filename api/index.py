@@ -1977,8 +1977,12 @@ from fastapi.responses import RedirectResponse
 
 def _build_saml_request_data(request: Request, post_data: dict | None = None) -> dict:
     """Convert a FastAPI Request into the dict python3-saml expects."""
+    # Railway (and most proxies) terminate TLS and forward as http internally.
+    # Trust X-Forwarded-Proto to detect the real scheme.
+    forwarded_proto = request.headers.get("x-forwarded-proto", request.url.scheme)
+    is_https = forwarded_proto == "https"
     return {
-        "https": "on" if request.url.scheme == "https" else "off",
+        "https": "on" if is_https else "off",
         "http_host": request.headers.get("host", request.url.hostname),
         "script_name": request.url.path,
         "get_data": dict(request.query_params),
