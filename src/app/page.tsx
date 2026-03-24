@@ -572,6 +572,7 @@ export default function Home() {
   const [suggestedPersona, setSuggestedPersona] = useState<string | null>(null);
   const [deepVisualMode, setDeepVisualMode] = useState(false);
   const [deepResearch, setDeepResearch] = useState(false);
+  const [drProgress, setDrProgress] = useState<{ step: string; message: string } | null>(null);
   const [sidebarOpen, setSidebarOpen] = useState(true);
   // DOCBOT-802: Auto-routing mode — when true, routeQuestion() picks the persona per message
   const [isAutoMode, setIsAutoMode] = useState(true);
@@ -955,6 +956,7 @@ export default function Home() {
     setMessages(prev => [...prev, userMsg]);
     setInput("");
     setIsLoading(true);
+    setDrProgress(null);
 
     // ── DOCBOT-802: Auto-routing — pick persona and optionally bias chat mode ──
     let personaToSend = selectedPersona;
@@ -1289,7 +1291,10 @@ export default function Home() {
           if (!jsonStr) continue;
           try {
             const chunk = JSON.parse(jsonStr);
-            if (chunk.type === "token") {
+            if (chunk.type === "progress") {
+              setDrProgress({ step: chunk.step, message: chunk.message });
+            } else if (chunk.type === "token") {
+              setDrProgress(null); // collapse progress strip on first token
               setMessages(prev => prev.map((m, i) =>
                 i === prev.length - 1 ? { ...m, content: m.content + chunk.content } : m
               ));
@@ -2461,7 +2466,22 @@ export default function Home() {
                 </div>
               )}
 
-              {isLoading && messages.length > 0 && messages[messages.length - 1].role === "user" && !autopilotRunning && (
+              {/* Deep Research progress strip */}
+              {isLoading && drProgress && deepResearch && (
+                <div className="flex justify-start mb-2">
+                  <div className="flex items-center gap-2 px-3 py-2 rounded-xl bg-indigo-950/40 border border-indigo-500/20 text-indigo-300 text-xs max-w-sm">
+                    <span className="animate-pulse shrink-0">
+                      {drProgress.step === "planning" && "🧠"}
+                      {drProgress.step === "retrieving" && "🔍"}
+                      {drProgress.step === "evaluating" && "✅"}
+                      {drProgress.step === "gap_fill" && "🔄"}
+                      {drProgress.step === "synthesizing" && "📝"}
+                    </span>
+                    <span className="truncate">{drProgress.message}</span>
+                  </div>
+                </div>
+              )}
+              {isLoading && messages.length > 0 && messages[messages.length - 1].role === "user" && !autopilotRunning && !drProgress && (
                 <div className="flex justify-start">
                   <TypingIndicator />
                 </div>
