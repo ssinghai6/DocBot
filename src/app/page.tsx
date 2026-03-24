@@ -592,6 +592,7 @@ export default function Home() {
     dbname: "",
     user: "",
     password: "",
+    pii_masking_enabled: false,
   });
   const [showDbPassword, setShowDbPassword] = useState(false);
   const [liveDbConnectState, setLiveDbConnectState] = useState<"idle" | "connecting" | "error">("idle");
@@ -708,6 +709,7 @@ export default function Home() {
             dbname: liveDbForm.dbname,
             auth_type: "entra_interactive",
             access_token: entraToken,
+            pii_masking_enabled: liveDbForm.pii_masking_enabled,
           }
         : {
             session_id: sessionId ?? anonymousSessionIdRef.current,
@@ -717,6 +719,7 @@ export default function Home() {
             dbname: liveDbForm.dbname,
             user: liveDbForm.user,
             password: liveDbForm.password,
+            pii_masking_enabled: liveDbForm.pii_masking_enabled,
           };
       const response = await fetch("/api/db/connect", {
         method: "POST",
@@ -1853,6 +1856,18 @@ export default function Home() {
                       </div>
                     </>
                   )}
+
+                  {/* PII Masking toggle — DOCBOT-604 */}
+                  <button
+                    type="button"
+                    onClick={() => setLiveDbForm(f => ({ ...f, pii_masking_enabled: !f.pii_masking_enabled }))}
+                    className="w-full flex items-center justify-between px-3 py-2 rounded-lg bg-[#1a1a24] border border-[#ffffff10] hover:border-[#f97316]/20 transition-all"
+                  >
+                    <span className="text-xs text-gray-400">PII masking</span>
+                    <div className={`relative w-8 h-4 rounded-full transition-colors ${liveDbForm.pii_masking_enabled ? "bg-[#f97316]" : "bg-[#ffffff15]"}`}>
+                      <div className={`absolute top-0.5 w-3 h-3 rounded-full bg-white shadow transition-transform ${liveDbForm.pii_masking_enabled ? "translate-x-4" : "translate-x-0.5"}`} />
+                    </div>
+                  </button>
 
                   {liveDbError && (
                     <p className="text-[10px] text-red-400 px-1">{liveDbError}</p>
