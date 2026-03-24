@@ -1280,8 +1280,13 @@ As a DTC brand owner on Shopify, I want to connect my Shopify store to DocBot, s
 | Phase 1 | All Phase 1 tickets | 122 | ✅ Complete |
 | Enterprise Add-on | DOCBOT-208 (Azure SQL / Entra auth) | 8 | ✅ Complete |
 | Phase 2 Sprint 1 | DOCBOT-501, 503, 502, 504, 305, 405 | 44 | ✅ Complete |
+| Phase 2 Bug Fixes | Chart rendering (Qwen3 `<think>` strip), Autopilot auto-detect nudge | — | ✅ Complete |
 
-**Total delivered**: 179 story points across 27 tickets + full test suite (203 tests) + GitHub Actions CI
+**Total delivered**: 179 story points across 27 tickets + full test suite (232 tests) + GitHub Actions CI
+
+**Phase 2 Complete** — All 6 Phase 2 tickets shipped and merged to `main`. Two post-ship bugs resolved:
+- Fixed DB chat charts not rendering (Qwen3 `<think>` blocks in generated Python broke E2B sandbox execution)
+- Added Autopilot auto-detect nudge (keyword-triggered suggestion banner above input)
 
 ---
 
