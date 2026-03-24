@@ -241,6 +241,11 @@ async def rag_retrieve(
 ) -> tuple[str, list[dict]]:
     """Retrieve document context for a question via vector similarity search.
 
+    Uses multi-query expansion to improve recall for short or ambiguous
+    questions (e.g. "His position or title?" will also search for
+    "job title", "SOC occupation title", etc. so structured form labels
+    are found even when the user's phrasing is semantically distant).
+
     Returns (context_text, citations_list).
     Returns ("", []) when the session has no documents or on any error.
     """
@@ -248,12 +253,19 @@ async def rag_retrieve(
         return ("", [])
 
     try:
+        from api.utils.query_expansion import expand_query, deduplicate_docs
+
         db = vector_stores[session_id]
         retriever = db.as_retriever(
             search_type="similarity",
             search_kwargs={"k": 8},
         )
-        docs = retriever.invoke(question)
+
+        # Expand the question into synonym variants and retrieve for each;
+        # merge results so each unique chunk appears at most once.
+        expanded_queries = expand_query(question)
+        all_result_lists = [retriever.invoke(q) for q in expanded_queries]
+        docs = deduplicate_docs(all_result_lists)
 
         context = "\n\n".join(
             f"Source: {doc.metadata.get('source', 'Unknown')}, "
@@ -489,6 +501,17 @@ async def hybrid_chat(
         f"Answer the following question using the context below. "
         f"Be concise and accurate.{doc_note}{sql_note}"
         f"{discrepancy_instruction}\n\n"
+        "RETRIEVAL ACCURACY RULES:\n"
+        "- Read EVERY chunk in the document context carefully before concluding any "
+        "field is absent.\n"
+        "- Structured forms (government forms, legal filings) store fields as labelled "
+        "rows such as 'Job Title: X' or 'SOC Code: Y'. If ANY chunk contains a relevant "
+        "field value you MUST report it — do not say the value is missing.\n"
+        "- If the question asks about a person's role, title, position, or occupation, "
+        "look for any of: Job Title, Position, Role, Designation, SOC Occupation Title, "
+        "Occupation Title.\n"
+        "- Only say information is absent when you have examined all chunks and confirmed "
+        "it does not appear anywhere.\n\n"
         f"Question: {question}"
         f"{extracted_section}"
         f"\n\n[DOCUMENT CONTEXT]\n{doc_section}"
