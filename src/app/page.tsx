@@ -708,7 +708,6 @@ export default function Home() {
   const [authError, setAuthError] = useState<string | null>(null);
 
   // ── Persistent Workspace state ────────────────────────────────────────────
-  const [workspaceSessions, setWorkspaceSessions] = useState<WorkspaceSession[]>([]);
   const [workspaceConnections, setWorkspaceConnections] = useState<WorkspaceConnection[]>([]);
 
   // ── DOCBOT-606: Admin panel state ─────────────────────────────────────────
@@ -899,7 +898,6 @@ export default function Home() {
       const data = await res.json();
       const parsed = WorkspaceSchema.safeParse(data);
       if (parsed.success) {
-        setWorkspaceSessions(parsed.data.sessions);
         setWorkspaceConnections(parsed.data.db_connections);
       }
     } catch {
@@ -1812,62 +1810,15 @@ export default function Home() {
           </div>
         )}
 
-        {/* ── Persistent Workspace: Your sessions ────────────────────────── */}
-        {authUser && workspaceSessions.length > 0 && (
-          <div className="mb-5">
-            <h3 className="text-xs font-semibold mb-2 text-gray-400 flex items-center gap-1.5">
-              <Clock className="w-3.5 h-3.5" />
-              Your sessions
-            </h3>
-            <ul className="space-y-1">
-              {workspaceSessions.map((ws) => (
-                <li key={ws.session_id}>
-                  <button
-                    onClick={async () => {
-                      try {
-                        const res = await fetch(`/api/session/${ws.session_id}`);
-                        if (!res.ok) return;
-                        const data = await res.json();
-                        setSessionId(ws.session_id);
-                        const loadedMessages: Message[] = (data.messages ?? []).map((m: { role: string; content: string; sources?: Citation[] }) => ({
-                          role: m.role as "user" | "assistant",
-                          content: m.content,
-                          citations: m.sources ?? [],
-                        }));
-                        setMessages(loadedMessages);
-                        if (data.session?.persona) setSelectedPersona(data.session.persona);
-                        showToast("info", "Session restored");
-                      } catch {
-                        showToast("error", "Could not restore session");
-                      }
-                    }}
-                    className="w-full text-left px-2.5 py-1.5 rounded-lg hover:bg-[#ffffff08] transition-colors group"
-                  >
-                    <div className="flex items-center gap-2">
-                      <FileText className="w-3 h-3 text-[#667eea] shrink-0" />
-                      <span className="text-[11px] text-gray-300 truncate flex-1">
-                        {ws.file_count} file{ws.file_count !== 1 ? "s" : ""} · {ws.persona}
-                      </span>
-                    </div>
-                    <p className="text-[10px] text-gray-600 mt-0.5 pl-5">
-                      {ws.created_at ? new Date(ws.created_at).toLocaleDateString() : ""}
-                    </p>
-                  </button>
-                </li>
-              ))}
-            </ul>
-          </div>
-        )}
-
         {/* ── Persistent Workspace: Saved DB connections ──────────────────── */}
-        {authUser && workspaceConnections.length > 0 && (
+        {authUser && workspaceConnections.filter(wc => wc.host !== "__local_file__").length > 0 && (
           <div className="mb-5">
             <h3 className="text-xs font-semibold mb-2 text-gray-400 flex items-center gap-1.5">
               <Database className="w-3.5 h-3.5" />
               Saved connections
             </h3>
             <ul className="space-y-1">
-              {workspaceConnections.map((wc) => (
+              {workspaceConnections.filter(wc => wc.host !== "__local_file__").map((wc) => (
                 <li key={wc.id}>
                   <button
                     onClick={() => {

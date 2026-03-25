@@ -255,6 +255,10 @@ async def init_db() -> None:
             "ALTER TABLE users ADD COLUMN IF NOT EXISTS password_hash TEXT",
         ]:
             await conn.execute(text(col_ddl))
+        # DOCBOT-604: pii_masking_enabled column (added after initial deploy)
+        await conn.execute(text(
+            "ALTER TABLE db_connections ADD COLUMN IF NOT EXISTS pii_masking_enabled BOOLEAN DEFAULT false"
+        ))
         # Persistent Workspace: user_id columns for sessions + db_connections
         for col_ddl in [
             "ALTER TABLE sessions ADD COLUMN IF NOT EXISTS user_id TEXT",
