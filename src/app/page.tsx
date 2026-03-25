@@ -976,7 +976,6 @@ export default function Home() {
       // ignore
     }
     setAuthUser(null);
-    setWorkspaceSessions([]);
     setWorkspaceConnections([]);
     showToast("info", "Signed out");
   }, [showToast]);

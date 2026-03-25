@@ -752,6 +752,37 @@ Formatting: Answer directly and naturally. Use **bold** for key terms and import
     },
 }
 
+# DOCBOT-801: Inject OUTPUT FORMAT CONTRACT into each persona_def so the LLM
+# produces structurally consistent responses that the frontend can render
+# predictably.  Built from required_sections — no duplication.
+def _build_contract(sections: list) -> str:
+    if not sections:
+        return ""
+    headings = "\n".join(f"## {s}" for s in sections)
+    contract = (
+        "\n\nOUTPUT FORMAT CONTRACT:\n"
+        f"You MUST structure every response with these exact markdown headings in this order:\n"
+        f"{headings}\n\n"
+        "Rules:\n"
+        "- Never add extra top-level (##) headings beyond those listed\n"
+        "- Never skip a section; write \"N/A — insufficient information\" if no content applies\n"
+        "- Keep each section focused; do not repeat content across sections"
+    )
+    # Per-persona extra rules
+    if "Key Metrics" in sections:
+        contract += "\n- Under ## Key Metrics, always produce a markdown table: | Metric | Value | Context |"
+    if "Risk Assessment" in sections or "Risk Flags" in sections:
+        contract += "\n- Under ## Risk Assessment or ## Risk Flags, prefix each bullet with **RISK:**"
+    if "Medical Disclaimer" in sections:
+        contract += "\n- ## Medical Disclaimer must appear at the end and include the full disclaimer text"
+    return contract
+
+for _name, _data in EXPERT_PERSONAS.items():
+    _contract = _build_contract(_data.get("required_sections", []))
+    if _contract:
+        _data["persona_def"] = _data["persona_def"] + _contract
+
+
 DEEP_RESEARCH_ADDON = (
     "\n\nDEEP RESEARCH MODE IS ACTIVE: Provide a comprehensive, thorough analysis. "
     "Think through all angles of the question. Structure your response with clear markdown headers "
@@ -790,6 +821,7 @@ def get_personas():
                 "response_style": data["response_style"],
                 "disclaimer": data.get("disclaimer"),
                 "response_format": data.get("response_format"),
+                "required_sections": data.get("required_sections", []),
                 "detection_keywords": data.get("detection_keywords"),
                 "output_conventions": data.get("output_conventions")
             }
