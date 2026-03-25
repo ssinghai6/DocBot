@@ -2092,6 +2092,19 @@ async def saml_acs(request: Request, response: Response):
 # DOCBOT-701: Consumer OAuth + Email/Password auth routes
 # ---------------------------------------------------------------------------
 
+@app.get("/api/auth/debug-urls")
+async def auth_debug_urls():
+    """Show exactly what redirect URIs the app will send to OAuth providers."""
+    from api.oauth_service import _app_base_url, _frontend_url
+    base = _app_base_url()
+    return {
+        "app_base_url": base,
+        "frontend_url": _frontend_url(),
+        "github_callback": f"{base}/api/auth/github/callback",
+        "google_callback": f"{base}/api/auth/google/callback",
+    }
+
+
 @app.get("/api/auth/config")
 async def auth_config():
     """Return which auth methods are available (used by frontend to render options)."""
@@ -2107,13 +2120,12 @@ async def auth_config():
 
 @app.get("/api/auth/github")
 async def github_login():
-    """Redirect user to GitHub OAuth authorization page."""
+    """Return GitHub OAuth URL as JSON — frontend navigates directly to avoid proxy redirect issues."""
     from api.oauth_service import github_authorize_url, generate_oauth_state, is_github_configured
-    from fastapi.responses import RedirectResponse
     if not is_github_configured():
         raise HTTPException(status_code=503, detail="GitHub OAuth not configured.")
     state = generate_oauth_state()
-    return RedirectResponse(url=github_authorize_url(state))
+    return {"url": github_authorize_url(state)}
 
 
 @app.get("/api/auth/github/callback")
@@ -2159,13 +2171,12 @@ async def github_callback(code: str, state: str, response: Response):
 
 @app.get("/api/auth/google")
 async def google_login():
-    """Redirect user to Google OAuth authorization page."""
+    """Return Google OAuth URL as JSON — frontend navigates directly to avoid proxy redirect issues."""
     from api.oauth_service import google_authorize_url, generate_oauth_state, is_google_configured
-    from fastapi.responses import RedirectResponse
     if not is_google_configured():
         raise HTTPException(status_code=503, detail="Google OAuth not configured.")
     state = generate_oauth_state()
-    return RedirectResponse(url=google_authorize_url(state))
+    return {"url": google_authorize_url(state)}
 
 
 @app.get("/api/auth/google/callback")
