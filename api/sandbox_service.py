@@ -438,7 +438,7 @@ async def generate_csv_analysis_code(
                     {"role": "system", "content": system_prompt},
                     {"role": "user", "content": user_message},
                 ],
-                max_tokens=1200,
+                max_tokens=2000,
                 temperature=0,
             ),
         )
@@ -454,7 +454,21 @@ async def generate_csv_analysis_code(
             lines = lines[1:]
         if lines and lines[-1].strip() == "```":
             lines = lines[:-1]
-        return "\n".join(lines).strip()
+        code = "\n".join(lines).strip()
+
+        # Validate syntax before returning — a truncated response from the LLM
+        # can produce unterminated string literals that crash E2B at runtime.
+        try:
+            compile(code, "<generated>", "exec")
+        except SyntaxError as syn_err:
+            logger.warning(
+                "generate_csv_analysis_code: generated code has syntax error (%s) — "
+                "returning None so caller uses safe fallback",
+                syn_err,
+            )
+            return None
+
+        return code
 
     except Exception as exc:
         logger.warning("generate_csv_analysis_code failed: %s", exc)
@@ -562,15 +576,25 @@ async def run_csv_query_on_e2b(
         chart_type=chart_type,
     )
 
-    # Fallback code if LLM is unavailable or fails
+    # Fallback code if LLM is unavailable or generation produced invalid syntax.
+    # Uses only safe, deterministic pandas operations — no f-strings or
+    # dynamic string building that could re-introduce a syntax error.
     if not code:
-        cols_str = ", ".join(f'"{c}"' for c in column_names)
         code = (
             "import pandas as pd\n"
+            "import matplotlib\n"
+            "matplotlib.use('Agg')\n"
+            "import matplotlib.pyplot as plt\n"
+            "\n"
             f"df = pd.read_csv('{csv_path_in_sandbox}')\n"
-            "print('Columns:', list(df.columns))\n"
             "print('Shape:', df.shape)\n"
-            "print(df.head(20).to_string())\n"
+            "print('Columns:', list(df.columns))\n"
+            "print()\n"
+            "print('--- Summary Statistics ---')\n"
+            "print(df.describe(include='all').to_string())\n"
+            "print()\n"
+            "print('--- First 10 rows ---')\n"
+            "print(df.head(10).to_string())\n"
         )
 
     # Decode CSV and run on E2B
