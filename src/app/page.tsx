@@ -62,6 +62,30 @@ const AuditLogResponseSchema = z.object({
   events: z.array(AuditEventSchema),
 });
 
+// ── Workspace schemas (persistent sessions + DB connections per user) ─────────
+
+const WorkspaceSessionSchema = z.object({
+  session_id: z.string(),
+  created_at: z.string().nullable(),
+  file_count: z.number(),
+  persona: z.string(),
+});
+type WorkspaceSession = z.infer<typeof WorkspaceSessionSchema>;
+
+const WorkspaceConnectionSchema = z.object({
+  id: z.string(),
+  dialect: z.string(),
+  host: z.string(),
+  db_name: z.string(),
+  created_at: z.string().nullable(),
+});
+type WorkspaceConnection = z.infer<typeof WorkspaceConnectionSchema>;
+
+const WorkspaceSchema = z.object({
+  sessions: z.array(WorkspaceSessionSchema),
+  db_connections: z.array(WorkspaceConnectionSchema),
+});
+
 type Citation = {
   source: string;
   page: number;
@@ -683,6 +707,10 @@ export default function Home() {
   const [authSubmitting, setAuthSubmitting] = useState(false);
   const [authError, setAuthError] = useState<string | null>(null);
 
+  // ── Persistent Workspace state ────────────────────────────────────────────
+  const [workspaceSessions, setWorkspaceSessions] = useState<WorkspaceSession[]>([]);
+  const [workspaceConnections, setWorkspaceConnections] = useState<WorkspaceConnection[]>([]);
+
   // ── DOCBOT-606: Admin panel state ─────────────────────────────────────────
   const [adminPanelOpen, setAdminPanelOpen] = useState(false);
   const [adminTab, setAdminTab] = useState<"users" | "audit">("users");
@@ -863,6 +891,22 @@ export default function Home() {
     setToasts(prev => prev.filter(t => t.id !== id));
   }, []);
 
+  // ── Persistent Workspace: load previous sessions + connections ───────────
+  const fetchWorkspace = useCallback(async () => {
+    try {
+      const res = await fetch("/api/auth/workspace", { credentials: "include" });
+      if (!res.ok) return;
+      const data = await res.json();
+      const parsed = WorkspaceSchema.safeParse(data);
+      if (parsed.success) {
+        setWorkspaceSessions(parsed.data.sessions);
+        setWorkspaceConnections(parsed.data.db_connections);
+      }
+    } catch {
+      // non-fatal — workspace panel stays empty
+    }
+  }, []);
+
   // ── DOCBOT-606: Check auth on mount ──────────────────────────────────────
   useEffect(() => {
     const checkAuth = async () => {
@@ -880,7 +924,11 @@ export default function Home() {
         if (res.ok) {
           const data = await res.json();
           const parsed = AuthMeSchema.safeParse(data);
-          if (parsed.success) setAuthUser(parsed.data);
+          if (parsed.success) {
+            setAuthUser(parsed.data);
+            // Load workspace for already-authenticated user
+            fetchWorkspace();
+          }
         }
 
         // Handle OAuth redirect result (GitHub/Google callback redirects back here)
@@ -895,6 +943,8 @@ export default function Home() {
               if (parsed.success) {
                 setAuthUser(parsed.data);
                 showToast("success", `Welcome, ${parsed.data.name || parsed.data.email}!`);
+                // Load workspace after OAuth login
+                fetchWorkspace();
               }
             }
             // Clean up query param
@@ -918,7 +968,7 @@ export default function Home() {
       }
     };
     checkAuth();
-  }, []); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [fetchWorkspace]); // eslint-disable-line react-hooks/exhaustive-deps
 
   // ── DOCBOT-606 / DOCBOT-701: Handle logout ───────────────────────────────
   const handleLogout = useCallback(async () => {
@@ -928,6 +978,8 @@ export default function Home() {
       // ignore
     }
     setAuthUser(null);
+    setWorkspaceSessions([]);
+    setWorkspaceConnections([]);
     showToast("info", "Signed out");
   }, [showToast]);
 
@@ -964,12 +1016,14 @@ export default function Home() {
       setAuthPassword("");
       setAuthName("");
       showToast("success", authModalTab === "register" ? "Account created!" : "Welcome back!");
+      // Load workspace after email/password login
+      fetchWorkspace();
     } catch {
       setAuthError("Network error. Please try again.");
     } finally {
       setAuthSubmitting(false);
     }
-  }, [authModalTab, authEmail, authPassword, authName, showToast]);
+  }, [authModalTab, authEmail, authPassword, authName, showToast, fetchWorkspace]);
 
   // ── DOCBOT-606: Load admin users ──────────────────────────────────────────
   const loadAdminUsers = useCallback(async () => {
@@ -1718,16 +1772,8 @@ export default function Home() {
                   <ShieldCheck className="w-3.5 h-3.5 text-[#a5b4fc]" />
                 </div>
                 <div className="flex-1 min-w-0">
-                  <p className="text-xs font-medium text-gray-200 truncate">{authUser.email}</p>
-                  <span className={`inline-block mt-0.5 text-[9px] px-1.5 py-0.5 rounded-full font-semibold uppercase tracking-wide ${
-                    authUser.role === "admin"
-                      ? "bg-[#f59e0b]/20 text-[#fbbf24]"
-                      : authUser.role === "analyst"
-                      ? "bg-[#10b981]/20 text-[#34d399]"
-                      : "bg-[#3b82f6]/20 text-[#60a5fa]"
-                  }`}>
-                    {authUser.role}
-                  </span>
+                  <p className="text-xs font-medium text-gray-200 truncate">{authUser.name || authUser.email}</p>
+                  <p className="text-[10px] text-gray-500 truncate">{authUser.email}</p>
                 </div>
                 {authUser.role === "admin" && (
                   <button
@@ -1756,6 +1802,90 @@ export default function Home() {
                 Sign in / Create account
               </button>
             )}
+          </div>
+        )}
+
+        {/* ── Persistent Workspace: Your sessions ────────────────────────── */}
+        {authUser && workspaceSessions.length > 0 && (
+          <div className="mb-5">
+            <h3 className="text-xs font-semibold mb-2 text-gray-400 flex items-center gap-1.5">
+              <Clock className="w-3.5 h-3.5" />
+              Your sessions
+            </h3>
+            <ul className="space-y-1">
+              {workspaceSessions.map((ws) => (
+                <li key={ws.session_id}>
+                  <button
+                    onClick={async () => {
+                      try {
+                        const res = await fetch(`/api/session/${ws.session_id}`);
+                        if (!res.ok) return;
+                        const data = await res.json();
+                        setSessionId(ws.session_id);
+                        const loadedMessages: Message[] = (data.messages ?? []).map((m: { role: string; content: string; sources?: Citation[] }) => ({
+                          role: m.role as "user" | "assistant",
+                          content: m.content,
+                          citations: m.sources ?? [],
+                        }));
+                        setMessages(loadedMessages);
+                        if (data.session?.persona) setSelectedPersona(data.session.persona);
+                        showToast("info", "Session restored");
+                      } catch {
+                        showToast("error", "Could not restore session");
+                      }
+                    }}
+                    className="w-full text-left px-2.5 py-1.5 rounded-lg hover:bg-[#ffffff08] transition-colors group"
+                  >
+                    <div className="flex items-center gap-2">
+                      <FileText className="w-3 h-3 text-[#667eea] shrink-0" />
+                      <span className="text-[11px] text-gray-300 truncate flex-1">
+                        {ws.file_count} file{ws.file_count !== 1 ? "s" : ""} · {ws.persona}
+                      </span>
+                    </div>
+                    <p className="text-[10px] text-gray-600 mt-0.5 pl-5">
+                      {ws.created_at ? new Date(ws.created_at).toLocaleDateString() : ""}
+                    </p>
+                  </button>
+                </li>
+              ))}
+            </ul>
+          </div>
+        )}
+
+        {/* ── Persistent Workspace: Saved DB connections ──────────────────── */}
+        {authUser && workspaceConnections.length > 0 && (
+          <div className="mb-5">
+            <h3 className="text-xs font-semibold mb-2 text-gray-400 flex items-center gap-1.5">
+              <Database className="w-3.5 h-3.5" />
+              Saved connections
+            </h3>
+            <ul className="space-y-1">
+              {workspaceConnections.map((wc) => (
+                <li key={wc.id}>
+                  <button
+                    onClick={() => {
+                      setShowLiveDbForm(true);
+                      setLiveDbForm(prev => ({
+                        ...prev,
+                        dialect: wc.dialect,
+                        host: wc.host,
+                        dbname: wc.db_name,
+                      }));
+                      showToast("info", "Connection details loaded — enter credentials and connect");
+                    }}
+                    className="w-full text-left px-2.5 py-1.5 rounded-lg hover:bg-[#ffffff08] transition-colors"
+                  >
+                    <div className="flex items-center gap-2">
+                      <Database className="w-3 h-3 text-[#10b981] shrink-0" />
+                      <span className="text-[11px] text-gray-300 truncate flex-1">
+                        {wc.dialect} · {wc.db_name}
+                      </span>
+                    </div>
+                    <p className="text-[10px] text-gray-600 mt-0.5 pl-5 truncate">{wc.host}</p>
+                  </button>
+                </li>
+              ))}
+            </ul>
           </div>
         )}
 
