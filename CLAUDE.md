@@ -2,56 +2,67 @@
 
 ## What This Project Is
 
-DocBot is an AI-powered document + database analyst. Currently deployed on Vercel as a PDF chat tool with 7 expert personas (v1). Being extended into a full "Friendly Data/Business Analyst" product (v2) that can:
-- Chat with uploaded PDFs (existing)
-- Connect to live databases and generate SQL
-- Run Python analysis via E2B sandboxes
-- Answer hybrid questions spanning both docs and live data in one answer with dual citations
+DocBot is an AI-powered document + database analyst, fully deployed on Railway (backend) + Vercel (frontend). It can:
+- Chat with uploaded PDFs using 8 expert personas with smart auto-routing
+- Connect to live databases (PostgreSQL, MySQL, SQLite, Azure SQL) and generate SQL
+- Upload CSV files — queries run via E2B pandas sandbox (no SQL pipeline)
+- Run Python analysis via E2B sandboxes with matplotlib chart capture
+- Answer hybrid questions spanning both docs and live data with dual citations and discrepancy detection
+- Run multi-step deep research using a LangGraph 5-node state machine
+- Authenticate via SAML SSO (Okta, Azure AD), GitHub OAuth, Google OAuth, or email/password
+- Enforce RBAC (viewer / analyst / admin), audit logging, and PII auto-masking
 
 **The core differentiator:** Hybrid Docs+DB synthesis with discrepancy detection. No other tool on the market does this.
 
 ## Current Branch
 
-`v2` — all new work goes here. `main` is the stable Vercel-deployed v1.
+`main` — all work goes here. Railway auto-deploys from `main` on push.
 
 ## Key Files
 
 | File | Purpose |
 |------|---------|
-| `api/index.py` | FastAPI backend (~940 lines). Contains EXPERT_PERSONAS, VECTOR_STORES, init_db(), all routes |
+| `api/index.py` | FastAPI backend (~1700 lines). App setup, EXPERT_PERSONAS, init_db(), all route handlers |
+| `api/db_service.py` | All DB connectivity, schema introspection, 7-step SQL pipeline |
+| `api/sandbox_service.py` | E2B sandbox execution, Python/pandas code generation (Qwen via Groq), CSV→E2B pipeline |
+| `api/hybrid_service.py` | Intent classification, parallel RAG+SQL retrieval, discrepancy detection |
+| `api/autopilot_service.py` | Analytical Autopilot — LangGraph multi-step investigation state machine |
+| `api/deep_research_service.py` | LangGraph Deep Research — 5-node state machine (plan→retrieve→evaluate→gap→synthesize) |
+| `api/auth_service.py` | SAML 2.0 SSO, session management, JIT user provisioning |
+| `api/oauth_service.py` | GitHub OAuth, Google OAuth, email/password auth with bcrypt |
+| `api/rbac_service.py` | RBAC — viewer/analyst/admin roles, `require_role()` FastAPI dependency |
+| `api/audit_service.py` | Append-only audit log, PostgreSQL immutability trigger, CSV export |
+| `api/artifact_service.py` | Session artifact store — persists charts, code, SQL results |
+| `api/document_extractor.py` | LangExtract financial extraction (Gemini 2.5 Flash, full-doc coverage) |
+| `api/file_upload_service.py` | CSV/SQLite file uploads — CSV goes to E2B pandas, SQLite to SQL pipeline |
+| `api/utils/` | Shared helpers: encryption, SSRF validator, SQL validator, embeddings, PII masking, table selector, context compressor |
 | `src/app/page.tsx` | Monolithic React frontend (~1800 lines). All UI state via useState |
 | `requirements.txt` | Python dependencies |
-| `vercel.json` | Routes all /api/* to api/index.py |
+| `project-tasks/docbot-v2-project-tracking.md` | 38 user stories, 9 epics, sprint plan, Definition of Done — **primary ticket tracker** |
 | `project-tasks/docbot-db-master-plan.md` | Full architecture, security model, phased build plan |
-| `project-tasks/docbot-v2-project-tracking.md` | 32 user stories, 6 epics, sprint plan, Definition of Done |
 
-## Architecture: Current (v1)
-
-```
-Next.js 16 (Vercel) → FastAPI (Vercel Serverless) → Groq (Llama 3.3-70b)
-                                ↓
-              LangChain + InMemoryVectorStore + PyMuPDF
-                                ↓
-              SQLite at /tmp/docbot_sessions.db (lost on cold start)
-```
-
-## Architecture: Target (v2)
+## Current Architecture (v2 — live on Railway)
 
 ```
-Next.js 16 (Vercel) → FastAPI (Railway container) → Groq / Claude claude-sonnet-4-6
+Next.js 16 (Vercel) → FastAPI (Railway container) → Groq / Gemini
                                 ↓
          LangChain RAG  +  SQLAlchemy DB  +  E2B Python Sandbox
-                                ↓
-              PostgreSQL (Railway) — persistent session + schema store
+                 ↓                ↓                   ↓
+         HuggingFace        PostgreSQL           LangGraph
+         Embeddings         (Railway)         (Autopilot + Deep Research)
 ```
 
 ## Tech Stack
 
 - **Frontend**: Next.js 16, React 19, TailwindCSS 4, TypeScript, lucide-react, react-markdown
 - **Backend**: FastAPI, Python 3.12, Groq (Llama 3.3-70b), LangChain, PyMuPDF
+- **AI/ML**: Groq Qwen/qwen3-32b (code gen), Gemini 2.5 Flash via LangExtract (financial docs), LangGraph (agentic flows)
 - **Embeddings**: sentence-transformers/all-MiniLM-L6-v2 via HuggingFace API
-- **Storage**: SQLite /tmp (v1), PostgreSQL on Railway (v2)
-- **Deployment**: Vercel (frontend + current backend), Railway (v2 backend)
+- **Storage**: PostgreSQL on Railway (sessions, connections, audit log, schema cache)
+- **Sandbox**: E2B code-interpreter (Python/pandas execution, matplotlib charts)
+- **Auth**: python3-saml (SAML 2.0), httpx (OAuth), bcrypt (passwords), azure-identity (Entra)
+- **DB Connectors**: asyncpg (PostgreSQL), pymysql (MySQL), pyodbc (Azure SQL), aiosqlite (SQLite)
+- **Deployment**: Vercel (Next.js frontend), Railway (FastAPI backend + PostgreSQL)
 
 ## Local Dev Commands
 
@@ -72,11 +83,22 @@ Next.js proxies `/api/*` to `localhost:8000` in development.
 |----------|----------|-------|
 | `groq_api_key` | Yes | Groq API key |
 | `huggingface_api_key` | Yes | For embeddings model |
+| `DATABASE_URL` | Yes | Railway PostgreSQL connection string |
+| `DB_ENCRYPTION_KEY` | Yes | Fernet key for credential encryption — never hardcode |
+| `E2B_API_KEY` | Yes | E2B sandbox API key (CSV queries + Python analysis) |
+| `GEMINI_API_KEY` | Yes | Gemini 2.5 Flash for LangExtract financial extraction |
 | `ALLOWED_ORIGINS` | No | Comma-separated CORS origins, defaults to localhost:3000 |
-| `DB_ENCRYPTION_KEY` | v2 | Fernet key for credential encryption — never hardcode |
-| `DATABASE_URL` | v2 | Railway PostgreSQL connection string |
-| `E2B_API_KEY` | v2 | E2B sandbox API key |
-| `GEMINI_API_KEY` | v2 | Gemini API key for LangExtract financial extraction (free tier works; set max_workers=2) |
+| `SESSION_TTL_HOURS` | No | Session cookie TTL in hours, default 8 |
+| `SAML_SP_ENTITY_ID` | SSO | SP entity ID for SAML 2.0 |
+| `SAML_SP_ACS_URL` | SSO | SP Assertion Consumer Service URL |
+| `SAML_IDP_ENTITY_ID` | SSO | IdP entity ID (from IdP metadata) |
+| `SAML_IDP_SSO_URL` | SSO | IdP SSO redirect URL |
+| `SAML_IDP_X509_CERT` | SSO | IdP public certificate (base64, no headers) |
+| `GITHUB_CLIENT_ID` | OAuth | GitHub OAuth app client ID |
+| `GITHUB_CLIENT_SECRET` | OAuth | GitHub OAuth app client secret |
+| `GOOGLE_CLIENT_ID` | OAuth | Google OAuth client ID |
+| `GOOGLE_CLIENT_SECRET` | OAuth | Google OAuth client secret |
+| `OAUTH_REDIRECT_BASE_URL` | OAuth | Base URL for OAuth callback redirect |
 
 Never commit `.env`. Never log credentials. Never pass connection strings to LLM context.
 
@@ -86,20 +108,28 @@ Never commit `.env`. Never log credentials. Never pass connection strings to LLM
 feature/DOCBOT-XXX-short-description
 ```
 
-Example: `feature/DOCBOT-101-railway-migration`
+Example: `feature/DOCBOT-801-smart-agent-routing`
 
 One ticket per branch. One branch per session when possible.
 
 ## Ticket Reference
 
-All work is tracked against tickets in `project-tasks/docbot-v2-project-tracking.md`.
+All work is tracked in `project-tasks/docbot-v2-project-tracking.md`.
 
-Sprint 0 priorities (do these first, in order):
-1. **DOCBOT-101** — Railway migration (Dockerfile, railway.toml, health check)
-2. **DOCBOT-102** — PostgreSQL session store (migrate from SQLite /tmp)
-3. **DOCBOT-103** — E2B sandbox integration
+**Current state (2026-03-25):**
+- EPIC-01 through EPIC-06 — **Done** (archived)
+- Consumer Auth (DOCBOT-701) — **Done**
+- EPIC-08 Smart Agent Auto-Routing (DOCBOT-801–805) — **Done**
+- EPIC-09 LangGraph Deep Research (DOCBOT-901–904) — **Done**
+- **EPIC-10 RAG Quality Enhancement (DOCBOT-1001–1004) — Active work** (16 pts)
+  - DOCBOT-1001: Chroma persistent store (replaces InMemoryVectorStore)
+  - DOCBOT-1002: Cross-encoder reranker post-retrieval
+  - DOCBOT-1003: SemanticChunker for financial/legal docs
+  - DOCBOT-1004: FinanceBench accuracy baseline test suite
+- **EPIC-07 Commerce Connectors (DOCBOT-702–705) — Gated**
+  - Gate condition: begin after 3 of 5 discovery interviews confirm the commerce/seller segment
 
-Phase 1 starts after Sprint 0 and 5 discovery interviews are complete.
+> **PageIndex evaluated 2026-03-25 — not integrating.** Hard blockers: OpenAI-only (Groq incompatible), not on PyPI (Railway brittleness), no streaming (SSE conflict). Revisit if PyPI package + multi-backend support ships.
 
 ## Critical Architecture Rules — DO NOT VIOLATE
 
@@ -118,46 +148,36 @@ Phase 1 starts after Sprint 0 and 5 discovery interviews are complete.
 
 **Credential protection**: Connection strings with passwords are NEVER logged, NEVER passed to LLM context, NEVER stored in plain text. Always Fernet-encrypt before persisting.
 
-## Vercel Constraints (current backend)
-
-| Constraint | Limit |
-|-----------|-------|
-| Execution time | 30s max |
-| Writable filesystem | `/tmp` only |
-| Bundle size | 250MB |
-| Process memory | Per-invocation (no persistent state) |
-
-`VECTOR_STORES = {}` is in-memory and lost on every cold start. This is a known limitation addressed by the Railway migration.
+**CSV queries never use SQL pipeline**: CSV uploads store raw bytes in the encrypted creds blob (`dialect="csv"`). Queries bypass `run_sql_pipeline` entirely and go to `run_csv_query_on_e2b()` in `sandbox_service.py`.
 
 ## SQL Query Pipeline (7 bounded steps)
 
 ```
 NL Question
   → [1] Schema Retrieval     (cache → miss → introspect)
-  → [2] Table Selector       (LLM call #1)
+  → [2] Table Selector       (semantic similarity → LLM fallback)
   → [3] Few-Shot Retrieval   (cosine similarity on stored queries)
-  → [4] SQL Generator        (LLM call #2)
+  → [4] SQL Generator        (LLM call #1)
   → [5] SQL Validator        (sqlglot AST — DETERMINISTIC, no LLM)
   → [6] Executor             (SQLAlchemy, 15s timeout, 500 row cap)
-  → [7] Answer Generator     (LLM call #3, Groq streaming)
+  → [7] Answer Generator     (LLM call #2, Groq streaming)
 ```
 
-Max 3 LLM calls. No loops.
+Max 2–3 LLM calls. No loops. CSV dialect short-circuits before Step 1.
 
-## LLM Routing (v2)
+## LLM Routing
 
-- **Groq Llama 3.3-70b**: SQL generation, hybrid synthesis, intent classification (speed priority, ~82% accuracy on business queries)
-- **Groq Qwen/qwen3-32b**: Python code generation for E2B sandboxes (free, coding-optimised)
+- **Groq Llama 3.3-70b**: SQL generation, hybrid synthesis, intent classification, answer generation
+- **Groq Qwen/qwen3-32b**: Python/pandas code generation for E2B sandboxes (CSV queries + chart analysis)
 - **Gemini 2.5 Flash via LangExtract**: Financial document extraction (full-document chunked extraction with char_interval source grounding)
 
 ## Code Style
 
-- Python: No type: ignore, no bare except. Use specific exception types.
+- Python: No `type: ignore`, no bare `except`. Use specific exception types.
 - TypeScript: No `any`. Use Zod for runtime validation on API responses.
 - All new API routes need Pydantic models for request/response.
 - All new frontend API calls need Zod schemas.
 - No hardcoded secrets anywhere. Check with `grep -r "sk-\|api_key\s*=" --include="*.py" --include="*.ts"` before committing.
-
 
 ## Git Branch
 When asked to work on new Epic or Feature always create a new git branch based on that feature.
@@ -197,20 +217,27 @@ tests/
 - Route handlers (thin — call service functions, return responses)
 
 All business logic lives in dedicated service/util modules:
-- `api/db_service.py` — all database connectivity, schema, SQL pipeline logic
-- `api/sandbox_service.py` — E2B sandbox logic + Python code generation (Qwen via Groq)
+- `api/db_service.py` — DB connectivity, schema, 7-step SQL pipeline
+- `api/sandbox_service.py` — E2B sandbox, Python/pandas code gen, CSV→E2B pipeline
 - `api/hybrid_service.py` — intent classification, RAG retrieval, hybrid chat pipeline
-- `api/document_extractor.py` — LangExtract financial extraction (Gemini 2.5 Flash, full-doc coverage)
+- `api/autopilot_service.py` — Analytical Autopilot LangGraph state machine
+- `api/deep_research_service.py` — Deep Research LangGraph 5-node state machine
+- `api/auth_service.py` — SAML SSO, session management, JIT provisioning
+- `api/oauth_service.py` — GitHub/Google OAuth, email/password auth
+- `api/rbac_service.py` — role enforcement via FastAPI dependency
+- `api/audit_service.py` — append-only audit log
+- `api/artifact_service.py` — session artifact persistence
+- `api/document_extractor.py` — LangExtract financial extraction
+- `api/file_upload_service.py` — CSV/SQLite upload handling
 - `api/utils/` — shared helpers (embeddings, encryption, validators, etc.)
 
 **Rule:** If a function is more than ~15 lines or has no direct dependency on the HTTP request/response, it belongs in a service or utils module, not in index.py.
 
 Always prefer to create utils and helper functions whenever required.
 
-
-### Commit
-Always have Author : Sanshrit Singhai
-Never use Co-Authored By Claude
+## Commit
+Always have Author: Sanshrit Singhai
+Never use Co-Authored-By Claude
 
 ## Jira Sync Rule
 
@@ -220,14 +247,12 @@ Never use Co-Authored By Claude
 - Credentials: stored in `scripts/jira_update_status.py` (EMAIL + API_TOKEN)
 - Done transition ID: `51`
 - Also transition all subtasks of the story to Done
+- Run `python scripts/jira_update_status.py --dry-run` first to verify, then without `--dry-run`
+- Use `--epic EPIC-XX` to target a single epic
 
 **How to update:**
-1. Find the SCRUM key by searching Jira for the story summary (e.g. `DOCBOT-201`)
-2. POST to `/rest/api/3/issue/{key}/transitions` with `{"transition": {"id": "51"}}`
-3. Repeat for all child subtasks via `/rest/api/3/search/jql` with `parent={key}`
-4. If the ticket has a phase/priority correction needed, add a comment explaining the change
-
-Use `scripts/jira_update_status.py` as a reference implementation. Add new ticket mappings to it as work is completed.
+1. Add the new ticket to the `TICKETS` list in `scripts/jira_update_status.py`
+2. Run `python scripts/jira_update_status.py` (script auto-resolves SCRUM keys by summary search)
 
 ## README Update Rule
 
@@ -241,4 +266,4 @@ The README must always accurately describe what is actually shipped — not what
 5. Move completed items out of Roadmap and into the main feature sections
 6. Update the test count badge and test table
 
-Do not update the README for individual ticket completions within a phase — only on full phase completion or for significant standalone features (like DOCBOT-208 which added a new dialect).
+Do not update the README for individual ticket completions within a phase — only on full phase completion or for significant standalone features.
