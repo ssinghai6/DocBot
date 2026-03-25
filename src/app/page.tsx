@@ -1452,37 +1452,39 @@ export default function Home() {
             const jsonStr = line.slice(6).trim();
             if (!jsonStr) continue;
 
+            let chunk: Record<string, unknown>;
             try {
-              const chunk = JSON.parse(jsonStr);
-              if (chunk.type === "token") {
-                setMessages(prev => prev.map((m, i) =>
-                  i === prev.length - 1 ? { ...m, content: m.content + chunk.content } : m
-                ));
-              } else if (chunk.type === "metadata") {
-                setMessages(prev => prev.map((m, i) =>
-                  i === prev.length - 1
-                    ? { ...m, sql: chunk.sql_query, explanation: chunk.explanation }
-                    : m
-                ));
-              } else if (chunk.type === "analysis_code") {
-                setMessages(prev => prev.map((m, i) =>
-                  i === prev.length - 1 ? { ...m, analysisCode: chunk.code } : m
-                ));
-              } else if (chunk.type === "chart") {
-                setMessages(prev => prev.map((m, i) =>
-                  i === prev.length - 1
-                    ? {
-                        ...m,
-                        charts: [...(m.charts ?? []), chunk.base64],
-                        chartMetas: [...(m.chartMetas ?? []), chunk.metadata ?? null],
-                      }
-                    : m
-                ));
-              } else if (chunk.type === "error") {
-                throw new Error(chunk.detail || "Database query failed");
-              }
+              chunk = JSON.parse(jsonStr);
             } catch {
-              // skip malformed SSE lines
+              continue; // skip malformed SSE lines
+            }
+
+            if (chunk.type === "token") {
+              setMessages(prev => prev.map((m, i) =>
+                i === prev.length - 1 ? { ...m, content: m.content + (chunk.content as string) } : m
+              ));
+            } else if (chunk.type === "metadata") {
+              setMessages(prev => prev.map((m, i) =>
+                i === prev.length - 1
+                  ? { ...m, sql: chunk.sql_query, explanation: chunk.explanation }
+                  : m
+              ));
+            } else if (chunk.type === "analysis_code") {
+              setMessages(prev => prev.map((m, i) =>
+                i === prev.length - 1 ? { ...m, analysisCode: chunk.code } : m
+              ));
+            } else if (chunk.type === "chart") {
+              setMessages(prev => prev.map((m, i) =>
+                i === prev.length - 1
+                  ? {
+                      ...m,
+                      charts: [...(m.charts ?? []), chunk.base64 as string],
+                      chartMetas: [...(m.chartMetas ?? []), (chunk.metadata ?? null) as null],
+                    }
+                  : m
+              ));
+            } else if (chunk.type === "error") {
+              throw new Error((chunk.detail as string) || "Database query failed");
             }
           }
         }
