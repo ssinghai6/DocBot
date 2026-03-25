@@ -634,15 +634,15 @@ Set all environment variables in the Railway and Vercel dashboards.
 
 ## Roadmap
 
-### Phase 3 (Next)
-- BigQuery, Snowflake, Redshift connectors
-- CSV / Google Sheets file upload as queryable data source
-- Smart Agent Auto-Routing — client-side keyword scoring selects the right expert persona automatically
+### EPIC-07: Commerce Connectors (Not Started — Gated)
 
-### Phase 4
-- Standing Monitors — proactive alerts when doc-defined conditions breach in live data
-- Multi-tenant workspace isolation
-- Scheduled reports and digest emails
+> **Gate condition**: Begin only after ≥3 of 5 discovery interviews confirm the commerce/seller segment.
+
+- Pluggable `MarketplaceConnector` interface with credential vault extension
+- Unified commerce schema (orders, products, inventory, line items) with PostgreSQL row-level security per tenant
+- Amazon SP-API connector — LWA OAuth, Orders API, Finances API, incremental sync
+- Background sync worker — APScheduler, incremental fetch, exponential backoff on rate limits
+- Shopify connector — OAuth offline token, webhook-driven incremental sync
 
 ---
 
