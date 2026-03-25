@@ -1466,12 +1466,12 @@ export default function Home() {
             } else if (chunk.type === "metadata") {
               setMessages(prev => prev.map((m, i) =>
                 i === prev.length - 1
-                  ? { ...m, sql: chunk.sql_query, explanation: chunk.explanation }
+                  ? { ...m, sql: chunk.sql_query as string | undefined, explanation: chunk.explanation as string | undefined }
                   : m
               ));
             } else if (chunk.type === "analysis_code") {
               setMessages(prev => prev.map((m, i) =>
-                i === prev.length - 1 ? { ...m, analysisCode: chunk.code } : m
+                i === prev.length - 1 ? { ...m, analysisCode: chunk.code as string | undefined } : m
               ));
             } else if (chunk.type === "chart") {
               setMessages(prev => prev.map((m, i) =>
@@ -1479,7 +1479,9 @@ export default function Home() {
                   ? {
                       ...m,
                       charts: [...(m.charts ?? []), chunk.base64 as string],
-                      chartMetas: [...(m.chartMetas ?? []), (chunk.metadata ?? null) as null],
+                      chartMetas: chunk.metadata
+                        ? [...(m.chartMetas ?? []), chunk.metadata as ChartMeta]
+                        : (m.chartMetas ?? []),
                     }
                   : m
               ));
