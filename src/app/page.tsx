@@ -1286,9 +1286,11 @@ export default function Home() {
       const routing = routeQuestion(input, effectiveChatMode, isDbConnected, !!sessionId, EXPERT_PERSONAS);
       if (routing.confidence !== "low") {
         personaToSend = routing.persona;
+        // Only bias chat mode when a SINGLE source is available.
+        // When both PDF and CSV/DB are present, keep hybrid so backend intent classifier decides.
         const pref = EXPERT_PERSONAS[routing.persona as keyof typeof EXPERT_PERSONAS]?.tool_preference;
-        if (pref === "sql_first" && isDbConnected) effectiveChatMode = "database";
-        else if (pref === "rag_first" && sessionId) effectiveChatMode = "docs";
+        if (pref === "sql_first" && isDbConnected && !sessionId) effectiveChatMode = "database";
+        else if (pref === "rag_first" && sessionId && !isDbConnected) effectiveChatMode = "docs";
       } else {
         // Low confidence: fall back to Generalist rather than the upload-recommended persona
         personaToSend = "Generalist";

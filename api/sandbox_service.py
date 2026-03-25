@@ -383,12 +383,59 @@ async def run_python(
 # ---------------------------------------------------------------------------
 
 
+def _inspect_csv_profile(csv_bytes: bytes) -> tuple:
+    """Extract dtypes and sample rows from CSV bytes for LLM context.
+
+    Returns (dtypes_info, sample_rows) as formatted strings, or (None, None)
+    on error.
+    """
+    import io
+    import re
+
+    import pandas as pd
+
+    try:
+        df = None
+        for encoding in ("utf-8-sig", "utf-8", "latin-1"):
+            try:
+                df = pd.read_csv(io.BytesIO(csv_bytes), encoding=encoding, on_bad_lines="skip", nrows=5)
+                break
+            except (UnicodeDecodeError, pd.errors.ParserError):
+                continue
+
+        if df is None or df.empty:
+            return None, None
+
+        # Normalize column names the same way file_upload_service does
+        df.columns = [
+            re.sub(r"[^a-z0-9_]", "_", c.strip().lower().replace(" ", "_"))
+            for c in df.columns
+        ]
+        df = df.dropna(axis=1, how="all")
+
+        dtypes_info = df.dtypes.to_string()
+        sample_rows = df.head(3).to_string(max_colwidth=40)
+
+        if len(dtypes_info) > 1500:
+            dtypes_info = dtypes_info[:1500] + "\n... (truncated)"
+        if len(sample_rows) > 2000:
+            sample_rows = sample_rows[:2000] + "\n... (truncated)"
+
+        return dtypes_info, sample_rows
+
+    except Exception as exc:
+        logger.warning("_inspect_csv_profile failed: %s", exc)
+        return None, None
+
+
 async def generate_csv_analysis_code(
     csv_path_in_sandbox: str,
     column_names: List[str],
     question: str,
     persona_def: str,
     chart_type: str = "auto",
+    dtypes_info: Optional[str] = None,
+    sample_rows: Optional[str] = None,
 ) -> Optional[str]:
     """Generate Python/pandas code to answer a question about a CSV file on E2B.
 
@@ -406,24 +453,42 @@ async def generate_csv_analysis_code(
 
     system_prompt = (
         "You are a Python data analyst. A CSV file has already been uploaded to the sandbox. "
+        "IMPORTANT: The CSV may have messy/unnamed headers and NaN values. "
+        "A data-cleaning preamble will be automatically prepended to your code that:\n"
+        "  - Loads the CSV into `df`\n"
+        "  - Normalizes column names to lowercase with underscores\n"
+        "  - Drops fully-empty rows and columns\n"
+        "DO NOT include `pd.read_csv()` or `import pandas` in your code — they are already handled.\n\n"
         "Write Python code that:\n"
-        f"1. Loads the CSV: df = pd.read_csv('{csv_path_in_sandbox}')\n"
-        "2. Answers the user's question using pandas operations\n"
-        f"3. CHART TYPE REQUIREMENT: {chart_instructions}\n"
-        "4. If the question asks about schema / columns / structure: print df.dtypes and df.shape, skip charting\n"
-        "5. Otherwise calls plt.show() exactly once after creating the chart\n"
-        "6. Prints a brief text summary of findings\n"
-        "7. AFTER plt.show() (if chart was made), prints chart metadata on ONE line:\n"
+        "1. Uses the pre-loaded `df` DataFrame directly\n"
+        "2. For numeric operations: convert columns with pd.to_numeric(col, errors='coerce') "
+        "and ALWAYS call .dropna() or .fillna(0) before boolean masking\n"
+        "3. NEVER do boolean indexing like df[df['col'] > X] without first ensuring the column has no NaN\n"
+        "4. Answers the user's question using pandas operations\n"
+        f"5. CHART TYPE REQUIREMENT: {chart_instructions}\n"
+        "6. If the question asks about schema / columns / structure: print df.dtypes and df.shape, skip charting\n"
+        "7. Otherwise calls plt.show() exactly once after creating the chart\n"
+        "8. Prints a brief text summary of findings\n"
+        "9. AFTER plt.show() (if chart was made), prints chart metadata on ONE line:\n"
         "   import json; print('CHART_META:' + json.dumps({'type': '<chart_type>', "
         "'title': '<chart_title>', 'x_label': '<x_label>', 'y_label': '<y_label>', 'series_count': <int>}))\n\n"
         "Rules:\n"
         "- Output ONLY raw Python code, no markdown fences, no explanations\n"
-        "- Always import pandas as pd and import matplotlib.pyplot as plt\n"
+        "- Do NOT import pandas or call pd.read_csv — already done by preamble\n"
+        "- Import matplotlib.pyplot as plt if you need charts\n"
+        "- ALWAYS handle NaN before any boolean masking or aggregation\n"
         "- Keep code under 70 lines"
     )
 
+    # Build rich data context for the LLM
+    data_context = f"CSV columns (after name normalization): {cols_preview}"
+    if dtypes_info:
+        data_context += f"\n\nColumn dtypes:\n{dtypes_info}"
+    if sample_rows:
+        data_context += f"\n\nFirst 3 rows (after normalization):\n{sample_rows}"
+
     user_message = (
-        f"CSV columns: {cols_preview}\n\n"
+        f"{data_context}\n\n"
         f"Question: {question}"
     )
 
@@ -567,6 +632,15 @@ async def run_csv_query_on_e2b(
 
     csv_path_in_sandbox = f"/tmp/{table_name}.csv"
 
+    # Inspect CSV structure for better code generation
+    try:
+        csv_bytes_for_profile = base64.b64decode(csv_content_b64)
+    except Exception:
+        csv_bytes_for_profile = b""
+    dtypes_info, sample_rows = await asyncio.get_event_loop().run_in_executor(
+        None, _inspect_csv_profile, csv_bytes_for_profile,
+    )
+
     # Generate pandas code via LLM
     code = await generate_csv_analysis_code(
         csv_path_in_sandbox=csv_path_in_sandbox,
@@ -574,19 +648,33 @@ async def run_csv_query_on_e2b(
         question=question,
         persona_def=persona_def,
         chart_type=chart_type,
+        dtypes_info=dtypes_info,
+        sample_rows=sample_rows,
+    )
+
+    # Mandatory data-cleaning preamble — prepended to ALL generated code
+    # (both LLM-generated and fallback). Ensures column names in sandbox match
+    # the cleaned names the LLM was told about, and NaN-heavy data is handled.
+    _csv_cleaning_preamble = (
+        "import pandas as pd\n"
+        "import re as _re\n"
+        "import numpy as np\n"
+        "\n"
+        f"df = pd.read_csv('{csv_path_in_sandbox}')\n"
+        "# --- DocBot: mandatory data cleaning ---\n"
+        "df.columns = [_re.sub(r'[^a-z0-9_]', '_', c.strip().lower().replace(' ', '_')) for c in df.columns]\n"
+        "df = df.dropna(how='all').dropna(axis=1, how='all')\n"
+        "# --- end cleaning ---\n\n"
     )
 
     # Fallback code if LLM is unavailable or generation produced invalid syntax.
-    # Uses only safe, deterministic pandas operations — no f-strings or
-    # dynamic string building that could re-introduce a syntax error.
     if not code:
         code = (
-            "import pandas as pd\n"
-            "import matplotlib\n"
+            _csv_cleaning_preamble
+            + "import matplotlib\n"
             "matplotlib.use('Agg')\n"
             "import matplotlib.pyplot as plt\n"
             "\n"
-            f"df = pd.read_csv('{csv_path_in_sandbox}')\n"
             "print('Shape:', df.shape)\n"
             "print('Columns:', list(df.columns))\n"
             "print()\n"
@@ -596,6 +684,19 @@ async def run_csv_query_on_e2b(
             "print('--- First 10 rows ---')\n"
             "print(df.head(10).to_string())\n"
         )
+    else:
+        # Prepend cleaning preamble to LLM-generated code, stripping any
+        # duplicate pd.read_csv() / import pandas the LLM may have included
+        import re as _re
+        code = _re.sub(
+            r"^.*pd\.read_csv\s*\(.*\).*$",
+            "# (read_csv handled by preamble)",
+            code,
+            count=1,
+            flags=_re.MULTILINE,
+        )
+        code = _re.sub(r"^import pandas as pd\s*$", "", code, count=1, flags=_re.MULTILINE)
+        code = _csv_cleaning_preamble + code
 
     # Decode CSV and run on E2B
     try:
