@@ -120,7 +120,9 @@ users_table = Table(
     Column("id", String, primary_key=True),                # UUID
     Column("email", String, nullable=False, unique=True, index=True),
     Column("name", String, nullable=False),
-    Column("provider", String, nullable=False),            # okta | azure_ad | saml
+    Column("provider", String, nullable=False),            # github | google | email | okta | azure_ad | saml
+    Column("provider_id", String),                         # GitHub/Google user ID (nullable for email/saml)
+    Column("password_hash", Text),                         # bcrypt hash (nullable for OAuth users)
     Column("role", String, server_default="analyst", nullable=False),  # viewer | analyst | admin
     Column("last_login_at", DateTime(timezone=True)),
     Column("created_at", DateTime(timezone=True), server_default=func.now(), nullable=False),
@@ -226,6 +228,12 @@ async def init_db() -> None:
         from api.audit_service import IMMUTABILITY_TRIGGER_STATEMENTS
         for stmt in IMMUTABILITY_TRIGGER_STATEMENTS:
             await conn.execute(text(stmt))
+        # DOCBOT-701: consumer OAuth columns on users table
+        for col_ddl in [
+            "ALTER TABLE users ADD COLUMN IF NOT EXISTS provider_id TEXT",
+            "ALTER TABLE users ADD COLUMN IF NOT EXISTS password_hash TEXT",
+        ]:
+            await conn.execute(text(col_ddl))
     logger.info(
         "Database tables verified / created "
         "(sessions, messages, db_connections, schema_cache, query_history, "
@@ -2078,6 +2086,227 @@ async def saml_acs(request: Request, response: Response):
         metadata={"provider": attrs["provider"]},
     )
     return redirect
+
+
+# ---------------------------------------------------------------------------
+# DOCBOT-701: Consumer OAuth + Email/Password auth routes
+# ---------------------------------------------------------------------------
+
+@app.get("/api/auth/config")
+async def auth_config():
+    """Return which auth methods are available (used by frontend to render options)."""
+    from api.oauth_service import is_github_configured, is_google_configured
+    from api.auth_service import is_saml_configured
+    return {
+        "email": True,
+        "github": is_github_configured(),
+        "google": is_google_configured(),
+        "saml": is_saml_configured(),
+    }
+
+
+@app.get("/api/auth/github")
+async def github_login():
+    """Redirect user to GitHub OAuth authorization page."""
+    from api.oauth_service import github_authorize_url, generate_oauth_state, is_github_configured
+    from fastapi.responses import RedirectResponse
+    if not is_github_configured():
+        raise HTTPException(status_code=503, detail="GitHub OAuth not configured.")
+    state = generate_oauth_state()
+    return RedirectResponse(url=github_authorize_url(state))
+
+
+@app.get("/api/auth/github/callback")
+async def github_callback(code: str, state: str, response: Response):
+    """Handle GitHub OAuth callback: exchange code → provision user → set cookie."""
+    from api.oauth_service import github_exchange_code, validate_oauth_state, oauth_success_redirect
+    from api.auth_service import jit_provision_user, create_user_session
+    from api.audit_service import log_event, AuditEventType
+    from fastapi.responses import RedirectResponse
+    from urllib.parse import urlencode
+
+    frontend_url = oauth_success_redirect("")
+
+    if not validate_oauth_state(state):
+        return RedirectResponse(url=f"{frontend_url.split('?')[0]}?auth_error=invalid_state")
+
+    try:
+        attrs = await github_exchange_code(code)
+    except Exception as exc:
+        logger.warning("GitHub OAuth exchange failed: %s", exc)
+        return RedirectResponse(url=f"{frontend_url.split('?')[0]}?auth_error=github_failed")
+
+    try:
+        user_id = await jit_provision_user(attrs, users_table, async_session_factory)
+        token = await create_user_session(user_id, user_sessions_table, async_session_factory)
+    except Exception as exc:
+        logger.error("GitHub user provisioning failed: %s", exc)
+        return RedirectResponse(url=f"{frontend_url.split('?')[0]}?auth_error=provision_failed")
+
+    log_event(
+        AuditEventType.login, audit_log_table, async_session_factory,
+        user_id=user_id, detail=attrs["email"], metadata={"provider": "github"},
+    )
+
+    from api.oauth_service import _frontend_url
+    redirect = RedirectResponse(url=f"{_frontend_url()}/?auth_success=1")
+    redirect.set_cookie(
+        key="docbot_session", value=token, httponly=True, samesite="lax",
+        secure=os.getenv("APP_BASE_URL", "").startswith("https"), max_age=28800,
+    )
+    return redirect
+
+
+@app.get("/api/auth/google")
+async def google_login():
+    """Redirect user to Google OAuth authorization page."""
+    from api.oauth_service import google_authorize_url, generate_oauth_state, is_google_configured
+    from fastapi.responses import RedirectResponse
+    if not is_google_configured():
+        raise HTTPException(status_code=503, detail="Google OAuth not configured.")
+    state = generate_oauth_state()
+    return RedirectResponse(url=google_authorize_url(state))
+
+
+@app.get("/api/auth/google/callback")
+async def google_callback(code: str, state: str, response: Response):
+    """Handle Google OAuth callback: exchange code → provision user → set cookie."""
+    from api.oauth_service import google_exchange_code, validate_oauth_state, _frontend_url
+    from api.auth_service import jit_provision_user, create_user_session
+    from api.audit_service import log_event, AuditEventType
+    from fastapi.responses import RedirectResponse
+
+    if not validate_oauth_state(state):
+        return RedirectResponse(url=f"{_frontend_url()}/?auth_error=invalid_state")
+
+    try:
+        attrs = await google_exchange_code(code)
+    except Exception as exc:
+        logger.warning("Google OAuth exchange failed: %s", exc)
+        return RedirectResponse(url=f"{_frontend_url()}/?auth_error=google_failed")
+
+    try:
+        user_id = await jit_provision_user(attrs, users_table, async_session_factory)
+        token = await create_user_session(user_id, user_sessions_table, async_session_factory)
+    except Exception as exc:
+        logger.error("Google user provisioning failed: %s", exc)
+        return RedirectResponse(url=f"{_frontend_url()}/?auth_error=provision_failed")
+
+    log_event(
+        AuditEventType.login, audit_log_table, async_session_factory,
+        user_id=user_id, detail=attrs["email"], metadata={"provider": "google"},
+    )
+
+    redirect = RedirectResponse(url=f"{_frontend_url()}/?auth_success=1")
+    redirect.set_cookie(
+        key="docbot_session", value=token, httponly=True, samesite="lax",
+        secure=os.getenv("APP_BASE_URL", "").startswith("https"), max_age=28800,
+    )
+    return redirect
+
+
+class RegisterRequest(BaseModel):
+    email: str
+    password: str
+    name: Optional[str] = None
+
+
+class LoginRequest(BaseModel):
+    email: str
+    password: str
+
+
+@app.post("/api/auth/register")
+async def auth_register(body: RegisterRequest, response: Response):
+    """Register a new user with email + password."""
+    from api.oauth_service import hash_password, validate_password_strength
+    from api.auth_service import jit_provision_user, create_user_session
+    from api.audit_service import log_event, AuditEventType
+    import re
+
+    email = body.email.lower().strip()
+    if not re.match(r"^[^@\s]+@[^@\s]+\.[^@\s]+$", email):
+        raise HTTPException(status_code=422, detail="Invalid email address.")
+
+    err = validate_password_strength(body.password)
+    if err:
+        raise HTTPException(status_code=422, detail=err)
+
+    # Check if email already exists
+    async with async_session_factory() as session:
+        result = await session.execute(
+            select(users_table).where(users_table.c.email == email)
+        )
+        if result.fetchone():
+            raise HTTPException(status_code=409, detail="An account with this email already exists.")
+
+    attrs = {
+        "email": email,
+        "name": body.name or email.split("@")[0],
+        "provider": "email",
+        "password_hash": hash_password(body.password),
+    }
+
+    try:
+        user_id = await jit_provision_user(attrs, users_table, async_session_factory)
+        token = await create_user_session(user_id, user_sessions_table, async_session_factory)
+    except Exception as exc:
+        logger.error("Registration failed: %s", exc)
+        raise HTTPException(status_code=500, detail="Registration failed. Please try again.")
+
+    log_event(
+        AuditEventType.login, audit_log_table, async_session_factory,
+        user_id=user_id, detail=email, metadata={"provider": "email", "action": "register"},
+    )
+
+    resp = JSONResponse({"status": "registered", "email": email})
+    resp.set_cookie(
+        key="docbot_session", value=token, httponly=True, samesite="lax",
+        secure=os.getenv("APP_BASE_URL", "").startswith("https"), max_age=28800,
+    )
+    return resp
+
+
+@app.post("/api/auth/login")
+async def auth_login(body: LoginRequest, response: Response):
+    """Login with email + password."""
+    from api.oauth_service import verify_password
+    from api.auth_service import create_user_session
+    from api.audit_service import log_event, AuditEventType
+
+    email = body.email.lower().strip()
+
+    async with async_session_factory() as session:
+        result = await session.execute(
+            select(users_table).where(users_table.c.email == email)
+        )
+        user = result.fetchone()
+
+    if not user:
+        raise HTTPException(status_code=401, detail="Invalid email or password.")
+
+    if user.provider != "email" or not user.password_hash:
+        raise HTTPException(
+            status_code=400,
+            detail=f"This account uses {user.provider} sign-in. Please use that method instead.",
+        )
+
+    if not verify_password(body.password, user.password_hash):
+        raise HTTPException(status_code=401, detail="Invalid email or password.")
+
+    token = await create_user_session(user.id, user_sessions_table, async_session_factory)
+
+    log_event(
+        AuditEventType.login, audit_log_table, async_session_factory,
+        user_id=user.id, detail=email, metadata={"provider": "email"},
+    )
+
+    resp = JSONResponse({"status": "ok", "email": email})
+    resp.set_cookie(
+        key="docbot_session", value=token, httponly=True, samesite="lax",
+        secure=os.getenv("APP_BASE_URL", "").startswith("https"), max_age=28800,
+    )
+    return resp
 
 
 @app.get("/api/auth/me")
