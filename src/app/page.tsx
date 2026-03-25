@@ -739,13 +739,15 @@ export default function Home() {
   // Called when a DB connection is successfully established.
   // Auto-selects the Data Analyst persona only when the user has not already
   // chosen a specific persona (i.e. still on the default Generalist).
+  // If both a PDF (sessionId) and DB are connected, default to "hybrid" mode.
   const handleDbConnected = useCallback((connId: string) => {
     setIsDbConnected(true);
     setConnectionId(connId);
-    setChatMode("database");
+    // If both docs and DB are present, use hybrid mode so backend intent classifier handles routing
+    setChatMode(sessionId ? "hybrid" : "database");
     setSelectedPersona(prev => (prev === "Generalist" ? "Data Analyst" : prev));
     loadQueryHistory(connId);
-  }, [loadQueryHistory]);
+  }, [loadQueryHistory, sessionId]);
 
   const handleDbDisconnect = useCallback(() => {
     setIsDbConnected(false);
@@ -1274,21 +1276,31 @@ export default function Home() {
 
     // ── DOCBOT-802: Auto-routing — pick persona and optionally bias chat mode ──
     let personaToSend = selectedPersona;
+    // Use local variable for routing — React setState is async, so setChatMode won't be available in same execution
+    let effectiveChatMode = chatMode;
+    // If both docs (sessionId) and DB (isDbConnected) are present, default to hybrid so backend intent classifier routes correctly
+    if (sessionId && isDbConnected && chatMode !== "hybrid") {
+      effectiveChatMode = "hybrid";
+    }
     if (isAutoMode) {
-      const routing = routeQuestion(input, chatMode, isDbConnected, !!sessionId, EXPERT_PERSONAS);
+      const routing = routeQuestion(input, effectiveChatMode, isDbConnected, !!sessionId, EXPERT_PERSONAS);
       if (routing.confidence !== "low") {
         personaToSend = routing.persona;
         const pref = EXPERT_PERSONAS[routing.persona as keyof typeof EXPERT_PERSONAS]?.tool_preference;
-        if (pref === "sql_first" && isDbConnected) setChatMode("database");
-        else if (pref === "rag_first" && sessionId) setChatMode("docs");
+        if (pref === "sql_first" && isDbConnected) effectiveChatMode = "database";
+        else if (pref === "rag_first" && sessionId) effectiveChatMode = "docs";
       } else {
         // Low confidence: fall back to Generalist rather than the upload-recommended persona
         personaToSend = "Generalist";
       }
     }
+    // Update chatMode state after routing decisions (for UI, not for this request)
+    if (effectiveChatMode !== chatMode) {
+      setChatMode(effectiveChatMode);
+    }
 
     // ── DOCBOT-405: Autopilot path ─────────────────────────────────────────
-    if (chatMode === "database" && connectionId && autopilotMode) {
+    if (effectiveChatMode === "database" && connectionId && autopilotMode) {
       setAutopilotRunning(true);
       setAutopilotSteps([]);
       setAutopilotPlan([]);
@@ -1405,7 +1417,7 @@ export default function Home() {
     }
 
     // ── DB chat path: SSE streaming via /api/db/chat ──────────────────────
-    if (chatMode === "database" && connectionId) {
+    if (effectiveChatMode === "database" && connectionId) {
       try {
         const assistantMsg: Message = {
           role: "assistant",
@@ -1508,7 +1520,7 @@ export default function Home() {
     }
 
     // ── Hybrid chat path: SSE streaming via /api/hybrid/chat ─────────────
-    if (chatMode === "hybrid" && connectionId && sessionId) {
+    if (effectiveChatMode === "hybrid" && connectionId && sessionId) {
       try {
         const assistantMsg: Message = { role: "assistant", content: "", timestamp: new Date(), charts: [], agentPersona: personaToSend };
         setMessages(prev => [...prev, assistantMsg]);
