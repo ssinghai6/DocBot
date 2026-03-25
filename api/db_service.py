@@ -489,7 +489,32 @@ async def get_schema(
 
     creds = decrypt_credentials(conn_row.credentials_blob)
 
-    # For SQLite (CSV/SQLite uploads), the file lives in /tmp which is wiped on container restart.
+    # CSV uploads go via E2B pandas — schema is always rebuilt from stored column metadata.
+    if creds.get("dialect") == "csv":
+        columns = creds.get("columns", [])
+        table_name = creds.get("table_name", "data")
+        schema = [{"name": table_name, "columns": [{"name": col, "type": "TEXT"} for col in columns]}]
+        schema_json = json.dumps(schema)
+        expires_at = datetime.now(timezone.utc) + timedelta(hours=24)
+        async with async_session_factory() as session:
+            async with session.begin():
+                if cache_row:
+                    await session.execute(
+                        update(schema_cache_table)
+                        .where(schema_cache_table.c.connection_id == connection_id)
+                        .values(schema_json=schema_json, expires_at=expires_at)
+                    )
+                else:
+                    await session.execute(
+                        insert(schema_cache_table).values(
+                            connection_id=connection_id,
+                            schema_json=schema_json,
+                            expires_at=expires_at,
+                        )
+                    )
+        return schema
+
+    # For SQLite (SQLite file uploads), the file lives in /tmp which is wiped on container restart.
     # Detect this early and give the user an actionable message rather than a cryptic OperationalError.
     if creds.get("dialect") == "sqlite":
         import os as _os
@@ -497,7 +522,7 @@ async def get_schema(
         if db_path and not _os.path.exists(db_path):
             raise ConnectionNotFoundError(
                 "The uploaded file is no longer available — the server was restarted and "
-                "temporary files were cleared. Please re-upload your CSV or SQLite file to continue."
+                "temporary files were cleared. Please re-upload your file to continue."
             )
 
     import asyncio as _asyncio
@@ -666,6 +691,31 @@ async def run_sql_pipeline(
       3. One done chunk
     """
     start_ms = int(time.time() * 1000)
+
+    # ── CSV fast-path: bypass SQL pipeline, run pandas on E2B ────────────
+    async with async_session_factory() as _sess:
+        _conn_result = await _sess.execute(
+            select(db_connections_table).where(db_connections_table.c.id == connection_id)
+        )
+        _conn_row = _conn_result.fetchone()
+
+    if not _conn_row:
+        raise ConnectionNotFoundError(f"Connection '{connection_id}' not found.")
+
+    if _conn_row.dialect == "csv":
+        _creds = decrypt_credentials(_conn_row.credentials_blob)
+        from api.sandbox_service import run_csv_query_on_e2b
+        async for _chunk in run_csv_query_on_e2b(
+            csv_content_b64=_creds.get("csv_content", ""),
+            question=question,
+            persona=persona,
+            table_name=_creds.get("table_name", "data"),
+            column_names=_creds.get("columns", []),
+            chart_type=chart_type,
+            expert_personas=expert_personas,
+        ):
+            yield _chunk
+        return
 
     # ── Step 1: Schema retrieval ──────────────────────────────────────────
     schema = await get_schema(
