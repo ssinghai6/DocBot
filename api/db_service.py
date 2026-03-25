@@ -488,6 +488,18 @@ async def get_schema(
         raise ConnectionNotFoundError(f"Connection '{connection_id}' not found.")
 
     creds = decrypt_credentials(conn_row.credentials_blob)
+
+    # For SQLite (CSV/SQLite uploads), the file lives in /tmp which is wiped on container restart.
+    # Detect this early and give the user an actionable message rather than a cryptic OperationalError.
+    if creds.get("dialect") == "sqlite":
+        import os as _os
+        db_path = creds.get("dbname", "")
+        if db_path and not _os.path.exists(db_path):
+            raise ConnectionNotFoundError(
+                "The uploaded file is no longer available — the server was restarted and "
+                "temporary files were cleared. Please re-upload your CSV or SQLite file to continue."
+            )
+
     import asyncio as _asyncio
     sync_url, entra_connect_args = await _asyncio.get_event_loop().run_in_executor(
         None, _resolve_connection, creds
