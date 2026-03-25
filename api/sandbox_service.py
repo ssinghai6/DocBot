@@ -9,10 +9,11 @@ Provides a single async entry-point, run_python(), that:
 
 import asyncio
 import base64
+import json as _stdlib_json
 import logging
 import os
 import time
-from typing import Optional
+from typing import AsyncGenerator, List, Optional
 
 import groq as groq_module
 
@@ -375,3 +376,243 @@ async def run_python(
         )
 
     return result
+
+
+# ---------------------------------------------------------------------------
+# CSV → E2B pandas pipeline (DOCBOT-207 replacement)
+# ---------------------------------------------------------------------------
+
+
+async def generate_csv_analysis_code(
+    csv_path_in_sandbox: str,
+    column_names: List[str],
+    question: str,
+    persona_def: str,
+    chart_type: str = "auto",
+) -> Optional[str]:
+    """Generate Python/pandas code to answer a question about a CSV file on E2B.
+
+    Returns a Python code string, or None on error / missing API key.
+    """
+    api_key = os.getenv("groq_api_key")
+    if not api_key:
+        logger.warning("generate_csv_analysis_code: groq_api_key not set, using fallback")
+        return None
+
+    chart_instructions = _chart_type_instructions(chart_type)
+    cols_preview = ", ".join(column_names[:20])
+    if len(column_names) > 20:
+        cols_preview += f" … (+{len(column_names) - 20} more)"
+
+    system_prompt = (
+        "You are a Python data analyst. A CSV file has already been uploaded to the sandbox. "
+        "Write Python code that:\n"
+        f"1. Loads the CSV: df = pd.read_csv('{csv_path_in_sandbox}')\n"
+        "2. Answers the user's question using pandas operations\n"
+        f"3. CHART TYPE REQUIREMENT: {chart_instructions}\n"
+        "4. If the question asks about schema / columns / structure: print df.dtypes and df.shape, skip charting\n"
+        "5. Otherwise calls plt.show() exactly once after creating the chart\n"
+        "6. Prints a brief text summary of findings\n"
+        "7. AFTER plt.show() (if chart was made), prints chart metadata on ONE line:\n"
+        "   import json; print('CHART_META:' + json.dumps({'type': '<chart_type>', "
+        "'title': '<chart_title>', 'x_label': '<x_label>', 'y_label': '<y_label>', 'series_count': <int>}))\n\n"
+        "Rules:\n"
+        "- Output ONLY raw Python code, no markdown fences, no explanations\n"
+        "- Always import pandas as pd and import matplotlib.pyplot as plt\n"
+        "- Keep code under 70 lines"
+    )
+
+    user_message = (
+        f"CSV columns: {cols_preview}\n\n"
+        f"Question: {question}"
+    )
+
+    try:
+        client = groq_module.Groq(api_key=api_key)
+        loop = asyncio.get_running_loop()
+        response = await loop.run_in_executor(
+            None,
+            lambda: client.chat.completions.create(
+                model="qwen/qwen3-32b",
+                messages=[
+                    {"role": "system", "content": system_prompt},
+                    {"role": "user", "content": user_message},
+                ],
+                max_tokens=1200,
+                temperature=0,
+            ),
+        )
+        code = response.choices[0].message.content.strip()
+
+        # Strip <think>…</think> reasoning blocks
+        import re as _re
+        code = _re.sub(r"<think>.*?</think>", "", code, flags=_re.DOTALL).strip()
+
+        # Strip markdown fences
+        lines = code.splitlines()
+        if lines and lines[0].startswith("```"):
+            lines = lines[1:]
+        if lines and lines[-1].strip() == "```":
+            lines = lines[:-1]
+        return "\n".join(lines).strip()
+
+    except Exception as exc:
+        logger.warning("generate_csv_analysis_code failed: %s", exc)
+        return None
+
+
+def _run_csv_in_sandbox_sync(code: str, csv_path: str, csv_bytes: bytes) -> SandboxResult:
+    """Synchronous: upload CSV bytes to E2B sandbox, run code, return result."""
+    from e2b_code_interpreter import Sandbox
+
+    _get_api_key()
+    sandbox: Optional[Sandbox] = None
+    start_ms = int(time.monotonic() * 1000)
+
+    try:
+        sandbox = Sandbox.create()
+        # Upload CSV bytes to the sandbox filesystem
+        sandbox.files.write(csv_path, csv_bytes)
+
+        full_code = _MATPLOTLIB_PREAMBLE + code + _MATPLOTLIB_SUFFIX
+        execution = sandbox.run_code(full_code)
+
+        raw_stdout_joined = "".join(execution.logs.stdout or [])
+        raw_stdout: list[str] = raw_stdout_joined.splitlines()
+        stderr_lines: list[str] = list(execution.logs.stderr or [])
+
+        clean_stdout, charts, chart_meta = _extract_charts(raw_stdout)
+        stdout = "\n".join(clean_stdout)
+        stderr = "\n".join(stderr_lines)
+
+        error_msg: Optional[str] = None
+        if execution.error is not None:
+            name = getattr(execution.error, "name", "ExecutionError")
+            value = getattr(execution.error, "value", str(execution.error))
+            error_msg = f"{name}: {value}"
+            logger.warning("CSV sandbox execution error: %s: %s", name, value[:300])
+
+        elapsed_ms = int(time.monotonic() * 1000) - start_ms
+        logger.info(
+            "CSV sandbox finished in %d ms. charts=%d stderr_bytes=%d",
+            elapsed_ms, len(charts), len(stderr),
+        )
+        return SandboxResult(
+            stdout=stdout,
+            stderr=stderr,
+            charts=charts,
+            error=error_msg,
+            execution_time_ms=elapsed_ms,
+            chart_metadata=chart_meta,
+        )
+
+    finally:
+        if sandbox is not None:
+            try:
+                sandbox.kill()
+            except Exception as teardown_err:
+                logger.warning("Failed to close CSV sandbox cleanly: %s", teardown_err)
+
+
+async def _run_csv_in_sandbox(code: str, csv_path: str, csv_bytes: bytes) -> SandboxResult:
+    """Async wrapper around _run_csv_in_sandbox_sync with 30-second timeout."""
+    loop = asyncio.get_running_loop()
+    try:
+        return await asyncio.wait_for(
+            loop.run_in_executor(None, _run_csv_in_sandbox_sync, code, csv_path, csv_bytes),
+            timeout=30.0,
+        )
+    except asyncio.TimeoutError:
+        logger.error("CSV sandbox timed out after 30 seconds.")
+        return SandboxResult(
+            stdout="", stderr="", charts=[],
+            error="CSV analysis timed out after 30 seconds.",
+            execution_time_ms=30000,
+        )
+
+
+async def run_csv_query_on_e2b(
+    csv_content_b64: str,
+    question: str,
+    persona: str,
+    table_name: str,
+    column_names: List[str],
+    chart_type: str = "auto",
+    expert_personas: Optional[dict] = None,
+) -> AsyncGenerator[str, None]:
+    """Process a user question about a CSV file using pandas on E2B.
+
+    Yields SSE-formatted strings matching the SQL pipeline format so the
+    frontend needs no changes.
+    """
+    persona_def = (
+        (expert_personas or {})
+        .get(persona, (expert_personas or {}).get("Generalist", {}))
+        .get("persona_def", "You are a helpful data analyst.")
+    )
+
+    csv_path_in_sandbox = f"/tmp/{table_name}.csv"
+
+    # Generate pandas code via LLM
+    code = await generate_csv_analysis_code(
+        csv_path_in_sandbox=csv_path_in_sandbox,
+        column_names=column_names,
+        question=question,
+        persona_def=persona_def,
+        chart_type=chart_type,
+    )
+
+    # Fallback code if LLM is unavailable or fails
+    if not code:
+        cols_str = ", ".join(f'"{c}"' for c in column_names)
+        code = (
+            "import pandas as pd\n"
+            f"df = pd.read_csv('{csv_path_in_sandbox}')\n"
+            "print('Columns:', list(df.columns))\n"
+            "print('Shape:', df.shape)\n"
+            "print(df.head(20).to_string())\n"
+        )
+
+    # Decode CSV and run on E2B
+    try:
+        csv_bytes = base64.b64decode(csv_content_b64)
+    except Exception as exc:
+        error_chunk = _stdlib_json.dumps({"type": "error", "error_type": "InternalError", "detail": f"Failed to decode CSV content: {exc}"})
+        yield f"data: {error_chunk}\n\n"
+        return
+
+    result = await _run_csv_in_sandbox(code, csv_path_in_sandbox, csv_bytes)
+
+    # --- SSE: metadata chunk ---
+    cols_summary = ", ".join(column_names[:6])
+    if len(column_names) > 6:
+        cols_summary += f" (+{len(column_names) - 6} more)"
+    meta_chunk = {
+        "type": "metadata",
+        "sql_query": None,
+        "explanation": f"Analyzed {table_name} ({len(csv_bytes) // 1024 or 1} KB) using pandas — columns: {cols_summary}",
+        "result_preview": [],
+        "row_count": 0,
+        "execution_time_ms": result.execution_time_ms,
+        "sources": [table_name],
+    }
+    yield f"data: {_stdlib_json.dumps(meta_chunk)}\n\n"
+
+    # --- SSE: charts ---
+    if result.charts:
+        yield f"data: {_stdlib_json.dumps({'type': 'analysis_code', 'code': code})}\n\n"
+        for idx, chart_b64 in enumerate(result.charts):
+            meta = result.chart_metadata[idx] if idx < len(result.chart_metadata) else None
+            yield f"data: {_stdlib_json.dumps({'type': 'chart', 'base64': chart_b64, 'index': idx, 'metadata': meta.model_dump() if meta else None})}\n\n"
+
+    # --- SSE: answer tokens (stdout is the pandas output) ---
+    answer = result.stdout.strip()
+    if result.error and not answer:
+        answer = f"Execution error: {result.error}"
+    elif result.error:
+        answer = f"{answer}\n\n⚠️ {result.error}"
+
+    if answer:
+        yield f"data: {_stdlib_json.dumps({'type': 'token', 'content': answer})}\n\n"
+
+    yield f"data: {_stdlib_json.dumps({'type': 'done'})}\n\n"

@@ -2,15 +2,15 @@
 DocBot File Upload Service — DOCBOT-206, DOCBOT-207
 
 Handles credential-free data source uploads:
-  - DOCBOT-206: SQLite file upload → registered as a db_connection
-  - DOCBOT-207: CSV file upload → converted to SQLite → registered as a db_connection
-
-Both feed into the same 7-step SQL pipeline with zero separate code paths.
+  - DOCBOT-206: SQLite file upload → registered as a db_connection (sqlite dialect)
+  - DOCBOT-207: CSV file upload → stored as raw bytes → registered as a db_connection
+                (csv dialect) → queries run via E2B pandas sandbox, no SQL pipeline
 """
 
 from __future__ import annotations
 
 import asyncio
+import base64
 import json
 import logging
 import os
@@ -127,8 +127,11 @@ async def upload_csv(
     async_session_factory,
 ) -> Dict[str, Any]:
     """
-    Parse a CSV file with pandas, infer column types, write to a temp SQLite file,
-    and register it as a db_connection so the same 7-step pipeline applies.
+    Parse a CSV file with pandas (schema detection only), store raw bytes in
+    the credentials blob as dialect="csv", and register it as a db_connection.
+
+    Queries against this connection bypass the SQL pipeline entirely and run
+    pandas code on an E2B sandbox instead.
 
     Raises:
         ValueError: if the file exceeds the size limit or cannot be parsed.
@@ -138,24 +141,21 @@ async def upload_csv(
             f"CSV file exceeds the 50 MB limit ({len(file_bytes) // (1024*1024)} MB uploaded)."
         )
 
-    _ensure_tmp_dir()
-    file_id = str(uuid.uuid4())
-    sqlite_path = _TMP_DIR / f"{file_id}.sqlite"
-
-    # Convert CSV → SQLite in executor (pandas is sync)
+    # Parse CSV in executor to get schema info (no SQLite write needed)
     table_name, row_count, columns = await asyncio.get_event_loop().run_in_executor(
         None,
-        _csv_bytes_to_sqlite,
+        _parse_csv_metadata,
         file_bytes,
         original_filename,
-        sqlite_path,
     )
 
-    connection_id = await _register_file_as_connection(
-        file_path=sqlite_path,
-        dialect="sqlite",
-        session_id=session_id,
+    connection_id = await _register_csv_connection(
+        file_bytes=file_bytes,
+        table_name=table_name,
+        row_count=row_count,
+        columns=columns,
         original_filename=original_filename,
+        session_id=session_id,
         db_connections_table=db_connections_table,
         schema_cache_table=schema_cache_table,
         async_session_factory=async_session_factory,
@@ -175,118 +175,119 @@ async def upload_csv(
     }
 
 
-def _csv_bytes_to_sqlite(
+def _parse_csv_metadata(
     file_bytes: bytes,
     original_filename: str,
-    sqlite_path: Path,
 ) -> Tuple[str, int, List[str]]:
     """
-    Parse CSV bytes → pandas DataFrame → SQLite table.
-    Returns (table_name, row_count, column_names).
+    Parse CSV bytes with pandas and return (table_name, row_count, column_names).
 
-    Handles:
-      - BOM encoding (UTF-8-SIG)
-      - Quoted commas
-      - Mixed-type columns (fallback to TEXT)
-      - Date string detection and casting
+    Only reads the CSV to extract schema info — no SQLite write.
     """
     import io
     import re
-    import sqlite3
 
     import pandas as pd
 
-    # Detect encoding — try UTF-8 with BOM first, then plain UTF-8, then latin-1
+    df = None
     for encoding in ("utf-8-sig", "utf-8", "latin-1"):
         try:
             df = pd.read_csv(
                 io.BytesIO(file_bytes),
                 encoding=encoding,
-                dtype=str,          # Read everything as string first
+                dtype=str,
                 on_bad_lines="skip",
             )
             break
         except (UnicodeDecodeError, pd.errors.ParserError):
             continue
-    else:
-        raise ValueError("CSV file could not be parsed. Check encoding (UTF-8 or Latin-1 expected).")
 
-    if df.empty:
-        raise ValueError("CSV file is empty or contains only a header row.")
+    if df is None or df.empty:
+        raise ValueError("CSV file is empty or could not be parsed. Check encoding (UTF-8 or Latin-1 expected).")
 
-    # Clean column names: lowercase, strip spaces, replace non-alphanum with _
+    # Clean column names: lowercase, replace non-alphanum with _
     df.columns = [
         re.sub(r"[^a-z0-9_]", "_", col.strip().lower().replace(" ", "_"))
         for col in df.columns
     ]
 
-    # Type inference pass — try to coerce each column
-    df = _infer_and_cast_columns(df)
-
-    # Derive safe table name from filename (strip extension, sanitise)
     raw_name = Path(original_filename).stem
     table_name = re.sub(r"[^a-z0-9_]", "_", raw_name.strip().lower())[:50] or "uploaded_data"
-
-    # Write to SQLite
-    conn = sqlite3.connect(str(sqlite_path))
-    try:
-        df.to_sql(table_name, conn, if_exists="replace", index=False)
-        conn.commit()
-    finally:
-        conn.close()
 
     return table_name, len(df), list(df.columns)
 
 
-def _infer_and_cast_columns(df):
+async def _register_csv_connection(
+    file_bytes: bytes,
+    table_name: str,
+    row_count: int,
+    columns: List[str],
+    original_filename: str,
+    session_id: str,
+    db_connections_table: Table,
+    schema_cache_table: Table,
+    async_session_factory,
+) -> str:
     """
-    Attempt to cast each column to a more specific type:
-      - INTEGER if all non-null values are whole numbers
-      - FLOAT   if all non-null values are numeric
-      - DATE    if values match common date patterns
-      - TEXT    fallback (no data loss)
+    Register a CSV upload as a db_connection with dialect="csv".
+
+    The raw CSV bytes are base64-encoded and stored in the credentials blob so
+    they can be uploaded to an E2B sandbox at query time.  No /tmp file is
+    created — the bytes live in the encrypted DB record.
     """
-    import re
-    import pandas as pd
+    connection_id = str(uuid.uuid4())
+    csv_b64 = base64.b64encode(file_bytes).decode()
 
-    _DATE_PATTERNS = [
-        r"^\d{4}-\d{2}-\d{2}$",
-        r"^\d{2}/\d{2}/\d{4}$",
-        r"^\d{2}-\d{2}-\d{4}$",
-    ]
+    creds_blob = encrypt_credentials({
+        "dialect": "csv",
+        "host": "__local_file__",
+        "port": 0,
+        "dbname": original_filename,
+        "user": "",
+        "password": "",
+        "original_filename": original_filename,
+        "table_name": table_name,
+        "columns": columns,
+        "row_count": row_count,
+        "csv_content": csv_b64,
+        "ttl_expires_at": (
+            datetime.now(timezone.utc) + timedelta(seconds=_FILE_TTL_SECONDS)
+        ).isoformat(),
+    })
 
-    for col in df.columns:
-        series = df[col].dropna().str.strip()
-        if series.empty:
-            continue
+    async with async_session_factory() as session:
+        async with session.begin():
+            await session.execute(
+                insert(db_connections_table).values(
+                    id=connection_id,
+                    session_id=session_id,
+                    dialect="csv",
+                    host="__local_file__",
+                    port=0,
+                    dbname=original_filename,
+                    credentials_blob=creds_blob,
+                )
+            )
 
-        # Try integer
-        try:
-            as_float = pd.to_numeric(series, errors="raise")
-            if (as_float == as_float.astype(int)).all():
-                df[col] = pd.to_numeric(df[col], errors="coerce").astype("Int64")
-                continue
-        except (ValueError, TypeError):
-            pass
+    # Cache schema (columns as TEXT — E2B pandas handles actual types)
+    schema = [{
+        "name": table_name,
+        "columns": [{"name": col, "type": "TEXT"} for col in columns],
+    }]
+    schema_json = json.dumps(schema)
+    expires_at = datetime.now(timezone.utc) + timedelta(hours=24)
 
-        # Try float
-        try:
-            pd.to_numeric(series, errors="raise")
-            df[col] = pd.to_numeric(df[col], errors="coerce")
-            continue
-        except (ValueError, TypeError):
-            pass
+    async with async_session_factory() as session:
+        async with session.begin():
+            await session.execute(
+                insert(schema_cache_table).values(
+                    connection_id=connection_id,
+                    schema_json=schema_json,
+                    expires_at=expires_at,
+                )
+            )
 
-        # Try date
-        if any(re.match(pat, str(series.iloc[0])) for pat in _DATE_PATTERNS):
-            try:
-                df[col] = pd.to_datetime(df[col], errors="coerce")
-                continue
-            except Exception:
-                pass
-
-        # Fallback: keep as string
-    return df
+    return connection_id
 
 
 # ---------------------------------------------------------------------------
@@ -407,14 +408,15 @@ async def cleanup_expired_uploads(
         if now < ttl_expires:
             continue  # Still valid
 
-        # Expired — delete file and DB records
-        file_path = Path(creds.get("dbname", ""))
-        if file_path.exists():
-            try:
-                file_path.unlink()
-                logger.info("Cleaned up expired upload file: %s", file_path.name)
-            except OSError as exc:
-                logger.warning("Could not delete file %s: %s", file_path, exc)
+        # Expired — delete /tmp file (SQLite uploads only; CSV bytes live in the DB)
+        if creds.get("dialect") != "csv":
+            file_path = Path(creds.get("dbname", ""))
+            if file_path.exists():
+                try:
+                    file_path.unlink()
+                    logger.info("Cleaned up expired upload file: %s", file_path.name)
+                except OSError as exc:
+                    logger.warning("Could not delete file %s: %s", file_path, exc)
 
         async with async_session_factory() as session:
             async with session.begin():
