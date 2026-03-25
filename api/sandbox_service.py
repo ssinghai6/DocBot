@@ -386,6 +386,9 @@ async def run_python(
 def _inspect_csv_profile(csv_bytes: bytes) -> tuple:
     """Extract dtypes and sample rows from CSV bytes for LLM context.
 
+    Handles multi-table CSVs (e.g. Excel exports with section headers as rows)
+    by detecting when real headers are in a data row rather than the CSV header.
+
     Returns (dtypes_info, sample_rows) as formatted strings, or (None, None)
     on error.
     """
@@ -398,7 +401,7 @@ def _inspect_csv_profile(csv_bytes: bytes) -> tuple:
         df = None
         for encoding in ("utf-8-sig", "utf-8", "latin-1"):
             try:
-                df = pd.read_csv(io.BytesIO(csv_bytes), encoding=encoding, on_bad_lines="skip", nrows=5)
+                df = pd.read_csv(io.BytesIO(csv_bytes), encoding=encoding, on_bad_lines="skip", nrows=20)
                 break
             except (UnicodeDecodeError, pd.errors.ParserError):
                 continue
@@ -406,19 +409,49 @@ def _inspect_csv_profile(csv_bytes: bytes) -> tuple:
         if df is None or df.empty:
             return None, None
 
-        # Normalize column names the same way file_upload_service does
+        # Normalize column names
         df.columns = [
             re.sub(r"[^a-z0-9_]", "_", c.strip().lower().replace(" ", "_"))
             for c in df.columns
         ]
-        df = df.dropna(axis=1, how="all")
+        df = df.dropna(how="all").dropna(axis=1, how="all")
 
-        dtypes_info = df.dtypes.to_string()
-        sample_rows = df.head(3).to_string(max_colwidth=40)
+        # Detect multi-table CSV: if most columns are "unnamed__*", the real
+        # headers are likely in the first non-empty data row.
+        unnamed_count = sum(1 for c in df.columns if c.startswith("unnamed_"))
+        is_multi_table = unnamed_count > len(df.columns) * 0.5
 
-        if len(dtypes_info) > 1500:
-            dtypes_info = dtypes_info[:1500] + "\n... (truncated)"
-        if len(sample_rows) > 2000:
+        profile_parts = []
+        if is_multi_table:
+            profile_parts.append(
+                "WARNING: This CSV appears to be a multi-section Excel export. "
+                "The first row of the CSV is a section title, not a header. "
+                "The real column headers are likely in row index 0 or 1 of the DataFrame. "
+                "You MUST detect the actual header row and use df.columns = df.iloc[header_row] "
+                "then df = df.iloc[header_row+1:].reset_index(drop=True) before analysis."
+            )
+            # Show raw first 5 rows so LLM can find the real headers
+            profile_parts.append(f"\nRaw first 5 rows (inspect to find real headers):\n{df.head(5).to_string(max_colwidth=50)}")
+
+            # Also scan for section markers (EXHIBIT, Sheet, Table)
+            first_col = df.iloc[:, 0].astype(str)
+            sections = []
+            for idx, val in first_col.items():
+                if any(kw in val.upper() for kw in ("EXHIBIT", "SHEET", "TABLE")):
+                    sections.append(f"  Row {idx}: {val[:80]}")
+            if sections:
+                profile_parts.append(f"\nDetected section headers:\n" + "\n".join(sections))
+        else:
+            profile_parts.append(f"Column dtypes:\n{df.dtypes.to_string()}")
+            profile_parts.append(f"\nFirst 3 rows:\n{df.head(3).to_string(max_colwidth=40)}")
+
+        dtypes_info = "\n".join(profile_parts)
+        # For multi-table CSVs, sample_rows is redundant (already in dtypes_info)
+        sample_rows = None if is_multi_table else df.head(3).to_string(max_colwidth=40)
+
+        if len(dtypes_info) > 2500:
+            dtypes_info = dtypes_info[:2500] + "\n... (truncated)"
+        if sample_rows and len(sample_rows) > 2000:
             sample_rows = sample_rows[:2000] + "\n... (truncated)"
 
         return dtypes_info, sample_rows
@@ -655,6 +688,7 @@ async def run_csv_query_on_e2b(
     # Mandatory data-cleaning preamble — prepended to ALL generated code
     # (both LLM-generated and fallback). Ensures column names in sandbox match
     # the cleaned names the LLM was told about, and NaN-heavy data is handled.
+    # Also detects multi-table CSVs (Excel exports) and promotes the real header row.
     _csv_cleaning_preamble = (
         "import pandas as pd\n"
         "import re as _re\n"
@@ -662,8 +696,34 @@ async def run_csv_query_on_e2b(
         "\n"
         f"df = pd.read_csv('{csv_path_in_sandbox}')\n"
         "# --- DocBot: mandatory data cleaning ---\n"
-        "df.columns = [_re.sub(r'[^a-z0-9_]', '_', c.strip().lower().replace(' ', '_')) for c in df.columns]\n"
+        "df.columns = [_re.sub(r'[^a-z0-9_]', '_', str(c).strip().lower().replace(' ', '_')) for c in df.columns]\n"
         "df = df.dropna(how='all').dropna(axis=1, how='all')\n"
+        "# Detect multi-table CSV: if >50% columns are unnamed, find the real header row\n"
+        "_unnamed = sum(1 for c in df.columns if 'unnamed' in str(c))\n"
+        "if _unnamed > len(df.columns) * 0.5 and len(df) > 1:\n"
+        "    # Find first row where most cells are non-null strings (the real header)\n"
+        "    for _i in range(min(5, len(df))):\n"
+        "        _row = df.iloc[_i]\n"
+        "        _non_null = _row.dropna()\n"
+        "        if len(_non_null) >= len(df.columns) * 0.4:\n"
+        "            _vals = [str(v).strip() for v in _non_null if str(v).strip()]\n"
+        "            _is_header = any(v.replace(' ', '').isalpha() for v in _vals[:5])\n"
+        "            if _is_header:\n"
+        "                df.columns = [_re.sub(r'[^a-z0-9_]', '_', str(v).strip().lower().replace(' ', '_')) for v in df.iloc[_i]]\n"
+        "                df = df.iloc[_i+1:].reset_index(drop=True)\n"
+        "                # Drop columns named 'nan' or empty (from trailing commas)\n"
+        "                df = df.loc[:, ~df.columns.isin(['nan', 'none', ''])]\n"
+        "                df = df.dropna(how='all').dropna(axis=1, how='all')\n"
+        "                break\n"
+        "# Convert numeric-looking columns (only if majority of values convert)\n"
+        "for _col in df.columns:\n"
+        "    try:\n"
+        "        _converted = pd.to_numeric(df[_col], errors='coerce')\n"
+        "        _ratio = _converted.notna().sum() / max(df[_col].notna().sum(), 1)\n"
+        "        if _ratio > 0.5:\n"
+        "            df[_col] = _converted\n"
+        "    except Exception:\n"
+        "        pass\n"
         "# --- end cleaning ---\n\n"
     )
 
