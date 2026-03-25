@@ -23,7 +23,7 @@ DocBot is an AI-powered document + database analyst, fully deployed on Railway (
 | File | Purpose |
 |------|---------|
 | `api/index.py` | FastAPI backend (~1700 lines). App setup, EXPERT_PERSONAS, init_db(), all route handlers |
-| `api/db_service.py` | All DB connectivity, schema introspection, 7-step SQL pipeline |
+| `api/db_service.py` | All DB connectivity, schema introspection (tables+views), 7-step SQL pipeline, LRU engine pool, error taxonomy, schema drift detection |
 | `api/sandbox_service.py` | E2B sandbox execution, Python/pandas code generation (Qwen via Groq), CSV→E2B pipeline |
 | `api/hybrid_service.py` | Intent classification, parallel RAG+SQL retrieval, discrepancy detection |
 | `api/autopilot_service.py` | Analytical Autopilot — LangGraph multi-step investigation state machine |
@@ -35,7 +35,8 @@ DocBot is an AI-powered document + database analyst, fully deployed on Railway (
 | `api/artifact_service.py` | Session artifact store — persists charts, code, SQL results |
 | `api/document_extractor.py` | LangExtract financial extraction (Gemini 2.5 Flash, full-doc coverage) |
 | `api/file_upload_service.py` | CSV/SQLite file uploads — CSV goes to E2B pandas, SQLite to SQL pipeline |
-| `api/utils/` | Shared helpers: encryption, SSRF validator, SQL validator, embeddings, PII masking, table selector, context compressor |
+| `api/utils/csv_preprocessor.py` | Multi-section CSV detection, section splitting, header detection, E2B preamble generation |
+| `api/utils/` | Shared helpers: encryption, SSRF validator, SQL validator, embeddings, PII masking, table selector, context compressor, CSV preprocessor |
 | `src/app/page.tsx` | Monolithic React frontend (~1800 lines). All UI state via useState |
 | `requirements.txt` | Python dependencies |
 | `project-tasks/docbot-v2-project-tracking.md` | 38 user stories, 9 epics, sprint plan, Definition of Done — **primary ticket tracker** |
@@ -121,6 +122,14 @@ All work is tracked in `project-tasks/docbot-v2-project-tracking.md`.
 - Consumer Auth (DOCBOT-701) — **Done**
 - EPIC-08 Smart Agent Auto-Routing (DOCBOT-801–805) — **Done**
 - EPIC-09 LangGraph Deep Research (DOCBOT-901–904) — **Done**
+- **Enterprise Data Pipeline Hardening (2026-03-25) — Done**
+  - Hybrid routing fix (PDF+CSV dual-source misfire)
+  - Enterprise CSV pipeline: multi-section detection, section-aware E2B preamble, data cleaning
+  - DB pipeline: LRU engine pool, views support, 200-table cap, error taxonomy, schema drift detection
+  - Manual schema refresh endpoint (`POST /api/db/refresh-schema/{connection_id}`)
+  - Hybrid synthesis fix: CSV pandas output now captured in synthesis
+  - asyncio.get_running_loop() migration (Python 3.12+)
+  - 385 tests passing
 - **EPIC-10 RAG Quality Enhancement (DOCBOT-1001–1004) — Active work** (16 pts)
   - DOCBOT-1001: Chroma persistent store (replaces InMemoryVectorStore)
   - DOCBOT-1002: Cross-encoder reranker post-retrieval
@@ -154,14 +163,16 @@ All work is tracked in `project-tasks/docbot-v2-project-tracking.md`.
 
 ```
 NL Question
-  → [1] Schema Retrieval     (cache → miss → introspect)
-  → [2] Table Selector       (semantic similarity → LLM fallback)
+  → [1] Schema Retrieval     (cache → miss → introspect tables+views, 200 cap)
+  → [2] Table Selector       (semantic similarity → LLM fallback, 20 cols/table, 8 tables max)
   → [3] Few-Shot Retrieval   (cosine similarity on stored queries)
   → [4] SQL Generator        (LLM call #1)
   → [5] SQL Validator        (sqlglot AST — DETERMINISTIC, no LLM)
-  → [6] Executor             (SQLAlchemy, 15s timeout, 500 row cap)
+  → [6] Executor             (pooled engine, 15s timeout, 500 row cap, drift retry)
   → [7] Answer Generator     (LLM call #2, Groq streaming)
 ```
+
+**Schema drift retry**: If Step 6 fails with table/column-not-found, the pipeline invalidates cache, re-introspects, regenerates SQL, and retries once — no user intervention needed.
 
 Max 2–3 LLM calls. No loops. CSV dialect short-circuits before Step 1.
 

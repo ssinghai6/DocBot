@@ -1,6 +1,6 @@
 # DocBot v2 — Complete Project Tracking Document
 > Generated: 2026-03-17
-> **Last Updated: 2026-03-25** (EPIC-10 RAG Quality Enhancement added; PageIndex evaluation complete)
+> **Last Updated: 2026-03-25** (Enterprise Data Pipeline hardening — CSV section splitter, DB pooling/views/drift detection, hybrid routing fix)
 > Team size: 1–2 engineers
 > Tracking tool recommendation: Linear (see Section 6)
 
@@ -1694,9 +1694,10 @@ As a developer, I want an automated accuracy test harness against FinanceBench q
 | Phase 3 Sprint 1 | DOCBOT-801, 802, 803, 804, 805 | 18 | ✅ Complete |
 | Phase 3 Fixes | Persona format contract removal, routing fallback fix, AcroForm RAG fix, SSE streaming, parallel retrieval | — | ✅ Complete |
 | EPIC-09 Sprint 1 | DOCBOT-901, 902, 903, 904 | 19 | ✅ Complete |
+| Enterprise Data Pipeline Hardening | CSV section splitter, DB pipeline upgrades, hybrid routing fix | — | ✅ Complete |
 | EPIC-10 Sprint 1 | DOCBOT-1001, 1002, 1003, 1004 | 16 | 🔄 To Do |
 
-**Total delivered**: 198 story points across 31 tickets + full test suite (263 tests) + GitHub Actions CI | **EPIC-10 in progress**: 16 points remaining
+**Total delivered**: 198 story points across 31 tickets + full test suite (385 tests) + GitHub Actions CI | **EPIC-10 in progress**: 16 points remaining
 
 ---
 
@@ -1724,6 +1725,37 @@ Replaced single-shot `DEEP_RESEARCH_ADDON` prompt with a proper 5-node LangGraph
 - asyncio.Queue bridge streams progress events + tokens to frontend in real time
 - Frontend progress strip: 🧠 → 🔍 → ✅ → 📝 with live step messages
 - Max 2 LLM calls per request (hard ceiling)
+
+**Enterprise Data Pipeline Hardening (2026-03-25)** — Cross-cutting improvements to CSV, DB, and hybrid pipelines:
+
+*Hybrid Routing Fix (4 commits):*
+- Fixed routing misfire when both PDF and CSV are connected — `effectiveChatMode` local variable prevents async setState race condition
+- Tool preference override (`sql_first`, `rag_first`) now only fires for single-source scenarios, not when both sources are present
+- Backend intent classifier decides per-question when both sources are active
+
+*Enterprise CSV Pipeline (new module: `api/utils/csv_preprocessor.py`):*
+- Multi-section CSV detection: detects EXHIBIT/SHEET/TABLE/SECTION/APPENDIX boundaries in Excel exports
+- Per-section metadata extraction: columns, row counts, header detection with >=40% non-null string heuristic
+- `load_section(idx)` pattern: E2B sandbox preamble generates `_SECTIONS` dict + helper function for LLM to query any section
+- Mandatory data cleaning preamble: column normalization, `nan` column removal, currency/percentage parsing, date preservation
+- Section manifest injected into LLM prompt for multi-exhibit awareness
+- Tested against real 7-exhibit financial CSV (497 rows, Elon Musk W30170-XLS-ENG.csv)
+
+*Enterprise DB Pipeline Upgrades:*
+1. **Connection engine pooling** — LRU cache (max 20) with `pool_pre_ping`, 30-min recycle. Replaces create/dispose per query.
+2. **Views support** — `inspector.get_view_names()` included alongside tables, tagged `is_view: True` for LLM awareness
+3. **Higher caps** — Table cap 50→200, column preview 10→20 per table, table selector limit 5→8
+4. **Structured error taxonomy** — `classify_db_error()` maps raw driver exceptions to actionable messages (auth, network, SSL, missing objects, syntax, timeouts, deadlocks)
+5. **Schema drift detection** — On table/column-not-found execution errors, automatically invalidates cache, re-introspects, regenerates SQL, retries once
+6. **Manual schema refresh** — New `POST /api/db/refresh-schema/{connection_id}` endpoint
+
+*Hybrid Synthesis Fix:*
+- `_collect_sql_result()` now captures both `metadata` AND `token` chunks — CSV pandas output was invisible to synthesis because only metadata chunks were collected
+
+*asyncio Fix:*
+- All `asyncio.get_event_loop()` → `asyncio.get_running_loop()` across db_service.py, table_selector.py, file_upload_service.py (Python 3.12+ deprecation)
+
+*Test suite: 385 tests passing (was 263).*
 
 **EPIC-10 Active — RAG Quality Enhancement (DOCBOT-1001–1004, 16 points)**:
 PageIndex (VectifyAI) evaluated 2026-03-25 and rejected: OpenAI-only backend, no PyPI package, no streaming support. Replacing `InMemoryVectorStore` with Chroma for persistence, adding cross-encoder reranking (`ms-marco-MiniLM-L-6-v2`) for retrieval precision, adding `SemanticChunker` for financial/legal documents, and establishing a FinanceBench accuracy baseline to measure improvement delta.
