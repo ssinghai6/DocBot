@@ -303,45 +303,44 @@ async def jit_provision_user(
     email = attrs["email"]
 
     async with async_session_factory() as session:
-        result = await session.execute(
-            sa_select(users_table).where(users_table.c.email == email)
-        )
-        existing = result.fetchone()
+        async with session.begin():
+            result = await session.execute(
+                sa_select(users_table).where(users_table.c.email == email)
+            )
+            existing = result.fetchone()
 
-        if existing:
-            # Update name/provider on re-login in case they changed
-            update_vals: dict[str, Any] = {
-                "name": attrs["name"],
-                "provider": attrs["provider"],
-                "last_login_at": datetime.now(timezone.utc),
-            }
-            if attrs.get("provider_id"):
-                update_vals["provider_id"] = attrs["provider_id"]
-            async with session.begin():
+            if existing:
+                # Update name/provider on re-login in case they changed
+                update_vals: dict[str, Any] = {
+                    "name": attrs["name"],
+                    "provider": attrs["provider"],
+                    "last_login_at": datetime.now(timezone.utc),
+                }
+                if attrs.get("provider_id"):
+                    update_vals["provider_id"] = attrs["provider_id"]
                 await session.execute(
                     sa_update(users_table)
                     .where(users_table.c.email == email)
                     .values(**update_vals)
                 )
-            logger.info("Auth login: returning user %s (%s)", email, existing.id)
-            return existing.id
+                logger.info("Auth login: returning user %s (%s)", email, existing.id)
+                return existing.id
 
-        # First login — provision
-        user_id = str(uuid.uuid4())
-        insert_vals: dict[str, Any] = {
-            "id": user_id,
-            "email": email,
-            "name": attrs["name"],
-            "provider": attrs["provider"],
-            "role": "analyst",  # default role
-            "last_login_at": datetime.now(timezone.utc),
-        }
-        if attrs.get("provider_id"):
-            insert_vals["provider_id"] = attrs["provider_id"]
-        if attrs.get("password_hash"):
-            insert_vals["password_hash"] = attrs["password_hash"]
+            # First login — provision
+            user_id = str(uuid.uuid4())
+            insert_vals: dict[str, Any] = {
+                "id": user_id,
+                "email": email,
+                "name": attrs["name"],
+                "provider": attrs["provider"],
+                "role": "analyst",  # default role
+                "last_login_at": datetime.now(timezone.utc),
+            }
+            if attrs.get("provider_id"):
+                insert_vals["provider_id"] = attrs["provider_id"]
+            if attrs.get("password_hash"):
+                insert_vals["password_hash"] = attrs["password_hash"]
 
-        async with session.begin():
             await session.execute(sa_insert(users_table).values(**insert_vals))
-        logger.info("Auth JIT provision: new user %s (%s) via %s", email, user_id, attrs["provider"])
-        return user_id
+            logger.info("Auth JIT provision: new user %s (%s) via %s", email, user_id, attrs["provider"])
+            return user_id
