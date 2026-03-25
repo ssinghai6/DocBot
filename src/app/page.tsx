@@ -1493,10 +1493,13 @@ export default function Home() {
       } catch (error: unknown) {
         const msg = error instanceof Error ? error.message : "Unknown error";
         console.error("DB chat error:", error);
-        showToast("error", `Error: ${msg}`);
+        const isFileGone = msg.includes("re-upload") || msg.includes("temporary files");
+        showToast("error", isFileGone ? msg : `Query error: ${msg}`);
         setMessages(prev => prev.map((m, i) =>
           i === prev.length - 1 && m.role === "assistant" && m.content === ""
-            ? { ...m, content: "I encountered an error querying your database. Please try again." }
+            ? { ...m, content: isFileGone
+                ? "The uploaded file is no longer available — the server was restarted. Please re-upload your CSV or SQLite file."
+                : "I encountered an error querying your database. Please try again." }
             : m
         ));
       } finally {
