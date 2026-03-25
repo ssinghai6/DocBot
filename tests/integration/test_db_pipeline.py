@@ -46,17 +46,17 @@ class TestSchemaIntrospection:
         assert "status" in col_names
 
     @pytest.mark.asyncio
-    async def test_capped_at_50_tables(self, tmp_path):
-        """Schema introspection must not return more than 50 tables."""
+    async def test_capped_at_200_tables(self, tmp_path):
+        """Schema introspection must not return more than 200 tables."""
         db_path = tmp_path / "big.db"
         import sqlite3
         conn = sqlite3.connect(str(db_path))
-        for i in range(60):
+        for i in range(210):
             conn.execute(f"CREATE TABLE table_{i:03d} (id INTEGER PRIMARY KEY, val TEXT)")
         conn.commit()
         conn.close()
         schema = await _introspect_schema_from_url(f"sqlite:///{db_path}", "sqlite")
-        assert len(schema) <= 50
+        assert len(schema) <= 200
 
 
 @pytest.mark.integration

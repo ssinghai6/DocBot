@@ -37,6 +37,72 @@ from api.utils.exceptions import TokenExpiredError
 logger = logging.getLogger(__name__)
 
 
+# ---------------------------------------------------------------------------
+# Connection engine pool — LRU cache avoids create/dispose per query
+# ---------------------------------------------------------------------------
+
+import threading
+from collections import OrderedDict
+
+_engine_cache: OrderedDict[str, Any] = OrderedDict()
+_engine_cache_lock = threading.Lock()
+_ENGINE_CACHE_MAX = 20
+
+
+def _get_or_create_engine(sync_url: str, connect_args: Optional[Dict[str, Any]] = None):
+    """Return a cached SQLAlchemy engine or create one with connection pooling.
+
+    Engines are keyed by URL and cached in an LRU with max 20 entries.
+    Evicted engines are disposed properly.
+    """
+    from sqlalchemy import create_engine
+
+    with _engine_cache_lock:
+        if sync_url in _engine_cache:
+            _engine_cache.move_to_end(sync_url)
+            return _engine_cache[sync_url]
+
+    # Create outside lock to avoid blocking
+    engine = create_engine(
+        sync_url,
+        connect_args=connect_args or {},
+        pool_size=3,
+        max_overflow=2,
+        pool_timeout=10,
+        pool_recycle=1800,  # 30 min — prevent stale connections
+        pool_pre_ping=True,  # validate connections before use
+    )
+
+    with _engine_cache_lock:
+        # Double-check after lock
+        if sync_url in _engine_cache:
+            engine.dispose()
+            _engine_cache.move_to_end(sync_url)
+            return _engine_cache[sync_url]
+
+        _engine_cache[sync_url] = engine
+        # Evict oldest if over capacity
+        while len(_engine_cache) > _ENGINE_CACHE_MAX:
+            _, evicted = _engine_cache.popitem(last=False)
+            try:
+                evicted.dispose()
+            except Exception:
+                pass
+
+    return engine
+
+
+def _dispose_engine(sync_url: str) -> None:
+    """Remove and dispose a specific engine from the cache."""
+    with _engine_cache_lock:
+        engine = _engine_cache.pop(sync_url, None)
+    if engine:
+        try:
+            engine.dispose()
+        except Exception:
+            pass
+
+
 def _json_dumps(obj: Any) -> str:
     """json.dumps that handles Decimal and other non-serializable DB types."""
     def _default(o: Any) -> Any:
@@ -72,6 +138,63 @@ class ExecutionTimeoutError(Exception):
     """Raised when the SQL executor exceeds its time budget."""
 
 
+class SchemaIntrospectionError(Exception):
+    """Raised when schema introspection fails (permissions, network, etc.)."""
+
+
+class ConnectionError(Exception):
+    """Raised when a DB connection cannot be established."""
+
+
+class SQLGenerationError(Exception):
+    """Raised when the LLM fails to generate valid SQL."""
+
+
+def classify_db_error(exc: Exception, dialect: str) -> str:
+    """Return a user-friendly error message based on exception type and dialect.
+
+    Maps raw DB driver exceptions to actionable messages so users know
+    what went wrong and how to fix it.
+    """
+    msg = str(exc).lower()
+
+    # Authentication / permission errors
+    if any(k in msg for k in ("password authentication failed", "access denied", "login failed")):
+        return "Authentication failed. Please check your username and password."
+    if any(k in msg for k in ("permission denied", "insufficient privilege")):
+        return "Permission denied. Your database user does not have read access to the requested tables."
+
+    # Network / connectivity
+    if any(k in msg for k in ("could not connect", "connection refused", "no route to host",
+                                "name or service not known", "getaddrinfo failed")):
+        return (
+            f"Cannot reach the database server. Please verify the host, port, and "
+            f"that the server accepts connections from this IP."
+        )
+    if any(k in msg for k in ("connection timed out", "connect_timeout")):
+        return "Connection timed out. The database server did not respond within 10 seconds."
+    if "ssl" in msg and ("required" in msg or "unsupported" in msg):
+        return "SSL configuration mismatch. Check whether the server requires or rejects SSL connections."
+
+    # Query execution errors
+    if any(k in msg for k in ("relation", "does not exist", "unknown table", "no such table")):
+        return "Table not found. The schema may have changed — try refreshing the schema."
+    if any(k in msg for k in ("column", "does not exist", "unknown column", "no such column")):
+        return "Column not found. The table structure may have changed — try refreshing the schema."
+    if "syntax error" in msg:
+        return "SQL syntax error. The generated query has a syntax problem — try rephrasing your question."
+    if "canceling statement due to statement timeout" in msg:
+        return "Query exceeded the 15-second time limit. Try a simpler question or add filters."
+    if "deadlock" in msg:
+        return "Query hit a deadlock. Please try again in a moment."
+
+    # Dialect-specific
+    if dialect == "azure_sql" and "snapshot isolation" in msg:
+        return "Azure SQL snapshot isolation is not enabled on this database."
+
+    return f"Database error: {str(exc)[:200]}"
+
+
 # Re-export for routes
 __all__ = [
     "DBConnectionRequest",
@@ -80,7 +203,10 @@ __all__ = [
     "QueryValidationError",
     "ConnectionNotFoundError",
     "ExecutionTimeoutError",
+    "SchemaIntrospectionError",
+    "SQLGenerationError",
     "TokenExpiredError",
+    "classify_db_error",
     "connect_database",
     "disconnect_database",
     "get_schema",
@@ -574,10 +700,11 @@ async def _introspect_schema_from_url(
     Use SQLAlchemy Inspector to return:
       [{"name": "table", "columns": [{"name": "col", "type": "VARCHAR"}]}]
 
-    Capped at 50 tables. PostgreSQL sorts by row estimate.
+    Includes both tables and views. Capped at 200 objects total.
+    PostgreSQL sorts tables by row estimate for relevance.
     """
     import asyncio
-    from sqlalchemy import create_engine, inspect as sa_inspect
+    from sqlalchemy import inspect as sa_inspect
 
     def _sync_introspect() -> List[Dict[str, Any]]:
         connect_args: Dict[str, Any] = {}
@@ -586,30 +713,47 @@ async def _introspect_schema_from_url(
         elif dialect != "sqlite":
             connect_args["connect_timeout"] = 10
 
-        engine = create_engine(sync_url, connect_args=connect_args)
+        engine = _get_or_create_engine(sync_url, connect_args)
+        inspector = sa_inspect(engine)
+        table_names = inspector.get_table_names()
+
+        # Include views alongside tables
         try:
-            inspector = sa_inspect(engine)
-            table_names = inspector.get_table_names()
+            view_names = inspector.get_view_names()
+        except Exception:
+            view_names = []
 
-            if dialect == "postgresql" and len(table_names) > 50:
-                table_names = _sort_tables_by_row_estimate_pg(engine, table_names)
+        if dialect == "postgresql" and len(table_names) > 50:
+            table_names = _sort_tables_by_row_estimate_pg(engine, table_names)
 
-            table_names = table_names[:50]
-            schema = []
-            for tname in table_names:
-                try:
-                    columns = inspector.get_columns(tname)
-                    col_list = [
-                        {"name": col["name"], "type": str(col["type"])}
-                        for col in columns
-                    ]
-                except Exception:
-                    # Fall back to information_schema for restricted users
-                    col_list = _get_columns_via_information_schema(engine, tname)
-                schema.append({"name": tname, "columns": col_list})
-            return schema
-        finally:
-            engine.dispose()
+        table_names = table_names[:200]
+
+        schema = []
+        for tname in table_names:
+            try:
+                columns = inspector.get_columns(tname)
+                col_list = [
+                    {"name": col["name"], "type": str(col["type"])}
+                    for col in columns
+                ]
+            except Exception:
+                col_list = _get_columns_via_information_schema(engine, tname)
+            schema.append({"name": tname, "columns": col_list})
+
+        # Append views (tagged with is_view for downstream awareness)
+        views_cap = 200 - len(schema)
+        for vname in view_names[:views_cap]:
+            try:
+                columns = inspector.get_columns(vname)
+                col_list = [
+                    {"name": col["name"], "type": str(col["type"])}
+                    for col in columns
+                ]
+            except Exception:
+                col_list = _get_columns_via_information_schema(engine, vname)
+            schema.append({"name": vname, "columns": col_list, "is_view": True})
+
+        return schema
 
     return await asyncio.get_running_loop().run_in_executor(None, _sync_introspect)
 
@@ -791,13 +935,42 @@ async def run_sql_pipeline(
     dialect = conn_row.dialect
     validated_sql = validate_and_sanitize_sql(raw_sql, dialect=dialect)
 
-    # ── Step 6: Execute ───────────────────────────────────────────────────
+    # ── Step 6: Execute (with schema drift retry) ──────────────────────
     creds = decrypt_credentials(conn_row.credentials_blob)
     import asyncio as _asyncio
     sync_url, entra_connect_args = await _asyncio.get_running_loop().run_in_executor(
         None, _resolve_connection, creds
     )
-    rows, column_names = await _execute_query(validated_sql, sync_url, dialect, entra_connect_args)
+    try:
+        rows, column_names = await _execute_query(validated_sql, sync_url, dialect, entra_connect_args)
+    except Exception as exec_err:
+        err_msg = str(exec_err).lower()
+        is_drift = any(k in err_msg for k in (
+            "does not exist", "no such table", "no such column",
+            "unknown table", "unknown column", "relation",
+        ))
+        if not is_drift:
+            raise
+
+        # Schema drift detected — invalidate cache, re-introspect, regenerate SQL, retry once
+        logger.warning("Schema drift detected, refreshing schema and retrying: %s", exec_err)
+        async with async_session_factory() as session:
+            async with session.begin():
+                await session.execute(
+                    delete(schema_cache_table).where(
+                        schema_cache_table.c.connection_id == connection_id
+                    )
+                )
+        schema = await get_schema(
+            connection_id, db_connections_table, schema_cache_table, async_session_factory
+        )
+        schema_subset = [t for t in schema if t["name"] in set(selected_tables)]
+        if not schema_subset:
+            schema_subset = schema[:10]
+        raw_sql = await _generate_sql(question, schema_subset, few_shot_examples)
+        validated_sql = validate_and_sanitize_sql(raw_sql, dialect=dialect)
+        rows, column_names = await _execute_query(validated_sql, sync_url, dialect, entra_connect_args)
+
     execution_time_ms = int(time.time() * 1000) - start_ms
 
     result_dicts = [dict(zip(column_names, row)) for row in rows]
@@ -915,15 +1088,21 @@ async def run_sql_pipeline(
 
 
 async def _select_relevant_tables(question: str, schema: List[Dict[str, Any]]) -> List[str]:
-    """LLM call #1: pick the relevant tables for this question."""
+    """LLM call #1: pick the relevant tables for this question.
+
+    Shows up to 20 columns per table and tags views so the LLM knows
+    they're queryable but may not support JOINs the same way.
+    """
     table_list = "\n".join(
-        f"- {t['name']}: {', '.join(c['name'] for c in t['columns'][:10])}"
+        f"- {t['name']}{' (VIEW)' if t.get('is_view') else ''}: "
+        f"{', '.join(c['name'] for c in t['columns'][:20])}"
         for t in schema
     )
     prompt = (
         "You are a SQL expert. Given the following database schema and a user question, "
         "return ONLY a JSON array of the table names needed to answer the question. "
-        "Return at most 5 tables. No explanation.\n\n"
+        "Include views if they contain relevant data. "
+        "Return at most 8 tables. No explanation.\n\n"
         f"Schema:\n{table_list}\n\n"
         f"Question: {question}\n\n"
         "Response (JSON array only):"
@@ -1067,7 +1246,6 @@ async def _execute_query(
     Returns (rows, column_names).
     """
     import asyncio
-    from sqlalchemy import create_engine
 
     def _sync_execute():
         connect_args: Dict[str, Any] = {}
@@ -1076,23 +1254,20 @@ async def _execute_query(
         elif dialect != "sqlite":
             connect_args["connect_timeout"] = 15
 
-        engine = create_engine(sync_url, connect_args=connect_args)
-        try:
-            with engine.connect() as conn:
-                if dialect == "postgresql":
-                    conn.execute(text("SET TRANSACTION READ ONLY"))
-                    conn.execute(text("SET LOCAL statement_timeout = '15000'"))
-                elif dialect == "mysql":
-                    conn.execute(text("SET SESSION TRANSACTION READ ONLY"))
-                elif dialect == "azure_sql":
-                    conn.execute(text("SET TRANSACTION ISOLATION LEVEL SNAPSHOT"))
+        engine = _get_or_create_engine(sync_url, connect_args)
+        with engine.connect() as conn:
+            if dialect == "postgresql":
+                conn.execute(text("SET TRANSACTION READ ONLY"))
+                conn.execute(text("SET LOCAL statement_timeout = '15000'"))
+            elif dialect == "mysql":
+                conn.execute(text("SET SESSION TRANSACTION READ ONLY"))
+            elif dialect == "azure_sql":
+                conn.execute(text("SET TRANSACTION ISOLATION LEVEL SNAPSHOT"))
 
-                result = conn.execute(text(sql))
-                rows = result.fetchmany(500)
-                column_names = list(result.keys())
-                return rows, column_names
-        finally:
-            engine.dispose()
+            result = conn.execute(text(sql))
+            rows = result.fetchmany(500)
+            column_names = list(result.keys())
+            return rows, column_names
 
     try:
         return await asyncio.wait_for(
@@ -1101,6 +1276,10 @@ async def _execute_query(
         )
     except asyncio.TimeoutError as exc:
         raise ExecutionTimeoutError("Query exceeded the 15-second time limit.") from exc
+    except ExecutionTimeoutError:
+        raise
+    except Exception as exc:
+        raise Exception(classify_db_error(exc, dialect)) from exc
 
 
 # ---------------------------------------------------------------------------

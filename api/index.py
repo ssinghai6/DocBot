@@ -1664,6 +1664,42 @@ async def db_schema(connection_id: str):
         raise HTTPException(status_code=500, detail=safe_error_message(exc))
 
 
+@app.post("/api/db/refresh-schema/{connection_id}")
+async def db_refresh_schema(connection_id: str):
+    """
+    Force-refresh the schema cache for a connection.
+
+    Invalidates the cached schema and re-introspects the database,
+    useful when the user knows the schema has changed (new tables,
+    altered columns, etc.).
+    """
+    try:
+        async with async_session_factory() as session:
+            async with session.begin():
+                await session.execute(
+                    delete(schema_cache_table).where(
+                        schema_cache_table.c.connection_id == connection_id
+                    )
+                )
+        schema = await get_schema(
+            connection_id,
+            db_connections_table,
+            schema_cache_table,
+            async_session_factory,
+        )
+        return {
+            "connection_id": connection_id,
+            "refreshed": True,
+            "table_count": len(schema),
+            "tables": [t["name"] for t in schema[:20]],
+        }
+    except ConnectionNotFoundError as exc:
+        raise HTTPException(status_code=404, detail=str(exc))
+    except Exception as exc:
+        logger.error("db_refresh_schema error: %s", type(exc).__name__)
+        raise HTTPException(status_code=500, detail=safe_error_message(exc))
+
+
 @app.post("/api/db/chat")
 async def db_chat(request: DBChatRequest):
     """
