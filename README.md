@@ -5,7 +5,7 @@
   <img src="https://img.shields.io/badge/Python-3.12+-blue.svg" alt="Python">
   <img src="https://img.shields.io/badge/Next.js-16+-black.svg" alt="Next.js">
   <img src="https://img.shields.io/badge/FastAPI-0.115+-teal.svg" alt="FastAPI">
-  <img src="https://img.shields.io/badge/Tests-344 passing-brightgreen.svg" alt="Tests">
+  <img src="https://img.shields.io/badge/Tests-353 passing-brightgreen.svg" alt="Tests">
 </p>
 
 **Ask Anything About Your Data.**
@@ -26,6 +26,8 @@ DocBot is an AI-powered document + database analyst. Upload PDFs, connect a live
 | **Structured Extraction** | Pulls typed values (financial metrics, legal dates, medical measurements) from any document using Gemini 2.5 Flash |
 | **Azure SQL / Entra Auth** | Enterprise Microsoft Entra (Azure AD) Service Principal authentication for Azure SQL |
 | **SAML 2.0 SSO** | SP-initiated SSO with Okta, Azure AD, or any SAML 2.0 IdP; JIT user provisioning on first login |
+| **Consumer Auth** | GitHub OAuth, Google OAuth, email+password, or guest mode — no enterprise SSO required |
+| **Persistent Workspace** | Login restores your previous chat sessions and saved database connections across devices |
 | **Role-Based Access Control** | Three-tier roles (viewer / analyst / admin) enforced as FastAPI dependencies; admin UI for role management |
 | **Append-Only Audit Log** | Immutable PostgreSQL audit trail for all queries, logins, uploads, and connection events with CSV export |
 | **PII Masking** | Auto-detects and redacts names, emails, phone numbers, SSNs, credit cards before LLM synthesis |
@@ -196,6 +198,25 @@ SP-initiated SAML 2.0 SSO with any standards-compliant IdP (Okta, Azure AD, Goog
 - Session cookie is `HttpOnly; SameSite=Lax` — no token exposure to JavaScript
 - SP metadata available at `GET /api/auth/saml/metadata` for IdP registration
 - App stays fully functional without an IdP configured (open mode)
+
+### Consumer Authentication (GitHub / Google / Email)
+
+For individual users and small teams, DocBot supports consumer OAuth without any IdP setup:
+
+- **GitHub OAuth** — one-click login with your GitHub account
+- **Google OAuth** — one-click login with your Google account
+- **Email + password** — register and log in with any email address
+- **Guest mode** — use DocBot without an account; session is browser-local only
+
+Environment variables required:
+| Variable | Required | Notes |
+|----------|----------|-------|
+| `GITHUB_CLIENT_ID` | GitHub auth | From GitHub OAuth App settings |
+| `GITHUB_CLIENT_SECRET` | GitHub auth | From GitHub OAuth App settings |
+| `GOOGLE_CLIENT_ID` | Google auth | From Google Cloud Console |
+| `GOOGLE_CLIENT_SECRET` | Google auth | From Google Cloud Console |
+| `APP_BASE_URL` | OAuth | Your backend public URL — must match OAuth app callback settings |
+| `FRONTEND_URL` | OAuth | Your frontend URL — where users land after login |
 
 ### Role-Based Access Control (RBAC)
 
@@ -440,6 +461,16 @@ GET /api/auth/me
 
 # Logout (clears session cookie)
 POST /api/auth/logout
+
+# Consumer OAuth
+GET /api/auth/github        # Returns {"url": "..."} — redirect browser to this URL
+GET /api/auth/github/callback   # OAuth callback (handled server-side)
+GET /api/auth/google        # Returns {"url": "..."} — redirect browser to this URL
+GET /api/auth/google/callback   # OAuth callback (handled server-side)
+POST /api/auth/register     # Body: {email, password, name?} — email+password registration
+POST /api/auth/login        # Body: {email, password} — email+password login
+GET /api/auth/config        # Returns {email: true, github: bool, google: bool, saml: bool}
+GET /api/auth/workspace     # Returns user's saved sessions and DB connections (requires auth)
 ```
 
 ### Admin — User Management (admin role required)
@@ -480,7 +511,7 @@ GET /admin/audit-log?format=csv
 | `E2B_API_KEY` | Yes | E2B sandbox API key |
 | `GEMINI_API_KEY` | Yes | Gemini API key for LangExtract document extraction |
 | `ALLOWED_ORIGINS` | No | Comma-separated CORS origins (defaults to localhost:3000) |
-| `FRONTEND_URL` | No | Frontend base URL for SAML redirect after login (defaults to http://localhost:3000) |
+| `FRONTEND_URL` | Auth | Frontend public URL for post-login redirects (SAML and OAuth) |
 | `SESSION_TTL_HOURS` | No | SSO session lifetime in hours (default: 8) |
 | `SAML_SP_ENTITY_ID` | SSO | SP Entity ID — e.g. `https://docbot.example.com` |
 | `SAML_SP_ACS_URL` | SSO | ACS callback URL — e.g. `https://docbot.example.com/api/auth/saml/acs` |
@@ -489,6 +520,11 @@ GET /admin/audit-log?format=csv
 | `SAML_IDP_X509_CERT` | SSO | IdP public certificate (base64, no headers) |
 | `SAML_SP_X509_CERT` | SSO opt | SP certificate for signed requests |
 | `SAML_SP_PRIVATE_KEY` | SSO opt | SP private key for signed requests |
+| `GITHUB_CLIENT_ID` | Consumer auth | GitHub OAuth App client ID |
+| `GITHUB_CLIENT_SECRET` | Consumer auth | GitHub OAuth App client secret |
+| `GOOGLE_CLIENT_ID` | Consumer auth | Google OAuth 2.0 client ID |
+| `GOOGLE_CLIENT_SECRET` | Consumer auth | Google OAuth 2.0 client secret |
+| `APP_BASE_URL` | Auth | Backend public URL used for OAuth callback URIs |
 
 Never commit `.env`. Never hardcode secrets.
 
@@ -524,7 +560,7 @@ pytest tests/unit/ -v
 pytest tests/ -v -m "not external and not postgres"
 ```
 
-**344 tests passing** across:
+**353 tests passing** across:
 
 | File | Coverage |
 |---|---|
