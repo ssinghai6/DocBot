@@ -36,4 +36,4 @@ langgraph>=0.2.0
 python3-saml>=1.16.0
 # DOCBOT-701: Consumer OAuth (GitHub, Google) + email/password auth
 httpx>=0.27.0
-passlib[bcrypt]>=1.7.4
+bcrypt>=4.0.0

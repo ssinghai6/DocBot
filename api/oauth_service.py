@@ -205,15 +205,16 @@ async def google_exchange_code(code: str) -> dict:
 # ---------------------------------------------------------------------------
 
 def hash_password(password: str) -> str:
-    from passlib.context import CryptContext
-    ctx = CryptContext(schemes=["bcrypt"], deprecated="auto")
-    return ctx.hash(password)
+    import bcrypt
+    # bcrypt hard limit is 72 bytes; encode and truncate before hashing
+    pw_bytes = password.encode("utf-8")[:72]
+    return bcrypt.hashpw(pw_bytes, bcrypt.gensalt()).decode("utf-8")
 
 
 def verify_password(plain: str, hashed: str) -> bool:
-    from passlib.context import CryptContext
-    ctx = CryptContext(schemes=["bcrypt"], deprecated="auto")
-    return ctx.verify(plain, hashed)
+    import bcrypt
+    pw_bytes = plain.encode("utf-8")[:72]
+    return bcrypt.checkpw(pw_bytes, hashed.encode("utf-8"))
 
 
 def validate_password_strength(password: str) -> Optional[str]:
