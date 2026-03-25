@@ -69,3 +69,4 @@ project-tasks/
 CLAUDE.md
 DocBot_v2.txt
 *.txt__pycache__
+.env.docker

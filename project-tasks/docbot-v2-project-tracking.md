@@ -1,6 +1,6 @@
 # DocBot v2 — Complete Project Tracking Document
 > Generated: 2026-03-17
-> **Last Updated: 2026-03-25**
+> **Last Updated: 2026-03-25** (EPIC-10 RAG Quality Enhancement added; PageIndex evaluation complete)
 > Team size: 1–2 engineers
 > Tracking tool recommendation: Linear (see Section 6)
 
@@ -61,9 +61,10 @@ Every story is only "done" when ALL of the following are true. No exceptions.
 | EPIC-04 | Hybrid Intelligence | 1, 2 | ✅ Done | Cross-source synthesis, discrepancy detection, planner/router |
 | EPIC-05 | Memory and Context | 2 | ✅ Done | Session artifacts, context compression, multi-hop queries |
 | EPIC-06 | Enterprise Readiness | 4 | ✅ Done | SSO, RBAC, audit logging, PII masking, Docker Compose, admin UI — all shipped |
-| EPIC-07 | Commerce Connectors | 4+ | 🔜 Planned | Marketplace API integrations (Amazon SP-API, Shopify), unified commerce schema, multi-tenant RLS, background sync |
+| EPIC-07 | Commerce Connectors | 4+ | 🔜 Gated | Marketplace API integrations (Amazon SP-API, Shopify), unified commerce schema, multi-tenant RLS, background sync. Gate: ≥3 of 5 discovery interviews required. |
 | EPIC-08 | Smart Agent Auto-Routing | 3 | ✅ Done | Replace static persona picker with intelligent per-question agent routing, per-agent badges and rendering |
 | EPIC-09 | LangGraph Deep Research | 3+ | ✅ Done | Multi-step reasoning graph replacing single-shot Deep Research prompt — query planner, parallel retrieval, gap detection, streaming synthesis |
+| EPIC-10 | RAG Quality Enhancement | 4+ | 🔄 Active | Chroma persistent store, cross-encoder reranker, SemanticChunker for financial/legal docs, FinanceBench accuracy baseline. PageIndex evaluated and rejected (2026-03-25). |
 
 ---
 
@@ -1537,6 +1538,145 @@ As a developer, I want comprehensive unit tests for `_parse_json_list` and `gap_
 
 ---
 
+### EPIC-10: RAG Quality Enhancement
+
+> **PageIndex Evaluation Decision (2026-03-25):** VectifyAI's PageIndex was evaluated as a full RAG replacement. Decision: **Do not integrate.** Hard blockers:
+> 1. **OpenAI-only** — PageIndex requires `gpt-4o`. DocBot uses Groq for cost efficiency. Adding OpenAI adds ~$0.02–$0.10/doc at index time and ~$0.01–$0.04/query. Cannot be swapped — the library is not designed for backend abstraction.
+> 2. **Not on PyPI** — Must install via GitHub clone. Railway builds would depend on an unversioned external repo with no deprecation guarantees.
+> 3. **No streaming** — PageIndex returns complete JSON responses. DocBot's entire pipeline is SSE-streaming-first; every doc query would block token output until retrieval completes.
+>
+> Problems PageIndex solves are already partially addressed: LangExtract + Gemini 2.5 Flash handles structured financial extraction; multi-query expansion handles semantic mismatch; AcroForm prepending handles form fields. EPIC-10 fixes the remaining RAG limitations within the existing stack — no new vendors, no new API keys.
+>
+> **Revisit PageIndex when:** PyPI package ships + pluggable LLM backend supporting Groq or local models is available.
+
+---
+
+#### DOCBOT-1001: Replace InMemoryVectorStore with Chroma Persistent Store
+
+**Story**
+As a developer, I want the document vector store to persist across Railway restarts so that users do not lose their uploaded document sessions when the backend redeploys.
+
+**Phase**: 4+
+**Priority**: Must Have
+**Story Points**: 5
+**Dependencies**: None
+**Status**: 🔜 To Do
+
+**Acceptance Criteria**
+- [ ] `InMemoryVectorStore` replaced with `Chroma` in `api/index.py`; collections keyed by `session_id`
+- [ ] In-memory `VECTOR_STORES` dict removed; Chroma handles collection lifecycle
+- [ ] `rag_retrieve()` in `api/hybrid_service.py` uses Chroma retriever (interface unchanged)
+- [ ] `parallel_retriever` in `api/deep_research_service.py` updated to use Chroma
+- [ ] Unit test: write docs → delete Python collection object → re-fetch → assert docs still present
+
+**Engineering Tasks**
+
+| # | Task | Role | Est. Hours |
+|---|------|------|-----------|
+| 1 | Add `chromadb` to `requirements.txt` | Backend | 0.25h |
+| 2 | Replace `InMemoryVectorStore` with `Chroma.get_or_create_collection(session_id)` in `api/index.py` | Backend | 2h |
+| 3 | Update `rag_retrieve()` in `api/hybrid_service.py` to use Chroma retriever | Backend | 1h |
+| 4 | Update `parallel_retriever` node in `api/deep_research_service.py` | Backend | 1h |
+| 5 | Write unit test for persistence across collection object deletion | Backend | 1h |
+
+**Branch**: `feature/DOCBOT-1001-chroma-persistent-store`
+
+---
+
+#### DOCBOT-1002: Cross-Encoder Reranker Post-Retrieval
+
+**Story**
+As a user, I want document retrieval to surface the most relevant chunks first so that the LLM's synthesis context is precise and answers are more accurate.
+
+**Phase**: 4+
+**Priority**: Should Have
+**Story Points**: 3
+**Dependencies**: DOCBOT-1001
+**Status**: 🔜 To Do
+
+**Acceptance Criteria**
+- [ ] `api/utils/reranker.py` exports `rerank(question: str, docs: list[Document], top_k: int) -> list[Document]`
+- [ ] Uses `cross-encoder/ms-marco-MiniLM-L-6-v2` (local, zero API cost)
+- [ ] After k=8 cosine retrieval in `rag_retrieve()`, reranker reduces to top-5
+- [ ] Reranker skipped if fewer than 3 docs returned (no-op fallback)
+- [ ] Unit test: mock cross-encoder, verify output ordering and count truncation
+
+**Engineering Tasks**
+
+| # | Task | Role | Est. Hours |
+|---|------|------|-----------|
+| 1 | Add `sentence-transformers` cross-encoder to `requirements.txt` | Backend | 0.25h |
+| 2 | Create `api/utils/reranker.py` with `rerank()` function | Backend | 1.5h |
+| 3 | Wire `rerank()` into `rag_retrieve()` in `api/hybrid_service.py` | Backend | 1h |
+| 4 | Write unit test in `tests/unit/test_reranker.py` | Backend | 1h |
+
+**Branch**: `feature/DOCBOT-1002-cross-encoder-reranker`
+
+---
+
+#### DOCBOT-1003: SemanticChunker for Financial and Legal Documents
+
+**Story**
+As Maya (Finance Manager), I want financial documents chunked along natural semantic boundaries so that tables and financial data are not split across chunks, improving answer accuracy.
+
+**Phase**: 4+
+**Priority**: Should Have
+**Story Points**: 3
+**Dependencies**: DOCBOT-1001
+**Status**: 🔜 To Do
+
+**Acceptance Criteria**
+- [ ] `SemanticChunker` from `langchain_experimental` used for `financial` and `legal` doc types in `upload_documents()` in `api/index.py`
+- [ ] `RecursiveCharacterTextSplitter` (1500/200) kept for general, medical, research docs
+- [ ] Branching uses `detect_document_type()` output (already called at upload time in `api/document_extractor.py`)
+- [ ] `SemanticChunker` reuses the existing cached `get_embeddings()` model — no new deps or API keys
+- [ ] Integration test: upload two-page financial PDF, assert no chunks split mid-sentence at table boundaries
+
+**Engineering Tasks**
+
+| # | Task | Role | Est. Hours |
+|---|------|------|-----------|
+| 1 | Add `langchain-experimental` to `requirements.txt` if not present | Backend | 0.25h |
+| 2 | Import `SemanticChunker` and add doc-type branching logic in `upload_documents()` | Backend | 1.5h |
+| 3 | Write integration test for financial PDF chunking | Backend | 1h |
+
+**Branch**: `feature/DOCBOT-1003-semantic-chunker`
+
+---
+
+#### DOCBOT-1004: FinanceBench Accuracy Baseline Test Suite
+
+**Story**
+As a developer, I want an automated accuracy test harness against FinanceBench questions so I can measure before/after retrieval improvements and catch regressions when the RAG pipeline changes.
+
+**Phase**: 4+
+**Priority**: Should Have
+**Story Points**: 5
+**Dependencies**: DOCBOT-1001, DOCBOT-1002, DOCBOT-1003
+**Status**: 🔜 To Do
+
+**Acceptance Criteria**
+- [ ] `tests/external/test_financebench_accuracy.py` with 20 curated FinanceBench questions + ground truth answers
+- [ ] Marked `@pytest.mark.external` — skipped in CI (requires live Groq + HuggingFace keys)
+- [ ] Reports per-question pass/fail + aggregate accuracy (exact match + ±2% numeric fuzzy match)
+- [ ] Baseline LangChain RAG score recorded as comment at top of file BEFORE DOCBOT-1001–1003 merge
+- [ ] Post-improvement score recorded after — target: ≥15% improvement
+- [ ] Results pasted into ticket comments before closing
+
+**Engineering Tasks**
+
+| # | Task | Role | Est. Hours |
+|---|------|------|-----------|
+| 1 | Create `tests/external/` with `__init__.py` | Backend | 0.25h |
+| 2 | Source 20 FinanceBench questions with verified ground truth answers | Backend | 2h |
+| 3 | Write `test_financebench_accuracy.py` with fuzzy numeric matcher | Backend | 2h |
+| 4 | Run baseline (pre-improvement) and record score | Backend | 1h |
+| 5 | Run post-improvement and record delta | Backend | 0.5h |
+
+**Branch**: `feature/DOCBOT-1004-financebench-tests`
+
+---
+
 ## 4. Sprint Plan — Phase 0 + Phase 1
 
 ### Current Status (as of 2026-03-24)
@@ -1554,8 +1694,9 @@ As a developer, I want comprehensive unit tests for `_parse_json_list` and `gap_
 | Phase 3 Sprint 1 | DOCBOT-801, 802, 803, 804, 805 | 18 | ✅ Complete |
 | Phase 3 Fixes | Persona format contract removal, routing fallback fix, AcroForm RAG fix, SSE streaming, parallel retrieval | — | ✅ Complete |
 | EPIC-09 Sprint 1 | DOCBOT-901, 902, 903, 904 | 19 | ✅ Complete |
+| EPIC-10 Sprint 1 | DOCBOT-1001, 1002, 1003, 1004 | 16 | 🔄 To Do |
 
-**Total delivered**: 198 story points across 31 tickets + full test suite (263 tests) + GitHub Actions CI
+**Total delivered**: 198 story points across 31 tickets + full test suite (263 tests) + GitHub Actions CI | **EPIC-10 in progress**: 16 points remaining
 
 ---
 
@@ -1583,6 +1724,9 @@ Replaced single-shot `DEEP_RESEARCH_ADDON` prompt with a proper 5-node LangGraph
 - asyncio.Queue bridge streams progress events + tokens to frontend in real time
 - Frontend progress strip: 🧠 → 🔍 → ✅ → 📝 with live step messages
 - Max 2 LLM calls per request (hard ceiling)
+
+**EPIC-10 Active — RAG Quality Enhancement (DOCBOT-1001–1004, 16 points)**:
+PageIndex (VectifyAI) evaluated 2026-03-25 and rejected: OpenAI-only backend, no PyPI package, no streaming support. Replacing `InMemoryVectorStore` with Chroma for persistence, adding cross-encoder reranking (`ms-marco-MiniLM-L-6-v2`) for retrieval precision, adding `SemanticChunker` for financial/legal documents, and establishing a FinanceBench accuracy baseline to measure improvement delta.
 
 ---
 
