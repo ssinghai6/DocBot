@@ -87,6 +87,8 @@ sessions_table = Table(
     Column("context_summary", Text),
     Column("last_compressed_at", DateTime(timezone=True)),
     Column("message_count_at_compression", Integer, server_default="0"),
+    # ── Persistent Workspace: link session to logged-in user ─────────────────
+    Column("user_id", String, index=True),
 )
 
 messages_table = Table(
@@ -150,6 +152,8 @@ db_connections_table = Table(
     Column("credentials_blob", Text, nullable=False),   # Fernet-encrypted JSON
     Column("pii_masking_enabled", Boolean, server_default="false", nullable=False),  # DOCBOT-604
     Column("created_at", DateTime(timezone=True), server_default=func.now(), nullable=False),
+    # ── Persistent Workspace: link connection to logged-in user ──────────────
+    Column("user_id", String, index=True),
 )
 
 schema_cache_table = Table(
@@ -212,6 +216,23 @@ _rbac_analyst = Depends(require_role(UserRole.analyst))
 _rbac_admin   = Depends(require_role(UserRole.admin))
 
 
+async def get_optional_user(request: Request) -> Optional[Any]:
+    """Read docbot_session cookie and return the user row, or None if not logged in.
+
+    Never raises — callers treat None as anonymous.
+    """
+    from api.auth_service import get_user_from_session
+    token = request.cookies.get("docbot_session")
+    if not token:
+        return None
+    try:
+        return await get_user_from_session(
+            token, user_sessions_table, users_table, async_session_factory
+        )
+    except Exception:
+        return None
+
+
 async def init_db() -> None:
     """Create tables idempotently on startup."""
     async with engine.begin() as conn:
@@ -232,6 +253,12 @@ async def init_db() -> None:
         for col_ddl in [
             "ALTER TABLE users ADD COLUMN IF NOT EXISTS provider_id TEXT",
             "ALTER TABLE users ADD COLUMN IF NOT EXISTS password_hash TEXT",
+        ]:
+            await conn.execute(text(col_ddl))
+        # Persistent Workspace: user_id columns for sessions + db_connections
+        for col_ddl in [
+            "ALTER TABLE sessions ADD COLUMN IF NOT EXISTS user_id TEXT",
+            "ALTER TABLE db_connections ADD COLUMN IF NOT EXISTS user_id TEXT",
         ]:
             await conn.execute(text(col_ddl))
     logger.info(
@@ -768,6 +795,7 @@ def get_personas():
 
 @app.post("/api/upload")
 async def upload_documents(
+    request: Request,
     files: List[UploadFile] = File(...),
     deep_visual_mode: bool = Form(False)
 ):
@@ -864,7 +892,9 @@ async def upload_documents(
                     logger.info("upload: stored %d extracted fields for session=%s", len(fields), sid)
             asyncio.create_task(_run_extraction(session_id, full_text))
 
-        # Store session in database
+        # Store session in database — link to logged-in user if present
+        _session_owner = await get_optional_user(request)
+        _session_user_id = _session_owner.id if _session_owner else None
         async with engine.begin() as conn:
             await conn.execute(
                 insert(sessions_table).values(
@@ -872,6 +902,7 @@ async def upload_documents(
                     persona="Generalist",
                     file_count=len(files_info),
                     files_info=json.dumps(files_info),
+                    user_id=_session_user_id,
                 )
             )
         
@@ -1492,7 +1523,7 @@ class DisconnectRequest(BaseModel):
 
 
 @app.post("/api/db/connect")
-async def db_connect(request: DBConnectionRequest, _user=_rbac_analyst):
+async def db_connect(raw_request: Request, request: DBConnectionRequest, _user=_rbac_analyst):
     """
     DOCBOT-201 — Validate credentials, encrypt, store, and return connection_id.
     SSRF prevention and dialect validation are enforced by the Pydantic model.
@@ -1517,6 +1548,16 @@ async def db_connect(request: DBConnectionRequest, _user=_rbac_analyst):
             schema_cache_table,
             async_session_factory,
         )
+        # Persistent Workspace: stamp connection row with user_id if logged in
+        _conn_owner = await get_optional_user(raw_request)
+        if _conn_owner and result.get("connection_id"):
+            async with async_session_factory() as _db:
+                async with _db.begin():
+                    await _db.execute(
+                        update(db_connections_table)
+                        .where(db_connections_table.c.id == result["connection_id"])
+                        .values(user_id=_conn_owner.id)
+                    )
         # DOCBOT-602: audit connection event (never log password — only host/dialect)
         from api.audit_service import log_event, AuditEventType
         log_event(
@@ -2360,6 +2401,76 @@ async def auth_logout(request: Request):
     resp = JSONResponse({"status": "logged_out"})
     resp.delete_cookie(key="docbot_session", path="/")
     return resp
+
+
+# ---------------------------------------------------------------------------
+# Persistent Workspace: return user's previous sessions + DB connections
+# ---------------------------------------------------------------------------
+
+@app.get("/api/auth/workspace")
+async def get_workspace(request: Request):
+    """Return the authenticated user's previous chat sessions and DB connections.
+
+    Requires auth (401 if not logged in).
+    Response:
+      {
+        "sessions": [{"session_id": str, "created_at": str, "file_count": int, "persona": str}],
+        "db_connections": [{"id": str, "dialect": str, "host": str, "db_name": str, "created_at": str}]
+      }
+    """
+    user = await get_optional_user(request)
+    if not user:
+        raise HTTPException(status_code=401, detail="Not authenticated.")
+
+    async with async_session_factory() as db:
+        sess_result = await db.execute(
+            select(
+                sessions_table.c.session_id,
+                sessions_table.c.created_at,
+                sessions_table.c.file_count,
+                sessions_table.c.persona,
+            )
+            .where(sessions_table.c.user_id == user.id)
+            .order_by(sessions_table.c.updated_at.desc())
+            .limit(20)
+        )
+        sess_rows = sess_result.fetchall()
+
+        conn_result = await db.execute(
+            select(
+                db_connections_table.c.id,
+                db_connections_table.c.dialect,
+                db_connections_table.c.host,
+                db_connections_table.c.dbname,
+                db_connections_table.c.created_at,
+            )
+            .where(db_connections_table.c.user_id == user.id)
+            .order_by(db_connections_table.c.created_at.desc())
+            .limit(20)
+        )
+        conn_rows = conn_result.fetchall()
+
+    return {
+        "sessions": [
+            {
+                "session_id": r.session_id,
+                "created_at": r.created_at.isoformat() if r.created_at else None,
+                "file_count": r.file_count or 0,
+                "persona": r.persona or "Generalist",
+            }
+            for r in sess_rows
+        ],
+        "db_connections": [
+            {
+                "id": r.id,
+                "dialect": r.dialect,
+                "host": r.host,
+                "db_name": r.dbname,
+                "created_at": r.created_at.isoformat() if r.created_at else None,
+            }
+            for r in conn_rows
+        ],
+    }
 
 
 # ---------------------------------------------------------------------------
