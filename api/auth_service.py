@@ -110,6 +110,11 @@ def is_saml_configured() -> bool:
     return all(os.getenv(v) for v in required)
 
 
+def is_auth_configured() -> bool:
+    """Return True when ANY auth method is available (email/password always qualifies)."""
+    return True  # email/password is always available; OAuth providers are optional
+
+
 def build_saml_auth(request_data: dict) -> Any:
     """Build a OneLogin_Saml2_Auth instance for a given request.
 
@@ -289,7 +294,11 @@ async def jit_provision_user(
     users_table: Any,
     async_session_factory: Any,
 ) -> str:
-    """Create user on first login if not exists. Returns user_id."""
+    """Create user on first login if not exists. Returns user_id.
+
+    attrs keys: email, name, provider, provider_id (optional), password_hash (optional)
+    Providers: saml | okta | azure_ad | github | google | email
+    """
     from sqlalchemy import select as sa_select, insert as sa_insert, update as sa_update
     email = attrs["email"]
 
@@ -300,32 +309,39 @@ async def jit_provision_user(
         existing = result.fetchone()
 
         if existing:
-            # Update name/provider on re-login in case they changed in IdP
+            # Update name/provider on re-login in case they changed
+            update_vals: dict[str, Any] = {
+                "name": attrs["name"],
+                "provider": attrs["provider"],
+                "last_login_at": datetime.now(timezone.utc),
+            }
+            if attrs.get("provider_id"):
+                update_vals["provider_id"] = attrs["provider_id"]
             async with session.begin():
                 await session.execute(
                     sa_update(users_table)
                     .where(users_table.c.email == email)
-                    .values(
-                        name=attrs["name"],
-                        provider=attrs["provider"],
-                        last_login_at=datetime.now(timezone.utc),
-                    )
+                    .values(**update_vals)
                 )
-            logger.info("SSO login: returning user %s (%s)", email, existing.id)
+            logger.info("Auth login: returning user %s (%s)", email, existing.id)
             return existing.id
 
         # First login — provision
         user_id = str(uuid.uuid4())
+        insert_vals: dict[str, Any] = {
+            "id": user_id,
+            "email": email,
+            "name": attrs["name"],
+            "provider": attrs["provider"],
+            "role": "analyst",  # default role
+            "last_login_at": datetime.now(timezone.utc),
+        }
+        if attrs.get("provider_id"):
+            insert_vals["provider_id"] = attrs["provider_id"]
+        if attrs.get("password_hash"):
+            insert_vals["password_hash"] = attrs["password_hash"]
+
         async with session.begin():
-            await session.execute(
-                sa_insert(users_table).values(
-                    id=user_id,
-                    email=email,
-                    name=attrs["name"],
-                    provider=attrs["provider"],
-                    role="analyst",  # default role; admin can promote via RBAC (DOCBOT-603)
-                    last_login_at=datetime.now(timezone.utc),
-                )
-            )
-        logger.info("SSO JIT provision: new user %s (%s)", email, user_id)
+            await session.execute(sa_insert(users_table).values(**insert_vals))
+        logger.info("Auth JIT provision: new user %s (%s) via %s", email, user_id, attrs["provider"])
         return user_id
