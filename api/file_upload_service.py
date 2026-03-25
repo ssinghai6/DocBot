@@ -141,12 +141,14 @@ async def upload_csv(
             f"CSV file exceeds the 50 MB limit ({len(file_bytes) // (1024*1024)} MB uploaded)."
         )
 
-    # Parse CSV in executor to get schema info (no SQLite write needed)
-    table_name, row_count, columns = await asyncio.get_event_loop().run_in_executor(
-        None,
-        _parse_csv_metadata,
-        file_bytes,
-        original_filename,
+    # Parse CSV in executor to get schema info + section metadata
+    table_name, row_count, columns, sections_dicts, manifest = (
+        await asyncio.get_running_loop().run_in_executor(
+            None,
+            _parse_csv_metadata,
+            file_bytes,
+            original_filename,
+        )
     )
 
     connection_id = await _register_csv_connection(
@@ -154,6 +156,8 @@ async def upload_csv(
         table_name=table_name,
         row_count=row_count,
         columns=columns,
+        sections=sections_dicts,
+        section_manifest=manifest,
         original_filename=original_filename,
         session_id=session_id,
         db_connections_table=db_connections_table,
@@ -178,43 +182,37 @@ async def upload_csv(
 def _parse_csv_metadata(
     file_bytes: bytes,
     original_filename: str,
-) -> Tuple[str, int, List[str]]:
+) -> Tuple[str, int, List[str], List[dict], str]:
     """
-    Parse CSV bytes with pandas and return (table_name, row_count, column_names).
+    Parse CSV bytes and return (table_name, row_count, column_names, sections, manifest).
 
-    Only reads the CSV to extract schema info — no SQLite write.
+    Uses the csv_preprocessor to detect multi-section CSVs (e.g. multi-exhibit
+    Excel exports) and build per-section metadata for the LLM.
     """
-    import io
     import re
 
-    import pandas as pd
+    from api.utils.csv_preprocessor import (
+        build_section_manifest,
+        sections_to_dicts,
+        split_csv_sections,
+    )
 
-    df = None
-    for encoding in ("utf-8-sig", "utf-8", "latin-1"):
-        try:
-            df = pd.read_csv(
-                io.BytesIO(file_bytes),
-                encoding=encoding,
-                dtype=str,
-                on_bad_lines="skip",
-            )
-            break
-        except (UnicodeDecodeError, pd.errors.ParserError):
-            continue
+    sections = split_csv_sections(file_bytes)
+    total_rows = sum(s.row_count for s in sections)
 
-    if df is None or df.empty:
+    if total_rows == 0:
         raise ValueError("CSV file is empty or could not be parsed. Check encoding (UTF-8 or Latin-1 expected).")
 
-    # Clean column names: lowercase, replace non-alphanum with _
-    df.columns = [
-        re.sub(r"[^a-z0-9_]", "_", col.strip().lower().replace(" ", "_"))
-        for col in df.columns
-    ]
+    manifest = build_section_manifest(sections)
+    sections_dicts = sections_to_dicts(sections)
+
+    # Use first section's columns as primary (backward compat)
+    primary_columns = sections[0].columns
 
     raw_name = Path(original_filename).stem
     table_name = re.sub(r"[^a-z0-9_]", "_", raw_name.strip().lower())[:50] or "uploaded_data"
 
-    return table_name, len(df), list(df.columns)
+    return table_name, total_rows, primary_columns, sections_dicts, manifest
 
 
 async def _register_csv_connection(
@@ -222,6 +220,8 @@ async def _register_csv_connection(
     table_name: str,
     row_count: int,
     columns: List[str],
+    sections: List[dict],
+    section_manifest: str,
     original_filename: str,
     session_id: str,
     db_connections_table: Table,
@@ -234,6 +234,9 @@ async def _register_csv_connection(
     The raw CSV bytes are base64-encoded and stored in the credentials blob so
     they can be uploaded to an E2B sandbox at query time.  No /tmp file is
     created — the bytes live in the encrypted DB record.
+
+    Section metadata (from csv_preprocessor) is stored alongside for
+    multi-section CSV support.
     """
     connection_id = str(uuid.uuid4())
     csv_b64 = base64.b64encode(file_bytes).decode()
@@ -250,6 +253,8 @@ async def _register_csv_connection(
         "columns": columns,
         "row_count": row_count,
         "csv_content": csv_b64,
+        "sections": sections,
+        "section_manifest": section_manifest,
         "ttl_expires_at": (
             datetime.now(timezone.utc) + timedelta(seconds=_FILE_TTL_SECONDS)
         ).isoformat(),

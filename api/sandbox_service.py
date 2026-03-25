@@ -467,8 +467,8 @@ async def generate_csv_analysis_code(
     question: str,
     persona_def: str,
     chart_type: str = "auto",
-    dtypes_info: Optional[str] = None,
-    sample_rows: Optional[str] = None,
+    section_manifest: Optional[str] = None,
+    is_multi_section: bool = False,
 ) -> Optional[str]:
     """Generate Python/pandas code to answer a question about a CSV file on E2B.
 
@@ -480,50 +480,57 @@ async def generate_csv_analysis_code(
         return None
 
     chart_instructions = _chart_type_instructions(chart_type)
-    cols_preview = ", ".join(column_names[:20])
-    if len(column_names) > 20:
-        cols_preview += f" … (+{len(column_names) - 20} more)"
 
+    # Base system prompt
     system_prompt = (
-        "You are a Python data analyst. A CSV file has already been uploaded to the sandbox. "
-        "IMPORTANT: The CSV may have messy/unnamed headers and NaN values. "
-        "A data-cleaning preamble will be automatically prepended to your code that:\n"
-        "  - Loads the CSV into `df`\n"
-        "  - Normalizes column names to lowercase with underscores\n"
-        "  - Drops fully-empty rows and columns\n"
-        "DO NOT include `pd.read_csv()` or `import pandas` in your code — they are already handled.\n\n"
-        "Write Python code that:\n"
-        "1. Uses the pre-loaded `df` DataFrame directly\n"
-        "2. For numeric operations: convert columns with pd.to_numeric(col, errors='coerce') "
-        "and ALWAYS call .dropna() or .fillna(0) before boolean masking\n"
-        "3. NEVER do boolean indexing like df[df['col'] > X] without first ensuring the column has no NaN\n"
-        "4. Answers the user's question using pandas operations\n"
-        f"5. CHART TYPE REQUIREMENT: {chart_instructions}\n"
-        "6. If the question asks about schema / columns / structure: print df.dtypes and df.shape, skip charting\n"
-        "7. Otherwise calls plt.show() exactly once after creating the chart\n"
-        "8. Prints a brief text summary of findings\n"
-        "9. AFTER plt.show() (if chart was made), prints chart metadata on ONE line:\n"
-        "   import json; print('CHART_META:' + json.dumps({'type': '<chart_type>', "
-        "'title': '<chart_title>', 'x_label': '<x_label>', 'y_label': '<y_label>', 'series_count': <int>}))\n\n"
-        "Rules:\n"
-        "- Output ONLY raw Python code, no markdown fences, no explanations\n"
-        "- Do NOT import pandas or call pd.read_csv — already done by preamble\n"
-        "- Import matplotlib.pyplot as plt if you need charts\n"
-        "- ALWAYS handle NaN before any boolean masking or aggregation\n"
-        "- Keep code under 70 lines"
+        "You are a Python data analyst. A CSV file is pre-loaded as `df` by a preamble.\n\n"
+        "PREAMBLE (already done — DO NOT repeat):\n"
+        "- `import pandas as pd`, `import re`, `import numpy as np`\n"
+        "- CSV loaded and column names normalized to lowercase_underscores\n"
+        "- Empty rows/columns dropped, numeric columns auto-converted\n"
     )
 
-    # Build rich data context for the LLM
-    data_context = f"CSV columns (after name normalization): {cols_preview}"
-    if dtypes_info:
-        data_context += f"\n\nColumn dtypes:\n{dtypes_info}"
-    if sample_rows:
-        data_context += f"\n\nFirst 3 rows (after normalization):\n{sample_rows}"
+    if is_multi_section:
+        system_prompt += (
+            "\nMULTI-SECTION CSV: This file contains multiple data sections (exhibits/sheets).\n"
+            "A helper `load_section(idx)` is available. `df` defaults to section 0.\n"
+            "- Call `df = load_section(N)` to switch sections. `_SECTIONS` dict has metadata.\n"
+            "- For cross-section queries: load each section separately, then merge/compare.\n"
+            "- DO NOT use pd.read_csv(). DO NOT reference _RAW directly.\n\n"
+        )
+    else:
+        system_prompt += "- `df` is ready to use directly.\n\n"
 
-    user_message = (
-        f"{data_context}\n\n"
-        f"Question: {question}"
+    system_prompt += (
+        "YOUR CODE RULES:\n"
+        "1. Do NOT import pandas or call pd.read_csv — already handled\n"
+        "2. Import matplotlib.pyplot as plt only if charting\n"
+        "3. Output ONLY raw Python code — no markdown fences, no explanations\n"
+        "4. ALWAYS .dropna() or .fillna(0) before boolean masks or aggregation\n\n"
+        "DATA CLEANING PATTERNS (use as needed):\n"
+        "- Currency: col.str.replace(r'[$,]', '', regex=True).pipe(pd.to_numeric, errors='coerce')\n"
+        "- Percentages: col.str.rstrip('%').pipe(pd.to_numeric, errors='coerce').div(100)\n"
+        "- Dates: pd.to_datetime(col, format='mixed', dayfirst=False)\n\n"
+        f"CHARTING: {chart_instructions}\n"
+        "- If question is about schema/columns/structure: print df.dtypes and df.shape, skip chart\n"
+        "- Otherwise call plt.show() once, then print chart metadata:\n"
+        "  import json; print('CHART_META:' + json.dumps({'type': '<type>', "
+        "'title': '<title>', 'x_label': '<x>', 'y_label': '<y>', 'series_count': <int>}))\n\n"
+        "Print a brief text summary of findings. Keep code under 70 lines."
     )
+
+    # Build user message with section manifest or column list
+    if is_multi_section and section_manifest:
+        user_message = (
+            "MULTI-SECTION CSV — use load_section(idx) to access the right section.\n\n"
+            f"SECTION MANIFEST:\n{section_manifest}\n\n"
+            f"Question: {question}"
+        )
+    else:
+        cols_preview = ", ".join(column_names[:20])
+        if len(column_names) > 20:
+            cols_preview += f" … (+{len(column_names) - 20} more)"
+        user_message = f"CSV columns: {cols_preview}\n\nQuestion: {question}"
 
     try:
         client = groq_module.Groq(api_key=api_key)
@@ -651,11 +658,14 @@ async def run_csv_query_on_e2b(
     column_names: List[str],
     chart_type: str = "auto",
     expert_personas: Optional[dict] = None,
+    sections: Optional[List[dict]] = None,
+    section_manifest: Optional[str] = None,
 ) -> AsyncGenerator[str, None]:
     """Process a user question about a CSV file using pandas on E2B.
 
     Yields SSE-formatted strings matching the SQL pipeline format so the
-    frontend needs no changes.
+    frontend needs no changes.  Supports multi-section CSVs via
+    csv_preprocessor section metadata.
     """
     persona_def = (
         (expert_personas or {})
@@ -665,14 +675,35 @@ async def run_csv_query_on_e2b(
 
     csv_path_in_sandbox = f"/tmp/{table_name}.csv"
 
-    # Inspect CSV structure for better code generation
-    try:
-        csv_bytes_for_profile = base64.b64decode(csv_content_b64)
-    except Exception:
-        csv_bytes_for_profile = b""
-    dtypes_info, sample_rows = await asyncio.get_event_loop().run_in_executor(
-        None, _inspect_csv_profile, csv_bytes_for_profile,
-    )
+    # Build section-aware preamble if section metadata is available
+    is_multi_section = sections is not None and len(sections) > 1
+    if sections:
+        from api.utils.csv_preprocessor import dicts_to_sections, generate_section_preamble
+        csv_sections = dicts_to_sections(sections)
+        preamble = generate_section_preamble(csv_sections, csv_path_in_sandbox)
+    else:
+        # Fallback: inspect CSV on-the-fly (for connections created before this update)
+        try:
+            csv_bytes_for_profile = base64.b64decode(csv_content_b64)
+        except Exception:
+            csv_bytes_for_profile = b""
+        dtypes_info, sample_rows = await asyncio.get_running_loop().run_in_executor(
+            None, _inspect_csv_profile, csv_bytes_for_profile,
+        )
+        preamble = (
+            "import pandas as pd\n"
+            "import re as _re\n"
+            "import numpy as np\n"
+            "\n"
+            f"df = pd.read_csv('{csv_path_in_sandbox}')\n"
+            "df.columns = [_re.sub(r'[^a-z0-9_]', '_', str(c).strip().lower().replace(' ', '_')) for c in df.columns]\n"
+            "df = df.dropna(how='all').dropna(axis=1, how='all')\n"
+            "for _c in df.columns:\n"
+            "    _v = pd.to_numeric(df[_c], errors='coerce')\n"
+            "    if _v.notna().sum() / max(df[_c].notna().sum(), 1) > 0.5:\n"
+            "        df[_c] = _v\n"
+            "# --- end preamble ---\n\n"
+        )
 
     # Generate pandas code via LLM
     code = await generate_csv_analysis_code(
@@ -681,56 +712,14 @@ async def run_csv_query_on_e2b(
         question=question,
         persona_def=persona_def,
         chart_type=chart_type,
-        dtypes_info=dtypes_info,
-        sample_rows=sample_rows,
-    )
-
-    # Mandatory data-cleaning preamble — prepended to ALL generated code
-    # (both LLM-generated and fallback). Ensures column names in sandbox match
-    # the cleaned names the LLM was told about, and NaN-heavy data is handled.
-    # Also detects multi-table CSVs (Excel exports) and promotes the real header row.
-    _csv_cleaning_preamble = (
-        "import pandas as pd\n"
-        "import re as _re\n"
-        "import numpy as np\n"
-        "\n"
-        f"df = pd.read_csv('{csv_path_in_sandbox}')\n"
-        "# --- DocBot: mandatory data cleaning ---\n"
-        "df.columns = [_re.sub(r'[^a-z0-9_]', '_', str(c).strip().lower().replace(' ', '_')) for c in df.columns]\n"
-        "df = df.dropna(how='all').dropna(axis=1, how='all')\n"
-        "# Detect multi-table CSV: if >50% columns are unnamed, find the real header row\n"
-        "_unnamed = sum(1 for c in df.columns if 'unnamed' in str(c))\n"
-        "if _unnamed > len(df.columns) * 0.5 and len(df) > 1:\n"
-        "    # Find first row where most cells are non-null strings (the real header)\n"
-        "    for _i in range(min(5, len(df))):\n"
-        "        _row = df.iloc[_i]\n"
-        "        _non_null = _row.dropna()\n"
-        "        if len(_non_null) >= len(df.columns) * 0.4:\n"
-        "            _vals = [str(v).strip() for v in _non_null if str(v).strip()]\n"
-        "            _is_header = any(v.replace(' ', '').isalpha() for v in _vals[:5])\n"
-        "            if _is_header:\n"
-        "                df.columns = [_re.sub(r'[^a-z0-9_]', '_', str(v).strip().lower().replace(' ', '_')) for v in df.iloc[_i]]\n"
-        "                df = df.iloc[_i+1:].reset_index(drop=True)\n"
-        "                # Drop columns named 'nan' or empty (from trailing commas)\n"
-        "                df = df.loc[:, ~df.columns.isin(['nan', 'none', ''])]\n"
-        "                df = df.dropna(how='all').dropna(axis=1, how='all')\n"
-        "                break\n"
-        "# Convert numeric-looking columns (only if majority of values convert)\n"
-        "for _col in df.columns:\n"
-        "    try:\n"
-        "        _converted = pd.to_numeric(df[_col], errors='coerce')\n"
-        "        _ratio = _converted.notna().sum() / max(df[_col].notna().sum(), 1)\n"
-        "        if _ratio > 0.5:\n"
-        "            df[_col] = _converted\n"
-        "    except Exception:\n"
-        "        pass\n"
-        "# --- end cleaning ---\n\n"
+        section_manifest=section_manifest,
+        is_multi_section=is_multi_section,
     )
 
     # Fallback code if LLM is unavailable or generation produced invalid syntax.
     if not code:
         code = (
-            _csv_cleaning_preamble
+            preamble
             + "import matplotlib\n"
             "matplotlib.use('Agg')\n"
             "import matplotlib.pyplot as plt\n"
@@ -745,8 +734,8 @@ async def run_csv_query_on_e2b(
             "print(df.head(10).to_string())\n"
         )
     else:
-        # Prepend cleaning preamble to LLM-generated code, stripping any
-        # duplicate pd.read_csv() / import pandas the LLM may have included
+        # Prepend preamble to LLM-generated code, stripping any duplicate
+        # pd.read_csv() / import pandas the LLM may have included
         import re as _re
         code = _re.sub(
             r"^.*pd\.read_csv\s*\(.*\).*$",
@@ -756,7 +745,7 @@ async def run_csv_query_on_e2b(
             flags=_re.MULTILINE,
         )
         code = _re.sub(r"^import pandas as pd\s*$", "", code, count=1, flags=_re.MULTILINE)
-        code = _csv_cleaning_preamble + code
+        code = preamble + code
 
     # Decode CSV and run on E2B
     try:

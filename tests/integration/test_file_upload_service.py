@@ -45,19 +45,20 @@ class TestCSVMetadataParsing:
     """Tests for _parse_csv_metadata — schema detection without SQLite write."""
 
     def test_basic_csv_parsed(self, simple_csv_bytes):
-        table_name, row_count, columns = _parse_csv_metadata(simple_csv_bytes, "sales.csv")
+        table_name, row_count, columns, sections, manifest = _parse_csv_metadata(simple_csv_bytes, "sales.csv")
         assert table_name == "sales"
         assert row_count == 3
         assert "product" in columns
         assert "revenue" in columns
+        assert len(sections) == 1  # single-table CSV
 
     def test_bom_encoding_handled(self, bom_csv_bytes):
-        _, _, columns = _parse_csv_metadata(bom_csv_bytes, "bom.csv")
+        _, _, columns, _, _ = _parse_csv_metadata(bom_csv_bytes, "bom.csv")
         assert "name" in columns   # BOM stripped from first column name
         assert "value" in columns
 
     def test_messy_csv_column_names_sanitised(self, messy_csv_bytes):
-        _, row_count, columns = _parse_csv_metadata(messy_csv_bytes, "messy.csv")
+        _, row_count, columns, _, _ = _parse_csv_metadata(messy_csv_bytes, "messy.csv")
         assert row_count == 2
         assert len(columns) == 3
         for col in columns:
@@ -66,13 +67,13 @@ class TestCSVMetadataParsing:
 
     def test_column_names_sanitised(self):
         csv = b"First Name,Last Name,Total $\nAlice,Smith,100\n"
-        _, _, columns = _parse_csv_metadata(csv, "data.csv")
+        _, _, columns, _, _ = _parse_csv_metadata(csv, "data.csv")
         for col in columns:
             assert col == col.lower()
             assert " " not in col
 
     def test_table_name_derived_from_filename(self, simple_csv_bytes):
-        table_name, _, _ = _parse_csv_metadata(simple_csv_bytes, "monthly_report_2024.csv")
+        table_name, _, _, _, _ = _parse_csv_metadata(simple_csv_bytes, "monthly_report_2024.csv")
         assert table_name == "monthly_report_2024"
 
     def test_empty_csv_raises_value_error(self):
@@ -80,12 +81,12 @@ class TestCSVMetadataParsing:
             _parse_csv_metadata(b"col1,col2\n", "empty.csv")
 
     def test_returns_column_list(self, simple_csv_bytes):
-        _, _, columns = _parse_csv_metadata(simple_csv_bytes, "sales.csv")
+        _, _, columns, _, _ = _parse_csv_metadata(simple_csv_bytes, "sales.csv")
         assert isinstance(columns, list)
         assert len(columns) > 0
 
     def test_returns_correct_row_count(self, simple_csv_bytes):
-        _, row_count, _ = _parse_csv_metadata(simple_csv_bytes, "sales.csv")
+        _, row_count, _, _, _ = _parse_csv_metadata(simple_csv_bytes, "sales.csv")
         assert row_count == 3
 
     def test_size_limits_are_correct(self):

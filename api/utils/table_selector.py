@@ -78,7 +78,7 @@ async def upsert_table_embeddings(
         def _batch_embed() -> List[List[float]]:
             return embeddings_model.embed_documents(summaries)
 
-        loop = asyncio.get_event_loop()
+        loop = asyncio.get_running_loop()
         vectors: List[List[float]] = await loop.run_in_executor(None, _batch_embed)
 
         async with async_session_factory() as session:
@@ -153,7 +153,7 @@ async def select_relevant_tables(
         def _embed_q() -> List[float]:
             return embeddings_model.embed_query(question)
 
-        loop = asyncio.get_event_loop()
+        loop = asyncio.get_running_loop()
         q_vec: List[float] = await loop.run_in_executor(None, _embed_q)
 
         # Step 3: Rank by cosine similarity

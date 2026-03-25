@@ -339,7 +339,7 @@ async def connect_database(
                 raise ValueError("Provided access token is already expired")
             entra_connect_args = _build_entra_connect_args(req.access_token)  # type: ignore[arg-type]
         else:
-            token = await _asyncio.get_event_loop().run_in_executor(
+            token = await _asyncio.get_running_loop().run_in_executor(
                 None, _get_entra_token, req.tenant_id, req.client_id, req.client_secret
             )
             entra_connect_args = _build_entra_connect_args(token)
@@ -526,7 +526,7 @@ async def get_schema(
             )
 
     import asyncio as _asyncio
-    sync_url, entra_connect_args = await _asyncio.get_event_loop().run_in_executor(
+    sync_url, entra_connect_args = await _asyncio.get_running_loop().run_in_executor(
         None, _resolve_connection, creds
     )
     schema = await _introspect_schema_from_url(sync_url, creds["dialect"], entra_connect_args)
@@ -611,7 +611,7 @@ async def _introspect_schema_from_url(
         finally:
             engine.dispose()
 
-    return await asyncio.get_event_loop().run_in_executor(None, _sync_introspect)
+    return await asyncio.get_running_loop().run_in_executor(None, _sync_introspect)
 
 
 def _sort_tables_by_row_estimate_pg(engine, table_names: List[str]) -> List[str]:
@@ -654,7 +654,7 @@ async def _test_connection(
             engine.dispose()
 
     try:
-        await asyncio.get_event_loop().run_in_executor(None, _sync_test)
+        await asyncio.get_running_loop().run_in_executor(None, _sync_test)
     except Exception as exc:
         logger.error("DB connection test failed: %s", exc)
         raise ValueError(
@@ -713,6 +713,8 @@ async def run_sql_pipeline(
             column_names=_creds.get("columns", []),
             chart_type=chart_type,
             expert_personas=expert_personas,
+            sections=_creds.get("sections"),
+            section_manifest=_creds.get("section_manifest"),
         ):
             yield _chunk
         return
@@ -792,7 +794,7 @@ async def run_sql_pipeline(
     # ── Step 6: Execute ───────────────────────────────────────────────────
     creds = decrypt_credentials(conn_row.credentials_blob)
     import asyncio as _asyncio
-    sync_url, entra_connect_args = await _asyncio.get_event_loop().run_in_executor(
+    sync_url, entra_connect_args = await _asyncio.get_running_loop().run_in_executor(
         None, _resolve_connection, creds
     )
     rows, column_names = await _execute_query(validated_sql, sync_url, dialect, entra_connect_args)
@@ -1094,7 +1096,7 @@ async def _execute_query(
 
     try:
         return await asyncio.wait_for(
-            asyncio.get_event_loop().run_in_executor(None, _sync_execute),
+            asyncio.get_running_loop().run_in_executor(None, _sync_execute),
             timeout=15.0,
         )
     except asyncio.TimeoutError as exc:
@@ -1152,7 +1154,7 @@ async def _get_embedding(text_input: str, embeddings_model) -> List[float]:
     def _sync_embed() -> List[float]:
         return embeddings_model.embed_query(text_input)
 
-    return await asyncio.get_event_loop().run_in_executor(None, _sync_embed)
+    return await asyncio.get_running_loop().run_in_executor(None, _sync_embed)
 
 
 # ---------------------------------------------------------------------------

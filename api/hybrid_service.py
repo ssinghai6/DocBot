@@ -315,6 +315,9 @@ async def _collect_sql_result(
     from api.db_service import run_sql_pipeline
 
     try:
+        metadata_result: dict | None = None
+        answer_tokens: list[str] = []
+
         async for raw_chunk in run_sql_pipeline(
             connection_id=connection_id,
             question=question,
@@ -330,12 +333,22 @@ async def _collect_sql_result(
                 continue
             data = json.loads(raw_chunk[6:].strip())
             if data.get("type") == "metadata":
-                return data
+                metadata_result = data
+            elif data.get("type") == "token":
+                answer_tokens.append(data.get("content", ""))
+
+        # For CSV connections, metadata has empty result_preview.
+        # Inject the streamed answer tokens as the result text so
+        # hybrid synthesis has actual data to work with.
+        if metadata_result is not None and answer_tokens:
+            answer_text = "".join(answer_tokens).strip()
+            if not metadata_result.get("result_preview") and answer_text:
+                metadata_result["csv_answer"] = answer_text[:3000]
+
+        return metadata_result
     except Exception as exc:
         logger.warning("_collect_sql_result failed: %s", exc)
         return None
-
-    return None
 
 
 # ---------------------------------------------------------------------------
@@ -457,14 +470,25 @@ async def hybrid_chat(
 
     sql_section = ""
     if sql_metadata:
-        preview = json.dumps(sql_metadata.get("result_preview", [])[:20], default=str, indent=2)
-        row_count = sql_metadata.get("row_count", 0)
-        sources = sql_metadata.get("sources", [])
-        source_str = ", ".join(sources) if sources else "database"
-        sql_section = (
-            f"\n\nDatabase results ({row_count} rows) from [{source_str}]:\n{preview}\n"
-            "Cite database results as [DB: table_name]."
-        )
+        # CSV connections provide answer text in csv_answer; SQL connections
+        # provide structured result_preview rows.
+        csv_answer = sql_metadata.get("csv_answer")
+        if csv_answer:
+            sources = sql_metadata.get("sources", [])
+            source_str = ", ".join(sources) if sources else "CSV file"
+            sql_section = (
+                f"\n\nData analysis results from [{source_str}]:\n{csv_answer}\n"
+                "Cite data results as [DB: csv_file]."
+            )
+        else:
+            preview = json.dumps(sql_metadata.get("result_preview", [])[:20], default=str, indent=2)
+            row_count = sql_metadata.get("row_count", 0)
+            sources = sql_metadata.get("sources", [])
+            source_str = ", ".join(sources) if sources else "database"
+            sql_section = (
+                f"\n\nDatabase results ({row_count} rows) from [{source_str}]:\n{preview}\n"
+                "Cite database results as [DB: table_name]."
+            )
 
     doc_section = ""
     if doc_context:
