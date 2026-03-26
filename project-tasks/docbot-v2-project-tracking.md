@@ -1775,10 +1775,10 @@ Gate lifted 2026-03-25 for investor demo sprint. Building connector interface + 
 | Feature | Claimed | Actual Status | Fix Required |
 |---------|---------|---------------|--------------|
 | Hybrid discrepancy detection | "Flags conflicts between docs and DB with delta %" | **PARTIAL → FIXED (2026-03-25)** — `api/utils/discrepancy_detector.py` now extracts numeric values from both sources, matches by label similarity, computes deltas in code. 29 tests passing. | ✅ Done |
-| Smart agent per-question routing | "Per-question routing to the right expert" | **STUB** — upload-time keyword count only. `detection_keywords` in persona definitions are never read at query time. `/api/chat` uses persona passed from frontend, not re-classified per question. | Fix #2 |
-| Chroma persistent store | "Documents survive server restarts" | **MISSING** — `InMemoryVectorStore`. All uploaded docs lost on every Railway restart / redeploy. | Fix #3 (DOCBOT-1001) |
-| RBAC route enforcement | "Viewer/analyst/admin role enforcement" | **PARTIAL** — `require_role()` exists but `/api/chat`, `/api/db/chat`, `/api/hybrid/chat`, `/api/autopilot/run` have no `Depends(require_role(...))`. Non-SSO users bypass all role checks. | Fix #4 |
-| Audit log — SQL execution | "All queries are audited" | **PARTIAL** — upload, login/logout, db_connect/disconnect are logged. SQL query execution is never logged. IP address missing from all events. | Fix #5 |
+| Smart agent per-question routing | "Per-question routing to the right expert" | **STUB → FIXED (2026-03-25)** — `api/utils/persona_router.py` reads `detection_keywords` at query time, scores primary (2pt) + secondary (1pt), auto-routes when on Generalist. 13 tests. | ✅ Done |
+| Chroma persistent store | "Documents survive server restarts" | **MISSING → FIXED (2026-03-25)** — `api/utils/vector_store.py` wraps ChromaDB. Startup warm-up + lazy load on chat. `CHROMA_PERSIST_DIR` env var. 11 tests. | ✅ Done |
+| RBAC route enforcement | "Viewer/analyst/admin role enforcement" | **PARTIAL → FIXED (2026-03-25)** — `_user=_rbac_viewer` added to all four routes. 4 wiring tests. | ✅ Done |
+| Audit log — SQL execution | "All queries are audited" | **PARTIAL → FIXED (2026-03-25)** — `AuditEventType.query` + `get_client_ip()` wired into `/api/chat`, `/api/db/chat`, `/api/hybrid/chat`, `/api/autopilot/run`. X-Forwarded-For aware. 11 tests. | ✅ Done |
 | PII masking | "PII auto-masked in responses" | **PARTIAL** — email/phone/SSN patterns in structured DB results. Not applied to CSV E2B output or LLM answer text. No international formats. | Fix #6 |
 | Deep Research LangGraph | "5-node state machine" | **REAL** — plan→retrieve→evaluate→gap→synthesize fully implemented and tested. | ✅ Shipped |
 | E2B Python sandbox | "Run Python in isolated sandbox" | **REAL** — E2B code-interpreter, 25s timeout, finally cleanup. | ✅ Shipped |
