@@ -75,14 +75,9 @@ class DeepResearchState(TypedDict):
 
 
 def _get_llm(groq_api_key: str, streaming: bool = False):
-    from langchain_groq import ChatGroq
+    from api.utils.llm_provider import get_llm
 
-    return ChatGroq(
-        model="llama-3.3-70b-versatile",
-        api_key=groq_api_key,
-        temperature=0,
-        streaming=streaming,
-    )
+    return get_llm(temperature=0, streaming=streaming, groq_api_key=groq_api_key)
 
 
 def _parse_json_list(raw: str, fallback: list[str]) -> list[str]:
@@ -296,12 +291,15 @@ def _make_synthesizer(queue: asyncio.Queue, groq_api_key: str):
         chain = qa_prompt | llm_streaming | StrOutputParser()
         full_answer_parts: list[str] = []
 
+        from api.utils.pii_masking import mask_pii
+
         async for chunk in chain.astream({
             "context": format_docs(all_docs),
             "question": state["question"],
         }):
-            full_answer_parts.append(chunk)
-            await _emit(queue, {"type": "token", "content": chunk})
+            masked_chunk = mask_pii(chunk)
+            full_answer_parts.append(masked_chunk)
+            await _emit(queue, {"type": "token", "content": masked_chunk})
 
         full_answer = "".join(full_answer_parts)
 

@@ -410,6 +410,7 @@ def _resolve_connection(creds: Dict[str, Any]) -> tuple[str, Optional[Dict[str, 
 
 
 def _get_groq_client():
+    """Legacy helper — kept for reference. New code uses llm_provider."""
     from groq import Groq
     api_key = os.getenv("groq_api_key")
     if not api_key:
@@ -1055,12 +1056,13 @@ async def run_sql_pipeline(
     )
     explanation = _build_explanation(validated_sql, schema_subset)
 
-    # First chunk: metadata
+    # First chunk: metadata — mask PII in result preview
+    from api.utils.pii_masking import mask_rows
     meta_chunk = {
         "type": "metadata",
         "sql_query": validated_sql,
         "explanation": explanation,
-        "result_preview": result_dicts[:10],
+        "result_preview": mask_rows(result_dicts[:10]),
         "row_count": len(rows),
         "execution_time_ms": execution_time_ms,
         "sources": [t["name"] for t in schema_subset],
@@ -1108,14 +1110,12 @@ async def _select_relevant_tables(question: str, schema: List[Dict[str, Any]]) -
         "Response (JSON array only):"
     )
     try:
-        client = _get_groq_client()
-        response = client.chat.completions.create(
-            model="llama-3.3-70b-versatile",
-            messages=[{"role": "user", "content": prompt}],
+        from api.utils.llm_provider import chat_completion
+        raw = chat_completion(
+            [{"role": "user", "content": prompt}],
             temperature=0,
             max_tokens=200,
         )
-        raw = response.choices[0].message.content.strip()
         start = raw.find("[")
         end = raw.rfind("]") + 1
         if start != -1 and end > start:
@@ -1208,14 +1208,12 @@ async def _generate_sql(
         "SQL:"
     )
 
-    client = _get_groq_client()
-    response = client.chat.completions.create(
-        model="llama-3.3-70b-versatile",
-        messages=[{"role": "user", "content": prompt}],
+    from api.utils.llm_provider import chat_completion
+    sql = chat_completion(
+        [{"role": "user", "content": prompt}],
         temperature=0,
         max_tokens=500,
     )
-    sql = response.choices[0].message.content.strip()
     # Strip markdown code fences if present
     if sql.startswith("```"):
         lines = sql.split("\n")
@@ -1307,18 +1305,14 @@ async def _stream_answer(
         "Answer:"
     )
 
-    client = _get_groq_client()
-    stream = client.chat.completions.create(
-        model="llama-3.3-70b-versatile",
-        messages=[{"role": "user", "content": prompt}],
+    from api.utils.llm_provider import chat_completion_stream
+    from api.utils.pii_masking import mask_pii
+    for token in chat_completion_stream(
+        [{"role": "user", "content": prompt}],
         temperature=0.2,
         max_tokens=800,
-        stream=True,
-    )
-    for chunk in stream:
-        delta = chunk.choices[0].delta
-        if delta and delta.content:
-            yield delta.content
+    ):
+        yield mask_pii(token)
 
 
 # ---------------------------------------------------------------------------

@@ -296,21 +296,17 @@ async def generate_analysis_code(
     )
 
     try:
-        client = groq_module.Groq(api_key=api_key)
-        loop = asyncio.get_running_loop()
-        response = await loop.run_in_executor(
-            None,
-            lambda: client.chat.completions.create(
-                model="qwen/qwen3-32b",
-                messages=[
-                    {"role": "system", "content": system_prompt},
-                    {"role": "user", "content": user_message},
-                ],
-                max_tokens=1500,
-                temperature=0,
-            ),
+        from api.utils.llm_provider import chat_completion, GROQ_CODE_MODEL
+
+        code = chat_completion(
+            [
+                {"role": "system", "content": system_prompt},
+                {"role": "user", "content": user_message},
+            ],
+            model=GROQ_CODE_MODEL,
+            temperature=0,
+            max_tokens=1500,
         )
-        code = response.choices[0].message.content.strip()
 
         # Strip <think>...</think> reasoning blocks emitted by Qwen 3
         import re as _re
@@ -533,21 +529,18 @@ async def generate_csv_analysis_code(
         user_message = f"CSV columns: {cols_preview}\n\nQuestion: {question}"
 
     try:
-        client = groq_module.Groq(api_key=api_key)
-        loop = asyncio.get_running_loop()
-        response = await loop.run_in_executor(
-            None,
-            lambda: client.chat.completions.create(
-                model="qwen/qwen3-32b",
-                messages=[
-                    {"role": "system", "content": system_prompt},
-                    {"role": "user", "content": user_message},
-                ],
-                max_tokens=2000,
-                temperature=0,
-            ),
+        from api.utils.llm_provider import chat_completion, GROQ_CODE_MODEL
+
+        response_text = chat_completion(
+            [
+                {"role": "system", "content": system_prompt},
+                {"role": "user", "content": user_message},
+            ],
+            model=GROQ_CODE_MODEL,
+            temperature=0,
+            max_tokens=2000,
         )
-        code = response.choices[0].message.content.strip()
+        code = response_text
 
         # Strip <think>…</think> reasoning blocks
         import re as _re

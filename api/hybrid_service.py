@@ -390,13 +390,16 @@ async def hybrid_chat(
     has_db = connection_id is not None
 
     # ── Step 1: classify intent ───────────────────────────────────────────
-    groq_api_key = os.getenv("groq_api_key")
-    if not groq_api_key:
-        yield f"data: {json.dumps({'type': 'error', 'detail': 'groq_api_key not configured'})}\n\n"
-        return
+    groq_api_key = os.getenv("groq_api_key", "")
 
-    import groq as groq_module
-    groq_client = groq_module.Groq(api_key=groq_api_key)
+    # Build a groq_client for classify_intent (signature unchanged for test compat).
+    # If Groq key is missing, classify_intent_safe will catch the error and default
+    # to "hybrid", then synthesis uses chat_completion_stream with Gemini fallback.
+    try:
+        import groq as groq_module
+        groq_client = groq_module.Groq(api_key=groq_api_key) if groq_api_key else None
+    except Exception:
+        groq_client = None
 
     classification = await classify_intent_safe(
         question=question,
@@ -553,19 +556,17 @@ async def hybrid_chat(
         "Answer:"
     )
 
-    # ── Step 4: stream Groq synthesis ────────────────────────────────────
+    # ── Step 4: stream synthesis (Groq → Gemini fallback) ───────────────
     try:
-        stream = groq_client.chat.completions.create(
-            model="llama-3.3-70b-versatile",
-            messages=[{"role": "user", "content": prompt}],
+        from api.utils.llm_provider import chat_completion_stream
+        from api.utils.pii_masking import mask_pii
+
+        for token in chat_completion_stream(
+            [{"role": "user", "content": prompt}],
             temperature=0.2,
             max_tokens=800,
-            stream=True,
-        )
-        for chunk in stream:
-            delta = chunk.choices[0].delta
-            if delta and delta.content:
-                yield f"data: {json.dumps({'type': 'token', 'content': delta.content})}\n\n"
+        ):
+            yield f"data: {json.dumps({'type': 'token', 'content': mask_pii(token)})}\n\n"
     except Exception as exc:
         logger.error("hybrid_chat synthesis failed: %s", exc)
         yield f"data: {json.dumps({'type': 'error', 'detail': 'Synthesis failed. Please try again.'})}\n\n"

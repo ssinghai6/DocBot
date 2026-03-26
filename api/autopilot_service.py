@@ -103,21 +103,16 @@ async def _planner_node(state: AutopilotState) -> dict:
     )
 
     try:
-        loop = asyncio.get_running_loop()
-        client = groq_module.Groq(api_key=api_key)
-        response = await loop.run_in_executor(
-            None,
-            lambda: client.chat.completions.create(
-                model="llama-3.3-70b-versatile",
-                messages=[
-                    {"role": "system", "content": system_prompt},
-                    {"role": "user", "content": f"Question: {state['question']}"},
-                ],
-                max_tokens=400,
-                temperature=0,
-            ),
+        from api.utils.llm_provider import chat_completion
+
+        raw = chat_completion(
+            [
+                {"role": "system", "content": system_prompt},
+                {"role": "user", "content": f"Question: {state['question']}"},
+            ],
+            temperature=0,
+            max_tokens=400,
         )
-        raw = response.choices[0].message.content.strip()
         # Strip markdown fences if the model adds them
         lines = raw.splitlines()
         if lines and lines[0].startswith("```"):
@@ -372,23 +367,16 @@ async def _synthesizer_node(state: AutopilotState) -> dict:
     )
 
     try:
-        import groq as groq_module
+        from api.utils.llm_provider import chat_completion
 
-        loop = asyncio.get_running_loop()
-        client = groq_module.Groq(api_key=api_key)
-        response = await loop.run_in_executor(
-            None,
-            lambda: client.chat.completions.create(
-                model="llama-3.3-70b-versatile",
-                messages=[
-                    {"role": "system", "content": system_prompt},
-                    {"role": "user", "content": user_content},
-                ],
-                max_tokens=600,
-                temperature=0.3,
-            ),
+        final_answer = chat_completion(
+            [
+                {"role": "system", "content": system_prompt},
+                {"role": "user", "content": user_content},
+            ],
+            temperature=0.3,
+            max_tokens=600,
         )
-        final_answer = response.choices[0].message.content.strip()
     except Exception as exc:
         logger.warning("synthesizer_node LLM call failed: %s", exc)
         final_answer = f"Investigation complete.\n\n{steps_text}"
@@ -532,7 +520,8 @@ async def run_autopilot(
                         all_citations.extend(new_cits)
 
                 elif node_name == "synthesizer":
-                    final_answer = updates.get("final_answer", "")
+                    from api.utils.pii_masking import mask_pii
+                    final_answer = mask_pii(updates.get("final_answer", ""))
                     yield _sse({"type": "answer", "content": final_answer})
                     yield _sse({"type": "done", "citations": all_citations})
 

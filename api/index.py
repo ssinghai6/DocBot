@@ -1124,7 +1124,7 @@ async def chat(raw_request: Request, request: ChatRequest, _user=_rbac_viewer):
             return
 
         # ── Standard single-shot path ─────────────────────────────────────────
-        from langchain_groq import ChatGroq
+        from api.utils.llm_provider import get_llm
         from langchain_core.prompts import ChatPromptTemplate, MessagesPlaceholder
         from langchain_core.messages import HumanMessage, AIMessage
         from langchain_core.runnables import RunnablePassthrough
@@ -1132,11 +1132,10 @@ async def chat(raw_request: Request, request: ChatRequest, _user=_rbac_viewer):
         from concurrent.futures import ThreadPoolExecutor
 
         try:
-            llm = ChatGroq(
-                model="llama-3.3-70b-versatile",
-                api_key=groq_api_key,
+            llm = get_llm(
                 temperature=0,
                 streaming=True,
+                groq_api_key=groq_api_key,
             )
 
             db = VECTOR_STORES[request.session_id]
@@ -1242,13 +1241,16 @@ async def chat(raw_request: Request, request: ChatRequest, _user=_rbac_viewer):
             qa_chain = qa_prompt | llm | StrOutputParser()
             full_answer = []
 
+            from api.utils.pii_masking import mask_pii
+
             async for chunk in qa_chain.astream({
                 "context": format_docs(retrieved_docs),
                 "chat_history": chat_history,
                 "input": request.message,
             }):
-                full_answer.append(chunk)
-                yield f"data: {json.dumps({'type': 'token', 'content': chunk})}\n\n"
+                masked_chunk = mask_pii(chunk)
+                full_answer.append(masked_chunk)
+                yield f"data: {json.dumps({'type': 'token', 'content': masked_chunk})}\n\n"
 
             answer_text = "".join(full_answer)
 
@@ -2030,6 +2032,11 @@ async def execute_sandbox(request: SandboxExecuteRequest) -> SandboxResult:
     except Exception as exc:
         logger.error("%s Unexpected sandbox error: %s", log_prefix, exc)
         raise HTTPException(status_code=500, detail=safe_error_message(exc))
+
+    # Mask PII in sandbox stdout (may contain CSV data)
+    from api.utils.pii_masking import mask_pii_dataframe_output
+    if result.stdout:
+        result.stdout = mask_pii_dataframe_output(result.stdout)
 
     logger.info(
         "%s Sandbox finished. execution_time_ms=%d charts=%d has_error=%s",

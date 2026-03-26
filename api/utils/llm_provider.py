@@ -13,8 +13,18 @@ Usage:
     # Or call directly with a prompt string
     response = await call_llm("Summarize this document...")
 
-Note: This module does NOT rewire existing callers. It's a standalone
-provider that new code can adopt incrementally.
+Usage:
+    from api.utils.llm_provider import get_llm, call_llm, chat_completion, chat_completion_stream
+
+    # LangChain: get a ChatModel with fallback
+    llm = get_llm()
+
+    # Raw SDK style: non-streaming
+    text = chat_completion(messages, model="llama-3.3-70b-versatile")
+
+    # Raw SDK style: streaming
+    for token in chat_completion_stream(messages, model="llama-3.3-70b-versatile"):
+        print(token, end="")
 """
 
 from __future__ import annotations
@@ -22,7 +32,7 @@ from __future__ import annotations
 import logging
 import os
 import time
-from typing import Optional
+from typing import Iterator, List, Optional
 
 from langchain_core.language_models import BaseChatModel
 
@@ -217,3 +227,174 @@ async def call_llm(
     elapsed = time.monotonic() - start
     logger.info("LLM call completed via Gemini (fallback) in %.2fs", elapsed)
     return response.content
+
+
+# ---------------------------------------------------------------------------
+# Raw SDK-style completions with Groq → Gemini fallback
+# ---------------------------------------------------------------------------
+
+GROQ_CODE_MODEL = "qwen/qwen3-32b"
+
+
+def _gemini_completion(
+    messages: List[dict],
+    temperature: float = 0,
+    max_tokens: int = 800,
+) -> str:
+    """Non-streaming Gemini completion via google-generativeai SDK."""
+    import google.generativeai as genai
+
+    api_key = os.getenv("GEMINI_API_KEY", "")
+    if not api_key:
+        raise ValueError("GEMINI_API_KEY not set")
+
+    genai.configure(api_key=api_key)
+
+    system_instruction = None
+    contents: list[dict] = []
+    for msg in messages:
+        role = msg.get("role", "user")
+        content = msg.get("content", "")
+        if role == "system":
+            system_instruction = content
+        elif role == "assistant":
+            contents.append({"role": "model", "parts": [content]})
+        else:
+            contents.append({"role": "user", "parts": [content]})
+
+    gen_config = genai.GenerationConfig(
+        temperature=temperature,
+        max_output_tokens=max_tokens,
+    )
+    model = genai.GenerativeModel(
+        model_name=GEMINI_MODEL,
+        system_instruction=system_instruction,
+        generation_config=gen_config,
+    )
+    response = model.generate_content(contents)
+    return response.text or ""
+
+
+def _gemini_completion_stream(
+    messages: List[dict],
+    temperature: float = 0,
+    max_tokens: int = 800,
+) -> Iterator[str]:
+    """Streaming Gemini completion via google-generativeai SDK."""
+    import google.generativeai as genai
+
+    api_key = os.getenv("GEMINI_API_KEY", "")
+    if not api_key:
+        raise ValueError("GEMINI_API_KEY not set")
+
+    genai.configure(api_key=api_key)
+
+    system_instruction = None
+    contents: list[dict] = []
+    for msg in messages:
+        role = msg.get("role", "user")
+        content = msg.get("content", "")
+        if role == "system":
+            system_instruction = content
+        elif role == "assistant":
+            contents.append({"role": "model", "parts": [content]})
+        else:
+            contents.append({"role": "user", "parts": [content]})
+
+    gen_config = genai.GenerationConfig(
+        temperature=temperature,
+        max_output_tokens=max_tokens,
+    )
+    model = genai.GenerativeModel(
+        model_name=GEMINI_MODEL,
+        system_instruction=system_instruction,
+        generation_config=gen_config,
+    )
+    response = model.generate_content(contents, stream=True)
+    for chunk in response:
+        if chunk.text:
+            yield chunk.text
+
+
+def chat_completion(
+    messages: List[dict],
+    *,
+    model: str = GROQ_MODEL,
+    temperature: float = 0,
+    max_tokens: int = 800,
+) -> str:
+    """Non-streaming chat completion with Groq → Gemini fallback.
+
+    Drop-in replacement for `groq.Groq().chat.completions.create()`.
+    Returns the response text string directly.
+    """
+    # Try Groq first
+    try:
+        from groq import Groq
+        api_key = os.getenv("groq_api_key", "")
+        if not api_key:
+            raise ValueError("groq_api_key not set")
+        client = Groq(api_key=api_key)
+        start = time.monotonic()
+        response = client.chat.completions.create(
+            model=model,
+            messages=messages,
+            temperature=temperature,
+            max_tokens=max_tokens,
+        )
+        elapsed = time.monotonic() - start
+        logger.info("chat_completion via Groq (%s) in %.2fs", model, elapsed)
+        return response.choices[0].message.content.strip()
+    except Exception as exc:
+        if isinstance(exc, ValueError) or _is_retriable_error(exc):
+            logger.warning("Groq chat_completion failed (%s), falling back to Gemini", str(exc)[:200])
+        else:
+            logger.error("Groq chat_completion error (%s), attempting Gemini", str(exc)[:200])
+
+    # Fallback to Gemini
+    start = time.monotonic()
+    result = _gemini_completion(messages, temperature, max_tokens)
+    elapsed = time.monotonic() - start
+    logger.info("chat_completion via Gemini (fallback) in %.2fs", elapsed)
+    return result
+
+
+def chat_completion_stream(
+    messages: List[dict],
+    *,
+    model: str = GROQ_MODEL,
+    temperature: float = 0.2,
+    max_tokens: int = 800,
+) -> Iterator[str]:
+    """Streaming chat completion with Groq → Gemini fallback.
+
+    Yields content tokens as strings. Drop-in replacement for the
+    streaming pattern used in db_service and hybrid_service.
+    """
+    # Try Groq first
+    try:
+        from groq import Groq
+        api_key = os.getenv("groq_api_key", "")
+        if not api_key:
+            raise ValueError("groq_api_key not set")
+        client = Groq(api_key=api_key)
+        stream = client.chat.completions.create(
+            model=model,
+            messages=messages,
+            temperature=temperature,
+            max_tokens=max_tokens,
+            stream=True,
+        )
+        for chunk in stream:
+            delta = chunk.choices[0].delta
+            if delta and delta.content:
+                yield delta.content
+        return  # success — don't fall through
+    except Exception as exc:
+        if isinstance(exc, ValueError) or _is_retriable_error(exc):
+            logger.warning("Groq streaming failed (%s), falling back to Gemini", str(exc)[:200])
+        else:
+            logger.error("Groq streaming error (%s), attempting Gemini", str(exc)[:200])
+
+    # Fallback to Gemini streaming
+    yield from _gemini_completion_stream(messages, temperature, max_tokens)

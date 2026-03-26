@@ -120,6 +120,8 @@ def log_event(
         Stored as JSON string.
     """
     import json
+    from api.utils.pii_masking import mask_pii
+    detail = mask_pii(detail) if detail else detail
     metadata_json = json.dumps(metadata) if metadata else None
 
     try:
