@@ -1,0 +1,19 @@
+# Python backend — runs on Railway, not Vercel.
+# Excluding these prevents Vercel from bundling them as Lambda functions
+# and keeps the deployment under the 500 MB ephemeral storage limit.
+api/
+requirements.txt
+requirements-dev.txt
+tests/
+.venv/
+__pycache__/
+*.py
+*.pyc
+Dockerfile
+Dockerfile.frontend
+docker-compose.yml
+railway.toml
+pytest.ini
+scripts/
+docs/
+project-tasks/
