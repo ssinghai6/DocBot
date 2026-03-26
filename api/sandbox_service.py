@@ -12,6 +12,7 @@ import base64
 import json as _stdlib_json
 import logging
 import os
+import re as _re_module
 import time
 from typing import AsyncGenerator, List, Optional
 
@@ -120,6 +121,46 @@ def _get_api_key() -> str:
     return key
 
 
+_MODULE_NOT_FOUND_RE = _re_module.compile(
+    r"No module named ['\"]([a-zA-Z0-9_]+)['\"]"
+)
+
+_KNOWN_IMPORT_TO_PYPI = {
+    "cv2": "opencv-python",
+    "PIL": "Pillow",
+    "sklearn": "scikit-learn",
+    "skimage": "scikit-image",
+    "bs4": "beautifulsoup4",
+    "yaml": "pyyaml",
+    "attr": "attrs",
+    "dateutil": "python-dateutil",
+    "dotenv": "python-dotenv",
+    "gi": "PyGObject",
+    "lxml": "lxml",
+}
+
+
+def _parse_missing_module(error_str: str) -> Optional[str]:
+    match = _MODULE_NOT_FOUND_RE.search(error_str)
+    if not match:
+        return None
+    module_name = match.group(1)
+    return _KNOWN_IMPORT_TO_PYPI.get(module_name, module_name)
+
+
+def _pip_install_in_sandbox(sandbox, package_name: str) -> bool:
+    install_result = sandbox.run_code(
+        f"import subprocess; subprocess.check_call(['pip', 'install', '-q', {package_name!r}])"
+    )
+    if install_result.error is not None:
+        name = getattr(install_result.error, "name", "InstallError")
+        value = getattr(install_result.error, "value", str(install_result.error))
+        logger.warning("Sandbox pip install %s failed: %s: %s", package_name, name, value[:300])
+        return False
+    logger.info("Sandbox pip install %s succeeded", package_name)
+    return True
+
+
 def _extract_charts(
     stdout_lines: list[str],
 ) -> tuple[list[str], list[str], list[ChartMetadata]]:
@@ -174,6 +215,17 @@ def _run_in_sandbox(code: str) -> SandboxResult:
         # Prepend preamble + append suffix so all figures are captured
         full_code = _MATPLOTLIB_PREAMBLE + code + _MATPLOTLIB_SUFFIX
         execution = sandbox.run_code(full_code)
+
+        if (
+            execution.error is not None
+            and getattr(execution.error, "name", "") == "ModuleNotFoundError"
+        ):
+            pkg = _parse_missing_module(
+                getattr(execution.error, "value", str(execution.error))
+            )
+            if pkg and _pip_install_in_sandbox(sandbox, pkg):
+                logger.info("Retrying sandbox execution after installing %s", pkg)
+                execution = sandbox.run_code(full_code)
 
         # Join all stdout chunks then split by newline — handles SDKs that
         # buffer output in chunks rather than line-by-line
@@ -610,6 +662,17 @@ def _run_csv_in_sandbox_sync(code: str, csv_path: str, csv_bytes: bytes) -> Sand
 
         full_code = _MATPLOTLIB_PREAMBLE + code + _MATPLOTLIB_SUFFIX
         execution = sandbox.run_code(full_code)
+
+        if (
+            execution.error is not None
+            and getattr(execution.error, "name", "") == "ModuleNotFoundError"
+        ):
+            pkg = _parse_missing_module(
+                getattr(execution.error, "value", str(execution.error))
+            )
+            if pkg and _pip_install_in_sandbox(sandbox, pkg):
+                logger.info("Retrying CSV sandbox execution after installing %s", pkg)
+                execution = sandbox.run_code(full_code)
 
         raw_stdout_joined = "".join(execution.logs.stdout or [])
         raw_stdout: list[str] = raw_stdout_joined.splitlines()
