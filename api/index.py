@@ -1034,7 +1034,7 @@ async def upload_documents(
         raise HTTPException(status_code=500, detail=safe_error_message(e))
 
 @app.post("/api/chat")
-async def chat(request: ChatRequest, _user=_rbac_viewer):
+async def chat(raw_request: Request, request: ChatRequest, _user=_rbac_viewer):
     """SSE streaming document chat.
 
     Emits newline-delimited JSON events:
@@ -1057,6 +1057,22 @@ async def chat(request: ChatRequest, _user=_rbac_viewer):
         raise HTTPException(status_code=500, detail="Groq API key not configured")
 
     async def event_stream():
+        # ── DOCBOT-602: audit doc-chat query ──────────────────────────────────
+        from api.audit_service import log_event, AuditEventType, get_client_ip
+        log_event(
+            AuditEventType.query,
+            audit_log_table,
+            async_session_factory,
+            session_id=request.session_id,
+            detail=request.message[:500],
+            metadata={
+                "source": "doc_chat",
+                "persona": request.persona,
+                "deep_research": request.deep_research,
+                "ip_address": get_client_ip(raw_request),
+            },
+        )
+
         # ── DOCBOT-802: per-question persona routing ──────────────────────────
         # If the user is on Generalist (default/auto), route based on question
         # content. If they explicitly chose a specialist persona, respect it.
@@ -1741,7 +1757,7 @@ async def db_refresh_schema(connection_id: str):
 
 
 @app.post("/api/db/chat")
-async def db_chat(request: DBChatRequest, _user=_rbac_viewer):
+async def db_chat(raw_request: Request, request: DBChatRequest, _user=_rbac_viewer):
     """
     DOCBOT-204 — Natural language → SQL → execute → streamed answer.
     Returns a StreamingResponse (text/event-stream) with SSE chunks:
@@ -1751,14 +1767,19 @@ async def db_chat(request: DBChatRequest, _user=_rbac_viewer):
     """
     async def event_stream():
         # DOCBOT-602: audit query event (fire before stream so it's captured even if stream errors)
-        from api.audit_service import log_event, AuditEventType
+        from api.audit_service import log_event, AuditEventType, get_client_ip
         log_event(
             AuditEventType.query,
             audit_log_table,
             async_session_factory,
             session_id=request.session_id,
             detail=request.question[:500],
-            metadata={"connection_id": request.connection_id, "persona": request.persona},
+            metadata={
+                "source": "db_chat",
+                "connection_id": request.connection_id,
+                "persona": request.persona,
+                "ip_address": get_client_ip(raw_request),
+            },
         )
         try:
             async for chunk in run_sql_pipeline(
@@ -2041,7 +2062,7 @@ class HybridChatRequest(BaseModel):
 
 
 @app.post("/api/hybrid/chat")
-async def hybrid_chat_route(request: HybridChatRequest, _user=_rbac_viewer):
+async def hybrid_chat_route(raw_request: Request, request: HybridChatRequest, _user=_rbac_viewer):
     """DOCBOT-402 — Hybrid chat pipeline: intent classification → SQL + RAG → synthesis.
 
     Returns a StreamingResponse (text/event-stream) with SSE chunks:
@@ -2052,6 +2073,21 @@ async def hybrid_chat_route(request: HybridChatRequest, _user=_rbac_viewer):
     from api.hybrid_service import hybrid_chat
 
     async def event_stream():
+        # DOCBOT-602: audit hybrid query
+        from api.audit_service import log_event, AuditEventType, get_client_ip
+        log_event(
+            AuditEventType.query,
+            audit_log_table,
+            async_session_factory,
+            session_id=request.session_id,
+            detail=request.question[:500],
+            metadata={
+                "source": "hybrid_chat",
+                "connection_id": request.connection_id,
+                "persona": request.persona,
+                "ip_address": get_client_ip(raw_request),
+            },
+        )
         try:
             async for chunk in hybrid_chat(
                 question=request.question,
@@ -2092,7 +2128,7 @@ class AutopilotRequest(BaseModel):
 
 
 @app.post("/api/autopilot/run")
-async def autopilot_run(request: AutopilotRequest, _user=_rbac_viewer):
+async def autopilot_run(raw_request: Request, request: AutopilotRequest, _user=_rbac_viewer):
     """DOCBOT-405 — Analytical Autopilot: plan → execute (≤5 steps) → synthesise.
 
     Returns a StreamingResponse (text/event-stream) with SSE chunks:
@@ -2106,6 +2142,21 @@ async def autopilot_run(request: AutopilotRequest, _user=_rbac_viewer):
     from api.autopilot_service import run_autopilot
 
     async def event_stream():
+        # DOCBOT-602: audit autopilot query
+        from api.audit_service import log_event, AuditEventType, get_client_ip
+        log_event(
+            AuditEventType.query,
+            audit_log_table,
+            async_session_factory,
+            session_id=request.session_id,
+            detail=request.question[:500],
+            metadata={
+                "source": "autopilot",
+                "connection_id": request.connection_id,
+                "persona": request.persona,
+                "ip_address": get_client_ip(raw_request),
+            },
+        )
         try:
             async for chunk in run_autopilot(
                 question=request.question,

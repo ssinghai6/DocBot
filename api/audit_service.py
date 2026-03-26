@@ -27,6 +27,26 @@ from typing import Any, Optional
 logger = logging.getLogger(__name__)
 
 
+def get_client_ip(request: Any) -> Optional[str]:
+    """Extract the real client IP from a FastAPI Request object.
+
+    Respects X-Forwarded-For (Railway / Vercel reverse proxy) and falls back
+    to request.client.host for direct connections.  Returns None if the request
+    object is None or has no client info.
+    """
+    if request is None:
+        return None
+    try:
+        forwarded = request.headers.get("X-Forwarded-For")
+        if forwarded:
+            return forwarded.split(",")[0].strip()
+        if request.client:
+            return request.client.host
+    except Exception:
+        pass
+    return None
+
+
 class AuditEventType(str, Enum):
     query = "query"
     db_connect = "db_connect"

@@ -195,3 +195,97 @@ class TestImmutabilityTriggerStatements:
         from api.audit_service import IMMUTABILITY_TRIGGER_STATEMENTS
         for stmt in IMMUTABILITY_TRIGGER_STATEMENTS:
             assert "IF NOT EXISTS" in stmt
+
+
+# ---------------------------------------------------------------------------
+# get_client_ip — IP extraction from FastAPI Request objects
+# ---------------------------------------------------------------------------
+
+class TestGetClientIp:
+
+    def _make_request(self, forwarded=None, host=None):
+        """Build a minimal mock that looks like a FastAPI Request."""
+        req = MagicMock()
+        req.headers = {}
+        if forwarded:
+            req.headers = {"X-Forwarded-For": forwarded}
+        if host:
+            req.client = MagicMock()
+            req.client.host = host
+        else:
+            req.client = None
+        return req
+
+    def test_returns_first_ip_from_x_forwarded_for(self):
+        from api.audit_service import get_client_ip
+        req = self._make_request(forwarded="1.2.3.4, 10.0.0.1, 172.16.0.1")
+        assert get_client_ip(req) == "1.2.3.4"
+
+    def test_single_ip_in_x_forwarded_for(self):
+        from api.audit_service import get_client_ip
+        req = self._make_request(forwarded="203.0.113.5")
+        assert get_client_ip(req) == "203.0.113.5"
+
+    def test_falls_back_to_client_host(self):
+        from api.audit_service import get_client_ip
+        req = self._make_request(host="192.168.1.1")
+        assert get_client_ip(req) == "192.168.1.1"
+
+    def test_returns_none_when_request_is_none(self):
+        from api.audit_service import get_client_ip
+        assert get_client_ip(None) is None
+
+    def test_returns_none_when_no_client_info(self):
+        from api.audit_service import get_client_ip
+        req = self._make_request()  # no forwarded, no host
+        assert get_client_ip(req) is None
+
+    def test_x_forwarded_for_takes_priority_over_client_host(self):
+        from api.audit_service import get_client_ip
+        req = self._make_request(forwarded="5.6.7.8", host="10.0.0.1")
+        assert get_client_ip(req) == "5.6.7.8"
+
+    def test_strips_whitespace_from_ip(self):
+        from api.audit_service import get_client_ip
+        req = self._make_request(forwarded="  9.9.9.9  , 1.1.1.1")
+        assert get_client_ip(req) == "9.9.9.9"
+
+
+# ---------------------------------------------------------------------------
+# Route audit wiring — confirm all four chat routes log query events with IP
+# ---------------------------------------------------------------------------
+
+class TestRouteAuditWiring:
+    """Verify that all four chat route handlers reference get_client_ip.
+
+    We inspect the source rather than running the app to keep the test
+    fast and env-var-free.
+    """
+
+    def _route_source(self, fn) -> str:
+        import inspect
+        return inspect.getsource(fn)
+
+    def test_chat_route_logs_query_with_ip(self):
+        import api.index as idx
+        src = self._route_source(idx.chat)
+        assert "AuditEventType.query" in src
+        assert "get_client_ip" in src
+
+    def test_db_chat_route_logs_query_with_ip(self):
+        import api.index as idx
+        src = self._route_source(idx.db_chat)
+        assert "AuditEventType.query" in src
+        assert "get_client_ip" in src
+
+    def test_hybrid_chat_route_logs_query_with_ip(self):
+        import api.index as idx
+        src = self._route_source(idx.hybrid_chat_route)
+        assert "AuditEventType.query" in src
+        assert "get_client_ip" in src
+
+    def test_autopilot_run_logs_query_with_ip(self):
+        import api.index as idx
+        src = self._route_source(idx.autopilot_run)
+        assert "AuditEventType.query" in src
+        assert "get_client_ip" in src
