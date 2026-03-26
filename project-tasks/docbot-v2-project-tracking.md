@@ -61,7 +61,7 @@ Every story is only "done" when ALL of the following are true. No exceptions.
 | EPIC-04 | Hybrid Intelligence | 1, 2 | ✅ Done | Cross-source synthesis, discrepancy detection, planner/router |
 | EPIC-05 | Memory and Context | 2 | ✅ Done | Session artifacts, context compression, multi-hop queries |
 | EPIC-06 | Enterprise Readiness | 4 | ✅ Done | SSO, RBAC, audit logging, PII masking, Docker Compose, admin UI — all shipped |
-| EPIC-07 | Commerce Connectors | 4+ | 🔜 Gated | Marketplace API integrations (Amazon SP-API, Shopify), unified commerce schema, multi-tenant RLS, background sync. Gate: ≥3 of 5 discovery interviews required. |
+| EPIC-07 | Commerce Connectors | 4+ | 🔄 Active (Phase 1) | Marketplace API integrations. **Phase 1 (unblocked):** Connector interface, unified commerce schema, Amazon SP-API (DOCBOT-701–703, 29 pts). **Phase 2 (post-funding):** Background sync worker, Shopify connector (DOCBOT-704–705, 16 pts). |
 | EPIC-08 | Smart Agent Auto-Routing | 3 | ✅ Done | Replace static persona picker with intelligent per-question agent routing, per-agent badges and rendering |
 | EPIC-09 | LangGraph Deep Research | 3+ | ✅ Done | Multi-step reasoning graph replacing single-shot Deep Research prompt — query planner, parallel retrieval, gap detection, streaming synthesis |
 | EPIC-10 | RAG Quality Enhancement | 4+ | 🔄 Active | Chroma persistent store, cross-encoder reranker, SemanticChunker for financial/legal docs, FinanceBench accuracy baseline. PageIndex evaluated and rejected (2026-03-25). |
@@ -1155,7 +1155,7 @@ GitHub OAuth and Google OAuth implemented via standard authorization code flow �
 
 ### EPIC-07: Commerce Connectors
 
-> **Gate:** Begin only after Phase 3 ships AND ≥3 of 5 discovery interviews confirm the commerce/seller segment. The horizontal platform (Phases 0–3) is the prerequisite — Phase 4 is a vertical specialization on top of it.
+> **Gate lifted 2026-03-25.** Phase 1 (DOCBOT-701–703: connector interface, commerce schema, Amazon SP-API) unblocked for investor demo sprint. Phase 2 (DOCBOT-704–705: background sync, Shopify) deferred to post-funding.
 
 ---
 
@@ -1696,8 +1696,11 @@ As a developer, I want an automated accuracy test harness against FinanceBench q
 | EPIC-09 Sprint 1 | DOCBOT-901, 902, 903, 904 | 19 | ✅ Complete |
 | Enterprise Data Pipeline Hardening | CSV section splitter, DB pipeline upgrades, hybrid routing fix | — | ✅ Complete |
 | EPIC-10 Sprint 1 | DOCBOT-1001, 1002, 1003, 1004 | 16 | 🔄 To Do |
+| EPIC-07 Phase 1 | DOCBOT-701, 702, 703 (connector interface + commerce schema + Amazon SP-API) | 29 | 🔄 To Do |
+| Investor Readiness | CI pipeline, landing page, metrics endpoint, LLM fallback, frontend split | — | 🔄 To Do |
+| Human Testing | 85-test manual regression across all features | — | 🔄 To Do |
 
-**Total delivered**: 198 story points across 31 tickets + full test suite (385 tests) + GitHub Actions CI | **EPIC-10 in progress**: 16 points remaining
+**Total delivered**: 198 story points across 31 tickets + full test suite (385 tests) | **Remaining**: EPIC-10 (16 pts) + EPIC-07 Phase 1 (29 pts) + investor readiness = **~20 day sprint to investor-demo-ready**
 
 ---
 
@@ -1759,6 +1762,40 @@ Replaced single-shot `DEEP_RESEARCH_ADDON` prompt with a proper 5-node LangGraph
 
 **EPIC-10 Active — RAG Quality Enhancement (DOCBOT-1001–1004, 16 points)**:
 PageIndex (VectifyAI) evaluated 2026-03-25 and rejected: OpenAI-only backend, no PyPI package, no streaming support. Replacing `InMemoryVectorStore` with Chroma for persistence, adding cross-encoder reranking (`ms-marco-MiniLM-L-6-v2`) for retrieval precision, adding `SemanticChunker` for financial/legal documents, and establishing a FinanceBench accuracy baseline to measure improvement delta.
+
+**EPIC-07 Phase 1 Unblocked — Amazon Commerce Connector (DOCBOT-701–703, 29 points)**:
+Gate lifted 2026-03-25 for investor demo sprint. Building connector interface + credential vault (DOCBOT-701), unified commerce schema with multi-tenant RLS (DOCBOT-702), and Amazon SP-API connector (DOCBOT-703). Background sync worker (DOCBOT-704) and Shopify connector (DOCBOT-705) deferred to post-funding.
+
+---
+
+### Investor Demo Sprint — 20-Day Plan (2026-03-25)
+
+**Goal**: Ship EPIC-10 + EPIC-07 Phase 1 + investor readiness polish + 85-test manual regression. Product must be demo-ready for investor presentation.
+
+| Day | Phase | Work Item | Deliverable |
+|-----|-------|-----------|-------------|
+| 1-2 | EPIC-10 | DOCBOT-1001: Chroma persistent store | `api/utils/vector_store.py`, updated index.py + hybrid_service + deep_research_service |
+| 2 | EPIC-10 | DOCBOT-1002: Cross-encoder reranker | `api/utils/reranker.py`, wired into rag_retrieve() |
+| 3 | EPIC-10 | DOCBOT-1003: SemanticChunker | `api/utils/chunker.py`, doc-type branching in upload route |
+| 3-4 | EPIC-10 | DOCBOT-1004: FinanceBench baseline | `tests/benchmarks/`, 20 questions, before/after accuracy delta |
+| 5-6 | Polish | Frontend route splitting | page.tsx < 600 lines, components in `src/components/` |
+| 6 | Polish | Landing page | Auth gate, hero + features + CTA at `/` |
+| 7 | Polish | Metrics endpoint + CI pipeline | `api/metrics_service.py`, `GET /admin/metrics`, GitHub Actions enhanced |
+| 8 | Polish | LLM fallback | `api/utils/llm_provider.py` — Groq primary, Gemini 2.5 Flash fallback |
+| 9-11 | EPIC-07 | DOCBOT-701: Connector interface + credential vault | `api/connectors/base.py`, `registry.py`, `credential_service.py`, `rate_limiter.py`, `status_maps.py` |
+| 12-14 | EPIC-07 | DOCBOT-702: Unified commerce schema + RLS | 6 tables, RLS policies, materialized views, `set_tenant_context()` |
+| 15-18 | EPIC-07 | DOCBOT-703: Amazon SP-API connector | `api/connectors/amazon_sp.py`, LWA OAuth, Orders + Finances sync, routes |
+| 19 | Testing | Human testing: 85 tests across all feature areas | Bug list |
+| 20 | Ship | Bug fixes + final deploy verification | Investor-demo-ready production |
+
+**Exit Criteria:**
+1. All 85 manual tests pass on production (Railway + Vercel)
+2. EPIC-10 complete: Chroma + reranker + SemanticChunker active
+3. FinanceBench accuracy documented (target: >60%)
+4. Amazon SP-API connector live: connect → sync orders → ask NL questions about Amazon data
+5. CI green with 400+ tests
+6. Landing page live, metrics endpoint working, LLM fallback tested
+7. Zero P0/P1 bugs from human testing
 
 ---
 

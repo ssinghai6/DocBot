@@ -135,8 +135,13 @@ All work is tracked in `project-tasks/docbot-v2-project-tracking.md`.
   - DOCBOT-1002: Cross-encoder reranker post-retrieval
   - DOCBOT-1003: SemanticChunker for financial/legal docs
   - DOCBOT-1004: FinanceBench accuracy baseline test suite
-- **EPIC-07 Commerce Connectors (DOCBOT-702–705) — Gated**
-  - Gate condition: begin after 3 of 5 discovery interviews confirm the commerce/seller segment
+- **EPIC-07 Commerce Connectors Phase 1 (DOCBOT-701–703) — Active** (29 pts)
+  - DOCBOT-701: Marketplace connector interface + credential vault + rate limiter
+  - DOCBOT-702: Unified commerce schema + multi-tenant RLS
+  - DOCBOT-703: Amazon SP-API connector (Orders, Finances, OAuth)
+  - *Phase 2 deferred to post-funding:* DOCBOT-704 (background sync), DOCBOT-705 (Shopify)
+- **Investor Readiness Sprint — Active**
+  - GitHub Actions CI, landing page, `/admin/metrics`, LLM fallback, frontend split, 85-test manual regression
 
 > **PageIndex evaluated 2026-03-25 — not integrating.** Hard blockers: OpenAI-only (Groq incompatible), not on PyPI (Railway brittleness), no streaming (SSE conflict). Revisit if PyPI package + multi-backend support ships.
 
