@@ -36,17 +36,19 @@ DocBot is an AI-powered document + database analyst, fully deployed on Railway (
 | `api/document_extractor.py` | LangExtract financial extraction (Gemini 2.5 Flash, full-doc coverage) |
 | `api/file_upload_service.py` | CSV/SQLite file uploads — CSV goes to E2B pandas, SQLite to SQL pipeline |
 | `api/utils/csv_preprocessor.py` | Multi-section CSV detection, section splitting, header detection, E2B preamble generation |
-| `api/utils/llm_provider.py` | LLM fallback provider — Groq primary, Gemini 2.5 Flash fallback (not yet wired to prod) |
+| `api/utils/llm_provider.py` | LLM fallback provider — Groq primary, Gemini 2.5 Flash fallback. Wired to all prod callsites. |
 | `api/utils/_gemini_wrapper.py` | Minimal LangChain-compatible Gemini wrapper for fallback provider |
 | `api/utils/` | Shared helpers: encryption, SSRF validator, SQL validator, embeddings, PII masking, table selector, context compressor, CSV preprocessor, reranker, chunker, vector store |
 | `api/connectors/base.py` | Marketplace connector ABC, ConnectorCredentials, normalized dataclasses |
 | `api/connectors/registry.py` | Decorator-based connector type registration |
 | `api/connectors/rate_limiter.py` | Async token-bucket rate limiter (per-credential keying) |
 | `api/connectors/amazon_connector.py` | Amazon SP-API connector — LWA OAuth, Orders, Finances, retry logic |
+| `api/commerce_service.py` | Unified commerce schema — 2 tables, RLS via connection_id, persist/query helpers, sync orchestrator |
 | `api/metrics_service.py` | Admin metrics aggregation for `/admin/metrics` endpoint |
-| `src/app/page.tsx` | React frontend (~2400 lines, split from ~3300). Core chat UI state via useState |
-| `src/components/` | Extracted frontend components: ChatMessage, ConnectionPanel, FileUploadZone, PersonaSelector, UI primitives |
-| `src/app/landing/page.tsx` | Investor landing page — hero, features, CTA |
+| `src/app/page.tsx` | Investor landing page at `/` — hero, features, CTA |
+| `src/app/chat/page.tsx` | Chat app at `/chat` (~512 lines). State declarations + hook calls + layout |
+| `src/components/` | Extracted frontend components: Sidebar, ChatArea, AuthModal, AdminPanel, ChatMessage, ConnectionPanel, FileUploadZone, PersonaSelector, personas |
+| `src/hooks/` | Custom hooks: useChatHandlers (DB/auth/file handlers), useChatSubmit (message submission) |
 | `tests/external/test_financebench_accuracy.py` | FinanceBench 20-question accuracy test suite (external, requires live API keys) |
 | `requirements.txt` | Python dependencies |
 | `project-tasks/docbot-v2-project-tracking.md` | 38 user stories, 9 epics, sprint plan, Definition of Done — **primary ticket tracker** |
@@ -144,15 +146,19 @@ All work is tracked in `project-tasks/docbot-v2-project-tracking.md`.
   - DOCBOT-1002: Cross-encoder reranker — **Done**
   - DOCBOT-1003: SemanticChunker — **Done**
   - DOCBOT-1004: FinanceBench accuracy — **Code complete** (test suite written, accuracy not yet run)
-- **EPIC-07 Commerce Connectors Phase 1 (DOCBOT-701–703) — In Progress** (29 pts)
+- **EPIC-07 Commerce Connectors Phase 1 (DOCBOT-701–703) — Done** (29 pts)
   - DOCBOT-701: Marketplace connector interface + credential vault + rate limiter — **Done**
-  - DOCBOT-702: Unified commerce schema + multi-tenant RLS — **To Do**
+  - DOCBOT-702: Unified commerce schema + multi-tenant RLS — **Done** (31 tests)
   - DOCBOT-703: Amazon SP-API connector (Orders, Finances, OAuth) — **Done** (22 tests)
   - *Phase 2 deferred to post-funding:* DOCBOT-704 (background sync), DOCBOT-705 (Shopify)
-- **Investor Readiness Sprint — Near-complete**
-  - Done: GitHub Actions CI, landing page, `/admin/metrics`, LLM fallback module, frontend split
-  - Remaining: Wire LLM fallback to prod code paths, Fix #6 PII masking gaps, 85-test manual regression
-- **535 tests passing, 0 failures**
+- **Investor Readiness Sprint (2026-03-26) — Done**
+  - LLM fallback wired to all 8 prod callsites (Groq → Gemini auto-fallback)
+  - Landing page routed to `/`, chat app to `/chat`
+  - PII masking applied to all SSE, sandbox, audit response paths
+  - Frontend refactored: page.tsx 2426 → 512 lines (Sidebar, ChatArea, useChatHandlers, useChatSubmit)
+  - E2B sandbox: ML package pre-install + auto-retry on ModuleNotFoundError
+  - Remaining: FinanceBench accuracy run (needs live keys), 85-test manual regression on prod
+- **566 tests passing, 0 failures**
 
 > **PageIndex evaluated 2026-03-25 — not integrating.** Hard blockers: OpenAI-only (Groq incompatible), not on PyPI (Railway brittleness), no streaming (SSE conflict). Revisit if PyPI package + multi-backend support ships.
 

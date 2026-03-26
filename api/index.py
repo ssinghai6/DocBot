@@ -206,6 +206,10 @@ session_artifacts_table = Table(
     Column("created_at", DateTime(timezone=True), server_default=func.now(), nullable=False),
 )
 
+# ── DOCBOT-702: Commerce Schema ────────────────────────────────────────────────
+from api.commerce_service import register_commerce_tables
+commerce_orders_table, commerce_financials_table = register_commerce_tables(metadata)
+
 # ── EPIC-06: RBAC dependencies (DOCBOT-603) ──────────────────────────────────
 # Imported here so Depends() objects can be declared at module level.
 # require_role() checks is_saml_configured() at request time — safe to import early.
@@ -268,7 +272,8 @@ async def init_db() -> None:
     logger.info(
         "Database tables verified / created "
         "(sessions, messages, db_connections, schema_cache, query_history, "
-        "query_embeddings, session_artifacts, table_embeddings, audit_log)."
+        "query_embeddings, session_artifacts, table_embeddings, audit_log, "
+        "commerce_orders, commerce_financials)."
     )
 
 
@@ -278,6 +283,9 @@ async def lifespan(app: FastAPI):
     # DOCBOT-603: wire RBAC module-level table references
     from api.rbac_service import wire_rbac
     wire_rbac(users_table, user_sessions_table, async_session_factory)
+    # DOCBOT-702: wire commerce service table references
+    from api.commerce_service import wire_commerce
+    wire_commerce(commerce_orders_table, commerce_financials_table, async_session_factory)
     # Clean up any expired file uploads from previous runs
     try:
         from api.file_upload_service import cleanup_expired_uploads
@@ -2929,3 +2937,48 @@ async def list_connector_types():
     """Return all registered connector type identifiers."""
     from api.connectors.registry import list_connector_types as _list_types
     return {"types": _list_types()}
+
+
+# ---------------------------------------------------------------------------
+# DOCBOT-702: Commerce Data Sync + Query (persisted commerce schema)
+# ---------------------------------------------------------------------------
+
+@app.post("/api/connectors/{connector_id}/sync")
+async def sync_connector(connector_id: str, body: ConnectorDateRangeRequest):
+    """Fetch orders + financials from connector and persist to commerce tables."""
+    from api.commerce_service import sync_connector_data
+
+    connector = _get_connector(connector_id)
+    try:
+        summary = await sync_connector_data(
+            connector_id, connector, body.start_date, body.end_date,
+        )
+    except Exception as exc:
+        logger.error("sync failed for %s: %s", connector_id, exc)
+        raise HTTPException(status_code=502, detail=f"Sync failed: {exc}")
+    return summary
+
+
+@app.get("/api/commerce/{connector_id}/orders")
+async def get_commerce_orders(
+    connector_id: str,
+    limit: int = 50,
+    offset: int = 0,
+    status: Optional[str] = None,
+):
+    """Query persisted orders for a connection (RLS-filtered by connector_id)."""
+    from api.commerce_service import query_orders
+    orders = await query_orders(connector_id, limit=limit, offset=offset, status=status)
+    return {"connector_id": connector_id, "order_count": len(orders), "orders": orders}
+
+
+@app.get("/api/commerce/{connector_id}/financials")
+async def get_commerce_financials(
+    connector_id: str,
+    limit: int = 50,
+    offset: int = 0,
+):
+    """Query persisted financials for a connection (RLS-filtered by connector_id)."""
+    from api.commerce_service import query_financials
+    financials = await query_financials(connector_id, limit=limit, offset=offset)
+    return {"connector_id": connector_id, "financials": financials}
