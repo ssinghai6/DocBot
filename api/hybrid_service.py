@@ -267,6 +267,12 @@ async def rag_retrieve(
         all_result_lists = [retriever.invoke(q) for q in expanded_queries]
         docs = deduplicate_docs(all_result_lists)
 
+        # DOCBOT-1002: re-rank with cross-encoder when HF key is available
+        from api.utils.reranker import rerank
+        hf_key = os.getenv("huggingface_api_key", "")
+        if hf_key and docs:
+            docs = rerank(question, docs, hf_key, top_k=5)
+
         context = "\n\n".join(
             f"Source: {doc.metadata.get('source', 'Unknown')}, "
             f"Page {doc.metadata.get('page', 0)}\n{doc.page_content}"
