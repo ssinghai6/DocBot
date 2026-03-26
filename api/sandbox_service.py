@@ -24,6 +24,26 @@ logger = logging.getLogger(__name__)
 # DOCBOT-305: supported chart types for validate + prompt routing
 VALID_CHART_TYPES = {"auto", "bar", "line", "scatter", "heatmap", "box", "multi"}
 
+_SANDBOX_EXTRA_PACKAGES = [
+    "statsmodels",
+    "scikit-learn",
+    "scipy",
+    "seaborn",
+    "plotly",
+    "xgboost",
+    "lightgbm",
+]
+
+def _install_sandbox_packages(sandbox) -> None:
+    """Install additional analysis packages in the E2B sandbox before code execution."""
+    install_result = sandbox.run_code(
+        f"import subprocess; subprocess.check_call(['pip', 'install', '-q', {', '.join(repr(p) for p in _SANDBOX_EXTRA_PACKAGES)}])"
+    )
+    if install_result.error is not None:
+        name = getattr(install_result.error, "name", "InstallError")
+        value = getattr(install_result.error, "value", str(install_result.error))
+        logger.warning("Sandbox package install warning: %s: %s", name, value[:300])
+
 # Injected before every execution to:
 #   1. Force the Agg (non-GUI) backend so matplotlib works in headless sandboxes
 #   2. Patch plt.show() to write base64-encoded PNGs to stdout prefixed with
@@ -150,6 +170,7 @@ def _run_in_sandbox(code: str) -> SandboxResult:
 
     try:
         sandbox = Sandbox.create()
+        _install_sandbox_packages(sandbox)
         # Prepend preamble + append suffix so all figures are captured
         full_code = _MATPLOTLIB_PREAMBLE + code + _MATPLOTLIB_SUFFIX
         execution = sandbox.run_code(full_code)
@@ -272,7 +293,7 @@ async def generate_analysis_code(
 
     system_prompt = (
         "You are a Python data analyst. Given a question and a dataset, write Python code that:\n"
-        "1. Imports pandas, numpy, matplotlib.pyplot as plt, and seaborn as sns if needed\n"
+        "1. Imports pandas, numpy, json, matplotlib.pyplot as plt, and seaborn as sns if needed\n"
         "2. Creates a DataFrame `df` from the provided data\n"
         "3. Performs relevant analysis to answer the question\n"
         f"4. CHART TYPE REQUIREMENT: {chart_instructions}\n"
@@ -500,7 +521,7 @@ async def generate_csv_analysis_code(
     system_prompt += (
         "YOUR CODE RULES:\n"
         "1. Do NOT import pandas or call pd.read_csv — already handled\n"
-        "2. Import matplotlib.pyplot as plt only if charting\n"
+        "2. Import json, matplotlib.pyplot as plt, seaborn as sns only if needed\n"
         "3. Output ONLY raw Python code — no markdown fences, no explanations\n"
         "4. ALWAYS .dropna() or .fillna(0) before boolean masks or aggregation\n\n"
         "DATA CLEANING PATTERNS (use as needed):\n"
@@ -583,6 +604,7 @@ def _run_csv_in_sandbox_sync(code: str, csv_path: str, csv_bytes: bytes) -> Sand
 
     try:
         sandbox = Sandbox.create()
+        _install_sandbox_packages(sandbox)
         # Upload CSV bytes to the sandbox filesystem
         sandbox.files.write(csv_path, csv_bytes)
 
