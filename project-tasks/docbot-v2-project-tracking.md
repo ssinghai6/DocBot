@@ -1,6 +1,6 @@
 # DocBot v2 — Complete Project Tracking Document
 > Generated: 2026-03-17
-> **Last Updated: 2026-03-25** (Enterprise Data Pipeline hardening — CSV section splitter, DB pooling/views/drift detection, hybrid routing fix)
+> **Last Updated: 2026-03-25** (Audit pass + Fix #1: real discrepancy detection — numeric extraction engine, delta computation, 29 unit tests)
 > Team size: 1–2 engineers
 > Tracking tool recommendation: Linear (see Section 6)
 
@@ -1768,34 +1768,57 @@ Gate lifted 2026-03-25 for investor demo sprint. Building connector interface + 
 
 ---
 
-### Investor Demo Sprint — 20-Day Plan (2026-03-25)
+### Audit Reality — Feature Status Table (2026-03-25)
 
-**Goal**: Ship EPIC-10 + EPIC-07 Phase 1 + investor readiness polish + 85-test manual regression. Product must be demo-ready for investor presentation.
+> Brutal audit: what actually ships vs. what the marketing says. Fix before investor demo.
+
+| Feature | Claimed | Actual Status | Fix Required |
+|---------|---------|---------------|--------------|
+| Hybrid discrepancy detection | "Flags conflicts between docs and DB with delta %" | **PARTIAL → FIXED (2026-03-25)** — `api/utils/discrepancy_detector.py` now extracts numeric values from both sources, matches by label similarity, computes deltas in code. 29 tests passing. | ✅ Done |
+| Smart agent per-question routing | "Per-question routing to the right expert" | **STUB** — upload-time keyword count only. `detection_keywords` in persona definitions are never read at query time. `/api/chat` uses persona passed from frontend, not re-classified per question. | Fix #2 |
+| Chroma persistent store | "Documents survive server restarts" | **MISSING** — `InMemoryVectorStore`. All uploaded docs lost on every Railway restart / redeploy. | Fix #3 (DOCBOT-1001) |
+| RBAC route enforcement | "Viewer/analyst/admin role enforcement" | **PARTIAL** — `require_role()` exists but `/api/chat`, `/api/db/chat`, `/api/hybrid/chat`, `/api/autopilot/run` have no `Depends(require_role(...))`. Non-SSO users bypass all role checks. | Fix #4 |
+| Audit log — SQL execution | "All queries are audited" | **PARTIAL** — upload, login/logout, db_connect/disconnect are logged. SQL query execution is never logged. IP address missing from all events. | Fix #5 |
+| PII masking | "PII auto-masked in responses" | **PARTIAL** — email/phone/SSN patterns in structured DB results. Not applied to CSV E2B output or LLM answer text. No international formats. | Fix #6 |
+| Deep Research LangGraph | "5-node state machine" | **REAL** — plan→retrieve→evaluate→gap→synthesize fully implemented and tested. | ✅ Shipped |
+| E2B Python sandbox | "Run Python in isolated sandbox" | **REAL** — E2B code-interpreter, 25s timeout, finally cleanup. | ✅ Shipped |
+| 7-step SQL pipeline | "Bounded 2–3 LLM calls" | **REAL** — sqlglot AST validation + executor + drift retry. | ✅ Shipped |
+| SAML SSO | "Okta/Azure AD enterprise SSO" | **REAL** — python3-saml, JIT provisioning, session cookies. | ✅ Shipped |
+
+---
+
+### Investor Demo Sprint — 23-Day Revised Plan (2026-03-25)
+
+**Goal**: Fix the three critical gaps first (real behaviour ≠ marketing claims), then ship EPIC-10 + EPIC-07 Phase 1 + polish. Product must be demo-ready and honest.
 
 | Day | Phase | Work Item | Deliverable |
 |-----|-------|-----------|-------------|
-| 1-2 | EPIC-10 | DOCBOT-1001: Chroma persistent store | `api/utils/vector_store.py`, updated index.py + hybrid_service + deep_research_service |
-| 2 | EPIC-10 | DOCBOT-1002: Cross-encoder reranker | `api/utils/reranker.py`, wired into rag_retrieve() |
-| 3 | EPIC-10 | DOCBOT-1003: SemanticChunker | `api/utils/chunker.py`, doc-type branching in upload route |
-| 3-4 | EPIC-10 | DOCBOT-1004: FinanceBench baseline | `tests/benchmarks/`, 20 questions, before/after accuracy delta |
-| 5-6 | Polish | Frontend route splitting | page.tsx < 600 lines, components in `src/components/` |
-| 6 | Polish | Landing page | Auth gate, hero + features + CTA at `/` |
-| 7 | Polish | Metrics endpoint + CI pipeline | `api/metrics_service.py`, `GET /admin/metrics`, GitHub Actions enhanced |
-| 8 | Polish | LLM fallback | `api/utils/llm_provider.py` — Groq primary, Gemini 2.5 Flash fallback |
-| 9-11 | EPIC-07 | DOCBOT-701: Connector interface + credential vault | `api/connectors/base.py`, `registry.py`, `credential_service.py`, `rate_limiter.py`, `status_maps.py` |
-| 12-14 | EPIC-07 | DOCBOT-702: Unified commerce schema + RLS | 6 tables, RLS policies, materialized views, `set_tenant_context()` |
-| 15-18 | EPIC-07 | DOCBOT-703: Amazon SP-API connector | `api/connectors/amazon_sp.py`, LWA OAuth, Orders + Finances sync, routes |
-| 19 | Testing | Human testing: 85 tests across all feature areas | Bug list |
-| 20 | Ship | Bug fixes + final deploy verification | Investor-demo-ready production |
+| 1 | **Fix #1** | ~~Discrepancy detection~~ | ✅ **Done** — `api/utils/discrepancy_detector.py`, 29 tests |
+| 2-3 | **Fix #2** | Per-question persona routing | Read `detection_keywords` at query time; re-classify persona on `/api/chat` before synthesis |
+| 4 | **Fix #3** | DOCBOT-1001: Chroma persistent store | `api/utils/vector_store.py`, replace `InMemoryVectorStore` throughout |
+| 5 | **Fix #4** | RBAC route guards | Add `Depends(require_role("viewer"))` to `/api/chat`, `/api/db/chat`, `/api/hybrid/chat`, `/api/autopilot/run` |
+| 5 | **Fix #5** | Audit SQL execution + IP | Log `query_executed` event in `run_sql_pipeline`; extract IP from request headers |
+| 6 | EPIC-10 | DOCBOT-1002: Cross-encoder reranker | `api/utils/reranker.py`, wired into `rag_retrieve()` |
+| 7 | EPIC-10 | DOCBOT-1003: SemanticChunker | `api/utils/chunker.py`, doc-type branching in upload route |
+| 7-8 | EPIC-10 | DOCBOT-1004: FinanceBench baseline | `tests/benchmarks/`, 20 questions, before/after accuracy delta |
+| 9-10 | Polish | Frontend route splitting | `page.tsx` < 600 lines, components in `src/components/` |
+| 10 | Polish | Landing page | Auth gate, hero + features + CTA at `/` |
+| 11 | Polish | Metrics endpoint + CI pipeline | `api/metrics_service.py`, `GET /admin/metrics`, GitHub Actions enhanced |
+| 12 | Polish | LLM fallback | `api/utils/llm_provider.py` — Groq primary, Gemini 2.5 Flash fallback |
+| 13-15 | EPIC-07 | DOCBOT-701: Connector interface + credential vault | `api/connectors/base.py`, `registry.py`, `credential_service.py` |
+| 16-18 | EPIC-07 | DOCBOT-702: Unified commerce schema + RLS | 6 tables, RLS policies, materialized views |
+| 19-22 | EPIC-07 | DOCBOT-703: Amazon SP-API connector | `api/connectors/amazon_sp.py`, LWA OAuth, Orders + Finances sync |
+| 23 | Testing | Human testing: 85 tests across all feature areas + final deploy | Investor-demo-ready production |
 
 **Exit Criteria:**
 1. All 85 manual tests pass on production (Railway + Vercel)
-2. EPIC-10 complete: Chroma + reranker + SemanticChunker active
-3. FinanceBench accuracy documented (target: >60%)
-4. Amazon SP-API connector live: connect → sync orders → ask NL questions about Amazon data
-5. CI green with 400+ tests
-6. Landing page live, metrics endpoint working, LLM fallback tested
-7. Zero P0/P1 bugs from human testing
+2. All 6 audit fixes confirmed resolved — no gap between marketing claims and code
+3. EPIC-10 complete: Chroma + reranker + SemanticChunker active
+4. FinanceBench accuracy documented (target: >60%)
+5. Amazon SP-API connector live: connect → sync orders → NL questions answered
+6. CI green with 420+ tests
+7. Landing page live, metrics endpoint working, LLM fallback tested
+8. Zero P0/P1 bugs from human testing
 
 ---
 

@@ -505,20 +505,24 @@ async def hybrid_chat(
         if formatted:
             extracted_section = f"\n\n{formatted}"
 
-    # DOCBOT-403: discrepancy detection instructions (only in hybrid mode)
+    # DOCBOT-403: real discrepancy detection — extract numeric values from both
+    # sources, compute deltas in code, inject pre-computed facts into the prompt.
+    # The LLM receives confirmed discrepancies with exact numbers; it does NOT
+    # compute deltas itself (which caused hallucination in the prompt-only stub).
     discrepancy_instruction = ""
     if intent == "hybrid" and doc_context and sql_metadata:
-        discrepancy_instruction = (
-            "\n\nDISCREPANCY DETECTION: When the document and database results contain "
-            "conflicting numeric values for the same metric:\n"
-            "- Flag it explicitly with a [DISCREPANCY] marker\n"
-            "- Format: \"[DISCREPANCY] Doc says {doc_value} [Source: ...]. "
-            "DB shows {db_value} [DB: table]. Delta: {delta} ({pct}%)\"\n"
-            "- Also flag non-numeric inconsistencies (e.g. different time periods, "
-            "different categories)\n"
-            "- Do NOT say \"no discrepancy found\" unless the user explicitly asks\n"
-            "- If sources agree, simply synthesize without mentioning discrepancy"
-        )
+        from api.utils.discrepancy_detector import detect_discrepancies
+        report = detect_discrepancies(doc_context, sql_metadata)
+        discrepancy_instruction = report.to_prompt_block()
+        if not discrepancy_instruction:
+            # No numeric discrepancies found by code — tell LLM to flag only
+            # non-numeric inconsistencies it observes (time periods, categories, etc.)
+            discrepancy_instruction = (
+                "\n\nDISCREPANCY CHECK: No numeric value conflicts were detected between "
+                "the document and database results. If you observe non-numeric "
+                "inconsistencies (e.g. different time periods, mismatched categories), "
+                "flag them with [DISCREPANCY]. Otherwise synthesize normally."
+            )
 
     prompt = (
         f"{persona_def}\n\n"
