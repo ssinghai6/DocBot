@@ -188,7 +188,7 @@ class TestPlannerNodeFallback:
         with patch.dict(os.environ, {}, clear=True):
             # Ensure groq_api_key is absent
             os.environ.pop("groq_api_key", None)
-            result = asyncio.get_event_loop().run_until_complete(_planner_node(state))
+            result = asyncio.run(_planner_node(state))
         assert result["plan"] == ["What is revenue?"]
         assert result["iteration"] == 0
 
@@ -204,7 +204,7 @@ class TestPlannerNodeFallback:
 
         with patch("groq.Groq", return_value=mock_client), \
              patch.dict(os.environ, {"groq_api_key": "fake"}):
-            result = asyncio.get_event_loop().run_until_complete(_planner_node(state))
+            result = asyncio.run(_planner_node(state))
         assert len(result["plan"]) <= MAX_ITERATIONS
 
 
@@ -216,7 +216,7 @@ class TestPlannerNodeFallback:
 class TestSynthesizerNodeFallback:
     def test_no_steps_returns_empty_message(self):
         state = _make_state()
-        result = asyncio.get_event_loop().run_until_complete(_synthesizer_node(state))
+        result = asyncio.run(_synthesizer_node(state))
         assert "No investigation" in result["final_answer"]
 
     def test_fallback_includes_step_text_when_no_api_key(self):
@@ -227,7 +227,7 @@ class TestSynthesizerNodeFallback:
         )
         with patch.dict(os.environ, {}, clear=True):
             os.environ.pop("groq_api_key", None)
-            result = asyncio.get_event_loop().run_until_complete(_synthesizer_node(state))
+            result = asyncio.run(_synthesizer_node(state))
         assert "42 rows" in result["final_answer"] or "Investigation complete" in result["final_answer"]
 
 
@@ -265,6 +265,6 @@ class TestMakeExecutorNode:
             vector_stores={},
         )
         state = _make_state(plan=[], iteration=0)
-        result = asyncio.get_event_loop().run_until_complete(node(state))
+        result = asyncio.run(node(state))
         # Plan is empty so we return without executing — iteration unchanged
         assert result == {"iteration": 0}

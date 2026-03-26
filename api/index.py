@@ -2788,3 +2788,137 @@ async def update_user_role(
             )
     logger.info("Admin role update: user %s → %s", target.email, body.role)
     return {"user_id": user_id, "email": target.email, "new_role": body.role}
+
+
+# ---------------------------------------------------------------------------
+# Admin Metrics endpoint — Investor Readiness Sprint
+# ---------------------------------------------------------------------------
+
+@app.get("/admin/metrics")
+async def get_admin_metrics(_user=_rbac_admin):
+    """Return aggregate platform metrics. Requires admin role.
+
+    Returns total sessions, query counts by type, document uploads,
+    active DB connections, average response time, and uptime.
+    """
+    from api.metrics_service import get_platform_metrics
+
+    metrics = await get_platform_metrics(
+        async_session_factory=async_session_factory,
+    )
+    return metrics
+
+
+# ---------------------------------------------------------------------------
+# Commerce Connectors — EPIC-07
+# ---------------------------------------------------------------------------
+
+class ConnectorRegisterRequest(BaseModel):
+    """Register a new commerce connector with encrypted credentials."""
+    connector_type: str  # e.g. "amazon"
+    credentials: Dict[str, str]  # client_id, client_secret, refresh_token, marketplace_id
+
+
+class ConnectorDateRangeRequest(BaseModel):
+    """Date range for fetching orders or financials."""
+    start_date: str  # ISO 8601 date, e.g. "2024-01-01"
+    end_date: str    # ISO 8601 date, e.g. "2024-01-31"
+
+
+@app.post("/api/connectors/register")
+async def register_connector(body: ConnectorRegisterRequest):
+    """Register and test a commerce connector. Returns connector_id on success."""
+    from api.connectors.registry import get_connector_class
+    from api.connectors.base import ConnectorCredentials
+
+    try:
+        cls = get_connector_class(body.connector_type)
+    except KeyError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+
+    creds = ConnectorCredentials(
+        connector_type=body.connector_type,
+        credentials=body.credentials,
+    )
+    connector = cls(creds)
+
+    try:
+        ok = await connector.test_connection()
+    except Exception as exc:
+        logger.warning("Connector test_connection failed: %s", exc)
+        raise HTTPException(
+            status_code=502,
+            detail=f"Connection test failed: {exc}",
+        )
+
+    if not ok:
+        raise HTTPException(
+            status_code=502,
+            detail="Connector test_connection returned False — check credentials.",
+        )
+
+    connector_id = str(uuid.uuid4())
+    # Store connector metadata (credentials encrypted at rest via Fernet in production)
+    # For now, store in-memory registry keyed by connector_id
+    if not hasattr(app.state, "connectors"):
+        app.state.connectors = {}
+    app.state.connectors[connector_id] = connector
+
+    logger.info(
+        "Registered %s connector: %s",
+        body.connector_type,
+        connector_id,
+    )
+    return {"connector_id": connector_id, "connector_type": body.connector_type, "status": "connected"}
+
+
+def _get_connector(connector_id: str):
+    """Retrieve a registered connector by ID or raise 404."""
+    connectors = getattr(app.state, "connectors", {})
+    connector = connectors.get(connector_id)
+    if connector is None:
+        raise HTTPException(status_code=404, detail=f"Connector '{connector_id}' not found.")
+    return connector
+
+
+@app.get("/api/connectors")
+async def list_connectors():
+    """List all registered connector IDs and their types."""
+    connectors = getattr(app.state, "connectors", {})
+    return {
+        "connectors": [
+            {"connector_id": cid, "connector_type": c.connector_type}
+            for cid, c in connectors.items()
+        ]
+    }
+
+
+@app.post("/api/connectors/{connector_id}/orders")
+async def fetch_connector_orders(connector_id: str, body: ConnectorDateRangeRequest):
+    """Fetch orders from a registered commerce connector."""
+    connector = _get_connector(connector_id)
+    try:
+        orders = await connector.fetch_orders(body.start_date, body.end_date)
+    except Exception as exc:
+        logger.error("fetch_orders failed for %s: %s", connector_id, exc)
+        raise HTTPException(status_code=502, detail=f"Failed to fetch orders: {exc}")
+    return {"connector_id": connector_id, "order_count": len(orders), "orders": orders}
+
+
+@app.post("/api/connectors/{connector_id}/financials")
+async def fetch_connector_financials(connector_id: str, body: ConnectorDateRangeRequest):
+    """Fetch financial events from a registered commerce connector."""
+    connector = _get_connector(connector_id)
+    try:
+        financials = await connector.fetch_financials(body.start_date, body.end_date)
+    except Exception as exc:
+        logger.error("fetch_financials failed for %s: %s", connector_id, exc)
+        raise HTTPException(status_code=502, detail=f"Failed to fetch financials: {exc}")
+    return {"connector_id": connector_id, "financials": financials}
+
+
+@app.get("/api/connectors/types")
+async def list_connector_types():
+    """Return all registered connector type identifiers."""
+    from api.connectors.registry import list_connector_types as _list_types
+    return {"types": _list_types()}

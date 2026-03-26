@@ -1,6 +1,6 @@
 # DocBot v2 — Complete Project Tracking Document
 > Generated: 2026-03-17
-> **Last Updated: 2026-03-25** (Audit pass + Fix #1: real discrepancy detection — numeric extraction engine, delta computation, 29 unit tests)
+> **Last Updated: 2026-03-26** (EPIC-10 DOCBOT-1001/1002/1003 done, investor readiness items landed, frontend split, autopilot test fix)
 > Team size: 1–2 engineers
 > Tracking tool recommendation: Linear (see Section 6)
 
@@ -64,7 +64,7 @@ Every story is only "done" when ALL of the following are true. No exceptions.
 | EPIC-07 | Commerce Connectors | 4+ | 🔄 Active (Phase 1) | Marketplace API integrations. **Phase 1 (unblocked):** Connector interface, unified commerce schema, Amazon SP-API (DOCBOT-701–703, 29 pts). **Phase 2 (post-funding):** Background sync worker, Shopify connector (DOCBOT-704–705, 16 pts). |
 | EPIC-08 | Smart Agent Auto-Routing | 3 | ✅ Done | Replace static persona picker with intelligent per-question agent routing, per-agent badges and rendering |
 | EPIC-09 | LangGraph Deep Research | 3+ | ✅ Done | Multi-step reasoning graph replacing single-shot Deep Research prompt — query planner, parallel retrieval, gap detection, streaming synthesis |
-| EPIC-10 | RAG Quality Enhancement | 4+ | 🔄 Active | Chroma persistent store, cross-encoder reranker, SemanticChunker for financial/legal docs, FinanceBench accuracy baseline. PageIndex evaluated and rejected (2026-03-25). |
+| EPIC-10 | RAG Quality Enhancement | 4+ | 🔄 Active | Chroma persistent store (done), cross-encoder reranker (done), SemanticChunker (done), FinanceBench accuracy baseline (to do). PageIndex evaluated and rejected (2026-03-25). |
 
 ---
 
@@ -1560,7 +1560,7 @@ As a developer, I want the document vector store to persist across Railway resta
 **Priority**: Must Have
 **Story Points**: 5
 **Dependencies**: None
-**Status**: 🔜 To Do
+**Status**: ✅ Done
 
 **Acceptance Criteria**
 - [ ] `InMemoryVectorStore` replaced with `Chroma` in `api/index.py`; collections keyed by `session_id`
@@ -1592,7 +1592,7 @@ As a user, I want document retrieval to surface the most relevant chunks first s
 **Priority**: Should Have
 **Story Points**: 3
 **Dependencies**: DOCBOT-1001
-**Status**: 🔜 To Do
+**Status**: ✅ Done
 
 **Acceptance Criteria**
 - [ ] `api/utils/reranker.py` exports `rerank(question: str, docs: list[Document], top_k: int) -> list[Document]`
@@ -1623,7 +1623,7 @@ As Maya (Finance Manager), I want financial documents chunked along natural sema
 **Priority**: Should Have
 **Story Points**: 3
 **Dependencies**: DOCBOT-1001
-**Status**: 🔜 To Do
+**Status**: ✅ Done
 
 **Acceptance Criteria**
 - [ ] `SemanticChunker` from `langchain_experimental` used for `financial` and `legal` doc types in `upload_documents()` in `api/index.py`
@@ -1679,7 +1679,7 @@ As a developer, I want an automated accuracy test harness against FinanceBench q
 
 ## 4. Sprint Plan — Phase 0 + Phase 1
 
-### Current Status (as of 2026-03-24)
+### Current Status (as of 2026-03-26)
 
 | Sprint | Tickets | Points | Status |
 |--------|---------|--------|--------|
@@ -1695,12 +1695,12 @@ As a developer, I want an automated accuracy test harness against FinanceBench q
 | Phase 3 Fixes | Persona format contract removal, routing fallback fix, AcroForm RAG fix, SSE streaming, parallel retrieval | — | ✅ Complete |
 | EPIC-09 Sprint 1 | DOCBOT-901, 902, 903, 904 | 19 | ✅ Complete |
 | Enterprise Data Pipeline Hardening | CSV section splitter, DB pipeline upgrades, hybrid routing fix | — | ✅ Complete |
-| EPIC-10 Sprint 1 | DOCBOT-1001, 1002, 1003, 1004 | 16 | 🔄 To Do |
+| EPIC-10 Sprint 1 | DOCBOT-1001, 1002, 1003 | 11 | ✅ Complete (DOCBOT-1004 remaining) |
 | EPIC-07 Phase 1 | DOCBOT-701, 702, 703 (connector interface + commerce schema + Amazon SP-API) | 29 | 🔄 To Do |
-| Investor Readiness | CI pipeline, landing page, metrics endpoint, LLM fallback, frontend split | — | 🔄 To Do |
+| Investor Readiness | CI pipeline, landing page, metrics endpoint, LLM fallback, frontend split | — | 🔄 In Progress (landing page, metrics, LLM fallback, frontend split done; CI remaining) |
 | Human Testing | 85-test manual regression across all features | — | 🔄 To Do |
 
-**Total delivered**: 198 story points across 31 tickets + full test suite (385 tests) | **Remaining**: EPIC-10 (16 pts) + EPIC-07 Phase 1 (29 pts) + investor readiness = **~20 day sprint to investor-demo-ready**
+**Total delivered**: 209 story points across 34 tickets + full test suite (385+ tests) | **Remaining**: DOCBOT-1004 (5 pts) + EPIC-07 Phase 1 (29 pts) + investor readiness (CI) = **~15 day sprint to investor-demo-ready**
 
 ---
 
@@ -1795,16 +1795,16 @@ Gate lifted 2026-03-25 for investor demo sprint. Building connector interface + 
 |-----|-------|-----------|-------------|
 | 1 | **Fix #1** | ~~Discrepancy detection~~ | ✅ **Done** — `api/utils/discrepancy_detector.py`, 29 tests |
 | 2-3 | **Fix #2** | Per-question persona routing | Read `detection_keywords` at query time; re-classify persona on `/api/chat` before synthesis |
-| 4 | **Fix #3** | DOCBOT-1001: Chroma persistent store | `api/utils/vector_store.py`, replace `InMemoryVectorStore` throughout |
+| 4 | **Fix #3** | ~~DOCBOT-1001: Chroma persistent store~~ | ✅ **Done** — `api/utils/vector_store.py`, ChromaDB wrapping |
 | 5 | **Fix #4** | RBAC route guards | Add `Depends(require_role("viewer"))` to `/api/chat`, `/api/db/chat`, `/api/hybrid/chat`, `/api/autopilot/run` |
 | 5 | **Fix #5** | Audit SQL execution + IP | Log `query_executed` event in `run_sql_pipeline`; extract IP from request headers |
-| 6 | EPIC-10 | DOCBOT-1002: Cross-encoder reranker | `api/utils/reranker.py`, wired into `rag_retrieve()` |
-| 7 | EPIC-10 | DOCBOT-1003: SemanticChunker | `api/utils/chunker.py`, doc-type branching in upload route |
+| 6 | EPIC-10 | ~~DOCBOT-1002: Cross-encoder reranker~~ | ✅ **Done** — `api/utils/reranker.py`, wired into `rag_retrieve()` |
+| 7 | EPIC-10 | ~~DOCBOT-1003: SemanticChunker~~ | ✅ **Done** — `api/utils/chunker.py`, doc-type branching in upload route |
 | 7-8 | EPIC-10 | DOCBOT-1004: FinanceBench baseline | `tests/benchmarks/`, 20 questions, before/after accuracy delta |
-| 9-10 | Polish | Frontend route splitting | `page.tsx` < 600 lines, components in `src/components/` |
-| 10 | Polish | Landing page | Auth gate, hero + features + CTA at `/` |
-| 11 | Polish | Metrics endpoint + CI pipeline | `api/metrics_service.py`, `GET /admin/metrics`, GitHub Actions enhanced |
-| 12 | Polish | LLM fallback | `api/utils/llm_provider.py` — Groq primary, Gemini 2.5 Flash fallback |
+| 9-10 | Polish | ~~Frontend component split~~ | ✅ **Done** — `ChatMessage`, `ConnectionPanel`, `FileUploadZone`, `PersonaSelector` extracted to `src/components/` |
+| 10 | Polish | ~~Landing page~~ | ✅ **Done** — `src/app/landing/` |
+| 11 | Polish | ~~Metrics endpoint~~ + CI pipeline | ✅ **Partial** — metrics endpoint done; CI pipeline remaining |
+| 12 | Polish | ~~LLM fallback~~ | ✅ **Done** — `api/utils/llm_provider.py` — Groq primary, Gemini 2.5 Flash fallback |
 | 13-15 | EPIC-07 | DOCBOT-701: Connector interface + credential vault | `api/connectors/base.py`, `registry.py`, `credential_service.py` |
 | 16-18 | EPIC-07 | DOCBOT-702: Unified commerce schema + RLS | 6 tables, RLS policies, materialized views |
 | 19-22 | EPIC-07 | DOCBOT-703: Amazon SP-API connector | `api/connectors/amazon_sp.py`, LWA OAuth, Orders + Finances sync |
