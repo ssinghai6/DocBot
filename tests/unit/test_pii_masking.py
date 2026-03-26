@@ -1,11 +1,16 @@
-"""Unit tests for api/utils/pii_masking.py — DOCBOT-604.
+"""Unit tests for api/utils/pii_masking.py — DOCBOT-604 + international extensions.
 
 All tests are CI-safe: no network calls, no API keys, no external services.
 """
 
 import pytest
 
-from api.utils.pii_masking import detect_pii_summary, mask_rows
+from api.utils.pii_masking import (
+    detect_pii_summary,
+    mask_pii,
+    mask_pii_dataframe_output,
+    mask_rows,
+)
 
 
 # ---------------------------------------------------------------------------
@@ -178,3 +183,131 @@ class TestDetectPiiSummary:
     def test_returns_all_keys(self):
         summary = detect_pii_summary([])
         assert set(summary.keys()) == {"email", "phone", "ssn", "credit_card"}
+
+
+# ---------------------------------------------------------------------------
+# International phone — UK
+# ---------------------------------------------------------------------------
+
+
+class TestUKPhoneFormats:
+    def test_uk_plus44_format(self):
+        text = "Call me at +44 7700 900123 please."
+        result = mask_pii(text)
+        assert "+44 7700 900123" not in result
+        assert "***" in result
+
+    def test_uk_local_07_format(self):
+        text = "My number is 07700 900456."
+        result = mask_pii(text)
+        assert "07700 900456" not in result
+        assert "***" in result
+
+    def test_uk_plus44_compact(self):
+        text = "Reach us at +447911123456."
+        result = mask_pii(text)
+        assert "+447911123456" not in result
+
+    def test_uk_last_four_preserved(self):
+        text = "+44 7700 900123"
+        result = mask_pii(text)
+        # Last 4 digits of the full number should appear in masked output
+        assert "0123" in result
+
+
+# ---------------------------------------------------------------------------
+# International phone — India
+# ---------------------------------------------------------------------------
+
+
+class TestIndiaPhoneFormats:
+    def test_india_plus91_space(self):
+        text = "Contact: +91 98765 43210"
+        result = mask_pii(text)
+        assert "+91 98765 43210" not in result
+        assert "***" in result
+
+    def test_india_plus91_dash(self):
+        text = "Helpline: +91-98765-43210"
+        result = mask_pii(text)
+        assert "+91-98765-43210" not in result
+        assert "***" in result
+
+    def test_india_last_four_preserved(self):
+        text = "+91 98765 43210"
+        result = mask_pii(text)
+        assert "3210" in result
+
+
+# ---------------------------------------------------------------------------
+# mask_pii() — public API for LLM answer text
+# ---------------------------------------------------------------------------
+
+
+class TestMaskPii:
+    def test_callable_as_mask_pii(self):
+        """mask_pii(text) is the documented public API — must remain callable."""
+        result = mask_pii("Email me at bob@corp.com.")
+        assert "bob@corp.com" not in result
+        assert "b***@corp.com" in result
+
+    def test_plain_text_email(self):
+        text = "Reach alice@example.org for details."
+        result = mask_pii(text)
+        assert "alice" not in result
+
+    def test_plain_text_us_phone(self):
+        text = "Call (800) 555-0199 now."
+        result = mask_pii(text)
+        assert "(800) 555-0199" not in result
+
+    def test_no_pii_unchanged(self):
+        text = "The revenue for Q3 was $1.2M."
+        assert mask_pii(text) == text
+
+    def test_mixed_pii_all_masked(self):
+        text = "Contact bob@example.com or call +44 7700 900111."
+        result = mask_pii(text)
+        assert "bob@example.com" not in result
+        assert "+44 7700 900111" not in result
+
+
+# ---------------------------------------------------------------------------
+# mask_pii_dataframe_output()
+# ---------------------------------------------------------------------------
+
+
+class TestMaskPiiDataframeOutput:
+    def test_pipe_separated_email_masked(self):
+        table = (
+            "name       | email               | dept\n"
+            "Alice      | alice@example.com   | Eng\n"
+            "Bob        | bob@corp.io         | Sales\n"
+        )
+        result = mask_pii_dataframe_output(table)
+        assert "alice@example.com" not in result
+        assert "bob@corp.io" not in result
+
+    def test_comma_separated_email_masked(self):
+        csv_line = "Alice,alice@example.com,Engineering"
+        result = mask_pii_dataframe_output(csv_line)
+        assert "alice@example.com" not in result
+
+    def test_pipe_separated_phone_masked(self):
+        table = "name  | phone\nAlice | +44 7700 900123\n"
+        result = mask_pii_dataframe_output(table)
+        assert "+44 7700 900123" not in result
+
+    def test_non_pii_table_unchanged(self):
+        table = "product | revenue\nWidget  | 1200\n"
+        result = mask_pii_dataframe_output(table)
+        assert "Widget" in result
+        assert "1200" in result
+
+    def test_delegates_to_mask_pii(self):
+        """mask_pii_dataframe_output must apply all PII patterns, not just email."""
+        text = "Row: 4111111111111111, bob@test.com, +91 99999 88888"
+        result = mask_pii_dataframe_output(text)
+        assert "bob@test.com" not in result
+        assert "4111111111111111" not in result
+        assert "+91 99999 88888" not in result

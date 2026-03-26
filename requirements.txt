@@ -40,3 +40,5 @@ bcrypt>=4.0.0
 # DOCBOT-1001: Chroma persistent vector store (replaces InMemoryVectorStore)
 chromadb>=0.5.0
 langchain-chroma>=0.1.0
+# DOCBOT-1003: SemanticChunker for financial/legal document splitting
+langchain-experimental>=0.0.50

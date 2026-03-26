@@ -911,26 +911,43 @@ async def upload_documents(
         
         if not all_content:
             raise HTTPException(status_code=400, detail="No readable text found in documents. Please ensure PDFs contain text, not just images.")
-        
-        # OPTIMIZED: Larger chunks for more context, better overlap for continuity
-        text_splitter = RecursiveCharacterTextSplitter(
-            chunk_size=1500,  # Increased from 1000 for more context
-            chunk_overlap=200,  # Increased from 100 for better continuity
-            length_function=len,
-            separators=["\n\n", "\n", ". ", " ", ""]
-        )
-        splits = text_splitter.split_documents(all_content)
-        
+
+        # DOCBOT-1003: SemanticChunker for financial/legal docs, with
+        # RecursiveCharacterTextSplitter fallback for all other types.
+        full_text = " ".join(d.page_content for d in all_content)
+        from api.utils.chunker import chunk_document, detect_doc_type
+        _hf_key = os.getenv("huggingface_api_key", "")
+        _detected_type = detect_doc_type(full_text)
+        splits = chunk_document(full_text, _hf_key, doc_type=_detected_type)
+
+        # Restore per-page metadata: map each split back to the nearest source
+        # document by matching content prefix, falling back to the first doc.
+        _src_map = {d.page_content[:80]: d.metadata for d in all_content}
+
+        def _best_metadata(chunk_text: str) -> dict:
+            prefix = chunk_text[:80]
+            if prefix in _src_map:
+                return _src_map[prefix]
+            # Fall back: find which source document contains this chunk
+            for src_doc in all_content:
+                if chunk_text[:40] in src_doc.page_content:
+                    return src_doc.metadata
+            return all_content[0].metadata if all_content else {}
+
+        for split in splits:
+            if not split.metadata:
+                split.metadata = _best_metadata(split.page_content)
+
         # Use cached embeddings for better performance
         embeddings = get_embeddings()
-        
+
         start_time = time.time()
         db = create_store(session_id, splits, embeddings)
         index_time = time.time() - start_time
         VECTOR_STORES[session_id] = db
 
         # SCRUM-391: run structured extraction for any extractable document type
-        full_text = " ".join(d.page_content for d in all_content)
+        # full_text already computed above
         from api.document_extractor import is_extractable_document, extract_document_fields, detect_document_type
         if is_extractable_document(full_text):
             doc_type = detect_document_type(full_text)
