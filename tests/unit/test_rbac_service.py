@@ -155,3 +155,40 @@ class TestWireRbac:
         assert rbac_mod._users_table is fake_users
         assert rbac_mod._user_sessions_table is fake_sessions
         assert rbac_mod._async_session_factory is fake_factory
+
+
+# ---------------------------------------------------------------------------
+# Route guard verification — confirm the four chat routes declare _rbac_viewer
+# ---------------------------------------------------------------------------
+#
+# We inspect function signatures rather than spinning up the full FastAPI app
+# (which requires DATABASE_URL and other env vars).  A missing _user parameter
+# means the route has no role guard and would have been caught here.
+# ---------------------------------------------------------------------------
+
+class TestRouteRBACWiring:
+    """Verify that all four chat endpoints declare a _user parameter (RBAC guard)."""
+
+    def _has_rbac_param(self, fn) -> bool:
+        import inspect
+        return "_user" in inspect.signature(fn).parameters
+
+    def test_chat_route_has_rbac(self):
+        import api.index as idx
+        assert self._has_rbac_param(idx.chat), \
+            "/api/chat is missing _user=_rbac_viewer — route is unguarded"
+
+    def test_db_chat_route_has_rbac(self):
+        import api.index as idx
+        assert self._has_rbac_param(idx.db_chat), \
+            "/api/db/chat is missing _user=_rbac_viewer — route is unguarded"
+
+    def test_hybrid_chat_route_has_rbac(self):
+        import api.index as idx
+        assert self._has_rbac_param(idx.hybrid_chat_route), \
+            "/api/hybrid/chat is missing _user=_rbac_viewer — route is unguarded"
+
+    def test_autopilot_run_has_rbac(self):
+        import api.index as idx
+        assert self._has_rbac_param(idx.autopilot_run), \
+            "/api/autopilot/run is missing _user=_rbac_viewer — route is unguarded"

@@ -1034,7 +1034,7 @@ async def upload_documents(
         raise HTTPException(status_code=500, detail=safe_error_message(e))
 
 @app.post("/api/chat")
-async def chat(request: ChatRequest):
+async def chat(request: ChatRequest, _user=_rbac_viewer):
     """SSE streaming document chat.
 
     Emits newline-delimited JSON events:
@@ -1741,7 +1741,7 @@ async def db_refresh_schema(connection_id: str):
 
 
 @app.post("/api/db/chat")
-async def db_chat(request: DBChatRequest):
+async def db_chat(request: DBChatRequest, _user=_rbac_viewer):
     """
     DOCBOT-204 — Natural language → SQL → execute → streamed answer.
     Returns a StreamingResponse (text/event-stream) with SSE chunks:
@@ -2041,7 +2041,7 @@ class HybridChatRequest(BaseModel):
 
 
 @app.post("/api/hybrid/chat")
-async def hybrid_chat_route(request: HybridChatRequest):
+async def hybrid_chat_route(request: HybridChatRequest, _user=_rbac_viewer):
     """DOCBOT-402 — Hybrid chat pipeline: intent classification → SQL + RAG → synthesis.
 
     Returns a StreamingResponse (text/event-stream) with SSE chunks:
@@ -2092,7 +2092,7 @@ class AutopilotRequest(BaseModel):
 
 
 @app.post("/api/autopilot/run")
-async def autopilot_run(request: AutopilotRequest):
+async def autopilot_run(request: AutopilotRequest, _user=_rbac_viewer):
     """DOCBOT-405 — Analytical Autopilot: plan → execute (≤5 steps) → synthesise.
 
     Returns a StreamingResponse (text/event-stream) with SSE chunks:
