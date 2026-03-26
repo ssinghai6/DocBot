@@ -288,6 +288,21 @@ async def lifespan(app: FastAPI):
             logger.info("Startup cleanup: removed %d expired upload(s).", removed)
     except Exception as exc:
         logger.warning("Startup cleanup failed (non-fatal): %s", exc)
+
+    # DOCBOT-1001: warm VECTOR_STORES from Chroma disk — recovers sessions after restart
+    try:
+        from api.utils.vector_store import list_stored_sessions, load_store
+        stored = list_stored_sessions()
+        if stored:
+            embeddings = get_embeddings()
+            for sid in stored:
+                store = load_store(sid, embeddings)
+                if store is not None:
+                    VECTOR_STORES[sid] = store
+            logger.info("Startup: warmed %d vector store(s) from Chroma disk.", len(stored))
+    except Exception as exc:
+        logger.warning("Startup Chroma warm-up failed (non-fatal): %s", exc)
+
     yield
     await engine.dispose()
 
@@ -841,7 +856,7 @@ async def upload_documents(
         from langchain_community.document_loaders import PyPDFLoader
         from langchain_text_splitters import RecursiveCharacterTextSplitter
         from langchain_huggingface import HuggingFaceEndpointEmbeddings
-        from langchain_community.vectorstores import InMemoryVectorStore
+        from api.utils.vector_store import create_store
         from langchain_core.documents import Document
         
         all_content = []
@@ -910,7 +925,7 @@ async def upload_documents(
         embeddings = get_embeddings()
         
         start_time = time.time()
-        db = InMemoryVectorStore.from_documents(splits, embeddings)
+        db = create_store(session_id, splits, embeddings)
         index_time = time.time() - start_time
         VECTOR_STORES[session_id] = db
 
@@ -1028,7 +1043,14 @@ async def chat(request: ChatRequest):
       {"type": "error",    "detail": "<msg>"}
     """
     if request.session_id not in VECTOR_STORES:
-        raise HTTPException(status_code=404, detail="Session not found. Please upload documents again.")
+        # DOCBOT-1001: try to lazy-load from Chroma disk before giving up
+        from api.utils.vector_store import load_store
+        recovered = load_store(request.session_id, get_embeddings())
+        if recovered is not None:
+            VECTOR_STORES[request.session_id] = recovered
+            logger.info("chat: lazy-loaded vector store for session %s from disk", request.session_id)
+        else:
+            raise HTTPException(status_code=404, detail="Session not found. Please upload documents again.")
 
     groq_api_key = os.getenv('groq_api_key')
     if not groq_api_key:
@@ -1337,6 +1359,9 @@ async def delete_session(session_id: str):
     try:
         if session_id in VECTOR_STORES:
             del VECTOR_STORES[session_id]
+        # DOCBOT-1001: remove persisted Chroma collection
+        from api.utils.vector_store import delete_store
+        delete_store(session_id)
 
         async with engine.begin() as conn:
             await conn.execute(
