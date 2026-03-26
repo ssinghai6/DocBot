@@ -1035,11 +1035,26 @@ async def chat(request: ChatRequest):
         raise HTTPException(status_code=500, detail="Groq API key not configured")
 
     async def event_stream():
+        # ── DOCBOT-802: per-question persona routing ──────────────────────────
+        # If the user is on Generalist (default/auto), route based on question
+        # content. If they explicitly chose a specialist persona, respect it.
+        from api.utils.persona_router import route_persona
+        if request.persona == "Generalist":
+            routing = route_persona(request.message, EXPERT_PERSONAS)
+            effective_persona = routing.persona
+            if routing.was_routed:
+                logger.info(
+                    "Persona auto-routed: %s (score=%d, primary=%d)",
+                    effective_persona, routing.score, routing.primary_hits,
+                )
+        else:
+            effective_persona = request.persona
+
         # ── Deep Research path: LangGraph multi-step reasoning graph ─────────
         if request.deep_research:
             try:
                 from api.deep_research_service import run_deep_research
-                persona_data = EXPERT_PERSONAS.get(request.persona, EXPERT_PERSONAS["Generalist"])
+                persona_data = EXPERT_PERSONAS.get(effective_persona, EXPERT_PERSONAS["Generalist"])
                 async for sse_line in run_deep_research(
                     question=request.message,
                     session_id=request.session_id,
@@ -1120,14 +1135,14 @@ async def chat(request: ChatRequest):
             retrieved_docs = deduplicate_docs(list(result_lists))
 
             # ── Build prompt ─────────────────────────────────────────────────
-            persona_data = EXPERT_PERSONAS.get(request.persona, EXPERT_PERSONAS["Generalist"])
+            persona_data = EXPERT_PERSONAS.get(effective_persona, EXPERT_PERSONAS["Generalist"])
             persona_def = persona_data["persona_def"]
             effective_persona_def = persona_def
             if request.deep_research:
                 effective_persona_def = persona_def + DEEP_RESEARCH_ADDON
 
             disclaimer_note = ""
-            if request.persona in ["Doctor", "Finance Expert", "Lawyer"]:
+            if effective_persona in ["Doctor", "Finance Expert", "Lawyer"]:
                 disclaimer = persona_data.get("disclaimer", "")
                 if disclaimer:
                     disclaimer_note = f"\n\nIMPORTANT: {disclaimer}"
@@ -1193,7 +1208,7 @@ async def chat(request: ChatRequest):
                         "source": doc.metadata.get("source", "Unknown"),
                         "page": doc.metadata.get("page", 0),
                     })
-            yield f"data: {json.dumps({'type': 'citations', 'citations': citations})}\n\n"
+            yield f"data: {json.dumps({'type': 'citations', 'citations': citations, 'routed_persona': effective_persona})}\n\n"
 
             # ── Persist to DB (fire-and-forget, non-blocking) ─────────────────
             async def _persist():
@@ -1217,7 +1232,7 @@ async def chat(request: ChatRequest):
                         await conn.execute(
                             update(sessions_table)
                             .where(sessions_table.c.session_id == request.session_id)
-                            .values(updated_at=func.now(), persona=request.persona)
+                            .values(updated_at=func.now(), persona=effective_persona)
                         )
                 except Exception as db_err:
                     logger.error("DB persist error: %s", db_err)
