@@ -1,6 +1,6 @@
 # DocBot v2 — Complete Project Tracking Document
 > Generated: 2026-03-17
-> **Last Updated: 2026-03-26** (EPIC-10 DOCBOT-1001/1002/1003 done, investor readiness items landed, frontend split, autopilot test fix)
+> **Last Updated: 2026-03-26** (EPIC-10 1001-1003 done, EPIC-07 701/703 done, investor readiness sprint complete, 535 tests)
 > Team size: 1–2 engineers
 > Tracking tool recommendation: Linear (see Section 6)
 
@@ -61,10 +61,10 @@ Every story is only "done" when ALL of the following are true. No exceptions.
 | EPIC-04 | Hybrid Intelligence | 1, 2 | ✅ Done | Cross-source synthesis, discrepancy detection, planner/router |
 | EPIC-05 | Memory and Context | 2 | ✅ Done | Session artifacts, context compression, multi-hop queries |
 | EPIC-06 | Enterprise Readiness | 4 | ✅ Done | SSO, RBAC, audit logging, PII masking, Docker Compose, admin UI — all shipped |
-| EPIC-07 | Commerce Connectors | 4+ | 🔄 Active (Phase 1) | Marketplace API integrations. **Phase 1 (unblocked):** Connector interface, unified commerce schema, Amazon SP-API (DOCBOT-701–703, 29 pts). **Phase 2 (post-funding):** Background sync worker, Shopify connector (DOCBOT-704–705, 16 pts). |
+| EPIC-07 | Commerce Connectors | 4+ | 🔄 Active (Phase 1) | Marketplace API integrations. **Phase 1:** DOCBOT-701 (connector interface) ✅ Done, DOCBOT-703 (Amazon SP-API) ✅ Done, DOCBOT-702 (unified commerce schema + RLS) remaining. **Phase 2 (post-funding):** Background sync worker, Shopify connector (DOCBOT-704–705, 16 pts). |
 | EPIC-08 | Smart Agent Auto-Routing | 3 | ✅ Done | Replace static persona picker with intelligent per-question agent routing, per-agent badges and rendering |
 | EPIC-09 | LangGraph Deep Research | 3+ | ✅ Done | Multi-step reasoning graph replacing single-shot Deep Research prompt — query planner, parallel retrieval, gap detection, streaming synthesis |
-| EPIC-10 | RAG Quality Enhancement | 4+ | 🔄 Active | Chroma persistent store (done), cross-encoder reranker (done), SemanticChunker (done), FinanceBench accuracy baseline (to do). PageIndex evaluated and rejected (2026-03-25). |
+| EPIC-10 | RAG Quality Enhancement | 4+ | 🔄 Active | Chroma persistent store (done), cross-encoder reranker (done), SemanticChunker (done), FinanceBench accuracy baseline (code complete, accuracy not yet run). PageIndex evaluated and rejected (2026-03-25). |
 
 ---
 
@@ -1168,6 +1168,7 @@ As a developer, I want a pluggable connector architecture with an extended crede
 **Priority**: Must Have (for Commerce tier)
 **Story Points**: 8
 **Dependencies**: DOCBOT-201 (Fernet encryption baseline)
+**Status**: ✅ Done (connector ABC, registry, rate limiter, 22 tests — commit 40d7c98)
 
 **Acceptance Criteria**
 - [ ] `api/connectors/base.py` defines `MarketplaceConnector` ABC with abstract methods: `validate_credentials`, `refresh_token`, `fetch_orders_incremental`, `fetch_products_incremental`, `fetch_inventory`
@@ -1199,6 +1200,7 @@ As a developer, I want a normalized commerce schema in PostgreSQL with row-level
 **Priority**: Must Have (for Commerce tier)
 **Story Points**: 8
 **Dependencies**: DOCBOT-701, DOCBOT-102
+**Status**: 🔜 To Do (no DB migration, no commerce tables created yet)
 
 **Acceptance Criteria**
 - [ ] Tables created: `tenants`, `marketplace_connections`, `products`, `inventory_snapshots`, `orders`, `order_line_items`
@@ -1231,6 +1233,7 @@ As Alex (Amazon seller), I want to connect my Amazon Seller Central account to D
 **Priority**: Must Have (for Commerce tier)
 **Story Points**: 13
 **Dependencies**: DOCBOT-701, DOCBOT-702
+**Status**: ✅ Done (Amazon SP-API: LWA OAuth, Orders, Finances, retry logic, 22 tests — commit 40d7c98)
 
 **Acceptance Criteria**
 - [ ] `AmazonSPConnector` implements `MarketplaceConnector` ABC fully
@@ -1653,7 +1656,7 @@ As a developer, I want an automated accuracy test harness against FinanceBench q
 **Priority**: Should Have
 **Story Points**: 5
 **Dependencies**: DOCBOT-1001, DOCBOT-1002, DOCBOT-1003
-**Status**: 🔜 To Do
+**Status**: 🔄 Code Complete (test suite written with 20 questions in `tests/external/test_financebench_accuracy.py`, accuracy not yet run/documented)
 
 **Acceptance Criteria**
 - [ ] `tests/external/test_financebench_accuracy.py` with 20 curated FinanceBench questions + ground truth answers
@@ -1695,12 +1698,12 @@ As a developer, I want an automated accuracy test harness against FinanceBench q
 | Phase 3 Fixes | Persona format contract removal, routing fallback fix, AcroForm RAG fix, SSE streaming, parallel retrieval | — | ✅ Complete |
 | EPIC-09 Sprint 1 | DOCBOT-901, 902, 903, 904 | 19 | ✅ Complete |
 | Enterprise Data Pipeline Hardening | CSV section splitter, DB pipeline upgrades, hybrid routing fix | — | ✅ Complete |
-| EPIC-10 Sprint 1 | DOCBOT-1001, 1002, 1003 | 11 | ✅ Complete (DOCBOT-1004 remaining) |
-| EPIC-07 Phase 1 | DOCBOT-701, 702, 703 (connector interface + commerce schema + Amazon SP-API) | 29 | 🔄 To Do |
-| Investor Readiness | CI pipeline, landing page, metrics endpoint, LLM fallback, frontend split | — | 🔄 In Progress (landing page, metrics, LLM fallback, frontend split done; CI remaining) |
+| EPIC-10 Sprint 1 | DOCBOT-1001, 1002, 1003 | 11 | ✅ Complete (DOCBOT-1004 code complete, accuracy not yet run) |
+| EPIC-07 Phase 1 | DOCBOT-701, 702, 703 (connector interface + commerce schema + Amazon SP-API) | 29 | 🔄 In Progress (701 ✅, 703 ✅, 702 remaining) |
+| Investor Readiness | CI pipeline, landing page, metrics endpoint, LLM fallback, frontend split | — | 🔄 In Progress (landing page, metrics, LLM fallback, frontend split, CI done; LLM fallback not wired to prod paths) |
 | Human Testing | 85-test manual regression across all features | — | 🔄 To Do |
 
-**Total delivered**: 209 story points across 34 tickets + full test suite (385+ tests) | **Remaining**: DOCBOT-1004 (5 pts) + EPIC-07 Phase 1 (29 pts) + investor readiness (CI) = **~15 day sprint to investor-demo-ready**
+**Total delivered**: 230 story points across 36 tickets + full test suite (535 tests) | **Remaining**: DOCBOT-1004 accuracy run (5 pts) + DOCBOT-702 (8 pts) + wire LLM fallback to prod + Fix #6 PII masking + human testing = **~7 day sprint to investor-demo-ready**
 
 ---
 
@@ -1758,17 +1761,20 @@ Replaced single-shot `DEEP_RESEARCH_ADDON` prompt with a proper 5-node LangGraph
 *asyncio Fix:*
 - All `asyncio.get_event_loop()` → `asyncio.get_running_loop()` across db_service.py, table_selector.py, file_upload_service.py (Python 3.12+ deprecation)
 
-*Test suite: 385 tests passing (was 263).*
+*Test suite: 535 tests passing (was 263 -> 385 -> 535).*
 
-**EPIC-10 Active — RAG Quality Enhancement (DOCBOT-1001–1004, 16 points)**:
-PageIndex (VectifyAI) evaluated 2026-03-25 and rejected: OpenAI-only backend, no PyPI package, no streaming support. Replacing `InMemoryVectorStore` with Chroma for persistence, adding cross-encoder reranking (`ms-marco-MiniLM-L-6-v2`) for retrieval precision, adding `SemanticChunker` for financial/legal documents, and establishing a FinanceBench accuracy baseline to measure improvement delta.
+**EPIC-10 Near-Complete — RAG Quality Enhancement (DOCBOT-1001–1004, 16 points)**:
+PageIndex (VectifyAI) evaluated 2026-03-25 and rejected: OpenAI-only backend, no PyPI package, no streaming support. DOCBOT-1001 (Chroma persistent store), DOCBOT-1002 (cross-encoder reranker), and DOCBOT-1003 (SemanticChunker) all shipped. DOCBOT-1004 (FinanceBench accuracy) has test suite written (20 questions) but accuracy run not yet executed/documented.
 
-**EPIC-07 Phase 1 Unblocked — Amazon Commerce Connector (DOCBOT-701–703, 29 points)**:
-Gate lifted 2026-03-25 for investor demo sprint. Building connector interface + credential vault (DOCBOT-701), unified commerce schema with multi-tenant RLS (DOCBOT-702), and Amazon SP-API connector (DOCBOT-703). Background sync worker (DOCBOT-704) and Shopify connector (DOCBOT-705) deferred to post-funding.
+**EPIC-07 Phase 1 In Progress — Amazon Commerce Connector (DOCBOT-701–703, 29 points)**:
+Gate lifted 2026-03-25 for investor demo sprint. DOCBOT-701 (connector interface, registry, rate limiter) and DOCBOT-703 (Amazon SP-API connector with LWA OAuth, Orders, Finances, retry logic) shipped with 22 unit tests and 5 API routes. DOCBOT-702 (unified commerce schema + multi-tenant RLS) is NOT started — no DB migration, no commerce tables. Background sync worker (DOCBOT-704) and Shopify connector (DOCBOT-705) deferred to post-funding.
+
+**Investor Readiness Sprint (2026-03-25–26)**:
+Landing page (`src/app/landing/page.tsx`), admin metrics endpoint (`api/metrics_service.py` + `GET /admin/metrics`), LLM fallback provider (`api/utils/llm_provider.py` — Groq primary, Gemini Flash fallback, not yet wired to prod code paths), frontend component split (page.tsx reduced from 3336 to 2426 lines), CI pipeline (`.github/workflows/ci.yml`), and 5 failing autopilot tests fixed. Test suite: 535 passed, 0 failed.
 
 ---
 
-### Audit Reality — Feature Status Table (2026-03-25)
+### Audit Reality — Feature Status Table (2026-03-26)
 
 > Brutal audit: what actually ships vs. what the marketing says. Fix before investor demo.
 
@@ -1779,7 +1785,8 @@ Gate lifted 2026-03-25 for investor demo sprint. Building connector interface + 
 | Chroma persistent store | "Documents survive server restarts" | **MISSING → FIXED (2026-03-25)** — `api/utils/vector_store.py` wraps ChromaDB. Startup warm-up + lazy load on chat. `CHROMA_PERSIST_DIR` env var. 11 tests. | ✅ Done |
 | RBAC route enforcement | "Viewer/analyst/admin role enforcement" | **PARTIAL → FIXED (2026-03-25)** — `_user=_rbac_viewer` added to all four routes. 4 wiring tests. | ✅ Done |
 | Audit log — SQL execution | "All queries are audited" | **PARTIAL → FIXED (2026-03-25)** — `AuditEventType.query` + `get_client_ip()` wired into `/api/chat`, `/api/db/chat`, `/api/hybrid/chat`, `/api/autopilot/run`. X-Forwarded-For aware. 11 tests. | ✅ Done |
-| PII masking | "PII auto-masked in responses" | **PARTIAL** — email/phone/SSN patterns in structured DB results. Not applied to CSV E2B output or LLM answer text. No international formats. | Fix #6 |
+| PII masking | "PII auto-masked in responses" | **PARTIAL** — email/phone/SSN patterns in structured DB results. Not applied to CSV E2B output or LLM answer text. No international formats. | Fix #6 — STILL OPEN |
+| Commerce connectors | "Amazon SP-API integration" | **PARTIAL (2026-03-26)** — Connector interface, registry, rate limiter, Amazon SP-API (OAuth, Orders, Finances) shipped with 22 tests and 5 API routes. Missing: unified commerce schema (DOCBOT-702) — no DB tables to persist synced data. | DOCBOT-702 remaining |
 | Deep Research LangGraph | "5-node state machine" | **REAL** — plan→retrieve→evaluate→gap→synthesize fully implemented and tested. | ✅ Shipped |
 | E2B Python sandbox | "Run Python in isolated sandbox" | **REAL** — E2B code-interpreter, 25s timeout, finally cleanup. | ✅ Shipped |
 | 7-step SQL pipeline | "Bounded 2–3 LLM calls" | **REAL** — sqlglot AST validation + executor + drift retry. | ✅ Shipped |
@@ -1794,20 +1801,20 @@ Gate lifted 2026-03-25 for investor demo sprint. Building connector interface + 
 | Day | Phase | Work Item | Deliverable |
 |-----|-------|-----------|-------------|
 | 1 | **Fix #1** | ~~Discrepancy detection~~ | ✅ **Done** — `api/utils/discrepancy_detector.py`, 29 tests |
-| 2-3 | **Fix #2** | Per-question persona routing | Read `detection_keywords` at query time; re-classify persona on `/api/chat` before synthesis |
+| 2-3 | **Fix #2** | ~~Per-question persona routing~~ | ✅ **Done** — `api/utils/persona_router.py`, 13 tests |
 | 4 | **Fix #3** | ~~DOCBOT-1001: Chroma persistent store~~ | ✅ **Done** — `api/utils/vector_store.py`, ChromaDB wrapping |
-| 5 | **Fix #4** | RBAC route guards | Add `Depends(require_role("viewer"))` to `/api/chat`, `/api/db/chat`, `/api/hybrid/chat`, `/api/autopilot/run` |
-| 5 | **Fix #5** | Audit SQL execution + IP | Log `query_executed` event in `run_sql_pipeline`; extract IP from request headers |
+| 5 | **Fix #4** | ~~RBAC route guards~~ | ✅ **Done** — `_user=_rbac_viewer` wired to all 4 routes, 4 tests |
+| 5 | **Fix #5** | ~~Audit SQL execution + IP~~ | ✅ **Done** — `AuditEventType.query` + `get_client_ip()`, 11 tests |
 | 6 | EPIC-10 | ~~DOCBOT-1002: Cross-encoder reranker~~ | ✅ **Done** — `api/utils/reranker.py`, wired into `rag_retrieve()` |
 | 7 | EPIC-10 | ~~DOCBOT-1003: SemanticChunker~~ | ✅ **Done** — `api/utils/chunker.py`, doc-type branching in upload route |
-| 7-8 | EPIC-10 | DOCBOT-1004: FinanceBench baseline | `tests/benchmarks/`, 20 questions, before/after accuracy delta |
+| 7-8 | EPIC-10 | ~~DOCBOT-1004: FinanceBench baseline~~ | 🔄 **Code Complete** — `tests/external/test_financebench_accuracy.py`, 20 questions written; accuracy run pending |
 | 9-10 | Polish | ~~Frontend component split~~ | ✅ **Done** — `ChatMessage`, `ConnectionPanel`, `FileUploadZone`, `PersonaSelector` extracted to `src/components/` |
 | 10 | Polish | ~~Landing page~~ | ✅ **Done** — `src/app/landing/` |
-| 11 | Polish | ~~Metrics endpoint~~ + CI pipeline | ✅ **Partial** — metrics endpoint done; CI pipeline remaining |
+| 11 | Polish | ~~Metrics endpoint + CI pipeline~~ | ✅ **Done** — `api/metrics_service.py` + `GET /admin/metrics`; `.github/workflows/ci.yml` |
 | 12 | Polish | ~~LLM fallback~~ | ✅ **Done** — `api/utils/llm_provider.py` — Groq primary, Gemini 2.5 Flash fallback |
-| 13-15 | EPIC-07 | DOCBOT-701: Connector interface + credential vault | `api/connectors/base.py`, `registry.py`, `credential_service.py` |
-| 16-18 | EPIC-07 | DOCBOT-702: Unified commerce schema + RLS | 6 tables, RLS policies, materialized views |
-| 19-22 | EPIC-07 | DOCBOT-703: Amazon SP-API connector | `api/connectors/amazon_sp.py`, LWA OAuth, Orders + Finances sync |
+| 13-15 | EPIC-07 | ~~DOCBOT-701: Connector interface + credential vault~~ | ✅ **Done** — `api/connectors/base.py`, `registry.py`, `rate_limiter.py`, 5 routes |
+| 16-18 | EPIC-07 | DOCBOT-702: Unified commerce schema + RLS | 🔜 **To Do** — 6 tables, RLS policies, materialized views |
+| 19-22 | EPIC-07 | ~~DOCBOT-703: Amazon SP-API connector~~ | ✅ **Done** — `api/connectors/amazon_connector.py`, LWA OAuth, Orders + Finances, 22 tests |
 | 23 | Testing | Human testing: 85 tests across all feature areas + final deploy | Investor-demo-ready production |
 
 **Exit Criteria:**
@@ -1816,7 +1823,7 @@ Gate lifted 2026-03-25 for investor demo sprint. Building connector interface + 
 3. EPIC-10 complete: Chroma + reranker + SemanticChunker active
 4. FinanceBench accuracy documented (target: >60%)
 5. Amazon SP-API connector live: connect → sync orders → NL questions answered
-6. CI green with 420+ tests
+6. CI green with 535+ tests
 7. Landing page live, metrics endpoint working, LLM fallback tested
 8. Zero P0/P1 bugs from human testing
 
@@ -2053,17 +2060,53 @@ These risks should be tracked as Linear "issues" with label `risk` and priority 
 | Phase 2 | DOCBOT-305, 405, 501–504 | 44 pts | ✅ Done |
 | Phase 3 | DOCBOT-801–805, 901–904 | 37 pts | ✅ Done |
 | Phase 4 (Enterprise) | DOCBOT-601–605, DOCBOT-701 (consumer auth) | 58 pts | ✅ Done |
-| Phase 4 (Commerce — Remaining) | DOCBOT-701 (connector), 702–705 | ~45 pts | 🔜 Planned |
-| **Delivered total** | **38 stories + post-ship fixes** | **~279 pts** | ✅ |
+| Phase 4 (Commerce — Partial) | DOCBOT-701 (connector), 703 (Amazon SP-API) | 21 pts | ✅ Done |
+| Phase 4 (Commerce — Remaining) | DOCBOT-702, 704–705 | ~24 pts | 🔜 Planned (702 next, 704-705 post-funding) |
+| EPIC-10 (RAG Quality) | DOCBOT-1001–1003 | 11 pts | ✅ Done |
+| EPIC-10 (Remaining) | DOCBOT-1004 (accuracy run) | 5 pts | 🔄 Code Complete |
+| **Delivered total** | **38 stories + post-ship fixes + connectors + RAG** | **~300 pts** | ✅ |
 
-Note: EPIC-07 (Commerce Connectors) is the only outstanding work. Gate condition: ≥3 of 5 discovery interviews must confirm the commerce/seller segment before starting.
+Note: Remaining work: DOCBOT-702 (commerce schema), DOCBOT-1004 (accuracy run), wire LLM fallback to prod, Fix #6 (PII masking gaps), human testing.
 
 ---
 
 ## Immediate Next Actions (This Week)
 
-All phases through Phase 4 (Enterprise) are complete. The only remaining work is EPIC-07 (Commerce Connectors), which is gated on discovery interviews.
+Investor demo sprint is near-complete. Remaining work ordered by demo impact:
 
-1. Conduct ≥3 of 5 discovery interviews to validate the commerce/seller segment (RISK-04)
-2. If interviews confirm the segment: begin DOCBOT-701 (Marketplace Connector Interface) as the EPIC-07 foundation
-3. If interviews do not confirm the segment: defer EPIC-07 indefinitely; prioritize direct user feedback on shipped features
+1. **DOCBOT-702: Unified Commerce Schema + RLS** (8 pts, ~2 days) — DB migration for commerce tables, RLS policies, materialized views. Required for Amazon connector to persist data to PostgreSQL.
+2. **DOCBOT-1004: Run FinanceBench accuracy** (~0.5 day) — Test suite exists; run against live Groq + HuggingFace and document baseline vs. post-improvement scores.
+3. **Wire LLM fallback to production code paths** (~1 day) — `api/utils/llm_provider.py` is standalone; integrate into `db_service.py`, `hybrid_service.py`, `sandbox_service.py` so Groq outages auto-fallback to Gemini Flash.
+4. **Fix #6: PII masking gaps** (~1 day) — Apply PII masking to CSV E2B output and LLM answer text (currently only structured DB results are masked).
+5. **Human testing: 85-test manual regression** (~1 day) — Full regression across all feature areas on production.
+
+---
+
+## Session Log — 2026-03-26
+
+### What Shipped (commit 40d7c98, pushed to main)
+
+**EPIC-07 Commerce Connectors (DOCBOT-701, DOCBOT-703):**
+- `api/connectors/base.py` — Abstract `MarketplaceConnector` ABC + `ConnectorCredentials` dataclass
+- `api/connectors/registry.py` — Decorator-based connector type registration
+- `api/connectors/rate_limiter.py` — Async token-bucket rate limiter (per-credential keying)
+- `api/connectors/amazon_connector.py` — Amazon SP-API connector: LWA OAuth token exchange, Orders API with NextToken pagination, Finances API, exponential retry on 429/5xx
+- `api/connectors/__init__.py` — Package exports
+- 5 connector API routes in `api/index.py`: `POST /api/connectors/register`, `GET /api/connectors`, `POST /api/connectors/{id}/orders`, `POST /api/connectors/{id}/financials`, `GET /api/connectors/types`
+- 22 unit tests in `tests/unit/test_amazon_connector.py`
+- DOCBOT-702 (unified commerce schema + RLS) NOT done — no DB migration, no commerce tables
+
+**EPIC-10 RAG Quality (DOCBOT-1004):**
+- `tests/external/test_financebench_accuracy.py` — 20-question FinanceBench accuracy test suite with fuzzy numeric matching
+- Marked `@pytest.mark.external` (skipped in CI)
+- Accuracy has not been run/documented yet
+
+**Investor Readiness Sprint:**
+- LLM fallback: `api/utils/llm_provider.py` + `api/utils/_gemini_wrapper.py` — Groq primary, Gemini 2.5 Flash fallback (11 tests). NOT wired to prod code paths yet.
+- Admin metrics: `api/metrics_service.py` + `GET /admin/metrics` route (RBAC admin-only, 4 tests)
+- Landing page: `src/app/landing/page.tsx` — hero section, feature grid, CTA
+- Frontend split: `src/components/` — `ChatMessage`, `ConnectionPanel`, `FileUploadZone`, `PersonaSelector`, `types.ts`, 5 UI primitives. `page.tsx` reduced from 3336 to 2426 lines.
+- CI pipeline: `.github/workflows/ci.yml`
+- Autopilot test fix: 5 failing tests fixed (`asyncio.get_event_loop` -> `asyncio.run`)
+
+**Test suite: 535 passed, 0 failed (was 385)**

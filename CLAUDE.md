@@ -36,8 +36,18 @@ DocBot is an AI-powered document + database analyst, fully deployed on Railway (
 | `api/document_extractor.py` | LangExtract financial extraction (Gemini 2.5 Flash, full-doc coverage) |
 | `api/file_upload_service.py` | CSV/SQLite file uploads — CSV goes to E2B pandas, SQLite to SQL pipeline |
 | `api/utils/csv_preprocessor.py` | Multi-section CSV detection, section splitting, header detection, E2B preamble generation |
-| `api/utils/` | Shared helpers: encryption, SSRF validator, SQL validator, embeddings, PII masking, table selector, context compressor, CSV preprocessor |
-| `src/app/page.tsx` | Monolithic React frontend (~1800 lines). All UI state via useState |
+| `api/utils/llm_provider.py` | LLM fallback provider — Groq primary, Gemini 2.5 Flash fallback (not yet wired to prod) |
+| `api/utils/_gemini_wrapper.py` | Minimal LangChain-compatible Gemini wrapper for fallback provider |
+| `api/utils/` | Shared helpers: encryption, SSRF validator, SQL validator, embeddings, PII masking, table selector, context compressor, CSV preprocessor, reranker, chunker, vector store |
+| `api/connectors/base.py` | Marketplace connector ABC, ConnectorCredentials, normalized dataclasses |
+| `api/connectors/registry.py` | Decorator-based connector type registration |
+| `api/connectors/rate_limiter.py` | Async token-bucket rate limiter (per-credential keying) |
+| `api/connectors/amazon_connector.py` | Amazon SP-API connector — LWA OAuth, Orders, Finances, retry logic |
+| `api/metrics_service.py` | Admin metrics aggregation for `/admin/metrics` endpoint |
+| `src/app/page.tsx` | React frontend (~2400 lines, split from ~3300). Core chat UI state via useState |
+| `src/components/` | Extracted frontend components: ChatMessage, ConnectionPanel, FileUploadZone, PersonaSelector, UI primitives |
+| `src/app/landing/page.tsx` | Investor landing page — hero, features, CTA |
+| `tests/external/test_financebench_accuracy.py` | FinanceBench 20-question accuracy test suite (external, requires live API keys) |
 | `requirements.txt` | Python dependencies |
 | `project-tasks/docbot-v2-project-tracking.md` | 38 user stories, 9 epics, sprint plan, Definition of Done — **primary ticket tracker** |
 | `project-tasks/docbot-db-master-plan.md` | Full architecture, security model, phased build plan |
@@ -117,7 +127,7 @@ One ticket per branch. One branch per session when possible.
 
 All work is tracked in `project-tasks/docbot-v2-project-tracking.md`.
 
-**Current state (2026-03-25):**
+**Current state (2026-03-26):**
 - EPIC-01 through EPIC-06 — **Done** (archived)
 - Consumer Auth (DOCBOT-701) — **Done**
 - EPIC-08 Smart Agent Auto-Routing (DOCBOT-801–805) — **Done**
@@ -129,19 +139,20 @@ All work is tracked in `project-tasks/docbot-v2-project-tracking.md`.
   - Manual schema refresh endpoint (`POST /api/db/refresh-schema/{connection_id}`)
   - Hybrid synthesis fix: CSV pandas output now captured in synthesis
   - asyncio.get_running_loop() migration (Python 3.12+)
-  - 385 tests passing
-- **EPIC-10 RAG Quality Enhancement (DOCBOT-1001–1004) — Active work** (16 pts)
-  - DOCBOT-1001: Chroma persistent store (replaces InMemoryVectorStore)
-  - DOCBOT-1002: Cross-encoder reranker post-retrieval
-  - DOCBOT-1003: SemanticChunker for financial/legal docs
-  - DOCBOT-1004: FinanceBench accuracy baseline test suite
-- **EPIC-07 Commerce Connectors Phase 1 (DOCBOT-701–703) — Active** (29 pts)
-  - DOCBOT-701: Marketplace connector interface + credential vault + rate limiter
-  - DOCBOT-702: Unified commerce schema + multi-tenant RLS
-  - DOCBOT-703: Amazon SP-API connector (Orders, Finances, OAuth)
+- **EPIC-10 RAG Quality Enhancement (DOCBOT-1001–1004) — Near-complete** (16 pts)
+  - DOCBOT-1001: Chroma persistent store — **Done**
+  - DOCBOT-1002: Cross-encoder reranker — **Done**
+  - DOCBOT-1003: SemanticChunker — **Done**
+  - DOCBOT-1004: FinanceBench accuracy — **Code complete** (test suite written, accuracy not yet run)
+- **EPIC-07 Commerce Connectors Phase 1 (DOCBOT-701–703) — In Progress** (29 pts)
+  - DOCBOT-701: Marketplace connector interface + credential vault + rate limiter — **Done**
+  - DOCBOT-702: Unified commerce schema + multi-tenant RLS — **To Do**
+  - DOCBOT-703: Amazon SP-API connector (Orders, Finances, OAuth) — **Done** (22 tests)
   - *Phase 2 deferred to post-funding:* DOCBOT-704 (background sync), DOCBOT-705 (Shopify)
-- **Investor Readiness Sprint — Active**
-  - GitHub Actions CI, landing page, `/admin/metrics`, LLM fallback, frontend split, 85-test manual regression
+- **Investor Readiness Sprint — Near-complete**
+  - Done: GitHub Actions CI, landing page, `/admin/metrics`, LLM fallback module, frontend split
+  - Remaining: Wire LLM fallback to prod code paths, Fix #6 PII masking gaps, 85-test manual regression
+- **535 tests passing, 0 failures**
 
 > **PageIndex evaluated 2026-03-25 — not integrating.** Hard blockers: OpenAI-only (Groq incompatible), not on PyPI (Railway brittleness), no streaming (SSE conflict). Revisit if PyPI package + multi-backend support ships.
 
@@ -211,9 +222,12 @@ tests/
     test_sql_validator.py
     test_embeddings.py
     test_db_service_helpers.py
+    test_amazon_connector.py  # 22 tests for connector framework + Amazon SP-API
   integration/             # hit real SQLite / temp files — still run in CI (no external APIs)
     test_db_pipeline.py
     test_file_upload_service.py
+  external/                # require live API keys — skipped in CI (@pytest.mark.external)
+    test_financebench_accuracy.py  # 20-question FinanceBench accuracy suite
 ```
 
 **Rules:**
@@ -245,7 +259,13 @@ All business logic lives in dedicated service/util modules:
 - `api/artifact_service.py` — session artifact persistence
 - `api/document_extractor.py` — LangExtract financial extraction
 - `api/file_upload_service.py` — CSV/SQLite upload handling
-- `api/utils/` — shared helpers (embeddings, encryption, validators, etc.)
+- `api/metrics_service.py` — admin metrics aggregation (`GET /admin/metrics`)
+- `api/connectors/` — marketplace connector framework:
+  - `base.py` — `MarketplaceConnector` ABC, normalized dataclasses, exceptions
+  - `registry.py` — connector type registration and lookup
+  - `rate_limiter.py` — async token-bucket rate limiter
+  - `amazon_connector.py` — Amazon SP-API (LWA OAuth, Orders, Finances)
+- `api/utils/` — shared helpers (embeddings, encryption, validators, LLM provider, reranker, chunker, vector store, etc.)
 
 **Rule:** If a function is more than ~15 lines or has no direct dependency on the HTTP request/response, it belongs in a service or utils module, not in index.py.
 
