@@ -188,6 +188,17 @@ All work is tracked in `project-tasks/docbot-v2-project-tracking.md`.
   - Finance Expert persona: added COMPUTATION guideline for step-by-step DCF, valuations, and projections
   - Autopilot synthesizer: max_tokens 600→2000, removed "Max 400 words" cap, added computation instruction
   - Hybrid synthesis: max_tokens 800→2000, added computation rule for user-provided inputs
+  - DB answer generator: replaced "Answer using ONLY the query result" with same computation-friendly prompt
+- **Autopilot Trigger & Formatting Fix (2026-03-27) — Done**
+  - Fixed autopilot auto-trigger regex: removed trailing `\b` that blocked prefix matches (`compar` didn't match "comparable", `analys` didn't match "analysis")
+  - Added missing financial keywords: `calculat`, `valuation`, `discount`, `dcf`, `scenario`, `estimat`, `assess`
+  - All 7 persona formatting prompts: improved to use markdown tables for numerical data, format currency as $X.XM/$X.XB, show formulas once then computed results only
+  - Autopilot synthesizer: detailed FORMAT RULES section for clean table output
+- **Demo Video & Landing Page Polish (2026-03-27) — Done**
+  - Removed em dashes from all landing page copy (both `/` and `/landing`)
+  - Added "Built by Sanshrit Singhai" with portfolio link in footer
+  - DemoVideo component: supports YouTube/Loom/Vimeo embed, direct MP4, or animated placeholder mockup
+  - Embedded Veo-generated demo video (`public/docbot-demo.mp4`, 8s, 1280x720) — auto-plays muted, loops
 - **599 tests passing, 0 failures**
 
 > **PageIndex evaluated 2026-03-25 — not integrating.** Hard blockers: OpenAI-only (Groq incompatible), not on PyPI (Railway brittleness), no streaming (SSE conflict). Revisit if PyPI package + multi-backend support ships.

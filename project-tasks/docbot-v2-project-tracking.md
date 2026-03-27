@@ -2173,3 +2173,30 @@ Investor demo sprint P0/P1 items are complete. Remaining work:
 - Files changed: `page.tsx`, `landing/page.tsx`, `ChatArea.tsx`, `ChatMessage.tsx`, `ConnectionPanel.tsx`, `MarketplacePanel.tsx`, `AdminPanel.tsx`, `AuthModal.tsx`, `FileUploadZone.tsx`, `PersonaSelector.tsx`, `Sidebar.tsx`
 
 **Test suite: 567 passed, 0 failed**
+
+### What Shipped (branches DOCBOT-1102 through DOCBOT-1105, merged to main)
+
+**Hybrid Mode & Answer Quality Fix (DOCBOT-1102):**
+- `src/app/chat/page.tsx` — useEffect auto-promotes to hybrid mode when both sessionId and connectionId exist (fixes simultaneous PDF+CSV upload race condition)
+- `api/index.py` — RAG prompt: replaced "Answer based ONLY on context" with computation-friendly instruction; Finance Expert persona: added COMPUTATION guideline for step-by-step DCF/valuations
+- `api/autopilot_service.py` — Synthesizer: max_tokens 600→2000, removed "Max 400 words" cap, added computation instruction
+- `api/hybrid_service.py` — Synthesis: max_tokens 800→2000, added computation rule
+- `api/db_service.py` — DB answer generator: replaced "Answer using ONLY the query result" with same computation-friendly prompt
+
+**Autopilot Trigger & Formatting Fix (DOCBOT-1103):**
+- `src/hooks/useChatSubmit.ts` — Fixed autopilot regex: removed trailing `\b` blocking prefix matches, added financial keywords (calculat, valuation, discount, dcf, scenario, estimat, assess)
+- `api/index.py` — All 7 persona formatting prompts: markdown tables for numerical data, currency as $X.XM/$X.XB, formulas shown once then computed results only in tables
+- `api/autopilot_service.py` — Detailed FORMAT RULES section for clean table output
+
+**Demo Video Component (DOCBOT-1104):**
+- `src/app/page.tsx` + `src/app/landing/page.tsx` — DemoVideo component: supports YouTube/Loom/Vimeo embed, direct MP4, or animated placeholder mockup with stylized DocBot UI preview
+
+**Demo Video Embed (DOCBOT-1105):**
+- `public/docbot-demo.mp4` — Veo-generated demo video (8s, 1280x720, H.264) showing DocBot interface with dark theme and purple neon accents
+- Auto-plays muted and loops on both landing pages
+
+**Landing Page Copy Polish:**
+- Removed all em dashes from landing page copy (both `/` and `/landing`)
+- Added "Built by Sanshrit Singhai" with portfolio link in footer
+
+**Test suite: 599 passed, 0 failed**
