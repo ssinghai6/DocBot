@@ -49,7 +49,7 @@ const features = [
     icon: <Database className="w-6 h-6" />,
     title: "Live Database Chat",
     description:
-      "Connect PostgreSQL, MySQL, SQLite, and Azure SQL. Query in plain English through a secure 7-step bounded pipeline — no SQL knowledge required.",
+      "Connect PostgreSQL, MySQL, SQLite, and Azure SQL. Query in plain English through a secure 7-step bounded pipeline. No SQL knowledge required.",
     badge: "4 DB Types",
     badgeVariant: "success" as const,
     iconColor: "text-green-400",
@@ -59,7 +59,7 @@ const features = [
     icon: <BarChart2 className="w-6 h-6" />,
     title: "CSV Intelligence",
     description:
-      "Upload spreadsheets and get instant pandas-powered analysis via E2B sandboxes. Charts, aggregations, and trend analysis — all from natural language.",
+      "Upload spreadsheets and get instant pandas-powered analysis via E2B sandboxes. Charts, aggregations, and trend analysis, all from natural language.",
     badge: "E2B Sandbox",
     badgeVariant: "warning" as const,
     iconColor: "text-yellow-400",
@@ -99,7 +99,7 @@ const features = [
     icon: <MessageSquare className="w-6 h-6" />,
     title: "Conversational Memory",
     description:
-      "Follow-up questions work naturally across all data sources. Ask 'show revenue by month' then 'filter to Q1 only' — DocBot remembers context.",
+      "Follow-up questions work naturally across all data sources. Ask 'show revenue by month' then 'filter to Q1 only'. DocBot remembers context.",
     badge: "All Pipelines",
     badgeVariant: "success" as const,
     iconColor: "text-teal-400",
@@ -123,7 +123,7 @@ const steps = [
     icon: <Upload className="w-6 h-6" />,
     title: "Upload or Connect",
     description:
-      "Upload PDF documents or CSV files, or connect to your live PostgreSQL, MySQL, or SQLite database — no schema expertise needed.",
+      "Upload PDF documents or CSV files, or connect to your live PostgreSQL, MySQL, or SQLite database. No schema expertise needed.",
     color: "from-blue-600 to-blue-700",
     glow: "shadow-blue-900/40",
   },
@@ -139,7 +139,7 @@ const steps = [
     icon: <Zap className="w-6 h-6" />,
     title: "Get Cited Answers",
     description:
-      "Receive accurate, grounded responses with source citations from your documents and query results from your database — side by side.",
+      "Receive accurate, grounded responses with source citations from your documents and query results from your database, side by side.",
     color: "from-green-600 to-green-700",
     glow: "shadow-green-900/40",
   },
@@ -162,7 +162,7 @@ const mockMessages: MockMessage[] = [
   },
   {
     role: "assistant",
-    text: "Based on your database (Q3 actuals) and the uploaded annual report:\n\n**Database:** Q3 revenue = $4.2M\n**PDF Forecast:** $3.8M projected for Q3\n\nYou exceeded forecast by **10.5%**. Note: the report used conservative assumptions — discrepancy flagged.",
+    text: "Based on your database (Q3 actuals) and the uploaded annual report:\n\n**Database:** Q3 revenue = $4.2M\n**PDF Forecast:** $3.8M projected for Q3\n\nYou exceeded forecast by **10.5%**. Note: the report used conservative assumptions. Discrepancy flagged.",
     persona: "Finance Expert",
     citations: 2,
   },
@@ -257,7 +257,7 @@ export default function LandingPage() {
               </h1>
 
               <p className="text-lg sm:text-xl text-gray-400 leading-relaxed mb-8 max-w-lg">
-                The only platform that cross-references your documents against live databases in real time. Get cited answers, catch discrepancies automatically, and connect your marketplace data — all through plain English.
+                The only platform that cross-references your documents against live databases in real time. Get cited answers, catch discrepancies automatically, and connect your marketplace data. All through plain English.
               </p>
 
               <div className="flex flex-col sm:flex-row gap-3">
@@ -419,7 +419,7 @@ export default function LandingPage() {
             </h2>
             <p className="text-lg text-gray-400 max-w-2xl mx-auto">
               DocBot unifies your documents and databases into a single conversational
-              interface — no data pipelines, no SQL, no switching tools.
+              interface. No data pipelines, no SQL, no switching tools.
             </p>
           </div>
 
@@ -640,7 +640,7 @@ export default function LandingPage() {
               <FileText className="w-3 h-3 text-white" />
             </div>
             <span className="font-medium text-gray-400">DocBot</span>
-            <span className="hidden sm:inline text-gray-700">—</span>
+            <span className="hidden sm:inline text-gray-700">|</span>
             <span className="hidden sm:inline">AI-Powered Document Intelligence</span>
           </div>
 
@@ -657,6 +657,8 @@ export default function LandingPage() {
             </a>
             <span className="text-gray-700">|</span>
             <span>&copy; 2026 DocBot</span>
+            <span className="text-gray-700">|</span>
+            <span>Built by <a href="https://sanshrit-singhai.vercel.app/" target="_blank" rel="noopener noreferrer" className="text-gray-400 hover:text-white transition-colors duration-150">Sanshrit Singhai</a></span>
           </div>
         </div>
       </footer>
