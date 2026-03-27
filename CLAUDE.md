@@ -8,7 +8,7 @@ DocBot is an AI-powered document + database analyst, fully deployed on Railway (
 - Upload CSV files — queries run via E2B pandas sandbox (no SQL pipeline)
 - Run Python analysis via E2B sandboxes with matplotlib chart capture
 - Answer hybrid questions spanning both docs and live data with dual citations and discrepancy detection
-- Run multi-step deep research using a LangGraph 5-node state machine
+- Run multi-step investigations via Autopilot (auto-triggers on analytical queries, uses deep retrieval with gap detection for docs)
 - Authenticate via SAML SSO (Okta, Azure AD), GitHub OAuth, Google OAuth, or email/password
 - Enforce RBAC (viewer / analyst / admin), audit logging, and PII auto-masking
 
@@ -26,8 +26,8 @@ DocBot is an AI-powered document + database analyst, fully deployed on Railway (
 | `api/db_service.py` | All DB connectivity, schema introspection (tables+views), 7-step SQL pipeline, LRU engine pool, error taxonomy, schema drift detection |
 | `api/sandbox_service.py` | E2B sandbox execution, Python/pandas code generation (Qwen via Groq), CSV→E2B pipeline, error retry with feedback, conversational rephrase |
 | `api/hybrid_service.py` | Intent classification, parallel RAG+SQL retrieval, discrepancy detection |
-| `api/autopilot_service.py` | Analytical Autopilot — LangGraph multi-step investigation state machine |
-| `api/deep_research_service.py` | LangGraph Deep Research — 5-node state machine (plan→retrieve→evaluate→gap→synthesize) |
+| `api/autopilot_service.py` | Analytical Autopilot — LangGraph multi-step investigation state machine. Auto-triggers on analytical keywords. Uses `deep_retrieve()` for doc_search steps. |
+| `api/deep_research_service.py` | Deep Research retrieval pipeline + `deep_retrieve()` reusable function (sub-question decomposition, parallel retrieval, gap-fill loop). Legacy standalone route kept for backwards compat. |
 | `api/auth_service.py` | SAML 2.0 SSO, session management, JIT user provisioning |
 | `api/oauth_service.py` | GitHub OAuth, Google OAuth, email/password auth with bcrypt |
 | `api/rbac_service.py` | RBAC — viewer/analyst/admin roles, `require_role()` FastAPI dependency |
@@ -169,6 +169,11 @@ All work is tracked in `project-tasks/docbot-v2-project-tracking.md`.
   - Adaptive limits: complex queries get max_tokens 4000, 150-line code, 60s timeout
   - Error retry with feedback: sandbox failures fed back to LLM for one corrective attempt
   - Conversational memory: frontend sends last 6 messages; all pipelines (CSV, SQL, hybrid, autopilot) rephrase follow-ups into standalone queries
+- **Autopilot + Deep Research Merge (2026-03-26) — Done**
+  - Extracted `deep_retrieve()` from `deep_research_service.py` as reusable function (sub-question decomposition, parallel retrieval, gap-fill loop)
+  - Autopilot `doc_search` tool now uses `deep_retrieve()` instead of single-pass RAG
+  - Removed redundant autopilot nudge banner — auto-trigger with toast notification
+  - Deep Research standalone route kept for backwards compatibility
 - **567 tests passing, 0 failures**
 
 > **PageIndex evaluated 2026-03-25 — not integrating.** Hard blockers: OpenAI-only (Groq incompatible), not on PyPI (Railway brittleness), no streaming (SSE conflict). Revisit if PyPI package + multi-backend support ships.
@@ -267,8 +272,8 @@ All business logic lives in dedicated service/util modules:
 - `api/db_service.py` — DB connectivity, schema, 7-step SQL pipeline
 - `api/sandbox_service.py` — E2B sandbox, Python/pandas code gen, CSV→E2B pipeline
 - `api/hybrid_service.py` — intent classification, RAG retrieval, hybrid chat pipeline
-- `api/autopilot_service.py` — Analytical Autopilot LangGraph state machine
-- `api/deep_research_service.py` — Deep Research LangGraph 5-node state machine
+- `api/autopilot_service.py` — Analytical Autopilot LangGraph state machine (auto-triggers, deep retrieval for doc_search)
+- `api/deep_research_service.py` — Deep Research pipeline + `deep_retrieve()` reusable function (legacy standalone route kept)
 - `api/auth_service.py` — SAML SSO, session management, JIT provisioning
 - `api/oauth_service.py` — GitHub/Google OAuth, email/password auth
 - `api/rbac_service.py` — role enforcement via FastAPI dependency

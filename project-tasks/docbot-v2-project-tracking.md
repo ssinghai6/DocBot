@@ -1702,6 +1702,7 @@ As a developer, I want an automated accuracy test harness against FinanceBench q
 | EPIC-07 Phase 1 | DOCBOT-701, 702, 703 (connector interface + commerce schema + Amazon SP-API) | 29 | ✅ Complete |
 | Investor Readiness | CI, landing page, metrics, LLM fallback wired, PII masking, frontend refactor | — | ✅ Complete (all P0/P1 items done) |
 | CSV Intelligence & Memory | Data profiling, error retry, conversational memory across all pipelines | — | ✅ Complete |
+| Autopilot + Deep Research Merge | Deep retrieval in Autopilot doc_search, nudge removal, auto-trigger toast | — | ✅ Complete |
 | Human Testing | 85-test manual regression across all features | — | 🔄 To Do |
 
 **Total delivered**: 230 story points across 36 tickets + full test suite (567 tests) | **Remaining**: DOCBOT-1004 accuracy run (5 pts) + human testing
@@ -1787,6 +1788,16 @@ All CSV/DB/hybrid/autopilot pipelines upgraded with three major capabilities:
 - **Error retry with feedback** — If sandbox execution fails (non-timeout), error + stderr fed back to LLM with fix guidance for one corrective retry attempt. SSE status event emitted during retry.
 - **Conversational memory across all pipelines** — Frontend sends last 6 messages (truncated to 500 chars) with every request. All pipelines (CSV, SQL, hybrid, autopilot) rephrase follow-up questions into standalone queries via lightweight LLM call (`max_tokens=200`). "Show me revenue" → "filter to Q1" now works everywhere, not just RAG.
 - Files changed: `csv_preprocessor.py`, `file_upload_service.py`, `sandbox_service.py`, `db_service.py`, `hybrid_service.py`, `autopilot_service.py`, `index.py`, `useChatSubmit.ts`
+- Test suite: 567 passed, 0 failed
+
+**Autopilot + Deep Research Merge (2026-03-26)**:
+Unified the two multi-step engines into one:
+- **`deep_retrieve()` extracted** — Reusable async function in `deep_research_service.py` encapsulating the full retrieval pipeline (sub-question decomposition, parallel retrieval with query expansion, coverage evaluation, gap-fill re-retrieval loop) without LangGraph overhead.
+- **Autopilot `doc_search` upgraded** — Now calls `deep_retrieve()` instead of single-pass `rag_retrieve()`. Every Autopilot document search gets Deep Research quality (multi-pass, gap detection).
+- **Nudge banner removed** — `AUTOPILOT_KEYWORDS` regex and `showAutopilotNudge` banner in `ChatArea.tsx` removed. Auto-trigger in `useChatSubmit.ts` already handles activation silently.
+- **Toast notification added** — When autopilot auto-triggers, user sees "Autopilot activated — multi-step analysis in progress" toast.
+- **Deep Research route kept** — Standalone `/api/deep-research` route marked as legacy, kept for backwards compatibility.
+- Files changed: `autopilot_service.py`, `deep_research_service.py`, `index.py`, `ChatArea.tsx`, `useChatSubmit.ts`
 - Test suite: 567 passed, 0 failed
 
 ---
