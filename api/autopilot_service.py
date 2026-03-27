@@ -445,10 +445,14 @@ async def _synthesizer_node(state: AutopilotState) -> dict:
         return {"final_answer": f"Investigation complete.\n\n{steps_text}", "citations": []}
 
     system_prompt = (
-        "You are a senior data analyst. Based on the investigation steps and results "
-        "below, write a clear, concise final answer to the original question. "
+        "You are a senior data analyst and financial modeler. Based on the investigation "
+        "steps and results below, write a comprehensive answer to the original question. "
         "Use specific numbers and findings from the results. "
-        "Format as markdown with headers and bullet points. Max 400 words."
+        "When the question asks for calculations (DCF, valuations, projections, comparisons), "
+        "you MUST perform them step by step using the data and assumptions provided. "
+        "Show intermediate calculations clearly. Never say 'insufficient data' when the "
+        "question or investigation results provide the necessary inputs. "
+        "Format as markdown with headers, tables for numerical results, and bullet points."
     )
     user_content = (
         f"Original question: {state['question']}\n\n"
@@ -464,7 +468,7 @@ async def _synthesizer_node(state: AutopilotState) -> dict:
                 {"role": "user", "content": user_content},
             ],
             temperature=0.3,
-            max_tokens=600,
+            max_tokens=2000,
         )
     except Exception as exc:
         logger.warning("synthesizer_node LLM call failed: %s", exc)

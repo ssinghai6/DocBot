@@ -353,10 +353,14 @@ export default function Home() {
 
   // Fall back to "docs" mode when the active mode's required source becomes unavailable
   useEffect(() => {
-    if (chatMode === "database" && !connectionId) {
+    if (connectionId && sessionId) {
+      // Both doc session and DB/CSV connection exist — promote to hybrid
+      if (chatMode !== "hybrid") setChatMode("hybrid");
+    } else if (chatMode === "database" && !connectionId) {
       setChatMode("docs");
     } else if (chatMode === "hybrid" && (!connectionId || !sessionId)) {
-      setChatMode("docs");
+      // Lost one source — fall back
+      setChatMode(connectionId ? "database" : "docs");
     }
   }, [connectionId, sessionId, chatMode]);
 

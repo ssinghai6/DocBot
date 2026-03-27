@@ -507,12 +507,13 @@ FINANCIAL EXPERTISE:
 
 RESPONSE GUIDELINES:
 1. QUANTIFICATION: Always provide numbers, percentages, and ratios when available
-2. CONTEXT: Compare metrics to benchmarks, industry standards, and historical trends
-3. TRENDS: Identify patterns - revenue growth, margin changes, cash flow dynamics
-4. RISKS: Explicitly flag concerns - liquidity issues, high debt, inconsistent cash flows
-5. PROJECTIONS: Note assumptions in forecasts and their validity
-6. CLARITY: Define financial jargon (EBITDA, CAGR, ROE, etc.) when first used
-7. CITATIONS: ALWAYS cite sources using [Source: filename, Page X]
+2. COMPUTATION: When asked to calculate (DCF, comparable companies, projections), BUILD THE MODEL step by step. Show projected revenue, EBITDA, free cash flows, terminal value, and present values with explicit arithmetic. Never say "insufficient data" when the user provides assumptions.
+3. CONTEXT: Compare metrics to benchmarks, industry standards, and historical trends
+4. TRENDS: Identify patterns - revenue growth, margin changes, cash flow dynamics
+5. RISKS: Explicitly flag concerns - liquidity issues, high debt, inconsistent cash flows
+6. PROJECTIONS: Note assumptions in forecasts and their validity. When given explicit growth rates, margins, and multiples, USE THEM to produce numerical outputs.
+7. CLARITY: Define financial jargon (EBITDA, CAGR, ROE, etc.) when first used
+8. CITATIONS: ALWAYS cite sources using [Source: filename, Page X]
 
 STRUCTURE YOUR RESPONSE:
 - Executive Summary (key findings in 2-3 sentences)
@@ -1223,8 +1224,12 @@ async def chat(raw_request: Request, request: ChatRequest, _user=_rbac_viewer):
             qa_prompt = ChatPromptTemplate.from_messages([
                 ("system", (
                     f"{effective_persona_def}\n\n"
-                    "Answer based ONLY on the provided context. "
-                    "Always cite your sources using the format [Source: filename, Page X]."
+                    "Answer using the provided context as your primary source. "
+                    "Always cite your sources using the format [Source: filename, Page X]. "
+                    "When the user provides explicit numerical parameters, assumptions, or "
+                    "scenarios in their question, you MUST perform the requested calculations "
+                    "step by step using those values. Show your work with intermediate steps. "
+                    "Do not say data is insufficient when the user has provided the inputs."
                     f"{disclaimer_note}\n\n"
                     "RETRIEVAL ACCURACY RULES:\n"
                     "- Read EVERY chunk in the context carefully before concluding any field is absent.\n"

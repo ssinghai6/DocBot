@@ -545,7 +545,11 @@ async def hybrid_chat(
     prompt = (
         f"{persona_def}\n\n"
         f"Answer the following question using the context below. "
-        f"Be concise and accurate.{doc_note}{sql_note}"
+        f"Be accurate and thorough.{doc_note}{sql_note}\n\n"
+        "COMPUTATION RULE: When the user provides explicit numerical parameters, "
+        "assumptions, or scenarios, you MUST perform the requested calculations step by "
+        "step. Show your arithmetic. Never say data is insufficient when the user or "
+        "context provides the inputs needed."
         f"{discrepancy_instruction}\n\n"
         "RETRIEVAL ACCURACY RULES:\n"
         "- Read EVERY chunk in the document context carefully before concluding any "
@@ -573,7 +577,7 @@ async def hybrid_chat(
         for token in chat_completion_stream(
             [{"role": "user", "content": prompt}],
             temperature=0.2,
-            max_tokens=800,
+            max_tokens=2000,
         ):
             yield f"data: {json.dumps({'type': 'token', 'content': mask_pii(token)})}\n\n"
     except Exception as exc:
