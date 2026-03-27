@@ -179,7 +179,7 @@ const mockMessages: MockMessage[] = [
 ]
 
 // ── Demo Video Component ─────────────────────────────────────────────────────
-const DEMO_VIDEO_URL: string = ""
+const DEMO_VIDEO_URL: string = "/docbot-demo.mp4"
 
 function DemoVideo() {
   const [isPlaying, setIsPlaying] = React.useState(false)
@@ -206,9 +206,11 @@ function DemoVideo() {
           ref={videoRef}
           src={DEMO_VIDEO_URL}
           className="w-full h-full object-cover"
+          autoPlay
           muted
           playsInline
           loop
+          onPlay={() => setIsPlaying(true)}
           onClick={() => {
             if (videoRef.current?.paused) {
               videoRef.current.play()

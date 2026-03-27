@@ -184,7 +184,7 @@ const mockMessages: MockMessage[] = [
 //   MP4:     "https://your-cdn.com/docbot-demo.mp4"
 //   YouTube: "https://www.youtube.com/embed/VIDEO_ID"
 //   Loom:    "https://www.loom.com/embed/VIDEO_ID"
-const DEMO_VIDEO_URL: string = ""
+const DEMO_VIDEO_URL: string = "/docbot-demo.mp4"
 
 function DemoVideo() {
   const [isPlaying, setIsPlaying] = React.useState(false)
@@ -213,9 +213,11 @@ function DemoVideo() {
           ref={videoRef}
           src={DEMO_VIDEO_URL}
           className="w-full h-full object-cover"
+          autoPlay
           muted
           playsInline
           loop
+          onPlay={() => setIsPlaying(true)}
           onClick={() => {
             if (videoRef.current?.paused) {
               videoRef.current.play()
