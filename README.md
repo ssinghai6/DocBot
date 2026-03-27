@@ -1,7 +1,7 @@
 # DocBot
 
 <p align="center">
-  <img src="https://img.shields.io/badge/License-MIT-green.svg" alt="License">
+  <img src="https://img.shields.io/badge/License-BSL_1.1-orange.svg" alt="License">
   <img src="https://img.shields.io/badge/Python-3.12+-blue.svg" alt="Python">
   <img src="https://img.shields.io/badge/Next.js-16+-black.svg" alt="Next.js">
   <img src="https://img.shields.io/badge/FastAPI-0.115+-teal.svg" alt="FastAPI">
@@ -842,12 +842,16 @@ DocBot depends on the following key open-source libraries. All dependencies use 
 | [cryptography](https://github.com/pyca/cryptography) | Apache 2.0 / BSD | Fernet credential encryption |
 | [SQLAlchemy](https://github.com/sqlalchemy/sqlalchemy) | MIT | Database ORM and connection management |
 
-No copyleft (GPL/LGPL/AGPL) dependencies are included. All licenses permit commercial use, modification, and redistribution.
+No copyleft (GPL/LGPL/AGPL) dependencies are included. All dependency licenses are permissive and compatible with the BSL 1.1 license used by DocBot.
 
 ---
 
 ## License
 
-MIT (c) [Sanshrit Singhai](https://github.com/ssinghai6)
+**Business Source License 1.1** (c) 2026 [Sanshrit Singhai](https://github.com/ssinghai6)
 
-> **Note**: A `LICENSE` file should be added to the repository root to formalize this declaration. Without a `LICENSE` file, the MIT claim in this README is informational but not legally binding.
+You can use, modify, and self-host DocBot freely — but you cannot offer it as a competing commercial AI document/database assistant service. On **2030-03-27** (or 4 years after each version's release), the code automatically converts to **Apache 2.0**.
+
+For commercial licensing inquiries, contact: singhai.sanshrit@gmail.com
+
+See [LICENSE](./LICENSE) for full terms.
