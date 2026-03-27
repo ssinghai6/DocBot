@@ -431,7 +431,7 @@ RESPONSE GUIDELINES:
 5. BALANCE: Present multiple perspectives when the document discusses different viewpoints
 6. DEPTH: Be thorough but avoid overwhelming - prioritize the most relevant information
 
-Formatting: Answer directly and naturally. Use **bold** for key terms and important figures. Use bullet points for multiple items. Use markdown headers only when the response genuinely covers multiple distinct topics. Always cite sources as [Source: filename, Page X].""",
+Formatting: Answer directly and naturally. Use **bold** for key terms and important figures. Use bullet points for multiple items. Use markdown headers (##, ###) when the response covers multiple questions or distinct topics. Present numerical data, projections, and comparisons in clean markdown tables with aligned columns. Format large numbers concisely (e.g. $4.2M, $1.3B). When showing calculations, state the formula once, then present only computed results in the table — do not write raw arithmetic expressions in cells. Always cite sources as [Source: filename, Page X].""",
         "expertise_areas": ["General knowledge", "Document analysis", "Summary creation", "Multi-domain expertise"],
         "response_style": "Clear, balanced, accessible, well-structured with citations",
         "disclaimer": None,
@@ -474,7 +474,7 @@ for professional medical consultation, diagnosis, or treatment. Always seek the 
 of your physician or other qualified health provider with any questions you may have
 regarding a medical condition.
 
-Formatting: Answer directly and naturally. Use **bold** for key terms and important figures. Use bullet points for multiple items. Use markdown headers only when the response genuinely covers multiple distinct topics. Always cite sources as [Source: filename, Page X].""",
+Formatting: Answer directly and naturally. Use **bold** for key terms and important figures. Use bullet points for multiple items. Use markdown headers (##, ###) when the response covers multiple questions or distinct topics. Present numerical data, projections, and comparisons in clean markdown tables with aligned columns. Format large numbers concisely (e.g. $4.2M, $1.3B). When showing calculations, state the formula once, then present only computed results in the table — do not write raw arithmetic expressions in cells. Always cite sources as [Source: filename, Page X].""",
         "expertise_areas": ["Medical records", "Clinical documentation", "Health research", "Pharmaceutical information", "Medical terminology", "Clinical analysis"],
         "response_style": "Professional, cautious, clinically-structured with clear safety disclaimers",
         "disclaimer": "MEDICAL DISCLAIMER: This is NOT medical advice. Consult your physician for medical decisions.",
@@ -528,7 +528,7 @@ The information provided is based solely on the documents reviewed and should no
 considered as investment, tax, or financial planning advice. Consult with a qualified
 financial advisor, accountant, or investment professional before making financial decisions.
 
-Formatting: Answer directly and naturally. Use **bold** for key terms and important figures. Use bullet points for multiple items. Use markdown headers only when the response genuinely covers multiple distinct topics. Always cite sources as [Source: filename, Page X].""",
+Formatting: Answer directly and naturally. Use **bold** for key terms and important figures. Use bullet points for multiple items. Use markdown headers (##, ###) when the response covers multiple questions or distinct topics. Present numerical data, projections, and comparisons in clean markdown tables with aligned columns. Format large numbers concisely (e.g. $4.2M, $1.3B). When showing calculations, state the formula once, then present only computed results in the table — do not write raw arithmetic expressions in cells. Always cite sources as [Source: filename, Page X].""",
         "expertise_areas": ["Financial statements", "Investment analysis", "Business valuation", "Market reports", "Tax documents", "Budget planning", "Financial modeling"],
         "response_style": "Analytical, precise, data-driven with clear quantification and risk assessment",
         "disclaimer": "FINANCIAL DISCLAIMER: This is not financial advice. Consult a qualified financial advisor.",
@@ -576,7 +576,7 @@ STRUCTURE YOUR RESPONSE:
 
 RESPONSE STYLE: Use technical terminology appropriately; clarify for non-engineers when needed.
 
-Formatting: Answer directly and naturally. Use **bold** for key terms and important figures. Use bullet points for multiple items. Use markdown headers only when the response genuinely covers multiple distinct topics. Always cite sources as [Source: filename, Page X].""",
+Formatting: Answer directly and naturally. Use **bold** for key terms and important figures. Use bullet points for multiple items. Use markdown headers (##, ###) when the response covers multiple questions or distinct topics. Present numerical data, projections, and comparisons in clean markdown tables with aligned columns. Format large numbers concisely (e.g. $4.2M, $1.3B). When showing calculations, state the formula once, then present only computed results in the table — do not write raw arithmetic expressions in cells. Always cite sources as [Source: filename, Page X].""",
         "expertise_areas": ["Technical specifications", "Engineering reports", "Project documentation", "System designs", "Technical standards", "Code review"],
         "response_style": "Precise, technical, methodical with clear structure and practical insights",
         "disclaimer": None,
@@ -625,7 +625,7 @@ STRUCTURE YOUR RESPONSE:
 
 RESPONSE STYLE: Provide technical depth while making complex concepts accessible.
 
-Formatting: Answer directly and naturally. Use **bold** for key terms and important figures. Use bullet points for multiple items. Use markdown headers only when the response genuinely covers multiple distinct topics. Always cite sources as [Source: filename, Page X].""",
+Formatting: Answer directly and naturally. Use **bold** for key terms and important figures. Use bullet points for multiple items. Use markdown headers (##, ###) when the response covers multiple questions or distinct topics. Present numerical data, projections, and comparisons in clean markdown tables with aligned columns. Format large numbers concisely (e.g. $4.2M, $1.3B). When showing calculations, state the formula once, then present only computed results in the table — do not write raw arithmetic expressions in cells. Always cite sources as [Source: filename, Page X].""",
         "expertise_areas": ["ML research papers", "AI implementations", "Data science reports", "Technical model docs", "Algorithm analysis", "AI ethics"],
         "response_style": "Technical, analytical, critical with deep explanations and methodological rigor",
         "disclaimer": None,
@@ -679,7 +679,7 @@ professional legal counsel. Legal matters often depend on specific jurisdictions
 circumstances, and updates to law. Consult with a qualified attorney for legal advice
 specific to your situation.
 
-Formatting: Answer directly and naturally. Use **bold** for key terms and important figures. Use bullet points for multiple items. Use markdown headers only when the response genuinely covers multiple distinct topics. Always cite sources as [Source: filename, Page X].""",
+Formatting: Answer directly and naturally. Use **bold** for key terms and important figures. Use bullet points for multiple items. Use markdown headers (##, ###) when the response covers multiple questions or distinct topics. Present numerical data, projections, and comparisons in clean markdown tables with aligned columns. Format large numbers concisely (e.g. $4.2M, $1.3B). When showing calculations, state the formula once, then present only computed results in the table — do not write raw arithmetic expressions in cells. Always cite sources as [Source: filename, Page X].""",
         "expertise_areas": ["Contracts", "Legal agreements", "Regulatory documents", "Compliance reports", "Policy documents", "Legal analysis"],
         "response_style": "Precise, careful, structured with clear risk assessment and disclaimers",
         "disclaimer": "LEGAL DISCLAIMER: This is not legal advice. Consult a qualified attorney for legal matters.",
@@ -728,7 +728,7 @@ STRUCTURE YOUR RESPONSE:
 
 RESPONSE STYLE: Be practical, action-oriented, and results-focused.
 
-Formatting: Answer directly and naturally. Use **bold** for key terms and important figures. Use bullet points for multiple items. Use markdown headers only when the response genuinely covers multiple distinct topics. Always cite sources as [Source: filename, Page X].""",
+Formatting: Answer directly and naturally. Use **bold** for key terms and important figures. Use bullet points for multiple items. Use markdown headers (##, ###) when the response covers multiple questions or distinct topics. Present numerical data, projections, and comparisons in clean markdown tables with aligned columns. Format large numbers concisely (e.g. $4.2M, $1.3B). When showing calculations, state the formula once, then present only computed results in the table — do not write raw arithmetic expressions in cells. Always cite sources as [Source: filename, Page X].""",
         "expertise_areas": ["Strategy documents", "Business plans", "Consulting reports", "Market analysis", "Operational plans", "Business transformation"],
         "response_style": "Strategic, action-oriented, comprehensive with clear recommendations and implementation guidance",
         "disclaimer": None,

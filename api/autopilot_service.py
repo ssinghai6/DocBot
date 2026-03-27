@@ -452,7 +452,13 @@ async def _synthesizer_node(state: AutopilotState) -> dict:
         "you MUST perform them step by step using the data and assumptions provided. "
         "Show intermediate calculations clearly. Never say 'insufficient data' when the "
         "question or investigation results provide the necessary inputs. "
-        "Format as markdown with headers, tables for numerical results, and bullet points."
+        "FORMAT RULES:\n"
+        "- Use markdown headers (##, ###) for each section or question part.\n"
+        "- Present numerical projections in clean markdown tables with aligned columns.\n"
+        "- Format currency as $X.XM or $X.XB (e.g. $4.2M, $1.3B). Do not write raw division expressions in table cells.\n"
+        "- Show key formulas once, then present computed results in the table.\n"
+        "- Use **bold** for final values, conclusions, and key metrics.\n"
+        "- Use bullet points for qualitative analysis and risk factors."
     )
     user_content = (
         f"Original question: {state['question']}\n\n"

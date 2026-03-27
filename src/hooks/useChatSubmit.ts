@@ -103,7 +103,7 @@ export function useChatSubmit(params: UseChatSubmitParams) {
 
     // ── Smart autopilot auto-trigger ────────────────────────────────────────
     // Auto-enable autopilot for analytical questions when a data source is loaded
-    const AUTOPILOT_TRIGGER = /\b(predict|forecast|trend|seasonalit|correlat|regress|cluster|anomal|outli|compar|analys|analy[sz]|investigat|diagnos|root.?cause|deep.?dive|break.?down|distribut|what.?if|simulat|project|model|classif)\b/i;
+    const AUTOPILOT_TRIGGER = /\b(predict|forecast|trend|seasonal|correlat|regress|cluster|anomal|outli|compar|analy[sz]|investigat|diagnos|root.?cause|deep.?dive|break.?down|distribut|what.?if|simulat|project|model|classif|calculat|valu(?:e|ation)|discount|dcf|scenario|estimat|assess)/i;
     let useAutopilot = autopilotMode;
     if (!useAutopilot && (connectionId || sessionId) && AUTOPILOT_TRIGGER.test(input)) {
       useAutopilot = true;
