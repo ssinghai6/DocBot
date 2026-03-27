@@ -2077,7 +2077,13 @@ These risks should be tracked as Linear "issues" with label `risk` and priority 
 | EPIC-10 (Remaining) | DOCBOT-1004 (accuracy run) | 5 pts | 🔄 Code Complete |
 | **Delivered total** | **38 stories + post-ship fixes + connectors + RAG** | **~300 pts** | ✅ |
 
-Note: Remaining work: DOCBOT-1004 (accuracy run — needs live API keys), human testing (85-test regression on prod). All code tasks complete. 566 tests passing.
+Note: Remaining work: DOCBOT-1004 (accuracy run — needs live API keys), human testing (85-test regression on prod). All code tasks complete. 591 tests passing.
+
+### Post-Sprint Additions (2026-03-26)
+- Marketplace connector frontend UI (`MarketplacePanel.tsx`) — register/sync/disconnect flows
+- CSV chart generation bug fixed — narrowed "skip chart" prompt, auto-histogram fallback, `_format_stdout_as_markdown()`
+- Universal Autopilot — works with PDF + CSV + SQL (not just SQL-only), dynamic planner tools
+- HTTP 401 auth bug fixed — RBAC decoupled from SAML config, new `AUTH_REQUIRED` env var (default off for demo)
 
 ---
 

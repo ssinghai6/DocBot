@@ -79,6 +79,7 @@ export default function Home() {
   const [connectionId, setConnectionId] = useState<string | null>(null);
   const [dbUploadState, setDbUploadState] = useState<"idle" | "uploading" | "connected" | "error">("idle");
   const [dbFileName, setDbFileName] = useState<string | null>(null);
+  const [isCsvConnection, setIsCsvConnection] = useState(false);
 
   // Live DB connection form state
   const [showLiveDbForm, setShowLiveDbForm] = useState(false);
@@ -203,6 +204,7 @@ export default function Home() {
     setConnectionId,
     setDbUploadState,
     setDbFileName,
+    setIsCsvConnection,
     setShowLiveDbForm,
     setLiveDbConnectState,
     setLiveDbError,
@@ -243,6 +245,7 @@ export default function Home() {
     isAutoMode,
     chatMode,
     autopilotMode,
+    isCsvConnection,
     chartType,
     deepResearch,
     messages,

@@ -1,7 +1,7 @@
 # Investor Demo Sprint Board
 
 **Sprint Goal:** Demo-stable by end of sprint
-**Total Effort:** ~6-8 days | **Done:** 5 | **In Progress:** 0 | **Backlog:** 2
+**Total Effort:** ~6-8 days | **Done:** 9 | **In Progress:** 0 | **Backlog:** 2
 
 ## Dependency Graph
 
@@ -163,6 +163,19 @@ Tasks #1-#6 are independent and parallelizable. Task #7 is the gate — depends 
 
 ---
 
+## Additional Work (Post-Sprint, 2026-03-26)
+
+| Item | Status | Key Deliverable |
+|------|--------|-----------------|
+| Marketplace Connector UI | DONE | `MarketplacePanel.tsx` — register/sync/disconnect connectors, Zod schemas, 4 handlers in `useChatHandlers.ts` |
+| CSV Chart Bug Fix | DONE | Narrowed "skip chart" prompt, improved fallback with auto-histogram, `_format_stdout_as_markdown()` helper, 11 tests |
+| Universal Autopilot | DONE | Autopilot works with PDF + CSV + SQL (not just SQL), dynamic planner tools, `_select_tool()` with data source flags, 10 tests |
+| HTTP 401 Auth Fix | DONE | Decoupled RBAC enforcement from SAML config — new `AUTH_REQUIRED` env var (default off for demo), 4 tests |
+
+**591 total tests passing, 0 failures**
+
+---
+
 ## Sprint Status Summary
 
 | Task | Status | Priority | Notes |
@@ -174,6 +187,10 @@ Tasks #1-#6 are independent and parallelizable. Task #7 is the gate — depends 
 | TASK-05 Commerce Schema | DONE | P2 | 2 tables, RLS, 31 tests, 3 API routes |
 | TASK-06 page.tsx Refactor | DONE | P2 | 2426→512 lines (79% reduction) |
 | TASK-07 Regression | BACKLOG | P0 gate | Depends on #1-#6 |
+| Marketplace UI | DONE | P2 | Frontend for connector management |
+| CSV Chart Fix | DONE | P1 | Charts now generated for forecast queries |
+| Universal Autopilot | DONE | P1 | PDF+CSV+SQL, not just SQL-only |
+| Auth 401 Fix | DONE | P0 | `AUTH_REQUIRED` env var, demo-safe default |
 
 ## Risk Register
 
@@ -185,6 +202,8 @@ Tasks #1-#6 are independent and parallelizable. Task #7 is the gate — depends 
 | page.tsx merge conflicts | Low | RESOLVED — refactor complete (512 lines) |
 | FinanceBench accuracy < 70% | Medium | OPEN — not yet run |
 | Commerce schema slips | Low | RESOLVED — commerce_service.py shipped with 31 tests |
+| HTTP 401 blocking all chat | Critical | RESOLVED — RBAC decoupled from SAML config |
+| Autopilot limited to SQL-only | Medium | RESOLVED — universal autopilot shipped |
 
 ## Exit Criteria (Demo-Ready)
 
@@ -192,5 +211,9 @@ Tasks #1-#6 are independent and parallelizable. Task #7 is the gate — depends 
 2. ~~`/` shows investor landing page with CTA to `/chat`~~ DONE
 3. ~~PII masking applied to all response paths~~ DONE
 4. ~~page.tsx under 800 lines (code quality signal)~~ DONE (512 lines)
-5. FinanceBench accuracy documented — BACKLOG
-6. 85-test regression passes on prod — BACKLOG
+5. ~~Marketplace connector has frontend UI~~ DONE
+6. ~~CSV queries generate charts + formatted output~~ DONE
+7. ~~Autopilot works with all data sources~~ DONE
+8. ~~HTTP 401 auth bug fixed~~ DONE
+9. FinanceBench accuracy documented — BACKLOG
+10. 85-test regression passes on prod — BACKLOG

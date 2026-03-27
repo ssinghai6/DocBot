@@ -17,6 +17,7 @@ interface UseChatSubmitParams {
   isAutoMode: boolean
   chatMode: "docs" | "database" | "hybrid"
   autopilotMode: boolean
+  isCsvConnection: boolean
   chartType: string
   deepResearch: boolean
   messages: Message[]
@@ -44,6 +45,7 @@ export function useChatSubmit(params: UseChatSubmitParams) {
     isAutoMode,
     chatMode,
     autopilotMode,
+    isCsvConnection,
     chartType,
     deepResearch,
     messages,
@@ -92,8 +94,16 @@ export function useChatSubmit(params: UseChatSubmitParams) {
       setChatMode(effectiveChatMode);
     }
 
+    // ── Smart autopilot auto-trigger ────────────────────────────────────────
+    // Auto-enable autopilot for analytical questions when a data source is loaded
+    const AUTOPILOT_TRIGGER = /\b(predict|forecast|trend|seasonalit|correlat|regress|cluster|anomal|outli|compar|analys|analy[sz]|investigat|diagnos|root.?cause|deep.?dive|break.?down|distribut|what.?if|simulat|project|model|classif)\b/i;
+    let useAutopilot = autopilotMode;
+    if (!useAutopilot && (connectionId || sessionId) && AUTOPILOT_TRIGGER.test(input)) {
+      useAutopilot = true;
+    }
+
     // ── Autopilot path ─────────────────────────────────────────────────────
-    if (autopilotMode && (connectionId || sessionId)) {
+    if (useAutopilot && (connectionId || sessionId)) {
       setAutopilotRunning(true);
       setAutopilotSteps([]);
       setAutopilotPlan([]);
@@ -109,6 +119,7 @@ export function useChatSubmit(params: UseChatSubmitParams) {
             session_id: sessionId ?? "anonymous",
             has_docs: !!sessionId,
             has_db: !!connectionId,
+            has_csv: isCsvConnection,
           }),
         });
         if (!response.ok || !response.body) {

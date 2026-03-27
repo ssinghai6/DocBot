@@ -45,6 +45,7 @@ interface UseChatHandlersParams {
   setConnectionId: React.Dispatch<React.SetStateAction<string | null>>
   setDbUploadState: React.Dispatch<React.SetStateAction<"idle" | "uploading" | "connected" | "error">>
   setDbFileName: React.Dispatch<React.SetStateAction<string | null>>
+  setIsCsvConnection: React.Dispatch<React.SetStateAction<boolean>>
   setShowLiveDbForm: React.Dispatch<React.SetStateAction<boolean>>
   setLiveDbConnectState: React.Dispatch<React.SetStateAction<"idle" | "connecting" | "error">>
   setLiveDbError: React.Dispatch<React.SetStateAction<string | null>>
@@ -102,6 +103,7 @@ export function useChatHandlers(params: UseChatHandlersParams) {
     setConnectionId,
     setDbUploadState,
     setDbFileName,
+    setIsCsvConnection,
     setShowLiveDbForm,
     setLiveDbConnectState,
     setLiveDbError,
@@ -155,6 +157,7 @@ export function useChatHandlers(params: UseChatHandlersParams) {
     setIsDbConnected(false);
     setConnectionId(null);
     setDbFileName(null);
+    setIsCsvConnection(false);
     setDbUploadState("idle");
     setChatMode("docs");
     setSelectedPersona(prev => (prev === "Data Analyst" ? "Generalist" : prev));
@@ -182,6 +185,7 @@ export function useChatHandlers(params: UseChatHandlersParams) {
       }
       const data = await response.json();
       setDbFileName(file.name);
+      setIsCsvConnection(type === "csv");
       setDbUploadState("connected");
       handleDbConnected(data.connection_id);
       showToast("success", `Connected: ${file.name}`);
@@ -231,6 +235,7 @@ export function useChatHandlers(params: UseChatHandlersParams) {
       }
       const data = await response.json();
       setDbFileName(`${liveDbForm.dialect}://${liveDbForm.host}/${liveDbForm.dbname}`);
+      setIsCsvConnection(false);
       setDbUploadState("connected");
       setShowLiveDbForm(false);
       setLiveDbConnectState("idle");

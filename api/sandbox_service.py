@@ -572,8 +572,8 @@ async def generate_csv_analysis_code(
 
     system_prompt += (
         "YOUR CODE RULES:\n"
-        "1. Do NOT import pandas or call pd.read_csv — already handled\n"
-        "2. Import json, matplotlib.pyplot as plt, seaborn as sns only if needed\n"
+        "1. Do NOT import pandas, numpy, or json — already imported in preamble\n"
+        "2. Import matplotlib.pyplot as plt, seaborn as sns if needed for charts\n"
         "3. Output ONLY raw Python code — no markdown fences, no explanations\n"
         "4. ALWAYS .dropna() or .fillna(0) before boolean masks or aggregation\n\n"
         "DATA CLEANING PATTERNS (use as needed):\n"
@@ -733,26 +733,83 @@ async def _run_csv_in_sandbox(code: str, csv_path: str, csv_bytes: bytes) -> San
 
 
 def _format_stdout_as_markdown(text: str) -> str:
-    """Best-effort formatting of pandas stdout output for markdown rendering."""
+    """Best-effort formatting of pandas stdout output for markdown rendering.
+
+    Handles:
+    - Markdown pipe tables (pass-through)
+    - Section headers (--- Something ---)
+    - Raw pandas .to_string() / .describe() output → wrapped in code blocks
+    - CHART_META: lines (strip from visible output)
+    """
     if not text:
         return text
 
-    lines = text.split('\n')
+    # Strip CHART_META lines — they're machine-readable, not for humans
+    lines = [l for l in text.split('\n') if not l.strip().startswith('CHART_META:')]
+
     result_lines = []
+    in_raw_table = False
+    raw_table_lines: list[str] = []
+
+    def _flush_raw_table():
+        """Convert accumulated raw table lines to a code block."""
+        nonlocal raw_table_lines
+        if raw_table_lines:
+            result_lines.append('\n```')
+            result_lines.extend(raw_table_lines)
+            result_lines.append('```\n')
+            raw_table_lines = []
+
+    def _looks_like_raw_table(line: str) -> bool:
+        """Detect pandas .to_string() output: multiple whitespace-separated columns."""
+        stripped = line.strip()
+        if not stripped:
+            return False
+        # Lines with 3+ whitespace-separated tokens and at least 2 multi-space gaps
+        parts = stripped.split()
+        gaps = len([1 for i in range(len(stripped) - 1) if stripped[i:i+2] == '  '])
+        return len(parts) >= 3 and gaps >= 2
 
     for line in lines:
         # Already markdown formatted (has pipes) — keep as-is
-        if '|' in line:
+        if '|' in line and not in_raw_table:
+            _flush_raw_table()
             result_lines.append(line)
             continue
+
         # Section headers (--- Something ---) — convert to bold
         if line.strip().startswith('---') and line.strip().endswith('---'):
+            _flush_raw_table()
             header = line.strip().strip('-').strip()
             if header:
                 result_lines.append(f'\n**{header}**\n')
                 continue
+
+        # Bold section headers like **Summary Statistics**
+        if line.strip().startswith('**') and line.strip().endswith('**'):
+            _flush_raw_table()
+            result_lines.append(line)
+            in_raw_table = False
+            continue
+
+        # Detect raw table output (pandas .to_string())
+        if _looks_like_raw_table(line):
+            in_raw_table = True
+            raw_table_lines.append(line)
+            continue
+
+        # Non-table line
+        if in_raw_table:
+            # Blank line might be separator between tables
+            if not line.strip():
+                raw_table_lines.append(line)
+                continue
+            _flush_raw_table()
+            in_raw_table = False
+
         result_lines.append(line)
 
+    _flush_raw_table()
     return '\n'.join(result_lines)
 
 
@@ -829,36 +886,50 @@ async def run_csv_query_on_e2b(
             + "import matplotlib\n"
             "matplotlib.use('Agg')\n"
             "import matplotlib.pyplot as plt\n"
-            "import json\n"
             "\n"
             "print('**Dataset Overview**')\n"
             "print(f'Shape: {df.shape[0]} rows x {df.shape[1]} columns')\n"
+            "print(f'Columns: {\", \".join(df.columns.tolist())}')\n"
             "print()\n"
-            "print('**Summary Statistics**')\n"
-            "try:\n"
-            "    print(df.describe(include='all').to_markdown())\n"
-            "except Exception:\n"
-            "    print(df.describe(include='all').to_string())\n"
-            "print()\n"
-            "print('**First 10 Rows**')\n"
-            "try:\n"
-            "    print(df.head(10).to_markdown())\n"
-            "except Exception:\n"
-            "    print(df.head(10).to_string())\n"
-            "\n"
-            "# Auto-chart: histogram of first numeric column\n"
             "numeric_cols = df.select_dtypes(include='number').columns.tolist()\n"
+            "date_cols = [c for c in df.columns if 'date' in c.lower() or 'time' in c.lower()]\n"
+            "print(f'Numeric columns: {\", \".join(numeric_cols) if numeric_cols else \"None\"}')\n"
+            "print(f'Date columns: {\", \".join(date_cols) if date_cols else \"None\"}')\n"
+            "print()\n"
+            "if numeric_cols:\n"
+            "    print('**Summary Statistics**')\n"
+            "    try:\n"
+            "        print(df[numeric_cols].describe().to_markdown())\n"
+            "    except Exception:\n"
+            "        print(df[numeric_cols].describe().to_string())\n"
+            "    print()\n"
+            "print('**Sample Data (first 5 rows)**')\n"
+            "try:\n"
+            "    print(df.head(5).to_markdown(index=False))\n"
+            "except Exception:\n"
+            "    print(df.head(5).to_string(index=False))\n"
+            "\n"
+            "# Auto-chart: line plot for time series, histogram otherwise\n"
             "if numeric_cols:\n"
             "    col = numeric_cols[0]\n"
             "    fig, ax = plt.subplots(figsize=(10, 6))\n"
-            "    df[col].dropna().hist(bins=30, ax=ax, color='#667eea', edgecolor='white')\n"
-            "    ax.set_title(f'Distribution of {col}', fontsize=14)\n"
-            "    ax.set_xlabel(col)\n"
-            "    ax.set_ylabel('Frequency')\n"
+            "    if date_cols:\n"
+            "        _dates = pd.to_datetime(df[date_cols[0]], errors='coerce')\n"
+            "        ax.plot(_dates, df[col], color='#667eea', linewidth=1.5)\n"
+            "        ax.set_title(f'{col} over time', fontsize=14)\n"
+            "        ax.set_xlabel(date_cols[0])\n"
+            "        fig.autofmt_xdate()\n"
+            "    else:\n"
+            "        df[col].dropna().hist(bins=30, ax=ax, color='#667eea', edgecolor='white')\n"
+            "        ax.set_title(f'Distribution of {col}', fontsize=14)\n"
+            "        ax.set_xlabel(col)\n"
+            "    ax.set_ylabel(col)\n"
             "    plt.tight_layout()\n"
             "    plt.show()\n"
-            "    print('CHART_META:' + json.dumps({'type': 'histogram', 'title': f'Distribution of {col}', "
-            "'x_label': col, 'y_label': 'Frequency', 'series_count': 1}))\n"
+            "    _chart_type = 'line' if date_cols else 'histogram'\n"
+            "    _chart_title = f'{col} over time' if date_cols else f'Distribution of {col}'\n"
+            "    print('CHART_META:' + json.dumps({'type': _chart_type, 'title': _chart_title, "
+            "'x_label': date_cols[0] if date_cols else col, 'y_label': col, 'series_count': 1}))\n"
         )
     else:
         # Prepend preamble to LLM-generated code, stripping any duplicate

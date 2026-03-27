@@ -2159,6 +2159,7 @@ class AutopilotRequest(BaseModel):
     persona: str = "Generalist"
     has_docs: bool = False
     has_db: bool = False
+    has_csv: bool = False
 
 
 @app.post("/api/autopilot/run")
@@ -2208,6 +2209,7 @@ async def autopilot_run(raw_request: Request, request: AutopilotRequest, _user=_
                 vector_stores=VECTOR_STORES,
                 has_docs=request.has_docs,
                 has_db=request.has_db,
+                has_csv=request.has_csv,
             ):
                 yield chunk
         except Exception as exc:

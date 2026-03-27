@@ -62,6 +62,7 @@ class AutopilotState(TypedDict):
     # data-source availability flags
     has_docs: bool
     has_db: bool
+    has_csv: bool
 
 
 # ---------------------------------------------------------------------------
@@ -166,11 +167,14 @@ async def _planner_node(state: AutopilotState) -> dict:
 # ---------------------------------------------------------------------------
 
 
-def _select_tool(step: str, has_db: bool = True, has_docs: bool = False) -> str:
+def _select_tool(step: str, has_db: bool = True, has_docs: bool = False, has_csv: bool = False) -> str:
     """Choose sql_query | doc_search | python_analysis based on step wording.
 
     Data-fetch verbs (query/fetch/get/retrieve/select/find) always win over
     visualisation keywords so "Fetch data for heatmap" stays sql_query.
+
+    When ``has_csv`` is True, CSV data is analysed via pandas in E2B sandbox,
+    so data-fetch steps route to ``"python_analysis"`` instead of ``"sql_query"``.
 
     When ``has_db`` is False the function never returns ``"sql_query"`` —
     data-fetch verbs fall back to ``"doc_search"`` (if docs available) or
@@ -182,12 +186,17 @@ def _select_tool(step: str, has_db: bool = True, has_docs: bool = False) -> str:
                   "compute ", "count ", "sum ", "aggregate ", "identify ")
     PYTHON_KEYWORDS = ("chart", "plot", "visuali", "correlat", "distribut",
                        "python", "scatter", "heatmap", "regression", "generate a ",
-                       "create a ", "draw ")
+                       "create a ", "draw ", "predict", "forecast", "model", "seasonal",
+                       "trend", "time series", "anomal", "cluster")
     DOC_KEYWORDS = ("document", "report", "pdf", "file", "upload",
                     "manual", "policy", "contract", "according to")
 
     has_chart = any(k in s for k in PYTHON_KEYWORDS)
     has_fetch = any(s.startswith(k) or f" {k}" in s for k in DATA_FETCH)
+
+    # CSV connections always use python_analysis (pandas sandbox), never sql_query
+    if has_csv and not any(k in s for k in DOC_KEYWORDS):
+        return "python_analysis"
 
     if has_chart and not has_fetch:
         return "python_analysis"
@@ -196,13 +205,17 @@ def _select_tool(step: str, has_db: bool = True, has_docs: bool = False) -> str:
 
     # Data-fetch step — route to sql_query if DB available, else doc_search or python
     if has_fetch or not has_chart:
-        if has_db:
+        if has_db and not has_csv:
             return "sql_query"
+        if has_csv:
+            return "python_analysis"
         if has_docs:
             return "doc_search"
         return "python_analysis"
 
-    return "sql_query" if has_db else ("doc_search" if has_docs else "python_analysis")
+    if has_db and not has_csv:
+        return "sql_query"
+    return "doc_search" if has_docs else "python_analysis"
 
 
 # ---------------------------------------------------------------------------
@@ -236,6 +249,7 @@ def make_executor_node(
             step,
             has_db=state.get("has_db", True),
             has_docs=state.get("has_docs", False),
+            has_csv=state.get("has_csv", False),
         )
         session_id = state["session_id"]
         connection_id = state["connection_id"]
@@ -493,6 +507,7 @@ async def run_autopilot(
     vector_stores: dict,
     has_docs: bool = False,
     has_db: bool = False,
+    has_csv: bool = False,
 ) -> AsyncGenerator[str, None]:
     """Run the Autopilot investigation and yield SSE-formatted strings.
 
@@ -532,6 +547,7 @@ async def run_autopilot(
         "timed_out": False,
         "has_docs": has_docs,
         "has_db": has_db,
+        "has_csv": has_csv,
     }
 
     step_num = 0

@@ -102,6 +102,7 @@ Next.js proxies `/api/*` to `localhost:8000` in development.
 | `GEMINI_API_KEY` | Yes | Gemini 2.5 Flash for LangExtract financial extraction |
 | `ALLOWED_ORIGINS` | No | Comma-separated CORS origins, defaults to localhost:3000 |
 | `SESSION_TTL_HOURS` | No | Session cookie TTL in hours, default 8 |
+| `AUTH_REQUIRED` | No | Set to `true` to enforce RBAC login on all protected routes. Default off (open/demo mode) |
 | `SAML_SP_ENTITY_ID` | SSO | SP entity ID for SAML 2.0 |
 | `SAML_SP_ACS_URL` | SSO | SP Assertion Consumer Service URL |
 | `SAML_IDP_ENTITY_ID` | SSO | IdP entity ID (from IdP metadata) |
@@ -157,8 +158,12 @@ All work is tracked in `project-tasks/docbot-v2-project-tracking.md`.
   - PII masking applied to all SSE, sandbox, audit response paths
   - Frontend refactored: page.tsx 2426 → 512 lines (Sidebar, ChatArea, useChatHandlers, useChatSubmit)
   - E2B sandbox: ML package pre-install + auto-retry on ModuleNotFoundError
+  - Marketplace connector frontend UI (`MarketplacePanel.tsx` — register/sync/disconnect)
+  - CSV chart bug fixed (narrowed "skip chart" prompt, improved fallback, `_format_stdout_as_markdown()`)
+  - Universal Autopilot — works with PDF + CSV + SQL (dynamic planner tools, `_select_tool()` flags)
+  - Auth 401 fix — RBAC decoupled from SAML config, new `AUTH_REQUIRED` env var (default off)
   - Remaining: FinanceBench accuracy run (needs live keys), 85-test manual regression on prod
-- **566 tests passing, 0 failures**
+- **591 tests passing, 0 failures**
 
 > **PageIndex evaluated 2026-03-25 — not integrating.** Hard blockers: OpenAI-only (Groq incompatible), not on PyPI (Railway brittleness), no streaming (SSE conflict). Revisit if PyPI package + multi-backend support ships.
 

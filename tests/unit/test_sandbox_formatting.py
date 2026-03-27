@@ -60,6 +60,39 @@ class TestFormatStdoutAsMarkdown:
         # Empty header stripped — line stays as-is
         assert result == "------"
 
+    def test_raw_pandas_output_wrapped_in_code_block(self):
+        """Raw pandas .to_string() output should be wrapped in code blocks."""
+        text = (
+            "**Summary Statistics**\n"
+            "              count         mean          std\n"
+            "price           675    39.804040    30.611456\n"
+            "volume          675  1234.567890   567.123456"
+        )
+        result = _format_stdout_as_markdown(text)
+        assert "```" in result
+        assert "**Summary Statistics**" in result
+
+    def test_strips_chart_meta_lines(self):
+        """CHART_META: lines should be removed from output."""
+        text = "Some analysis result\nCHART_META:{\"type\": \"line\"}\nMore text"
+        result = _format_stdout_as_markdown(text)
+        assert "CHART_META" not in result
+        assert "Some analysis result" in result
+        assert "More text" in result
+
+    def test_bold_headers_preserved(self):
+        """**Bold Headers** should pass through and break raw table accumulation."""
+        text = (
+            "**Dataset Overview**\n"
+            "Shape: 675 rows x 2 columns\n"
+            "**Summary Statistics**\n"
+            "              count         mean\n"
+            "price           675    39.804040"
+        )
+        result = _format_stdout_as_markdown(text)
+        assert "**Dataset Overview**" in result
+        assert "**Summary Statistics**" in result
+
 
 class TestCsvPromptChanges:
     """Verify the CSV code-gen prompt no longer has the overly broad skip-chart instruction."""
@@ -85,18 +118,25 @@ class TestCsvPromptChanges:
         assert "Do NOT print raw DataFrame output" in source
         assert "to_markdown()" in source
 
+    def test_prompt_says_json_already_imported(self):
+        """Prompt should tell LLM that json is already imported in preamble."""
+        import inspect
+        from api.sandbox_service import generate_csv_analysis_code
+
+        source = inspect.getsource(generate_csv_analysis_code)
+        assert "already imported in preamble" in source
+
 
 class TestFallbackCodeImprovements:
     """Verify fallback code includes chart generation and markdown formatting."""
 
     def test_fallback_includes_chart(self):
-        """Fallback code should include plt.show() for histogram generation."""
+        """Fallback code should include plt.show() for chart generation."""
         import inspect
         from api.sandbox_service import run_csv_query_on_e2b
 
         source = inspect.getsource(run_csv_query_on_e2b)
         assert "plt.show()" in source
-        assert "histogram" in source.lower()
 
     def test_fallback_uses_to_markdown(self):
         """Fallback code should use to_markdown() instead of to_string()."""
@@ -105,3 +145,48 @@ class TestFallbackCodeImprovements:
 
         source = inspect.getsource(run_csv_query_on_e2b)
         assert "to_markdown()" in source
+
+    def test_fallback_uses_numeric_only_describe(self):
+        """Fallback describe should use numeric columns only to avoid NaN."""
+        import inspect
+        from api.sandbox_service import run_csv_query_on_e2b
+
+        source = inspect.getsource(run_csv_query_on_e2b)
+        assert "numeric_cols" in source
+        assert "df[numeric_cols].describe()" in source
+
+    def test_fallback_detects_time_series(self):
+        """Fallback should detect date columns and use line plot instead of histogram."""
+        import inspect
+        from api.sandbox_service import run_csv_query_on_e2b
+
+        source = inspect.getsource(run_csv_query_on_e2b)
+        assert "date_cols" in source
+        assert "'line'" in source
+
+
+class TestPreambleIncludesJson:
+    """Verify CSV preamble includes import json."""
+
+    def test_single_section_preamble_has_json(self):
+        from api.utils.csv_preprocessor import CSVSection, generate_section_preamble
+
+        sections = [CSVSection(
+            index=0, name="main", title_row_idx=0, header_row_idx=0,
+            data_start_idx=1, data_end_idx=10,
+            columns=["date", "price"], row_count=9,
+        )]
+        preamble = generate_section_preamble(sections, "/tmp/test.csv")
+        assert "import json" in preamble
+
+    def test_multi_section_preamble_has_json(self):
+        from api.utils.csv_preprocessor import CSVSection, generate_section_preamble
+
+        sections = [
+            CSVSection(index=0, name="section1", title_row_idx=0, header_row_idx=0,
+                       data_start_idx=1, data_end_idx=5, columns=["a", "b"], row_count=4),
+            CSVSection(index=1, name="section2", title_row_idx=5, header_row_idx=6,
+                       data_start_idx=7, data_end_idx=10, columns=["c", "d"], row_count=3),
+        ]
+        preamble = generate_section_preamble(sections, "/tmp/test.csv")
+        assert "import json" in preamble
