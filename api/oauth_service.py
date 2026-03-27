@@ -258,4 +258,4 @@ def validate_oauth_state(state: str) -> bool:
 
 def oauth_success_redirect(token: str) -> str:
     """URL to redirect to after successful OAuth login."""
-    return f"{_frontend_url()}/?auth_success=1"
+    return f"{_frontend_url()}/chat?auth_success=1"

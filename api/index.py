@@ -2322,7 +2322,7 @@ async def saml_acs(request: Request, response: Response):
         raise HTTPException(status_code=500, detail="Session creation failed.")
 
     frontend_url = os.getenv("FRONTEND_URL", "http://localhost:3000")
-    redirect = RedirectResponse(url=f"{frontend_url}/?sso=success", status_code=302)
+    redirect = RedirectResponse(url=f"{frontend_url}/chat?sso=success", status_code=302)
     redirect.set_cookie(
         key="docbot_session",
         value=token,
@@ -2419,7 +2419,7 @@ async def github_callback(code: str, state: str, response: Response):
     )
 
     from api.oauth_service import _frontend_url
-    redirect = RedirectResponse(url=f"{_frontend_url()}/?auth_success=1")
+    redirect = RedirectResponse(url=f"{_frontend_url()}/chat?auth_success=1")
     redirect.set_cookie(
         key="docbot_session", value=token, httponly=True, samesite="lax",
         secure=os.getenv("APP_BASE_URL", "").startswith("https"), max_age=28800,
@@ -2446,27 +2446,27 @@ async def google_callback(code: str, state: str, response: Response):
     from fastapi.responses import RedirectResponse
 
     if not validate_oauth_state(state):
-        return RedirectResponse(url=f"{_frontend_url()}/?auth_error=invalid_state")
+        return RedirectResponse(url=f"{_frontend_url()}/chat?auth_error=invalid_state")
 
     try:
         attrs = await google_exchange_code(code)
     except Exception as exc:
         logger.warning("Google OAuth exchange failed: %s", exc)
-        return RedirectResponse(url=f"{_frontend_url()}/?auth_error=google_failed")
+        return RedirectResponse(url=f"{_frontend_url()}/chat?auth_error=google_failed")
 
     try:
         user_id = await jit_provision_user(attrs, users_table, async_session_factory)
         token = await create_user_session(user_id, user_sessions_table, async_session_factory)
     except Exception as exc:
         logger.error("Google user provisioning failed: %s", exc)
-        return RedirectResponse(url=f"{_frontend_url()}/?auth_error=provision_failed")
+        return RedirectResponse(url=f"{_frontend_url()}/chat?auth_error=provision_failed")
 
     log_event(
         AuditEventType.login, audit_log_table, async_session_factory,
         user_id=user_id, detail=attrs["email"], metadata={"provider": "google"},
     )
 
-    redirect = RedirectResponse(url=f"{_frontend_url()}/?auth_success=1")
+    redirect = RedirectResponse(url=f"{_frontend_url()}/chat?auth_success=1")
     redirect.set_cookie(
         key="docbot_session", value=token, httponly=True, samesite="lax",
         secure=os.getenv("APP_BASE_URL", "").startswith("https"), max_age=28800,
