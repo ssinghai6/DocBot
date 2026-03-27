@@ -178,6 +178,151 @@ const mockMessages: MockMessage[] = [
   },
 ]
 
+// ── Demo Video Component ─────────────────────────────────────────────────────
+// Set DEMO_VIDEO_URL to a direct MP4 URL, YouTube embed URL, or leave empty for placeholder.
+// Examples:
+//   MP4:     "https://your-cdn.com/docbot-demo.mp4"
+//   YouTube: "https://www.youtube.com/embed/VIDEO_ID"
+//   Loom:    "https://www.loom.com/embed/VIDEO_ID"
+const DEMO_VIDEO_URL: string = ""
+
+function DemoVideo() {
+  const [isPlaying, setIsPlaying] = React.useState(false)
+  const videoRef = React.useRef<HTMLVideoElement>(null)
+
+  // YouTube / Loom / Vimeo embed
+  if (DEMO_VIDEO_URL && (DEMO_VIDEO_URL.includes("youtube") || DEMO_VIDEO_URL.includes("loom") || DEMO_VIDEO_URL.includes("vimeo"))) {
+    return (
+      <div className="aspect-video rounded-2xl overflow-hidden border border-gray-800 shadow-2xl shadow-purple-900/20">
+        <iframe
+          src={DEMO_VIDEO_URL}
+          className="w-full h-full"
+          allow="autoplay; fullscreen; picture-in-picture"
+          allowFullScreen
+          title="DocBot Demo"
+        />
+      </div>
+    )
+  }
+
+  // Direct MP4 video
+  if (DEMO_VIDEO_URL) {
+    return (
+      <div className="aspect-video rounded-2xl overflow-hidden border border-gray-800 shadow-2xl shadow-purple-900/20 relative group">
+        <video
+          ref={videoRef}
+          src={DEMO_VIDEO_URL}
+          className="w-full h-full object-cover"
+          muted
+          playsInline
+          loop
+          onClick={() => {
+            if (videoRef.current?.paused) {
+              videoRef.current.play()
+              setIsPlaying(true)
+            } else {
+              videoRef.current?.pause()
+              setIsPlaying(false)
+            }
+          }}
+        />
+        {!isPlaying && (
+          <div
+            className="absolute inset-0 flex items-center justify-center bg-black/30 cursor-pointer"
+            onClick={() => {
+              videoRef.current?.play()
+              setIsPlaying(true)
+            }}
+          >
+            <div className="w-20 h-20 rounded-full bg-gradient-to-br from-blue-500 to-purple-600 flex items-center justify-center shadow-2xl shadow-purple-900/40 group-hover:scale-110 transition-transform duration-300">
+              <Play className="w-8 h-8 text-white ml-1" />
+            </div>
+          </div>
+        )}
+      </div>
+    )
+  }
+
+  // Placeholder — animated mockup preview
+  return (
+    <div className="aspect-video bg-gray-900/50 border border-gray-800 rounded-2xl overflow-hidden relative group cursor-pointer hover:border-purple-500/40 transition-all duration-300">
+      {/* Simulated UI background */}
+      <div className="absolute inset-0 p-6 sm:p-10 flex gap-4 opacity-60 group-hover:opacity-80 transition-opacity duration-500">
+        {/* Sidebar mock */}
+        <div className="hidden sm:flex flex-col w-48 shrink-0 gap-3">
+          <div className="h-8 rounded-lg bg-gradient-to-r from-blue-500/20 to-purple-600/20 border border-purple-500/10" />
+          <div className="h-5 w-32 rounded bg-gray-800/60" />
+          <div className="h-5 w-28 rounded bg-gray-800/40" />
+          <div className="mt-4 h-5 w-36 rounded bg-gray-800/60" />
+          <div className="flex items-center gap-2 mt-2 px-2 py-1.5 rounded-lg bg-green-500/10 border border-green-500/20">
+            <div className="w-2 h-2 rounded-full bg-green-400" />
+            <div className="h-3 w-20 rounded bg-green-400/30" />
+          </div>
+          <div className="mt-4 flex-1 rounded-xl border border-dashed border-gray-700/50 flex items-center justify-center">
+            <div className="h-4 w-16 rounded bg-gray-700/30" />
+          </div>
+          <div className="flex items-center gap-2 px-2 py-1.5 rounded-lg bg-purple-500/10 border border-purple-500/20">
+            <div className="w-3 h-3 rounded bg-purple-400/40" />
+            <div className="h-3 w-24 rounded bg-purple-400/20" />
+          </div>
+        </div>
+        {/* Chat area mock */}
+        <div className="flex-1 flex flex-col gap-3">
+          <div className="flex gap-2 mb-2">
+            <div className="h-7 w-16 rounded-full bg-blue-500/20 border border-blue-500/10" />
+            <div className="h-7 w-20 rounded-full bg-purple-500/20 border border-purple-500/10" />
+            <div className="h-7 w-16 rounded-full bg-gray-800/40" />
+          </div>
+          {/* User message */}
+          <div className="self-end max-w-[70%] rounded-2xl rounded-br-md bg-blue-600/20 border border-blue-500/10 px-4 py-2.5">
+            <div className="h-3 w-full rounded bg-white/20 mb-1.5" />
+            <div className="h-3 w-3/4 rounded bg-white/15" />
+          </div>
+          {/* AI response */}
+          <div className="self-start max-w-[80%] rounded-2xl rounded-bl-md bg-gray-800/60 border border-gray-700/30 px-4 py-3">
+            <div className="flex items-center gap-2 mb-2">
+              <div className="h-5 w-24 rounded-full bg-amber-500/20 border border-amber-500/10" />
+            </div>
+            <div className="h-3 w-full rounded bg-white/10 mb-1.5" />
+            <div className="h-3 w-5/6 rounded bg-white/10 mb-3" />
+            {/* Mini table */}
+            <div className="rounded-lg bg-gray-900/60 border border-gray-700/20 p-2 mb-2">
+              <div className="grid grid-cols-4 gap-1.5">
+                {Array.from({ length: 12 }).map((_, i) => (
+                  <div key={i} className={`h-2.5 rounded ${i < 4 ? "bg-purple-400/30" : "bg-gray-700/30"}`} />
+                ))}
+              </div>
+            </div>
+            {/* Mini chart */}
+            <div className="h-16 rounded-lg bg-gray-900/60 border border-gray-700/20 p-2 flex items-end gap-0.5">
+              {[40, 55, 45, 65, 50, 70, 60, 80, 75, 90, 85, 95].map((h, i) => (
+                <div
+                  key={i}
+                  className="flex-1 rounded-t bg-gradient-to-t from-blue-500/40 to-purple-500/40"
+                  style={{ height: `${h}%` }}
+                />
+              ))}
+            </div>
+            <div className="flex gap-2 mt-2">
+              <div className="h-4 w-28 rounded-full bg-purple-500/15 border border-purple-500/10" />
+              <div className="h-4 w-24 rounded-full bg-purple-500/15 border border-purple-500/10" />
+            </div>
+          </div>
+        </div>
+      </div>
+      {/* Play button overlay */}
+      <div className="absolute inset-0 flex items-center justify-center bg-black/20">
+        <div className="flex flex-col items-center gap-3">
+          <div className="w-20 h-20 rounded-full bg-gradient-to-br from-blue-500 to-purple-600 flex items-center justify-center shadow-2xl shadow-purple-900/40 group-hover:scale-110 transition-transform duration-300">
+            <Play className="w-8 h-8 text-white ml-1" />
+          </div>
+          <span className="text-sm text-gray-400 font-medium">Demo coming soon</span>
+        </div>
+      </div>
+    </div>
+  )
+}
+
 // ── Component ─────────────────────────────────────────────────────────────────
 
 export default function LandingPage() {
@@ -542,12 +687,11 @@ export default function LandingPage() {
             <h2 className="text-3xl sm:text-4xl font-bold text-white mb-4">
               Watch DocBot analyze real data
             </h2>
+            <p className="text-gray-400 text-lg max-w-xl mx-auto">
+              Upload a case study, ask complex financial questions, and get cited answers with calculations in seconds.
+            </p>
           </div>
-          <div className="aspect-video bg-gray-900/50 border border-gray-800 rounded-2xl flex items-center justify-center group cursor-pointer hover:border-purple-500/40 transition-all duration-300">
-            <div className="w-20 h-20 rounded-full bg-gradient-to-br from-blue-500 to-purple-600 flex items-center justify-center shadow-2xl shadow-purple-900/40 group-hover:scale-110 transition-transform duration-300">
-              <Play className="w-8 h-8 text-white ml-1" />
-            </div>
-          </div>
+          <DemoVideo />
         </div>
       </section>
 
