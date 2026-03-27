@@ -12,8 +12,9 @@ Usage in route handlers:
     async def audit_log(user=Depends(require_role(UserRole.admin))):
         ...
 
-When SAML is not configured (is_saml_configured() returns False), all role
-checks pass automatically so the app remains usable without an IdP.
+When auth enforcement is not active (AUTH_REQUIRED env var is not set to
+"true"), all role checks pass automatically so the app remains usable
+without login — ideal for demos and local development.
 """
 
 from __future__ import annotations
@@ -50,7 +51,7 @@ def require_role(min_role: UserRole):
     """FastAPI dependency factory.
 
     Returns a dependency that:
-    - Skips enforcement when SAML is not configured (non-SSO mode)
+    - Skips enforcement when AUTH_REQUIRED is not set (open/demo mode)
     - Reads the session cookie and resolves the user
     - Raises HTTP 401 if not authenticated (and SAML is on)
     - Raises HTTP 403 if the user's role is below min_role
@@ -62,10 +63,10 @@ def require_role(min_role: UserRole):
         # Tables and factory injected at call site — passed via closures from index.py
         # We use module-level references set by wire_rbac() below.
     ) -> Optional[Any]:
-        from api.auth_service import is_saml_configured
+        from api.auth_service import is_auth_enforcement_active
 
-        # When SAML is not configured the app runs in open mode — all checks pass
-        if not is_saml_configured():
+        # When auth enforcement is not active the app runs in open mode — all checks pass
+        if not is_auth_enforcement_active():
             return None
 
         if not docbot_session:

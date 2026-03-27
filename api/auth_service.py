@@ -110,6 +110,17 @@ def is_saml_configured() -> bool:
     return all(os.getenv(v) for v in required)
 
 
+def is_auth_enforcement_active() -> bool:
+    """Return True when RBAC should enforce authentication on protected routes.
+
+    Requires explicit opt-in via AUTH_REQUIRED=true env var.
+    SAML/OAuth env vars alone do NOT activate enforcement — this prevents
+    accidental lockout when auth providers are configured but login flow
+    hasn't been completed (e.g., during demos or local development).
+    """
+    return os.getenv("AUTH_REQUIRED", "").lower() in ("true", "1", "yes")
+
+
 def is_auth_configured() -> bool:
     """Return True when ANY auth method is available (email/password always qualifies)."""
     return True  # email/password is always available; OAuth providers are optional

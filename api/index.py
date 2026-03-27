@@ -212,7 +212,7 @@ commerce_orders_table, commerce_financials_table = register_commerce_tables(meta
 
 # ── EPIC-06: RBAC dependencies (DOCBOT-603) ──────────────────────────────────
 # Imported here so Depends() objects can be declared at module level.
-# require_role() checks is_saml_configured() at request time — safe to import early.
+# require_role() checks is_auth_enforcement_active() at request time — safe to import early.
 from api.rbac_service import require_role, UserRole  # noqa: E402
 
 _rbac_viewer  = Depends(require_role(UserRole.viewer))

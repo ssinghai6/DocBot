@@ -59,20 +59,20 @@ class TestRoleGte:
 
 class TestRequireRole:
     @pytest.mark.asyncio
-    async def test_passes_when_saml_not_configured(self):
-        """In non-SSO mode every request passes regardless of cookie presence."""
+    async def test_passes_when_auth_not_enforced(self):
+        """In open/demo mode every request passes regardless of cookie presence."""
         from api.rbac_service import require_role, UserRole
         dep = require_role(UserRole.admin)
-        with patch("api.auth_service.is_saml_configured", return_value=False):
+        with patch("api.auth_service.is_auth_enforcement_active", return_value=False):
             result = await dep(docbot_session=None)
         assert result is None
 
     @pytest.mark.asyncio
-    async def test_raises_401_when_no_cookie_and_saml_on(self):
+    async def test_raises_401_when_no_cookie_and_auth_enforced(self):
         from api.rbac_service import require_role, UserRole
         from fastapi import HTTPException
         dep = require_role(UserRole.viewer)
-        with patch("api.auth_service.is_saml_configured", return_value=True):
+        with patch("api.auth_service.is_auth_enforcement_active", return_value=True):
             with pytest.raises(HTTPException) as exc_info:
                 await dep(docbot_session=None)
         assert exc_info.value.status_code == 401
@@ -85,7 +85,7 @@ class TestRequireRole:
         wire_rbac(MagicMock(), MagicMock(), MagicMock())
         dep = require_role(UserRole.viewer)
 
-        with patch("api.auth_service.is_saml_configured", return_value=True), \
+        with patch("api.auth_service.is_auth_enforcement_active", return_value=True), \
              patch("api.auth_service.get_user_from_session", new_callable=AsyncMock, return_value=None):
             with pytest.raises(HTTPException) as exc_info:
                 await dep(docbot_session="expired-token")
@@ -101,7 +101,7 @@ class TestRequireRole:
         wire_rbac(MagicMock(), MagicMock(), MagicMock())
         dep = require_role(UserRole.admin)
 
-        with patch("api.auth_service.is_saml_configured", return_value=True), \
+        with patch("api.auth_service.is_auth_enforcement_active", return_value=True), \
              patch("api.auth_service.get_user_from_session", new_callable=AsyncMock, return_value=fake_user):
             with pytest.raises(HTTPException) as exc_info:
                 await dep(docbot_session="valid-token")
@@ -117,7 +117,7 @@ class TestRequireRole:
         wire_rbac(MagicMock(), MagicMock(), MagicMock())
         dep = require_role(UserRole.analyst)
 
-        with patch("api.auth_service.is_saml_configured", return_value=True), \
+        with patch("api.auth_service.is_auth_enforcement_active", return_value=True), \
              patch("api.auth_service.get_user_from_session", new_callable=AsyncMock, return_value=fake_user):
             result = await dep(docbot_session="valid-token")
         assert result is fake_user
@@ -131,7 +131,7 @@ class TestRequireRole:
         wire_rbac(MagicMock(), MagicMock(), MagicMock())
         dep = require_role(UserRole.admin)
 
-        with patch("api.auth_service.is_saml_configured", return_value=True), \
+        with patch("api.auth_service.is_auth_enforcement_active", return_value=True), \
              patch("api.auth_service.get_user_from_session", new_callable=AsyncMock, return_value=fake_admin):
             result = await dep(docbot_session="admin-token")
         assert result.role == "admin"

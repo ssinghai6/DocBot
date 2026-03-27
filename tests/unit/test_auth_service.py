@@ -41,6 +41,32 @@ class TestIsSamlConfigured:
 
 
 # ---------------------------------------------------------------------------
+# is_auth_enforcement_active
+# ---------------------------------------------------------------------------
+
+class TestIsAuthEnforcementActive:
+    def test_returns_false_by_default(self, monkeypatch):
+        monkeypatch.delenv("AUTH_REQUIRED", raising=False)
+        from api.auth_service import is_auth_enforcement_active
+        assert is_auth_enforcement_active() is False
+
+    def test_returns_true_when_set(self, monkeypatch):
+        monkeypatch.setenv("AUTH_REQUIRED", "true")
+        from api.auth_service import is_auth_enforcement_active
+        assert is_auth_enforcement_active() is True
+
+    def test_returns_true_case_insensitive(self, monkeypatch):
+        monkeypatch.setenv("AUTH_REQUIRED", "True")
+        from api.auth_service import is_auth_enforcement_active
+        assert is_auth_enforcement_active() is True
+
+    def test_returns_false_for_other_values(self, monkeypatch):
+        monkeypatch.setenv("AUTH_REQUIRED", "false")
+        from api.auth_service import is_auth_enforcement_active
+        assert is_auth_enforcement_active() is False
+
+
+# ---------------------------------------------------------------------------
 # _detect_provider
 # ---------------------------------------------------------------------------
 
