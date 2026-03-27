@@ -210,6 +210,10 @@ session_artifacts_table = Table(
 from api.commerce_service import register_commerce_tables
 commerce_orders_table, commerce_financials_table = register_commerce_tables(metadata)
 
+# ── DOCBOT-706: Connector Persistence ─────────────────────────────────────────
+from api.connector_store import register_connector_tables
+marketplace_connections_table = register_connector_tables(metadata)
+
 # ── EPIC-06: RBAC dependencies (DOCBOT-603) ──────────────────────────────────
 # Imported here so Depends() objects can be declared at module level.
 # require_role() checks is_auth_enforcement_active() at request time — safe to import early.
@@ -273,7 +277,7 @@ async def init_db() -> None:
         "Database tables verified / created "
         "(sessions, messages, db_connections, schema_cache, query_history, "
         "query_embeddings, session_artifacts, table_embeddings, audit_log, "
-        "commerce_orders, commerce_financials)."
+        "commerce_orders, commerce_financials, marketplace_connections)."
     )
 
 
@@ -286,6 +290,9 @@ async def lifespan(app: FastAPI):
     # DOCBOT-702: wire commerce service table references
     from api.commerce_service import wire_commerce
     wire_commerce(commerce_orders_table, commerce_financials_table, async_session_factory)
+    # DOCBOT-706: wire connector store + restore connectors from DB
+    from api.connector_store import wire_connector_store, load_all_active_connectors
+    wire_connector_store(marketplace_connections_table, async_session_factory)
     # Clean up any expired file uploads from previous runs
     try:
         from api.file_upload_service import cleanup_expired_uploads
@@ -296,6 +303,30 @@ async def lifespan(app: FastAPI):
             logger.info("Startup cleanup: removed %d expired upload(s).", removed)
     except Exception as exc:
         logger.warning("Startup cleanup failed (non-fatal): %s", exc)
+
+    # DOCBOT-706: restore marketplace connectors from DB on startup
+    try:
+        from api.connectors.registry import get_connector_class
+        from api.connectors.base import ConnectorCredentials
+        saved = await load_all_active_connectors()
+        if not hasattr(app.state, "connectors"):
+            app.state.connectors = {}
+        restored = 0
+        for row in saved:
+            try:
+                cls = get_connector_class(row["connector_type"])
+                creds = ConnectorCredentials(
+                    connector_type=row["connector_type"],
+                    credentials=row["credentials"],
+                )
+                app.state.connectors[row["connector_id"]] = cls(creds)
+                restored += 1
+            except Exception as exc:
+                logger.warning("Failed to restore connector %s: %s", row["connector_id"], exc)
+        if restored:
+            logger.info("Startup: restored %d connector(s) from DB.", restored)
+    except Exception as exc:
+        logger.warning("Connector restoration failed (non-fatal): %s", exc)
 
     # DOCBOT-1001: warm VECTOR_STORES from Chroma disk — recovers sessions after restart
     try:
@@ -2900,11 +2931,14 @@ async def register_connector(body: ConnectorRegisterRequest):
         )
 
     connector_id = str(uuid.uuid4())
-    # Store connector metadata (credentials encrypted at rest via Fernet in production)
-    # For now, store in-memory registry keyed by connector_id
+    # In-memory cache for fast lookups
     if not hasattr(app.state, "connectors"):
         app.state.connectors = {}
     app.state.connectors[connector_id] = connector
+
+    # DOCBOT-706: persist to PostgreSQL with encrypted credentials
+    from api.connector_store import save_connector
+    await save_connector(connector_id, body.connector_type, body.credentials)
 
     logger.info(
         "Registered %s connector: %s",
@@ -2925,14 +2959,23 @@ def _get_connector(connector_id: str):
 
 @app.get("/api/connectors")
 async def list_connectors():
-    """List all registered connector IDs and their types."""
+    """List all active connectors from DB (survives restarts)."""
+    from api.connector_store import list_active_connectors
+    connectors = await list_active_connectors()
+    return {"connectors": connectors}
+
+
+@app.delete("/api/connectors/{connector_id}")
+async def disconnect_connector(connector_id: str):
+    """Soft-delete a connector — removes from memory and marks inactive in DB."""
+    from api.connector_store import delete_connector
     connectors = getattr(app.state, "connectors", {})
-    return {
-        "connectors": [
-            {"connector_id": cid, "connector_type": c.connector_type}
-            for cid, c in connectors.items()
-        ]
-    }
+    connectors.pop(connector_id, None)
+    deleted = await delete_connector(connector_id)
+    if not deleted:
+        raise HTTPException(status_code=404, detail=f"Connector '{connector_id}' not found.")
+    logger.info("Disconnected connector: %s", connector_id)
+    return {"status": "disconnected", "connector_id": connector_id}
 
 
 @app.post("/api/connectors/{connector_id}/orders")
@@ -2983,6 +3026,11 @@ async def sync_connector(connector_id: str, body: ConnectorDateRangeRequest):
     except Exception as exc:
         logger.error("sync failed for %s: %s", connector_id, exc)
         raise HTTPException(status_code=502, detail=f"Sync failed: {exc}")
+
+    # DOCBOT-706: track last successful sync timestamp
+    from api.connector_store import update_last_sync
+    await update_last_sync(connector_id)
+
     return summary
 
 

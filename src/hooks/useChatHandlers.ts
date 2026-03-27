@@ -604,7 +604,16 @@ export function useChatHandlers(params: UseChatHandlersParams) {
     return data as ConnectorSyncResponse;
   }, [showToast]);
 
-  const handleConnectorDisconnect = useCallback((connectorId: string) => {
+  const handleConnectorDisconnect = useCallback(async (connectorId: string) => {
+    try {
+      const res = await fetch(`/api/connectors/${connectorId}`, { method: "DELETE" });
+      if (!res.ok) {
+        const err = await res.json();
+        throw new Error(err.detail || "Disconnect failed");
+      }
+    } catch (e) {
+      console.error("Disconnect API error:", e);
+    }
     setConnectors(prev => prev.filter(c => c.connector_id !== connectorId));
     showToast("info", "Marketplace disconnected");
   }, [setConnectors, showToast]);
