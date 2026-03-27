@@ -508,6 +508,7 @@ async def run_autopilot(
     has_docs: bool = False,
     has_db: bool = False,
     has_csv: bool = False,
+    chat_history: Optional[list[dict[str, str]]] = None,
 ) -> AsyncGenerator[str, None]:
     """Run the Autopilot investigation and yield SSE-formatted strings.
 
@@ -519,6 +520,14 @@ async def run_autopilot(
     Never raises — errors are emitted as SSE error events.
     """
     start_time = time.monotonic()
+
+    # Rephrase follow-up questions into standalone queries using chat history
+    if chat_history:
+        from api.db_service import _rephrase_with_history
+        try:
+            question = await _rephrase_with_history(question, chat_history)
+        except Exception as exc:
+            logger.warning("Autopilot rephrase failed, using original: %s", exc)
 
     executor_node = make_executor_node(
         db_connections_table=db_connections_table,

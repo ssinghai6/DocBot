@@ -379,6 +379,7 @@ async def hybrid_chat(
     vector_stores: dict,
     extracted_fields: list | None = None,
     deep_research: bool = False,
+    chat_history: list[dict[str, str]] | None = None,
 ) -> AsyncGenerator[str, None]:
     """Hybrid chat pipeline: intent classification → SQL + RAG → synthesis.
 
@@ -388,6 +389,14 @@ async def hybrid_chat(
       {"type": "done"}
     """
     has_db = connection_id is not None
+
+    # Rephrase follow-up questions using chat history
+    if chat_history:
+        from api.db_service import _rephrase_with_history
+        try:
+            question = await _rephrase_with_history(question, chat_history)
+        except Exception as _exc:
+            logger.warning("Hybrid rephrase failed, using original: %s", _exc)
 
     # ── Step 1: classify intent ───────────────────────────────────────────
     groq_api_key = os.getenv("groq_api_key", "")

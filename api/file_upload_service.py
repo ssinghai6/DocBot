@@ -151,6 +151,21 @@ async def upload_csv(
         )
     )
 
+    # Build deterministic data profile for LLM context enrichment
+    from api.utils.csv_preprocessor import build_data_profile, profile_to_dict
+
+    profile = await asyncio.get_running_loop().run_in_executor(
+        None, build_data_profile, file_bytes,
+    )
+    profile_dict: Optional[Dict] = None
+    if profile is not None:
+        profile_dict = profile_to_dict(profile)
+        logger.info(
+            "Data profile built for %s: %d rows x %d cols, %d datetime cols",
+            original_filename, profile.row_count, profile.column_count,
+            len(profile.datetime_columns),
+        )
+
     connection_id = await _register_csv_connection(
         file_bytes=file_bytes,
         table_name=table_name,
@@ -158,6 +173,7 @@ async def upload_csv(
         columns=columns,
         sections=sections_dicts,
         section_manifest=manifest,
+        data_profile=profile_dict,
         original_filename=original_filename,
         session_id=session_id,
         db_connections_table=db_connections_table,
@@ -222,11 +238,12 @@ async def _register_csv_connection(
     columns: List[str],
     sections: List[dict],
     section_manifest: str,
-    original_filename: str,
-    session_id: str,
-    db_connections_table: Table,
-    schema_cache_table: Table,
-    async_session_factory,
+    data_profile: Optional[Dict] = None,
+    original_filename: str = "",
+    session_id: str = "",
+    db_connections_table: Optional[Table] = None,
+    schema_cache_table: Optional[Table] = None,
+    async_session_factory=None,
 ) -> str:
     """
     Register a CSV upload as a db_connection with dialect="csv".
@@ -241,7 +258,7 @@ async def _register_csv_connection(
     connection_id = str(uuid.uuid4())
     csv_b64 = base64.b64encode(file_bytes).decode()
 
-    creds_blob = encrypt_credentials({
+    creds_dict: Dict[str, Any] = {
         "dialect": "csv",
         "host": "__local_file__",
         "port": 0,
@@ -258,7 +275,10 @@ async def _register_csv_connection(
         "ttl_expires_at": (
             datetime.now(timezone.utc) + timedelta(seconds=_FILE_TTL_SECONDS)
         ).isoformat(),
-    })
+    }
+    if data_profile is not None:
+        creds_dict["data_profile"] = data_profile
+    creds_blob = encrypt_credentials(creds_dict)
 
     async with async_session_factory() as session:
         async with session.begin():

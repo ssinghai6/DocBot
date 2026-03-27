@@ -284,12 +284,19 @@ class DBConnectionRequest(BaseModel):
         return self
 
 
+class ChatMessageCompact(BaseModel):
+    """Lightweight chat message for conversational history (DB/CSV pipelines)."""
+    role: str
+    content: str
+
+
 class DBChatRequest(BaseModel):
     connection_id: str
     question: str
     persona: str = "Generalist"
     session_id: str
     chart_type: str = "auto"   # DOCBOT-305: "auto"|"bar"|"line"|"scatter"|"heatmap"|"box"|"multi"
+    history: List[ChatMessageCompact] = []  # last 6 messages for follow-up context
 
 
 class DBChatResponse(BaseModel):
@@ -305,6 +312,52 @@ class DBChatResponse(BaseModel):
 # ---------------------------------------------------------------------------
 # Internal helpers
 # ---------------------------------------------------------------------------
+
+
+async def _rephrase_with_history(
+    question: str,
+    chat_history: List[Dict[str, str]],
+) -> str:
+    """Rephrase a follow-up question into a standalone question using chat history.
+
+    Uses a quick LLM call (max_tokens=200, temperature=0) so the downstream
+    SQL pipeline gets full context even when the user says things like
+    "now filter that to Q1 only".
+    """
+    import asyncio as _asyncio
+    from api.utils.llm_provider import chat_completion
+
+    history_text = "\n".join(
+        f"{m['role'].upper()}: {m['content']}" for m in chat_history
+    )
+    prompt = (
+        "Given the conversation history below and the user's latest question, "
+        "rephrase the latest question as a standalone question that includes "
+        "all necessary context from the conversation. If the question is "
+        "already standalone, return it unchanged.\n\n"
+        "Return ONLY the rephrased question, nothing else.\n\n"
+        f"Conversation history:\n{history_text}\n\n"
+        f"Latest question: {question}\n\n"
+        "Standalone question:"
+    )
+    try:
+        loop = _asyncio.get_running_loop()
+        rephrased = await loop.run_in_executor(
+            None,
+            lambda: chat_completion(
+                [{"role": "user", "content": prompt}],
+                temperature=0,
+                max_tokens=200,
+            ),
+        )
+        rephrased = rephrased.strip()
+        if rephrased:
+            logger.debug("Rephrased follow-up: %r → %r", question, rephrased)
+            return rephrased
+    except Exception as exc:
+        logger.warning("Follow-up rephrase failed, using original question: %s", exc)
+
+    return question
 
 
 def _build_connection_url(
@@ -826,6 +879,7 @@ async def run_sql_pipeline(
     session_artifacts_table: Optional[Table] = None,
     table_embeddings_table: Optional[Table] = None,
     chart_type: str = "auto",
+    chat_history: Optional[List[Dict[str, str]]] = None,
 ) -> AsyncGenerator[str, None]:
     """
     Execute the 7-step bounded SQL pipeline and yield SSE-formatted strings.
@@ -836,6 +890,12 @@ async def run_sql_pipeline(
       3. One done chunk
     """
     start_ms = int(time.time() * 1000)
+
+    # ── Step 0: Conversational rephrase — resolve follow-ups ─────────────
+    # If chat_history is provided, rephrase the question into a standalone
+    # query so table selection and SQL generation get full context.
+    if chat_history:
+        question = await _rephrase_with_history(question, chat_history)
 
     # ── CSV fast-path: bypass SQL pipeline, run pandas on E2B ────────────
     async with async_session_factory() as _sess:
@@ -849,6 +909,12 @@ async def run_sql_pipeline(
 
     if _conn_row.dialect == "csv":
         _creds = decrypt_credentials(_conn_row.credentials_blob)
+        # Build data profile string from credentials blob (stored during upload)
+        _data_profile = _creds.get("data_profile")
+        _data_profile_str: Optional[str] = None
+        if _data_profile and isinstance(_data_profile, dict):
+            _data_profile_str = json.dumps(_data_profile, indent=2, default=str)
+
         from api.sandbox_service import run_csv_query_on_e2b
         async for _chunk in run_csv_query_on_e2b(
             csv_content_b64=_creds.get("csv_content", ""),
@@ -860,6 +926,8 @@ async def run_sql_pipeline(
             expert_personas=expert_personas,
             sections=_creds.get("sections"),
             section_manifest=_creds.get("section_manifest"),
+            chat_history=chat_history,
+            data_profile_str=_data_profile_str,
         ):
             yield _chunk
         return

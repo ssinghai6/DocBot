@@ -74,6 +74,13 @@ export function useChatSubmit(params: UseChatSubmitParams) {
     setIsLoading(true);
     setDrProgress(null);
 
+    // Build recent conversation history (last 6 messages = 3 turns) for
+    // follow-up context in DB, CSV, hybrid, and autopilot pipelines.
+    const recentHistory = messages
+      .filter(m => m.content.trim())
+      .slice(-6)
+      .map(m => ({ role: m.role, content: m.content.slice(0, 500) }));
+
     let personaToSend = selectedPersona;
     let effectiveChatMode = chatMode;
     if (sessionId && isDbConnected && chatMode !== "hybrid") {
@@ -120,6 +127,7 @@ export function useChatSubmit(params: UseChatSubmitParams) {
             has_docs: !!sessionId,
             has_db: !!connectionId,
             has_csv: isCsvConnection,
+            history: recentHistory,
           }),
         });
         if (!response.ok || !response.body) {
@@ -241,6 +249,7 @@ export function useChatSubmit(params: UseChatSubmitParams) {
             persona: personaToSend,
             session_id: sessionId ?? "anonymous",
             chart_type: chartType,
+            history: recentHistory,
           }),
         });
 
@@ -338,6 +347,7 @@ export function useChatSubmit(params: UseChatSubmitParams) {
             persona: personaToSend,
             has_docs: true,
             deep_research: deepResearch,
+            history: recentHistory,
           }),
         });
 

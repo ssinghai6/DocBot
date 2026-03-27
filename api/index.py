@@ -1809,6 +1809,9 @@ async def db_chat(raw_request: Request, request: DBChatRequest, _user=_rbac_view
             },
         )
         try:
+            # Convert history to simple dicts for the pipeline
+            _chat_history = [{"role": m.role, "content": m.content} for m in (request.history or [])]
+
             async for chunk in run_sql_pipeline(
                 connection_id=request.connection_id,
                 question=request.question,
@@ -1823,6 +1826,7 @@ async def db_chat(raw_request: Request, request: DBChatRequest, _user=_rbac_view
                 async_session_factory=async_session_factory,
                 expert_personas=EXPERT_PERSONAS,
                 chart_type=request.chart_type,
+                chat_history=_chat_history if _chat_history else None,
             ):
                 yield chunk
         except ConnectionNotFoundError as exc:
@@ -2091,6 +2095,7 @@ class HybridChatRequest(BaseModel):
     persona: str = "Data Analyst"
     has_docs: bool = True
     deep_research: bool = False
+    history: List[ChatMessage] = []
 
 
 @app.post("/api/hybrid/chat")
@@ -2121,6 +2126,8 @@ async def hybrid_chat_route(raw_request: Request, request: HybridChatRequest, _u
             },
         )
         try:
+            _hybrid_history = [{"role": m.role, "content": m.content} for m in (request.history or [])]
+
             async for chunk in hybrid_chat(
                 question=request.question,
                 session_id=request.session_id,
@@ -2138,6 +2145,7 @@ async def hybrid_chat_route(raw_request: Request, request: HybridChatRequest, _u
                 vector_stores=VECTOR_STORES,
                 extracted_fields=EXTRACTED_FIELDS.get(request.session_id),
                 deep_research=request.deep_research,
+                chat_history=_hybrid_history if _hybrid_history else None,
             ):
                 yield chunk
         except Exception as exc:
@@ -2160,6 +2168,7 @@ class AutopilotRequest(BaseModel):
     has_docs: bool = False
     has_db: bool = False
     has_csv: bool = False
+    history: List[ChatMessage] = []
 
 
 @app.post("/api/autopilot/run")
@@ -2193,6 +2202,8 @@ async def autopilot_run(raw_request: Request, request: AutopilotRequest, _user=_
             },
         )
         try:
+            _autopilot_history = [{"role": m.role, "content": m.content} for m in (request.history or [])]
+
             async for chunk in run_autopilot(
                 question=request.question,
                 session_id=request.session_id,
@@ -2210,6 +2221,7 @@ async def autopilot_run(raw_request: Request, request: AutopilotRequest, _user=_
                 has_docs=request.has_docs,
                 has_db=request.has_db,
                 has_csv=request.has_csv,
+                chat_history=_autopilot_history if _autopilot_history else None,
             ):
                 yield chunk
         except Exception as exc:

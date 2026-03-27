@@ -17,13 +17,19 @@ import time
 from typing import AsyncGenerator, List, Optional
 
 import groq as groq_module
-
 from pydantic import BaseModel
 
 logger = logging.getLogger(__name__)
 
 # DOCBOT-305: supported chart types for validate + prompt routing
 VALID_CHART_TYPES = {"auto", "bar", "line", "scatter", "heatmap", "box", "multi"}
+
+# Regex to detect complex analytical queries that need more code/time
+_COMPLEX_QUERY_RE = _re_module.compile(
+    r'\b(predict|forecast|trend|seasonalit|correlat|regress|cluster|anomal'
+    r'|outli|model|classif|time.?series|arima|prophet|xgboost|machine.?learn)\b',
+    _re_module.IGNORECASE,
+)
 
 _SANDBOX_EXTRA_PACKAGES = [
     "statsmodels",
@@ -530,6 +536,57 @@ def _inspect_csv_profile(csv_bytes: bytes) -> tuple:
         return None, None
 
 
+def _rephrase_for_csv(
+    question: str,
+    chat_history: list[dict],
+) -> tuple[str, str]:
+    """Rephrase a follow-up question into a standalone query using chat history.
+
+    Returns (rephrased_question, previous_context_summary). Falls back to the
+    original question on any error.
+    """
+    try:
+        from api.utils.llm_provider import chat_completion, GROQ_CODE_MODEL
+
+        # Build a compact history summary (last 4 messages max)
+        recent = chat_history[-4:]
+        history_text = "\n".join(
+            f"{'User' if m.get('role') == 'user' else 'Assistant'}: {m.get('content', '')[:200]}"
+            for m in recent
+        )
+
+        rephrase_prompt = (
+            "Given this chat history and the latest question, rewrite the question "
+            "as a standalone data analysis question. Return ONLY the rephrased question.\n\n"
+            f"Chat history:\n{history_text}\n\n"
+            f"Latest question: {question}"
+        )
+        rephrased = chat_completion(
+            [{"role": "user", "content": rephrase_prompt}],
+            model=GROQ_CODE_MODEL,
+            temperature=0,
+            max_tokens=200,
+        ).strip()
+
+        # Strip <think>...</think> blocks from Qwen 3
+        import re as _re
+        rephrased = _re.sub(r"<think>.*?</think>", "", rephrased, flags=_re.DOTALL).strip()
+
+        # Extract last assistant message for context
+        previous_context = ""
+        for m in reversed(chat_history):
+            if m.get("role") == "assistant":
+                previous_context = f"Previous analysis result: {m['content'][:300]}"
+                break
+
+        logger.info("CSV rephrase: '%s' -> '%s'", question[:80], rephrased[:80])
+        return rephrased or question, previous_context
+
+    except Exception as exc:
+        logger.warning("_rephrase_for_csv failed: %s, using original question", exc)
+        return question, ""
+
+
 async def generate_csv_analysis_code(
     csv_path_in_sandbox: str,
     column_names: List[str],
@@ -538,15 +595,37 @@ async def generate_csv_analysis_code(
     chart_type: str = "auto",
     section_manifest: Optional[str] = None,
     is_multi_section: bool = False,
+    data_profile: Optional[str] = None,
+    chat_history: Optional[list[dict]] = None,
+    error_context: Optional[str] = None,
 ) -> Optional[str]:
     """Generate Python/pandas code to answer a question about a CSV file on E2B.
 
     Returns a Python code string, or None on error / missing API key.
+
+    Parameters
+    ----------
+    data_profile : optional serialized DataProfile string for LLM context
+    chat_history : optional list of {role, content} dicts for conversational memory
+    error_context : optional error message from a failed previous attempt (retry)
     """
     api_key = os.getenv("groq_api_key")
     if not api_key:
         logger.warning("generate_csv_analysis_code: groq_api_key not set, using fallback")
         return None
+
+    # Detect complex queries for adaptive limits
+    is_complex = bool(_COMPLEX_QUERY_RE.search(question))
+    max_code_lines = 150 if is_complex else 70
+    code_gen_max_tokens = 4000 if is_complex else 2000
+
+    # --- Conversational rephrase (Task 4) ---
+    effective_question = question
+    previous_context = ""
+    if chat_history:
+        effective_question, previous_context = _rephrase_for_csv(
+            question, chat_history
+        )
 
     chart_instructions = _chart_type_instructions(chart_type)
 
@@ -589,21 +668,35 @@ async def generate_csv_analysis_code(
         "'title': '<title>', 'x_label': '<x>', 'y_label': '<y>', 'series_count': <int>}))\n\n"
         "Print a brief human-readable narrative summary of findings (2-3 sentences). "
         "Do NOT print raw DataFrame output — if showing tabular data, use df.to_markdown(). "
-        "Keep code under 70 lines."
+        f"Keep code under {max_code_lines} lines."
     )
 
-    # Build user message with section manifest or column list
+    # Build user message with data profile, section manifest, and column list
+    user_parts: list[str] = []
+
+    if data_profile:
+        user_parts.append(f"DATA PROFILE:\n{data_profile}")
+
+    if previous_context:
+        user_parts.append(f"PREVIOUS ANALYSIS CONTEXT:\n{previous_context}")
+
     if is_multi_section and section_manifest:
-        user_message = (
+        user_parts.append(
             "MULTI-SECTION CSV — use load_section(idx) to access the right section.\n\n"
-            f"SECTION MANIFEST:\n{section_manifest}\n\n"
-            f"Question: {question}"
+            f"SECTION MANIFEST:\n{section_manifest}"
         )
     else:
         cols_preview = ", ".join(column_names[:20])
         if len(column_names) > 20:
-            cols_preview += f" … (+{len(column_names) - 20} more)"
-        user_message = f"CSV columns: {cols_preview}\n\nQuestion: {question}"
+            cols_preview += f" ... (+{len(column_names) - 20} more)"
+        user_parts.append(f"CSV columns: {cols_preview}")
+
+    user_parts.append(f"Question: {effective_question}")
+
+    if error_context:
+        user_parts.append(error_context)
+
+    user_message = "\n\n".join(user_parts)
 
     try:
         from api.utils.llm_provider import chat_completion, GROQ_CODE_MODEL
@@ -615,7 +708,7 @@ async def generate_csv_analysis_code(
             ],
             model=GROQ_CODE_MODEL,
             temperature=0,
-            max_tokens=2000,
+            max_tokens=code_gen_max_tokens,
         )
         code = response_text
 
@@ -715,20 +808,25 @@ def _run_csv_in_sandbox_sync(code: str, csv_path: str, csv_bytes: bytes) -> Sand
                 logger.warning("Failed to close CSV sandbox cleanly: %s", teardown_err)
 
 
-async def _run_csv_in_sandbox(code: str, csv_path: str, csv_bytes: bytes) -> SandboxResult:
-    """Async wrapper around _run_csv_in_sandbox_sync with 30-second timeout."""
+async def _run_csv_in_sandbox(
+    code: str,
+    csv_path: str,
+    csv_bytes: bytes,
+    timeout_seconds: int = 30,
+) -> SandboxResult:
+    """Async wrapper around _run_csv_in_sandbox_sync with configurable timeout."""
     loop = asyncio.get_running_loop()
     try:
         return await asyncio.wait_for(
             loop.run_in_executor(None, _run_csv_in_sandbox_sync, code, csv_path, csv_bytes),
-            timeout=30.0,
+            timeout=float(timeout_seconds),
         )
     except asyncio.TimeoutError:
-        logger.error("CSV sandbox timed out after 30 seconds.")
+        logger.error("CSV sandbox timed out after %d seconds.", timeout_seconds)
         return SandboxResult(
             stdout="", stderr="", charts=[],
-            error="CSV analysis timed out after 30 seconds.",
-            execution_time_ms=30000,
+            error=f"CSV analysis timed out after {timeout_seconds} seconds.",
+            execution_time_ms=timeout_seconds * 1000,
         )
 
 
@@ -823,12 +921,19 @@ async def run_csv_query_on_e2b(
     expert_personas: Optional[dict] = None,
     sections: Optional[List[dict]] = None,
     section_manifest: Optional[str] = None,
+    data_profile_str: Optional[str] = None,
+    chat_history: Optional[list[dict]] = None,
 ) -> AsyncGenerator[str, None]:
     """Process a user question about a CSV file using pandas on E2B.
 
     Yields SSE-formatted strings matching the SQL pipeline format so the
     frontend needs no changes.  Supports multi-section CSVs via
     csv_preprocessor section metadata.
+
+    Parameters
+    ----------
+    data_profile_str : optional serialized DataProfile for LLM context enrichment
+    chat_history : optional list of {role, content} dicts for conversational memory
     """
     persona_def = (
         (expert_personas or {})
@@ -837,6 +942,10 @@ async def run_csv_query_on_e2b(
     )
 
     csv_path_in_sandbox = f"/tmp/{table_name}.csv"
+
+    # Detect complex queries for adaptive timeout
+    is_complex = bool(_COMPLEX_QUERY_RE.search(question))
+    sandbox_timeout = 60 if is_complex else 30
 
     # Build section-aware preamble if section metadata is available
     is_multi_section = sections is not None and len(sections) > 1
@@ -877,6 +986,8 @@ async def run_csv_query_on_e2b(
         chart_type=chart_type,
         section_manifest=section_manifest,
         is_multi_section=is_multi_section,
+        data_profile=data_profile_str,
+        chat_history=chat_history,
     )
 
     # Fallback code if LLM is unavailable or generation produced invalid syntax.
@@ -953,7 +1064,58 @@ async def run_csv_query_on_e2b(
         yield f"data: {error_chunk}\n\n"
         return
 
-    result = await _run_csv_in_sandbox(code, csv_path_in_sandbox, csv_bytes)
+    result = await _run_csv_in_sandbox(code, csv_path_in_sandbox, csv_bytes, timeout_seconds=sandbox_timeout)
+
+    # --- Task 3: Error retry with feedback ---
+    _is_timeout = result.error and "timed out" in result.error.lower()
+    if result.error and not _is_timeout:
+        logger.info("CSV sandbox failed, attempting one retry with error feedback")
+        yield f"data: {_stdlib_json.dumps({'type': 'status', 'content': 'Retrying with corrected code...'})}\n\n"
+
+        error_feedback = (
+            f"PREVIOUS ATTEMPT FAILED with error:\n"
+            f"{result.error}\n"
+            f"{result.stderr[:500] if result.stderr else ''}\n\n"
+            "Fix the code and try again. Common fixes:\n"
+            "- Wrong column name -> check the column list above\n"
+            "- Date parsing -> try pd.to_datetime(col, format='mixed', errors='coerce')\n"
+            "- Type error -> ensure numeric conversion before math operations"
+        )
+        retry_code = await generate_csv_analysis_code(
+            csv_path_in_sandbox=csv_path_in_sandbox,
+            column_names=column_names,
+            question=question,
+            persona_def=persona_def,
+            chart_type=chart_type,
+            section_manifest=section_manifest,
+            is_multi_section=is_multi_section,
+            data_profile=data_profile_str,
+            chat_history=chat_history,
+            error_context=error_feedback,
+        )
+        if retry_code:
+            # Prepend preamble to retry code same as original
+            import re as _re
+            retry_code = _re.sub(
+                r"^.*pd\.read_csv\s*\(.*\).*$",
+                "# (read_csv handled by preamble)",
+                retry_code,
+                count=1,
+                flags=_re.MULTILINE,
+            )
+            retry_code = _re.sub(r"^import pandas as pd\s*$", "", retry_code, count=1, flags=_re.MULTILINE)
+            retry_code = preamble + retry_code
+
+            retry_result = await _run_csv_in_sandbox(
+                retry_code, csv_path_in_sandbox, csv_bytes, timeout_seconds=sandbox_timeout
+            )
+            if retry_result.error is None:
+                logger.info("CSV retry succeeded")
+                result = retry_result
+                code = retry_code
+            else:
+                logger.warning("CSV retry also failed: %s, using original error", retry_result.error[:200])
+                # Keep original result (don't show retry error)
 
     # --- SSE: metadata chunk ---
     cols_summary = ", ".join(column_names[:6])

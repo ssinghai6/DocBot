@@ -26,6 +26,21 @@ _COL_CLEAN = re.compile(r"[^a-z0-9_]")
 
 
 @dataclass
+class DataProfile:
+    """Deterministic profile of a CSV dataset, computed once on upload."""
+
+    row_count: int
+    column_count: int
+    dtypes: dict[str, str]  # col_name -> dtype string
+    sample_rows: str  # first 5 rows as .to_string()
+    numeric_summary: str  # .describe() output for numeric cols
+    datetime_columns: list[str]  # columns detected as datetime
+    null_percentages: dict[str, float]  # col_name -> null %
+    low_cardinality: dict[str, list[str]]  # col_name -> unique values (<=15 unique)
+    memory_note: str  # e.g. "1247 rows x 6 columns, daily frequency detected"
+
+
+@dataclass
 class CSVSection:
     """A single logical section within a multi-section CSV file."""
 
@@ -300,3 +315,127 @@ def sections_to_dicts(sections: List[CSVSection]) -> List[dict]:
 def dicts_to_sections(data: List[dict]) -> List[CSVSection]:
     """Deserialize sections from credentials blob."""
     return [CSVSection(**d) for d in data]
+
+
+# ---------------------------------------------------------------------------
+# Data Profiling (Task 1)
+# ---------------------------------------------------------------------------
+
+
+def build_data_profile(csv_bytes: bytes) -> Optional[DataProfile]:
+    """Build a deterministic DataProfile from raw CSV bytes.
+
+    Computes dtypes, sample rows, numeric summary, datetime detection,
+    null percentages, and low-cardinality column values. Returns None on
+    any parsing error.
+    """
+    try:
+        df = None
+        for enc in ("utf-8-sig", "utf-8", "latin-1"):
+            try:
+                df = pd.read_csv(
+                    io.BytesIO(csv_bytes), encoding=enc, on_bad_lines="skip"
+                )
+                break
+            except (UnicodeDecodeError, pd.errors.ParserError):
+                continue
+
+        if df is None or df.empty:
+            return None
+
+        # Normalize column names (same as existing pipeline)
+        df.columns = [_clean_col(str(c)) for c in df.columns]
+        df = df.dropna(how="all").dropna(axis=1, how="all")
+
+        row_count = len(df)
+        column_count = len(df.columns)
+
+        # Dtypes
+        dtypes = {col: str(dtype) for col, dtype in df.dtypes.items()}
+
+        # Sample rows (first 5, truncated)
+        sample_rows = df.head(5).to_string(max_colwidth=60)
+        if len(sample_rows) > 2000:
+            sample_rows = sample_rows[:2000] + "\n... (truncated)"
+
+        # Numeric summary
+        numeric_df = df.select_dtypes(include="number")
+        if not numeric_df.empty:
+            numeric_summary = numeric_df.describe().to_string()
+            if len(numeric_summary) > 1500:
+                numeric_summary = numeric_summary[:1500] + "\n... (truncated)"
+        else:
+            numeric_summary = "No numeric columns."
+
+        # Datetime detection
+        datetime_columns: list[str] = []
+        freq_notes: list[str] = []
+        for col in df.columns:
+            is_datetime = False
+            # Check by name
+            if any(kw in col for kw in ("date", "time", "timestamp")):
+                is_datetime = True
+            # Check by parsing object columns
+            if not is_datetime and df[col].dtype == object:
+                parsed = pd.to_datetime(df[col], errors="coerce", format="mixed")
+                valid_ratio = parsed.notna().sum() / max(df[col].notna().sum(), 1)
+                if valid_ratio > 0.7:
+                    is_datetime = True
+            if is_datetime:
+                datetime_columns.append(col)
+                # Try to infer frequency
+                try:
+                    dt_series = pd.to_datetime(df[col], errors="coerce").dropna().sort_values()
+                    if len(dt_series) >= 3:
+                        freq = pd.infer_freq(dt_series)
+                        if freq:
+                            freq_notes.append(f"{col}: {freq}")
+                except (ValueError, TypeError):
+                    pass
+
+        # Null percentages
+        null_percentages: dict[str, float] = {}
+        for col in df.columns:
+            pct = round(df[col].isna().sum() / max(row_count, 1) * 100, 1)
+            if pct > 0:
+                null_percentages[col] = pct
+
+        # Low cardinality (<=15 unique values)
+        low_cardinality: dict[str, list[str]] = {}
+        for col in df.columns:
+            nunique = df[col].nunique(dropna=True)
+            if 0 < nunique <= 15:
+                vals = df[col].dropna().unique().tolist()
+                low_cardinality[col] = [str(v) for v in vals[:15]]
+
+        # Memory note
+        freq_desc = ""
+        if freq_notes:
+            freq_desc = ", " + ", ".join(freq_notes[:2]) + " frequency detected"
+        memory_note = f"{row_count} rows x {column_count} columns{freq_desc}"
+
+        return DataProfile(
+            row_count=row_count,
+            column_count=column_count,
+            dtypes=dtypes,
+            sample_rows=sample_rows,
+            numeric_summary=numeric_summary,
+            datetime_columns=datetime_columns,
+            null_percentages=null_percentages,
+            low_cardinality=low_cardinality,
+            memory_note=memory_note,
+        )
+
+    except Exception as exc:
+        logger.warning("build_data_profile failed: %s", exc)
+        return None
+
+
+def profile_to_dict(profile: DataProfile) -> dict:
+    """Serialize a DataProfile to a JSON-safe dict."""
+    return asdict(profile)
+
+
+def dict_to_profile(data: dict) -> DataProfile:
+    """Deserialize a DataProfile from a dict."""
+    return DataProfile(**data)
