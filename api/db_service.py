@@ -1363,11 +1363,13 @@ async def _stream_answer(
     preview = json.dumps(result_dicts[:20], default=str, indent=2)
     prompt = (
         f"{persona_def}\n\n"
-        "A user asked a question about their database. Answer using ONLY the query result below.\n"
+        "A user asked a question about their database. Answer using the query result below as your primary data source.\n"
         "Rules:\n"
         "- Do not reveal the raw SQL unless explicitly asked.\n"
         "- Cite the data source as [DB: <table names>] at the end.\n"
-        "- Be concise and use the persona's voice.\n\n"
+        "- When the user provides explicit parameters or assumptions in their question, "
+        "perform the requested calculations step by step using those values combined with the query results.\n"
+        "- Use the persona's voice.\n\n"
         f"Question: {question}\n\n"
         f"Query result ({len(result_dicts)} rows):\n{preview}\n\n"
         "Answer:"
