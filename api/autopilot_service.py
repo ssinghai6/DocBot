@@ -308,16 +308,36 @@ def make_executor_node(
 
             # ── doc_search ─────────────────────────────────────────────────
             elif tool == "doc_search":
-                from api.hybrid_service import rag_retrieve
+                if session_id not in vector_stores:
+                    result_entry["result"] = "No relevant documents found."
+                else:
+                    from api.deep_research_service import deep_retrieve
 
-                context, citations = await rag_retrieve(
-                    question=step,
-                    session_id=session_id,
-                    vector_stores=vector_stores,
-                )
-                result_entry["result"] = (context[:800] if context
-                                          else "No relevant documents found.")
-                new_citations = citations
+                    docs, sub_questions = await deep_retrieve(
+                        question=step,
+                        vector_store=vector_stores[session_id],
+                    )
+
+                    if docs:
+                        context = "\n\n".join(
+                            f"Source: {doc.metadata.get('source', 'Unknown')}, "
+                            f"Page {doc.metadata.get('page', 0)}\n{doc.page_content}"
+                            for doc in docs
+                        )
+                        result_entry["result"] = context[:800]
+
+                        # Build citations from retrieved documents
+                        seen_keys: set[str] = set()
+                        for doc in docs:
+                            key = f"{doc.metadata.get('source', 'Unknown')}_{doc.metadata.get('page', 0)}"
+                            if key not in seen_keys:
+                                seen_keys.add(key)
+                                new_citations.append({
+                                    "source": doc.metadata.get("source", "Unknown"),
+                                    "page": doc.metadata.get("page", 0),
+                                })
+                    else:
+                        result_entry["result"] = "No relevant documents found."
 
             # ── python_analysis ────────────────────────────────────────────
             elif tool == "python_analysis":

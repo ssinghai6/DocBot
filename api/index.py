@@ -1114,6 +1114,10 @@ async def chat(raw_request: Request, request: ChatRequest, _user=_rbac_viewer):
             effective_persona = request.persona
 
         # ── Deep Research path: LangGraph multi-step reasoning graph ─────────
+        # NOTE (legacy): Deep Research's retrieval pipeline (sub-question
+        # decomposition + gap-fill) is now also used by Autopilot's doc_search
+        # tool via deep_retrieve(). This standalone route is kept for backwards
+        # compatibility with the frontend Deep Research toggle.
         if request.deep_research:
             try:
                 from api.deep_research_service import run_deep_research

@@ -107,6 +107,7 @@ export function useChatSubmit(params: UseChatSubmitParams) {
     let useAutopilot = autopilotMode;
     if (!useAutopilot && (connectionId || sessionId) && AUTOPILOT_TRIGGER.test(input)) {
       useAutopilot = true;
+      showToast("info", "Autopilot activated \u2014 multi-step analysis in progress");
     }
 
     // ── Autopilot path ─────────────────────────────────────────────────────

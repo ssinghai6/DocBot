@@ -128,8 +128,6 @@ export default function ChatArea(props: ChatAreaProps) {
     setInput,
     chartType,
     setChartType,
-    autopilotMode,
-    setAutopilotMode,
     autopilotRunning,
     autopilotSteps,
     autopilotPlan,
@@ -144,10 +142,6 @@ export default function ChatArea(props: ChatAreaProps) {
     exportChat,
     showToast,
   } = props;
-
-  const AUTOPILOT_KEYWORDS = /\b(why|diagnos|investigat|analys|analy[sz]|compar|trend|forecast|explain|root.?cause|deep.?dive|break.?down|summariz|evaluat)\b/i;
-  const hasDataSource = isDbConnected || !!sessionId;
-  const showAutopilotNudge = hasDataSource && !autopilotMode && AUTOPILOT_KEYWORDS.test(input);
 
   const copyToClipboard = (text: string) => {
     navigator.clipboard.writeText(text);
@@ -470,20 +464,6 @@ export default function ChatArea(props: ChatAreaProps) {
                 {t}
               </button>
             ))}
-          </div>
-        )}
-        {/* Autopilot nudge */}
-        {showAutopilotNudge && (
-          <div className="flex items-center gap-2 mb-2 px-3 py-1.5 rounded-xl bg-[#a5b4fc]/8 border border-[#a5b4fc]/20 text-xs text-[#c4b5fd]">
-            <Wand2 className="w-3 h-3 shrink-0 text-[#a5b4fc]" />
-            <span className="flex-1">This looks like a multi-step question — try Autopilot?</span>
-            <button
-              type="button"
-              onClick={() => setAutopilotMode(true)}
-              className="px-2 py-0.5 rounded-lg bg-[#a5b4fc]/20 hover:bg-[#a5b4fc]/30 text-[#a5b4fc] font-semibold transition-colors text-[11px] shrink-0"
-            >
-              Enable
-            </button>
           </div>
         )}
         <form
