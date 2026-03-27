@@ -1,6 +1,6 @@
 # DocBot v2 — Complete Project Tracking Document
 > Generated: 2026-03-17
-> **Last Updated: 2026-03-26** (EPIC-10 1001-1003 done, EPIC-07 701/703 done, investor readiness sprint complete, 535 tests)
+> **Last Updated: 2026-03-26** (EPIC-10 1001-1003 done, EPIC-07 701/703 done, investor readiness sprint complete, CSV intelligence + conversational memory, 567 tests)
 > Team size: 1–2 engineers
 > Tracking tool recommendation: Linear (see Section 6)
 
@@ -1701,9 +1701,10 @@ As a developer, I want an automated accuracy test harness against FinanceBench q
 | EPIC-10 Sprint 1 | DOCBOT-1001, 1002, 1003 | 11 | ✅ Complete (DOCBOT-1004 code complete, accuracy not yet run) |
 | EPIC-07 Phase 1 | DOCBOT-701, 702, 703 (connector interface + commerce schema + Amazon SP-API) | 29 | ✅ Complete |
 | Investor Readiness | CI, landing page, metrics, LLM fallback wired, PII masking, frontend refactor | — | ✅ Complete (all P0/P1 items done) |
+| CSV Intelligence & Memory | Data profiling, error retry, conversational memory across all pipelines | — | ✅ Complete |
 | Human Testing | 85-test manual regression across all features | — | 🔄 To Do |
 
-**Total delivered**: 230 story points across 36 tickets + full test suite (535 tests) | **Remaining**: DOCBOT-1004 accuracy run (5 pts) + DOCBOT-702 in progress (8 pts) + human testing
+**Total delivered**: 230 story points across 36 tickets + full test suite (567 tests) | **Remaining**: DOCBOT-1004 accuracy run (5 pts) + human testing
 
 ---
 
@@ -1778,6 +1779,15 @@ All P0/P1 items shipped:
 - **E2B sandbox resilience** — pre-install common ML packages + auto-retry on ModuleNotFoundError
 - Admin metrics, CI pipeline, LLM fallback module, 5 autopilot test fixes
 - Test suite: 535 passed, 0 failed
+
+**CSV Intelligence & Conversational Memory (2026-03-26)**:
+All CSV/DB/hybrid/autopilot pipelines upgraded with three major capabilities:
+- **Deterministic data profiling on upload** — `DataProfile` dataclass in `csv_preprocessor.py` captures dtypes, sample rows, `describe()` output, datetime column detection (name heuristic + 70% parse threshold), frequency inference via `pd.infer_freq()`, null percentages, low-cardinality values. Computed once on upload (~50ms pandas, zero LLM calls), cached in encrypted creds blob.
+- **Enhanced CSV code generation** — LLM now receives full data profile (dtypes, sample rows, distributions) instead of just column names. Adaptive limits for complex queries (predict/forecast/model/etc.): `max_tokens` 2000→4000, code line limit 70→150, sandbox timeout 30s→60s.
+- **Error retry with feedback** — If sandbox execution fails (non-timeout), error + stderr fed back to LLM with fix guidance for one corrective retry attempt. SSE status event emitted during retry.
+- **Conversational memory across all pipelines** — Frontend sends last 6 messages (truncated to 500 chars) with every request. All pipelines (CSV, SQL, hybrid, autopilot) rephrase follow-up questions into standalone queries via lightweight LLM call (`max_tokens=200`). "Show me revenue" → "filter to Q1" now works everywhere, not just RAG.
+- Files changed: `csv_preprocessor.py`, `file_upload_service.py`, `sandbox_service.py`, `db_service.py`, `hybrid_service.py`, `autopilot_service.py`, `index.py`, `useChatSubmit.ts`
+- Test suite: 567 passed, 0 failed
 
 ---
 

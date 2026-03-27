@@ -24,7 +24,7 @@ DocBot is an AI-powered document + database analyst, fully deployed on Railway (
 |------|---------|
 | `api/index.py` | FastAPI backend (~1700 lines). App setup, EXPERT_PERSONAS, init_db(), all route handlers |
 | `api/db_service.py` | All DB connectivity, schema introspection (tables+views), 7-step SQL pipeline, LRU engine pool, error taxonomy, schema drift detection |
-| `api/sandbox_service.py` | E2B sandbox execution, Python/pandas code generation (Qwen via Groq), CSV→E2B pipeline |
+| `api/sandbox_service.py` | E2B sandbox execution, Python/pandas code generation (Qwen via Groq), CSV→E2B pipeline, error retry with feedback, conversational rephrase |
 | `api/hybrid_service.py` | Intent classification, parallel RAG+SQL retrieval, discrepancy detection |
 | `api/autopilot_service.py` | Analytical Autopilot — LangGraph multi-step investigation state machine |
 | `api/deep_research_service.py` | LangGraph Deep Research — 5-node state machine (plan→retrieve→evaluate→gap→synthesize) |
@@ -35,7 +35,7 @@ DocBot is an AI-powered document + database analyst, fully deployed on Railway (
 | `api/artifact_service.py` | Session artifact store — persists charts, code, SQL results |
 | `api/document_extractor.py` | LangExtract financial extraction (Gemini 2.5 Flash, full-doc coverage) |
 | `api/file_upload_service.py` | CSV/SQLite file uploads — CSV goes to E2B pandas, SQLite to SQL pipeline |
-| `api/utils/csv_preprocessor.py` | Multi-section CSV detection, section splitting, header detection, E2B preamble generation |
+| `api/utils/csv_preprocessor.py` | Multi-section CSV detection, section splitting, header detection, E2B preamble generation, `DataProfile` (dtypes, sample rows, datetime detection, frequency inference) |
 | `api/utils/llm_provider.py` | LLM fallback provider — Groq primary, Gemini 2.5 Flash fallback. Wired to all prod callsites. |
 | `api/utils/_gemini_wrapper.py` | Minimal LangChain-compatible Gemini wrapper for fallback provider |
 | `api/utils/` | Shared helpers: encryption, SSRF validator, SQL validator, embeddings, PII masking, table selector, context compressor, CSV preprocessor, reranker, chunker, vector store |
@@ -163,7 +163,13 @@ All work is tracked in `project-tasks/docbot-v2-project-tracking.md`.
   - Universal Autopilot — works with PDF + CSV + SQL (dynamic planner tools, `_select_tool()` flags)
   - Auth 401 fix — RBAC decoupled from SAML config, new `AUTH_REQUIRED` env var (default off)
   - Remaining: FinanceBench accuracy run (needs live keys), 85-test manual regression on prod
-- **591 tests passing, 0 failures**
+- **CSV Intelligence & Conversational Memory (2026-03-26) — Done**
+  - Deterministic `DataProfile` on CSV upload (dtypes, sample rows, describe(), datetime detection, frequency inference) — zero LLM calls
+  - Data profile wired into CSV code gen (LLM sees actual data, not just column names)
+  - Adaptive limits: complex queries get max_tokens 4000, 150-line code, 60s timeout
+  - Error retry with feedback: sandbox failures fed back to LLM for one corrective attempt
+  - Conversational memory: frontend sends last 6 messages; all pipelines (CSV, SQL, hybrid, autopilot) rephrase follow-ups into standalone queries
+- **567 tests passing, 0 failures**
 
 > **PageIndex evaluated 2026-03-25 — not integrating.** Hard blockers: OpenAI-only (Groq incompatible), not on PyPI (Railway brittleness), no streaming (SSE conflict). Revisit if PyPI package + multi-backend support ships.
 
@@ -184,7 +190,7 @@ All work is tracked in `project-tasks/docbot-v2-project-tracking.md`.
 
 **Credential protection**: Connection strings with passwords are NEVER logged, NEVER passed to LLM context, NEVER stored in plain text. Always Fernet-encrypt before persisting.
 
-**CSV queries never use SQL pipeline**: CSV uploads store raw bytes in the encrypted creds blob (`dialect="csv"`). Queries bypass `run_sql_pipeline` entirely and go to `run_csv_query_on_e2b()` in `sandbox_service.py`.
+**CSV queries never use SQL pipeline**: CSV uploads store raw bytes in the encrypted creds blob (`dialect="csv"`). Queries bypass `run_sql_pipeline` entirely and go to `run_csv_query_on_e2b()` in `sandbox_service.py`. On upload, a `DataProfile` is computed (dtypes, sample rows, describe(), datetime columns, null percentages) and cached in the creds blob. The profile is passed to the LLM during code generation so it sees actual data context. Complex queries (predict/forecast/model) get adaptive limits (4000 tokens, 150-line code, 60s timeout). If sandbox execution fails, the error is fed back to the LLM for one corrective retry.
 
 ## SQL Query Pipeline (7 bounded steps)
 
