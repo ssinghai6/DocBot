@@ -146,7 +146,8 @@ export default function ChatArea(props: ChatAreaProps) {
   } = props;
 
   const AUTOPILOT_KEYWORDS = /\b(why|diagnos|investigat|analys|analy[sz]|compar|trend|forecast|explain|root.?cause|deep.?dive|break.?down|summariz|evaluat)\b/i;
-  const showAutopilotNudge = isDbConnected && !autopilotMode && AUTOPILOT_KEYWORDS.test(input);
+  const hasDataSource = isDbConnected || !!sessionId;
+  const showAutopilotNudge = hasDataSource && !autopilotMode && AUTOPILOT_KEYWORDS.test(input);
 
   const copyToClipboard = (text: string) => {
     navigator.clipboard.writeText(text);

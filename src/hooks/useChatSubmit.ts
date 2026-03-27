@@ -93,7 +93,7 @@ export function useChatSubmit(params: UseChatSubmitParams) {
     }
 
     // ── Autopilot path ─────────────────────────────────────────────────────
-    if (effectiveChatMode === "database" && connectionId && autopilotMode) {
+    if (autopilotMode && (connectionId || sessionId)) {
       setAutopilotRunning(true);
       setAutopilotSteps([]);
       setAutopilotPlan([]);
@@ -103,10 +103,12 @@ export function useChatSubmit(params: UseChatSubmitParams) {
           method: "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({
-            connection_id: connectionId,
+            connection_id: connectionId || "",
             question: userMsg.content,
             persona: personaToSend,
             session_id: sessionId ?? "anonymous",
+            has_docs: !!sessionId,
+            has_db: !!connectionId,
           }),
         });
         if (!response.ok || !response.body) {

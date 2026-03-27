@@ -140,6 +140,8 @@ def _make_state(**overrides) -> AutopilotState:
         "final_answer": "",
         "citations": [],
         "timed_out": False,
+        "has_docs": False,
+        "has_db": True,
     }
     base.update(overrides)  # type: ignore[typeddict-item]
     return base
@@ -268,3 +270,82 @@ class TestMakeExecutorNode:
         result = asyncio.run(node(state))
         # Plan is empty so we return without executing — iteration unchanged
         assert result == {"iteration": 0}
+
+
+# ---------------------------------------------------------------------------
+# _select_tool() with data-source flags
+# ---------------------------------------------------------------------------
+
+
+class TestSelectToolDataSourceFlags:
+    """Test _select_tool() respects has_db / has_docs flags."""
+
+    def test_no_db_never_returns_sql_query(self):
+        """When has_db=False, _select_tool never returns sql_query."""
+        steps = [
+            "Query total revenue by region",
+            "Fetch all customer records",
+            "What was Q3 revenue by region?",
+            "Select top products",
+            "Count active users",
+        ]
+        for step in steps:
+            result = _select_tool(step, has_db=False, has_docs=True)
+            assert result != "sql_query", f"Step '{step}' returned sql_query with has_db=False"
+
+    def test_no_db_data_fetch_falls_back_to_doc_search(self):
+        """Data-fetch verbs with has_db=False and has_docs=True → doc_search."""
+        assert _select_tool("Fetch revenue data", has_db=False, has_docs=True) == "doc_search"
+        assert _select_tool("Query total by region", has_db=False, has_docs=True) == "doc_search"
+
+    def test_no_db_no_docs_falls_back_to_python(self):
+        """Data-fetch verbs with no db and no docs → python_analysis."""
+        assert _select_tool("Fetch the data", has_db=False, has_docs=False) == "python_analysis"
+
+    def test_has_docs_returns_doc_search_for_document_steps(self):
+        """Doc keywords route to doc_search regardless of flags."""
+        assert _select_tool("Search the uploaded document", has_db=True, has_docs=True) == "doc_search"
+        assert _select_tool("Find in the PDF report", has_db=False, has_docs=True) == "doc_search"
+
+    def test_chart_keywords_still_python_with_no_db(self):
+        """Chart/viz keywords → python_analysis even without DB."""
+        assert _select_tool("Create a bar chart of results", has_db=False, has_docs=True) == "python_analysis"
+        assert _select_tool("Plot the distribution", has_db=False, has_docs=False) == "python_analysis"
+
+    def test_default_flags_preserve_existing_behavior(self):
+        """With default flags (has_db=True, has_docs=False), behavior is unchanged."""
+        assert _select_tool("Query total revenue") == "sql_query"
+        assert _select_tool("Create a bar chart") == "python_analysis"
+        assert _select_tool("Search the uploaded document") == "doc_search"
+
+    def test_generic_step_with_docs_only(self):
+        """A generic question with only docs → doc_search."""
+        result = _select_tool("What was the revenue?", has_db=False, has_docs=True)
+        assert result == "doc_search"
+
+
+# ---------------------------------------------------------------------------
+# AutopilotState with optional connection_id
+# ---------------------------------------------------------------------------
+
+
+class TestAutopilotStateOptionalConnection:
+    def test_empty_connection_id_accepted(self):
+        """AutopilotState accepts empty string for connection_id (doc-only sessions)."""
+        state = _make_state(connection_id="", has_db=False, has_docs=True)
+        assert state["connection_id"] == ""
+        assert state["has_docs"] is True
+        assert state["has_db"] is False
+
+    def test_should_continue_works_without_connection(self):
+        """_should_continue works normally with empty connection_id."""
+        state = _make_state(connection_id="", has_db=False, has_docs=True, plan=["a", "b"], iteration=0)
+        assert _should_continue(state) == "execute"
+
+    def test_planner_fallback_with_doc_only_state(self):
+        """Planner falls back to single-step when no API key, even for doc-only."""
+        state = _make_state(connection_id="", has_db=False, has_docs=True, question="Summarize the report")
+        with patch.dict(os.environ, {}, clear=True):
+            os.environ.pop("groq_api_key", None)
+            result = asyncio.run(_planner_node(state))
+        assert result["plan"] == ["Summarize the report"]

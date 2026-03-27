@@ -581,11 +581,15 @@ async def generate_csv_analysis_code(
         "- Percentages: col.str.rstrip('%').pipe(pd.to_numeric, errors='coerce').div(100)\n"
         "- Dates: pd.to_datetime(col, format='mixed', dayfirst=False)\n\n"
         f"CHARTING: {chart_instructions}\n"
-        "- If question is about schema/columns/structure: print df.dtypes and df.shape, skip chart\n"
+        "- ONLY skip charting if the user explicitly asks about column names, data types, or table structure "
+        "(e.g. 'what columns exist', 'show schema', 'list fields'). "
+        "For ALL analytical, forecasting, comparison, trend, or statistical questions: ALWAYS generate a chart.\n"
         "- Otherwise call plt.show() once, then print chart metadata:\n"
         "  import json; print('CHART_META:' + json.dumps({'type': '<type>', "
         "'title': '<title>', 'x_label': '<x>', 'y_label': '<y>', 'series_count': <int>}))\n\n"
-        "Print a brief text summary of findings. Keep code under 70 lines."
+        "Print a brief human-readable narrative summary of findings (2-3 sentences). "
+        "Do NOT print raw DataFrame output — if showing tabular data, use df.to_markdown(). "
+        "Keep code under 70 lines."
     )
 
     # Build user message with section manifest or column list
@@ -728,6 +732,30 @@ async def _run_csv_in_sandbox(code: str, csv_path: str, csv_bytes: bytes) -> San
         )
 
 
+def _format_stdout_as_markdown(text: str) -> str:
+    """Best-effort formatting of pandas stdout output for markdown rendering."""
+    if not text:
+        return text
+
+    lines = text.split('\n')
+    result_lines = []
+
+    for line in lines:
+        # Already markdown formatted (has pipes) — keep as-is
+        if '|' in line:
+            result_lines.append(line)
+            continue
+        # Section headers (--- Something ---) — convert to bold
+        if line.strip().startswith('---') and line.strip().endswith('---'):
+            header = line.strip().strip('-').strip()
+            if header:
+                result_lines.append(f'\n**{header}**\n')
+                continue
+        result_lines.append(line)
+
+    return '\n'.join(result_lines)
+
+
 async def run_csv_query_on_e2b(
     csv_content_b64: str,
     question: str,
@@ -801,15 +829,36 @@ async def run_csv_query_on_e2b(
             + "import matplotlib\n"
             "matplotlib.use('Agg')\n"
             "import matplotlib.pyplot as plt\n"
+            "import json\n"
             "\n"
-            "print('Shape:', df.shape)\n"
-            "print('Columns:', list(df.columns))\n"
+            "print('**Dataset Overview**')\n"
+            "print(f'Shape: {df.shape[0]} rows x {df.shape[1]} columns')\n"
             "print()\n"
-            "print('--- Summary Statistics ---')\n"
-            "print(df.describe(include='all').to_string())\n"
+            "print('**Summary Statistics**')\n"
+            "try:\n"
+            "    print(df.describe(include='all').to_markdown())\n"
+            "except Exception:\n"
+            "    print(df.describe(include='all').to_string())\n"
             "print()\n"
-            "print('--- First 10 rows ---')\n"
-            "print(df.head(10).to_string())\n"
+            "print('**First 10 Rows**')\n"
+            "try:\n"
+            "    print(df.head(10).to_markdown())\n"
+            "except Exception:\n"
+            "    print(df.head(10).to_string())\n"
+            "\n"
+            "# Auto-chart: histogram of first numeric column\n"
+            "numeric_cols = df.select_dtypes(include='number').columns.tolist()\n"
+            "if numeric_cols:\n"
+            "    col = numeric_cols[0]\n"
+            "    fig, ax = plt.subplots(figsize=(10, 6))\n"
+            "    df[col].dropna().hist(bins=30, ax=ax, color='#667eea', edgecolor='white')\n"
+            "    ax.set_title(f'Distribution of {col}', fontsize=14)\n"
+            "    ax.set_xlabel(col)\n"
+            "    ax.set_ylabel('Frequency')\n"
+            "    plt.tight_layout()\n"
+            "    plt.show()\n"
+            "    print('CHART_META:' + json.dumps({'type': 'histogram', 'title': f'Distribution of {col}', "
+            "'x_label': col, 'y_label': 'Frequency', 'series_count': 1}))\n"
         )
     else:
         # Prepend preamble to LLM-generated code, stripping any duplicate
@@ -858,7 +907,7 @@ async def run_csv_query_on_e2b(
             yield f"data: {_stdlib_json.dumps({'type': 'chart', 'base64': chart_b64, 'index': idx, 'metadata': meta.model_dump() if meta else None})}\n\n"
 
     # --- SSE: answer tokens (stdout is the pandas output) ---
-    answer = result.stdout.strip()
+    answer = _format_stdout_as_markdown(result.stdout.strip())
     if result.error and not answer:
         answer = f"Execution error: {result.error}"
     elif result.error:

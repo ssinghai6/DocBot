@@ -27,6 +27,7 @@ interface ConnectionPanelProps {
 
   // Autopilot
   autopilotMode: boolean
+  hasDocSession: boolean
 
   // Query history
   queryHistory: QueryHistoryItem[]
@@ -61,6 +62,7 @@ export default function ConnectionPanel({
   entraEmail,
   entraSignInState,
   autopilotMode,
+  hasDocSession,
   queryHistory,
   historyOpen,
   expandedHistoryId,
@@ -104,24 +106,6 @@ export default function ConnectionPanel({
               <XCircle className="w-3.5 h-3.5" />
             </button>
           </div>
-
-          {/* DOCBOT-405: Autopilot toggle */}
-          <button
-            onClick={onAutopilotToggle}
-            className={`w-full flex items-center gap-2 px-3 py-2 rounded-xl text-xs border transition-all ${
-              autopilotMode
-                ? "border-[#667eea]/50 bg-[#667eea]/10 text-[#a5b4fc]"
-                : "border-[#ffffff10] text-gray-400 hover:text-white hover:bg-[#ffffff08]"
-            }`}
-          >
-            <Wand2 className={`w-3.5 h-3.5 shrink-0 ${autopilotMode ? "text-[#a5b4fc]" : "text-[#667eea]"}`} />
-            <span className="flex-1 text-left font-medium">Autopilot</span>
-            <span className={`text-[10px] px-1.5 py-0.5 rounded-full font-medium ${
-              autopilotMode ? "bg-[#667eea]/30 text-[#a5b4fc]" : "bg-[#ffffff10] text-gray-500"
-            }`}>
-              {autopilotMode ? "ON" : "OFF"}
-            </span>
-          </button>
 
           {/* DOCBOT-504: Query History Panel */}
           <div className="rounded-xl border border-[#ffffff10] overflow-hidden">
@@ -405,6 +389,26 @@ export default function ConnectionPanel({
             </div>
           )}
         </div>
+      )}
+
+      {/* DOCBOT-405: Autopilot toggle — visible when DB connected OR docs uploaded */}
+      {(isDbConnected || hasDocSession) && (
+        <button
+          onClick={onAutopilotToggle}
+          className={`w-full flex items-center gap-2 px-3 py-2 rounded-xl text-xs border transition-all mt-2 ${
+            autopilotMode
+              ? "border-[#667eea]/50 bg-[#667eea]/10 text-[#a5b4fc]"
+              : "border-[#ffffff10] text-gray-400 hover:text-white hover:bg-[#ffffff08]"
+          }`}
+        >
+          <Wand2 className={`w-3.5 h-3.5 shrink-0 ${autopilotMode ? "text-[#a5b4fc]" : "text-[#667eea]"}`} />
+          <span className="flex-1 text-left font-medium">Autopilot</span>
+          <span className={`text-[10px] px-1.5 py-0.5 rounded-full font-medium ${
+            autopilotMode ? "bg-[#667eea]/30 text-[#a5b4fc]" : "bg-[#ffffff10] text-gray-500"
+          }`}>
+            {autopilotMode ? "ON" : "OFF"}
+          </span>
+        </button>
       )}
     </div>
   )

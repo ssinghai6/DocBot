@@ -129,6 +129,24 @@ export type Message = {
   agentPersonas?: string[]    // DOCBOT-802: for hybrid messages with multiple personas
 }
 
+// ── Connector schemas ────────────────────────────────────────────────────
+
+export const ConnectorInfoSchema = z.object({
+  connector_id: z.string(),
+  connector_type: z.string(),
+})
+export type ConnectorInfo = z.infer<typeof ConnectorInfoSchema>
+
+export const ConnectorListResponseSchema = z.object({
+  connectors: z.array(ConnectorInfoSchema),
+})
+
+export const ConnectorSyncResponseSchema = z.object({
+  orders_persisted: z.number().optional(),
+  financials_persisted: z.number().optional(),
+})
+export type ConnectorSyncResponse = z.infer<typeof ConnectorSyncResponseSchema>
+
 // Live DB connection form state shape
 export type LiveDbForm = {
   dialect: string

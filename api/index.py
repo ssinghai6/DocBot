@@ -2154,9 +2154,11 @@ async def hybrid_chat_route(raw_request: Request, request: HybridChatRequest, _u
 
 class AutopilotRequest(BaseModel):
     session_id: str
-    connection_id: str
+    connection_id: Optional[str] = None
     question: str
     persona: str = "Generalist"
+    has_docs: bool = False
+    has_db: bool = False
 
 
 @app.post("/api/autopilot/run")
@@ -2184,7 +2186,7 @@ async def autopilot_run(raw_request: Request, request: AutopilotRequest, _user=_
             detail=request.question[:500],
             metadata={
                 "source": "autopilot",
-                "connection_id": request.connection_id,
+                "connection_id": request.connection_id or "",
                 "persona": request.persona,
                 "ip_address": get_client_ip(raw_request),
             },
@@ -2193,7 +2195,7 @@ async def autopilot_run(raw_request: Request, request: AutopilotRequest, _user=_
             async for chunk in run_autopilot(
                 question=request.question,
                 session_id=request.session_id,
-                connection_id=request.connection_id,
+                connection_id=request.connection_id or "",
                 persona=request.persona,
                 db_connections_table=db_connections_table,
                 schema_cache_table=schema_cache_table,
@@ -2204,6 +2206,8 @@ async def autopilot_run(raw_request: Request, request: AutopilotRequest, _user=_
                 async_session_factory=async_session_factory,
                 expert_personas=EXPERT_PERSONAS,
                 vector_stores=VECTOR_STORES,
+                has_docs=request.has_docs,
+                has_db=request.has_db,
             ):
                 yield chunk
         except Exception as exc:

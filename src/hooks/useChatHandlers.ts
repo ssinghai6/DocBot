@@ -16,6 +16,8 @@ import type {
   Toast,
   LiveDbForm,
   QueryHistoryItem,
+  ConnectorInfo,
+  ConnectorSyncResponse,
 } from "@/components/types"
 
 interface UseChatHandlersParams {
@@ -69,6 +71,7 @@ interface UseChatHandlersParams {
   setAuditLoading: React.Dispatch<React.SetStateAction<boolean>>
   setAuditEvents: React.Dispatch<React.SetStateAction<AuditEvent[]>>
   setWorkspaceConnections: React.Dispatch<React.SetStateAction<WorkspaceConnection[]>>
+  setConnectors: React.Dispatch<React.SetStateAction<ConnectorInfo[]>>
 
   showToast: (type: Toast['type'], message: string) => void
 }
@@ -124,6 +127,7 @@ export function useChatHandlers(params: UseChatHandlersParams) {
     setAuditLoading,
     setAuditEvents,
     setWorkspaceConnections,
+    setConnectors,
 
     showToast,
   } = params;
@@ -551,6 +555,55 @@ export function useChatHandlers(params: UseChatHandlersParams) {
     }
   };
 
+  // ── Marketplace Connector handlers ──────────────────────────────────────
+
+  const loadConnectors = useCallback(async () => {
+    try {
+      const res = await fetch("/api/connectors");
+      if (res.ok) {
+        const data = await res.json();
+        setConnectors(data.connectors ?? []);
+      }
+    } catch {
+      // non-fatal — connector list stays empty
+    }
+  }, [setConnectors]);
+
+  const handleConnectorRegister = useCallback(async (connectorType: string, credentials: Record<string, string>) => {
+    const res = await fetch("/api/connectors/register", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ connector_type: connectorType, credentials }),
+    });
+    if (!res.ok) {
+      const err = await res.json();
+      throw new Error(err.detail || "Registration failed");
+    }
+    const data = await res.json();
+    setConnectors(prev => [...prev, { connector_id: data.connector_id, connector_type: data.connector_type }]);
+    showToast("success", `${connectorType} marketplace connected`);
+  }, [setConnectors, showToast]);
+
+  const handleConnectorSync = useCallback(async (connectorId: string, startDate: string, endDate: string): Promise<ConnectorSyncResponse> => {
+    const res = await fetch(`/api/connectors/${connectorId}/sync`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ start_date: startDate, end_date: endDate }),
+    });
+    if (!res.ok) {
+      const err = await res.json();
+      throw new Error(err.detail || "Sync failed");
+    }
+    const data = await res.json();
+    showToast("success", "Data synced successfully");
+    return data as ConnectorSyncResponse;
+  }, [showToast]);
+
+  const handleConnectorDisconnect = useCallback((connectorId: string) => {
+    setConnectors(prev => prev.filter(c => c.connector_id !== connectorId));
+    showToast("info", "Marketplace disconnected");
+  }, [setConnectors, showToast]);
+
   return {
     loadQueryHistory,
     handleDbConnected,
@@ -572,5 +625,9 @@ export function useChatHandlers(params: UseChatHandlersParams) {
     clearChat,
     clearSession,
     exportChat,
+    loadConnectors,
+    handleConnectorRegister,
+    handleConnectorSync,
+    handleConnectorDisconnect,
   };
 }

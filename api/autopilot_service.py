@@ -59,6 +59,9 @@ class AutopilotState(TypedDict):
     citations: Annotated[list[dict], operator.add]
     # set True when the wall-clock guard fires
     timed_out: bool
+    # data-source availability flags
+    has_docs: bool
+    has_db: bool
 
 
 # ---------------------------------------------------------------------------
@@ -84,19 +87,45 @@ async def _planner_node(state: AutopilotState) -> dict:
 
     import groq as groq_module
 
+    # Build dynamic tools list based on available data sources
+    tools_available: list[str] = []
+    if state.get("has_db"):
+        tools_available.append("  - sql_query: run a SQL query against the connected database")
+    if state.get("has_docs"):
+        tools_available.append("  - doc_search: search uploaded PDF documents for relevant information")
+    tools_available.append("  - python_analysis: run Python / generate charts — ONLY after a data-fetch step has provided data")
+
+    tools_str = "\n".join(tools_available) if tools_available else "  - doc_search: search documents"
+
+    # Build data-fetch guidance based on available sources
+    if state.get("has_db"):
+        fetch_guidance = (
+            "1. If the question asks for a chart, heatmap, plot, or visualisation, the step BEFORE it "
+            "MUST be a sql_query step that fetches the required data. Never start with python_analysis.\n"
+            "2. Write each step as a clear action verb phrase, e.g. 'Fetch revenue by region for Q3.' "
+            "or 'Generate a heatmap of the correlation matrix.' — NOT 'Query data for heatmap generation'.\n"
+            "3. For chart/visualisation questions with no other analysis needed, use exactly 2 steps: "
+            "first a sql_query fetch step, then a python_analysis visualisation step."
+        )
+    elif state.get("has_docs"):
+        fetch_guidance = (
+            "1. Use doc_search steps to retrieve information from the uploaded documents.\n"
+            "2. Write each step as a clear action verb phrase, e.g. 'Search for revenue figures in the report.' "
+            "or 'Find the risk factors section in the filing.'\n"
+            "3. python_analysis can be used AFTER a doc_search step to further process or visualise the extracted data."
+        )
+    else:
+        fetch_guidance = (
+            "1. Write each step as a clear action verb phrase.\n"
+            "2. Use python_analysis for computation and visualisation tasks."
+        )
+
     system_prompt = (
         "You are a senior data analyst. Decompose the business question into a list of "
         "≤5 concrete investigation steps. Each step must be answerable with ONE tool:\n"
-        "  - sql_query: run a SQL query against the connected database\n"
-        "  - doc_search: search uploaded PDF documents\n"
-        "  - python_analysis: run Python / generate charts — ONLY after a sql_query step has fetched data\n\n"
+        f"{tools_str}\n\n"
         "CRITICAL RULES:\n"
-        "1. If the question asks for a chart, heatmap, plot, or visualisation, the step BEFORE it "
-        "MUST be a sql_query step that fetches the required data. Never start with python_analysis.\n"
-        "2. Write each step as a clear action verb phrase, e.g. 'Fetch revenue by region for Q3.' "
-        "or 'Generate a heatmap of the correlation matrix.' — NOT 'Query data for heatmap generation'.\n"
-        "3. For chart/visualisation questions with no other analysis needed, use exactly 2 steps: "
-        "first a sql_query fetch step, then a python_analysis visualisation step.\n\n"
+        f"{fetch_guidance}\n\n"
         "Return ONLY a JSON array of short step strings (no keys, no explanation), e.g.:\n"
         '["Fetch total revenue by region for Q3.", "Identify top 3 products by revenue.", '
         '"Generate a bar chart of revenue trend."]'
@@ -137,31 +166,43 @@ async def _planner_node(state: AutopilotState) -> dict:
 # ---------------------------------------------------------------------------
 
 
-def _select_tool(step: str) -> str:
+def _select_tool(step: str, has_db: bool = True, has_docs: bool = False) -> str:
     """Choose sql_query | doc_search | python_analysis based on step wording.
 
     Data-fetch verbs (query/fetch/get/retrieve/select/find) always win over
     visualisation keywords so "Fetch data for heatmap" stays sql_query.
+
+    When ``has_db`` is False the function never returns ``"sql_query"`` —
+    data-fetch verbs fall back to ``"doc_search"`` (if docs available) or
+    ``"python_analysis"``.
     """
     s = step.lower()
     # Data-fetch verbs take priority — these are SQL steps even if chart words present
     DATA_FETCH = ("fetch ", "retrieve ", "get ", "select ", "find ", "query ", "calculate ",
                   "compute ", "count ", "sum ", "aggregate ", "identify ")
-    if any(s.startswith(k) or f" {k}" in s for k in DATA_FETCH):
-        # Only override to python_analysis if the step is PURELY about visualisation
-        # (no data-fetch verb AND chart keyword present)
-        pass  # fall through to explicit chart check below with fetch-verb guard
     PYTHON_KEYWORDS = ("chart", "plot", "visuali", "correlat", "distribut",
                        "python", "scatter", "heatmap", "regression", "generate a ",
                        "create a ", "draw ")
+    DOC_KEYWORDS = ("document", "report", "pdf", "file", "upload",
+                    "manual", "policy", "contract", "according to")
+
     has_chart = any(k in s for k in PYTHON_KEYWORDS)
     has_fetch = any(s.startswith(k) or f" {k}" in s for k in DATA_FETCH)
+
     if has_chart and not has_fetch:
         return "python_analysis"
-    if any(k in s for k in ("document", "report", "pdf", "file", "upload",
-                             "manual", "policy", "contract", "according to")):
+    if any(k in s for k in DOC_KEYWORDS):
         return "doc_search"
-    return "sql_query"
+
+    # Data-fetch step — route to sql_query if DB available, else doc_search or python
+    if has_fetch or not has_chart:
+        if has_db:
+            return "sql_query"
+        if has_docs:
+            return "doc_search"
+        return "python_analysis"
+
+    return "sql_query" if has_db else ("doc_search" if has_docs else "python_analysis")
 
 
 # ---------------------------------------------------------------------------
@@ -191,7 +232,11 @@ def make_executor_node(
             return {"iteration": iteration}
 
         step = plan[iteration]
-        tool = _select_tool(step)
+        tool = _select_tool(
+            step,
+            has_db=state.get("has_db", True),
+            has_docs=state.get("has_docs", False),
+        )
         session_id = state["session_id"]
         connection_id = state["connection_id"]
         persona = state.get("persona", "Generalist")
@@ -278,8 +323,18 @@ def make_executor_node(
                                 prior_rows = json.loads(art.data_json)
                                 break
 
+                # Fallback: if no SQL artifact, try doc_search results as context
                 if not prior_rows:
-                    result_entry["result"] = "No prior SQL data available for analysis."
+                    doc_context_parts: list[str] = []
+                    for prior in reversed(state.get("steps_completed", [])):
+                        if prior.get("tool") == "doc_search" and prior.get("result"):
+                            doc_context_parts.append(prior["result"])
+                    if doc_context_parts:
+                        # Synthesise doc results into a pseudo-data context for code gen
+                        prior_rows = [{"document_context": "\n\n".join(doc_context_parts)}]
+
+                if not prior_rows:
+                    result_entry["result"] = "No prior data available for analysis."
                 else:
                     from api.sandbox_service import generate_analysis_code, run_python
 
@@ -436,6 +491,8 @@ async def run_autopilot(
     async_session_factory: Any,
     expert_personas: dict,
     vector_stores: dict,
+    has_docs: bool = False,
+    has_db: bool = False,
 ) -> AsyncGenerator[str, None]:
     """Run the Autopilot investigation and yield SSE-formatted strings.
 
@@ -473,6 +530,8 @@ async def run_autopilot(
         "final_answer": "",
         "citations": [],
         "timed_out": False,
+        "has_docs": has_docs,
+        "has_db": has_db,
     }
 
     step_num = 0

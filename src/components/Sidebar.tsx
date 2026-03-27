@@ -7,6 +7,7 @@ import {
 } from "lucide-react"
 import FileUploadZone from "@/components/FileUploadZone"
 import ConnectionPanel from "@/components/ConnectionPanel"
+import MarketplacePanel from "@/components/MarketplacePanel"
 import PersonaSelector from "@/components/PersonaSelector"
 import type {
   AuthUser,
@@ -14,6 +15,8 @@ import type {
   WorkspaceConnection,
   QueryHistoryItem,
   LiveDbForm,
+  ConnectorInfo,
+  ConnectorSyncResponse,
 } from "@/components/types"
 
 export interface SidebarProps {
@@ -55,6 +58,7 @@ export interface SidebarProps {
   entraEmail: string | null
   entraSignInState: "idle" | "signing_in" | "signed_in" | "error"
   autopilotMode: boolean
+  hasDocSession: boolean
   queryHistory: QueryHistoryItem[]
   historyOpen: boolean
   expandedHistoryId: string | null
@@ -81,6 +85,12 @@ export interface SidebarProps {
 
   clearChat: () => void
   messagesLength: number
+
+  // Marketplace connectors
+  connectors: ConnectorInfo[]
+  onConnectorRegister: (connectorType: string, credentials: Record<string, string>) => Promise<void>
+  onConnectorSync: (connectorId: string, startDate: string, endDate: string) => Promise<ConnectorSyncResponse>
+  onConnectorDisconnect: (connectorId: string) => void
 }
 
 export default function Sidebar(props: SidebarProps) {
@@ -119,6 +129,7 @@ export default function Sidebar(props: SidebarProps) {
     entraEmail,
     entraSignInState,
     autopilotMode,
+    hasDocSession,
     queryHistory,
     historyOpen,
     expandedHistoryId,
@@ -143,6 +154,10 @@ export default function Sidebar(props: SidebarProps) {
     onDeepResearchChange,
     clearChat,
     messagesLength,
+    connectors,
+    onConnectorRegister,
+    onConnectorSync,
+    onConnectorDisconnect,
   } = props;
 
   return (
@@ -288,6 +303,7 @@ export default function Sidebar(props: SidebarProps) {
           entraEmail={entraEmail}
           entraSignInState={entraSignInState}
           autopilotMode={autopilotMode}
+          hasDocSession={hasDocSession}
           queryHistory={queryHistory}
           historyOpen={historyOpen}
           expandedHistoryId={expandedHistoryId}
@@ -303,6 +319,13 @@ export default function Sidebar(props: SidebarProps) {
           onSetInput={onSetInput}
           onMicrosoftSignIn={onMicrosoftSignIn}
           onEntraReset={onEntraReset}
+        />
+
+        <MarketplacePanel
+          connectors={connectors}
+          onRegister={onConnectorRegister}
+          onSync={onConnectorSync}
+          onDisconnect={onConnectorDisconnect}
         />
 
         <PersonaSelector

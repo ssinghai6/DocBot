@@ -27,6 +27,7 @@ import type {
   AutopilotStep,
   Message,
   LiveDbForm,
+  ConnectorInfo,
 } from "@/components/types"
 
 // Toast Component
@@ -133,6 +134,9 @@ export default function Home() {
   // Persistent Workspace state
   const [workspaceConnections, setWorkspaceConnections] = useState<WorkspaceConnection[]>([]);
 
+  // Marketplace connector state
+  const [connectors, setConnectors] = useState<ConnectorInfo[]>([]);
+
   // Admin panel state
   const [adminPanelOpen, setAdminPanelOpen] = useState(false);
   const [adminTab, setAdminTab] = useState<"users" | "audit">("users");
@@ -225,6 +229,7 @@ export default function Home() {
     setAuditLoading,
     setAuditEvents,
     setWorkspaceConnections,
+    setConnectors,
 
     showToast,
   });
@@ -275,6 +280,7 @@ export default function Home() {
           if (parsed.success) {
             setAuthUser(parsed.data);
             handlers.fetchWorkspace();
+            handlers.loadConnectors();
           }
         }
 
@@ -410,6 +416,7 @@ export default function Home() {
         entraEmail={entraEmail}
         entraSignInState={entraSignInState}
         autopilotMode={autopilotMode}
+        hasDocSession={!!sessionId}
         queryHistory={queryHistory}
         historyOpen={historyOpen}
         expandedHistoryId={expandedHistoryId}
@@ -434,6 +441,10 @@ export default function Home() {
         onDeepResearchChange={setDeepResearch}
         clearChat={handlers.clearChat}
         messagesLength={messages.length}
+        connectors={connectors}
+        onConnectorRegister={handlers.handleConnectorRegister}
+        onConnectorSync={handlers.handleConnectorSync}
+        onConnectorDisconnect={handlers.handleConnectorDisconnect}
       />
 
       <ChatArea
