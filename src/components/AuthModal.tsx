@@ -136,7 +136,7 @@ export default function AuthModal({
                 placeholder="Your name (optional)"
                 value={authName}
                 onChange={e => setAuthName(e.target.value)}
-                className="w-full px-3.5 py-2.5 rounded-xl bg-[#1a1a24] border border-[#ffffff10] text-white text-sm placeholder-gray-600 outline-none focus:border-[#667eea]/50 transition-colors"
+                className="w-full px-3.5 py-2.5 rounded-xl bg-[#1a1a24] border border-[#ffffff10] text-white text-sm placeholder-gray-500 outline-none focus:border-[#667eea]/50 transition-colors"
               />
             )}
             <input
@@ -145,7 +145,7 @@ export default function AuthModal({
               value={authEmail}
               onChange={e => setAuthEmail(e.target.value)}
               required
-              className="w-full px-3.5 py-2.5 rounded-xl bg-[#1a1a24] border border-[#ffffff10] text-white text-sm placeholder-gray-600 outline-none focus:border-[#667eea]/50 transition-colors"
+              className="w-full px-3.5 py-2.5 rounded-xl bg-[#1a1a24] border border-[#ffffff10] text-white text-sm placeholder-gray-500 outline-none focus:border-[#667eea]/50 transition-colors"
             />
             <input
               type="password"
@@ -153,7 +153,7 @@ export default function AuthModal({
               value={authPassword}
               onChange={e => setAuthPassword(e.target.value)}
               required
-              className="w-full px-3.5 py-2.5 rounded-xl bg-[#1a1a24] border border-[#ffffff10] text-white text-sm placeholder-gray-600 outline-none focus:border-[#667eea]/50 transition-colors"
+              className="w-full px-3.5 py-2.5 rounded-xl bg-[#1a1a24] border border-[#ffffff10] text-white text-sm placeholder-gray-500 outline-none focus:border-[#667eea]/50 transition-colors"
             />
             {authError && (
               <p className="text-xs text-red-400 bg-red-500/10 border border-red-500/20 rounded-lg px-3 py-2">{authError}</p>

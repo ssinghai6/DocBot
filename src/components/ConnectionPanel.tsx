@@ -80,7 +80,7 @@ export default function ConnectionPanel({
   onEntraReset,
 }: ConnectionPanelProps) {
   return (
-    <div className="mb-6">
+    <div className="mb-5">
       <h3 className="text-sm font-semibold mb-3 text-white flex items-center gap-2">
         <Database className="w-4 h-4 text-[#f97316]" />
         Database
@@ -271,7 +271,7 @@ export default function ConnectionPanel({
                 placeholder="Host"
                 value={liveDbForm.host}
                 onChange={(e) => onLiveDbFormChange({ ...liveDbForm, host: e.target.value })}
-                className="w-full px-3 py-2 rounded-lg bg-[#1a1a24] border border-[#ffffff10] text-gray-300 text-xs placeholder-gray-600 focus:outline-none focus:border-[#f97316]/40"
+                className="w-full px-3 py-2 rounded-lg bg-[#1a1a24] border border-[#ffffff10] text-gray-300 text-xs placeholder-gray-500 focus:outline-none focus:border-[#f97316]/40"
               />
 
               <div className="flex gap-2">
@@ -280,14 +280,14 @@ export default function ConnectionPanel({
                   placeholder="Port"
                   value={liveDbForm.port}
                   onChange={(e) => onLiveDbFormChange({ ...liveDbForm, port: e.target.value })}
-                  className="w-20 px-3 py-2 rounded-lg bg-[#1a1a24] border border-[#ffffff10] text-gray-300 text-xs placeholder-gray-600 focus:outline-none focus:border-[#f97316]/40"
+                  className="w-20 px-3 py-2 rounded-lg bg-[#1a1a24] border border-[#ffffff10] text-gray-300 text-xs placeholder-gray-500 focus:outline-none focus:border-[#f97316]/40"
                 />
                 <input
                   type="text"
                   placeholder="Database name"
                   value={liveDbForm.dbname}
                   onChange={(e) => onLiveDbFormChange({ ...liveDbForm, dbname: e.target.value })}
-                  className="flex-1 px-3 py-2 rounded-lg bg-[#1a1a24] border border-[#ffffff10] text-gray-300 text-xs placeholder-gray-600 focus:outline-none focus:border-[#f97316]/40"
+                  className="flex-1 px-3 py-2 rounded-lg bg-[#1a1a24] border border-[#ffffff10] text-gray-300 text-xs placeholder-gray-500 focus:outline-none focus:border-[#f97316]/40"
                 />
               </div>
 
@@ -332,7 +332,7 @@ export default function ConnectionPanel({
                     placeholder="Username"
                     value={liveDbForm.user}
                     onChange={(e) => onLiveDbFormChange({ ...liveDbForm, user: e.target.value })}
-                    className="w-full px-3 py-2 rounded-lg bg-[#1a1a24] border border-[#ffffff10] text-gray-300 text-xs placeholder-gray-600 focus:outline-none focus:border-[#f97316]/40"
+                    className="w-full px-3 py-2 rounded-lg bg-[#1a1a24] border border-[#ffffff10] text-gray-300 text-xs placeholder-gray-500 focus:outline-none focus:border-[#f97316]/40"
                   />
                   <div className="relative">
                     <input
@@ -340,7 +340,7 @@ export default function ConnectionPanel({
                       placeholder="Password"
                       value={liveDbForm.password}
                       onChange={(e) => onLiveDbFormChange({ ...liveDbForm, password: e.target.value })}
-                      className="w-full px-3 py-2 pr-8 rounded-lg bg-[#1a1a24] border border-[#ffffff10] text-gray-300 text-xs placeholder-gray-600 focus:outline-none focus:border-[#f97316]/40"
+                      className="w-full px-3 py-2 pr-8 rounded-lg bg-[#1a1a24] border border-[#ffffff10] text-gray-300 text-xs placeholder-gray-500 focus:outline-none focus:border-[#f97316]/40"
                     />
                     <button
                       type="button"

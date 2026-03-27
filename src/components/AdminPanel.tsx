@@ -67,7 +67,7 @@ export default function AdminPanel({
           </div>
           <div>
             <h2 className="text-sm font-semibold text-white">Admin Panel</h2>
-            <p className="text-[11px] text-gray-500">User management &amp; audit log</p>
+            <p className="text-xs text-gray-500">User management &amp; audit log</p>
           </div>
           <div className="ml-auto flex items-center gap-2">
             {/* Tab switcher */}
@@ -136,10 +136,10 @@ export default function AdminPanel({
                   <table className="w-full text-sm">
                     <thead>
                       <tr className="border-b border-[#ffffff08]">
-                        <th className="text-left text-[11px] font-semibold text-gray-500 uppercase tracking-wider pb-2 pr-4">User</th>
-                        <th className="text-left text-[11px] font-semibold text-gray-500 uppercase tracking-wider pb-2 pr-4">Provider</th>
-                        <th className="text-left text-[11px] font-semibold text-gray-500 uppercase tracking-wider pb-2 pr-4">Last Login</th>
-                        <th className="text-left text-[11px] font-semibold text-gray-500 uppercase tracking-wider pb-2">Role</th>
+                        <th className="text-left text-xs font-semibold text-gray-500 uppercase tracking-wider pb-2 pr-4">User</th>
+                        <th className="text-left text-xs font-semibold text-gray-500 uppercase tracking-wider pb-2 pr-4">Provider</th>
+                        <th className="text-left text-xs font-semibold text-gray-500 uppercase tracking-wider pb-2 pr-4">Last Login</th>
+                        <th className="text-left text-xs font-semibold text-gray-500 uppercase tracking-wider pb-2">Role</th>
                       </tr>
                     </thead>
                     <tbody className="divide-y divide-[#ffffff06]">
@@ -152,10 +152,10 @@ export default function AdminPanel({
                             </div>
                           </td>
                           <td className="py-3 pr-4">
-                            <span className="text-[11px] text-gray-400 capitalize">{user.provider}</span>
+                            <span className="text-xs text-gray-400 capitalize">{user.provider}</span>
                           </td>
                           <td className="py-3 pr-4">
-                            <span className="text-[11px] text-gray-500">
+                            <span className="text-xs text-gray-500">
                               {user.last_login_at
                                 ? new Date(user.last_login_at).toLocaleDateString([], { month: "short", day: "numeric", year: "numeric" })
                                 : "Never"}
@@ -171,7 +171,7 @@ export default function AdminPanel({
                                 }
                                 updateUserRole(user.id, e.target.value);
                               }}
-                              className="text-[11px] px-2 py-1 rounded-lg bg-[#1a1a24] border border-[#ffffff10] text-gray-300 focus:outline-none focus:border-[#667eea]/40 cursor-pointer"
+                              className="text-xs px-2 py-1 rounded-lg bg-[#1a1a24] border border-[#ffffff10] text-gray-300 focus:outline-none focus:border-[#667eea]/40 cursor-pointer"
                             >
                               <option value="viewer">viewer</option>
                               <option value="analyst">analyst</option>
@@ -242,10 +242,10 @@ export default function AdminPanel({
                   <table className="w-full text-sm">
                     <thead>
                       <tr className="border-b border-[#ffffff08]">
-                        <th className="text-left text-[11px] font-semibold text-gray-500 uppercase tracking-wider pb-2 pr-3">Time</th>
-                        <th className="text-left text-[11px] font-semibold text-gray-500 uppercase tracking-wider pb-2 pr-3">Event</th>
-                        <th className="text-left text-[11px] font-semibold text-gray-500 uppercase tracking-wider pb-2 pr-3">Detail</th>
-                        <th className="text-left text-[11px] font-semibold text-gray-500 uppercase tracking-wider pb-2">Session</th>
+                        <th className="text-left text-xs font-semibold text-gray-500 uppercase tracking-wider pb-2 pr-3">Time</th>
+                        <th className="text-left text-xs font-semibold text-gray-500 uppercase tracking-wider pb-2 pr-3">Event</th>
+                        <th className="text-left text-xs font-semibold text-gray-500 uppercase tracking-wider pb-2 pr-3">Detail</th>
+                        <th className="text-left text-xs font-semibold text-gray-500 uppercase tracking-wider pb-2">Session</th>
                       </tr>
                     </thead>
                     <tbody className="divide-y divide-[#ffffff06]">
@@ -254,7 +254,7 @@ export default function AdminPanel({
                         return (
                           <tr key={ev.id} className="hover:bg-[#ffffff03] transition-colors">
                             <td className="py-2.5 pr-3 whitespace-nowrap">
-                              <span className="text-[11px] text-gray-500">
+                              <span className="text-xs text-gray-500">
                                 {ev.occurred_at
                                   ? new Date(ev.occurred_at).toLocaleString([], { month: "short", day: "numeric", hour: "2-digit", minute: "2-digit" })
                                   : "\u2014"}
@@ -266,7 +266,7 @@ export default function AdminPanel({
                               </span>
                             </td>
                             <td className="py-2.5 pr-3 max-w-[220px]">
-                              <p className="text-[11px] text-gray-400 truncate" title={ev.detail ?? ""}>
+                              <p className="text-xs text-gray-400 truncate" title={ev.detail ?? ""}>
                                 {ev.detail || "\u2014"}
                               </p>
                             </td>

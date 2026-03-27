@@ -119,7 +119,7 @@ export default function MarketplacePanel({
   const allFieldsFilled = fields.every(f => credentials[f.key]?.trim())
 
   return (
-    <div className="mb-6">
+    <div className="mb-5">
       <h3 className="text-sm font-semibold mb-3 text-white flex items-center gap-2">
         <ShoppingCart className="w-4 h-4 text-[#8b5cf6]" />
         Marketplace
@@ -172,7 +172,7 @@ export default function MarketplacePanel({
                         type="date"
                         value={syncDates[conn.connector_id]?.start ?? ""}
                         onChange={e => updateSyncDate(conn.connector_id, "start", e.target.value)}
-                        className="w-full px-2 py-1.5 rounded-lg bg-[#1a1a24] border border-[#ffffff10] text-gray-300 text-[11px] focus:outline-none focus:border-[#8b5cf6]/40"
+                        className="w-full px-2 py-1.5 rounded-lg bg-[#1a1a24] border border-[#ffffff10] text-gray-300 text-xs focus:outline-none focus:border-[#8b5cf6]/40"
                       />
                     </div>
                     <div className="flex-1">
@@ -181,7 +181,7 @@ export default function MarketplacePanel({
                         type="date"
                         value={syncDates[conn.connector_id]?.end ?? ""}
                         onChange={e => updateSyncDate(conn.connector_id, "end", e.target.value)}
-                        className="w-full px-2 py-1.5 rounded-lg bg-[#1a1a24] border border-[#ffffff10] text-gray-300 text-[11px] focus:outline-none focus:border-[#8b5cf6]/40"
+                        className="w-full px-2 py-1.5 rounded-lg bg-[#1a1a24] border border-[#ffffff10] text-gray-300 text-xs focus:outline-none focus:border-[#8b5cf6]/40"
                       />
                     </div>
                   </div>
@@ -267,7 +267,7 @@ export default function MarketplacePanel({
                 placeholder={field.placeholder}
                 value={credentials[field.key] ?? ""}
                 onChange={e => setCredentials(prev => ({ ...prev, [field.key]: e.target.value }))}
-                className="w-full px-3 py-2 pr-8 rounded-lg bg-[#1a1a24] border border-[#ffffff10] text-gray-300 text-xs placeholder-gray-600 focus:outline-none focus:border-[#8b5cf6]/40"
+                className="w-full px-3 py-2 pr-8 rounded-lg bg-[#1a1a24] border border-[#ffffff10] text-gray-300 text-xs placeholder-gray-500 focus:outline-none focus:border-[#8b5cf6]/40"
               />
               {field.type === "password" && (
                 <button

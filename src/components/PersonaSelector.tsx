@@ -96,7 +96,7 @@ export default function PersonaSelector({
   onDeepResearchChange,
 }: PersonaSelectorProps) {
   return (
-    <div className="mb-6 flex-1">
+    <div className="mb-5 flex-1">
       <div className="flex items-center gap-2 mb-3">
         <Sparkles className="w-4 h-4 text-[#667eea]" />
         <span className="text-xs font-semibold text-gray-400 uppercase tracking-wider">Expert Mode</span>

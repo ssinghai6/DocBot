@@ -14,8 +14,11 @@ import {
   MessageSquare,
   Upload,
   Zap,
-  GitBranch,
+  Wand2,
   Github,
+  ShoppingCart,
+  XCircle,
+  Play,
 } from "lucide-react"
 import { Button, Badge, Card } from "@/components/ui"
 
@@ -63,11 +66,11 @@ const features = [
     iconBg: "bg-yellow-900/30",
   },
   {
-    icon: <GitBranch className="w-6 h-6" />,
-    title: "Deep Research",
+    icon: <Wand2 className="w-6 h-6" />,
+    title: "Analytical Autopilot",
     description:
-      "Multi-step investigation using a LangGraph 5-node state machine: plan, retrieve, evaluate, gap-fill, and synthesize across all your data sources.",
-    badge: "LangGraph",
+      "Auto-triggers multi-step investigations when it detects complex questions. Plans steps, queries databases, searches documents, runs Python analysis, and synthesizes findings.",
+    badge: "Auto-Triggers",
     badgeVariant: "info" as const,
     iconColor: "text-cyan-400",
     iconBg: "bg-cyan-900/30",
@@ -82,15 +85,35 @@ const features = [
     iconColor: "text-emerald-400",
     iconBg: "bg-emerald-900/30",
   },
+  {
+    icon: <ShoppingCart className="w-6 h-6" />,
+    title: "Marketplace Connector",
+    description:
+      "Connect Amazon Seller Central. Sync orders and financials, then query everything with natural language alongside your documents and databases.",
+    badge: "Amazon SP-API",
+    badgeVariant: "warning" as const,
+    iconColor: "text-orange-400",
+    iconBg: "bg-orange-900/30",
+  },
+  {
+    icon: <MessageSquare className="w-6 h-6" />,
+    title: "Conversational Memory",
+    description:
+      "Follow-up questions work naturally across all data sources. Ask 'show revenue by month' then 'filter to Q1 only' — DocBot remembers context.",
+    badge: "All Pipelines",
+    badgeVariant: "success" as const,
+    iconColor: "text-teal-400",
+    iconBg: "bg-teal-900/30",
+  },
 ]
 
 // ── Stats data ─────────────────────────────────────────────────────────────────
 
 const stats = [
-  { label: "Tests Passing", value: "385+" },
-  { label: "AI Personas", value: "8" },
-  { label: "Database Types", value: "4" },
-  { label: "Deployed On", value: "Railway" },
+  { label: "Test Coverage", value: "567+" },
+  { label: "Expert AI Personas", value: "8" },
+  { label: "Data Sources", value: "6+" },
+  { label: "SQL Pipeline Steps", value: "7" },
 ]
 
 // ── How it works steps ────────────────────────────────────────────────────────
@@ -178,13 +201,25 @@ export default function LandingPage() {
               Features
             </a>
             <a
+              href="#integrations"
+              className="hover:text-white transition-colors duration-150"
+            >
+              Integrations
+            </a>
+            <a
               href="#how-it-works"
               className="hover:text-white transition-colors duration-150"
             >
               How It Works
             </a>
+            <a
+              href="#pricing"
+              className="hover:text-white transition-colors duration-150"
+            >
+              Pricing
+            </a>
           </div>
-          <Link href="/">
+          <Link href="/chat">
             <Button variant="primary" size="sm">
               Launch App
               <ArrowRight className="w-3.5 h-3.5" />
@@ -211,7 +246,7 @@ export default function LandingPage() {
             <div>
               <div className="inline-flex items-center gap-2 px-3 py-1 rounded-full bg-blue-900/30 border border-blue-700/40 text-blue-400 text-sm font-medium mb-6">
                 <Zap className="w-3.5 h-3.5" />
-                AI-Powered Document + Database Analyst
+                Enterprise Document Intelligence
               </div>
 
               <h1 className="text-4xl sm:text-5xl lg:text-6xl font-bold leading-tight text-white mb-6">
@@ -222,13 +257,11 @@ export default function LandingPage() {
               </h1>
 
               <p className="text-lg sm:text-xl text-gray-400 leading-relaxed mb-8 max-w-lg">
-                Ask questions in plain English. Get answers from PDFs, live
-                databases, and data files — all at once, with citations and
-                discrepancy detection.
+                The only platform that cross-references your documents against live databases in real time. Get cited answers, catch discrepancies automatically, and connect your marketplace data — all through plain English.
               </p>
 
               <div className="flex flex-col sm:flex-row gap-3">
-                <Link href="/">
+                <Link href="/chat">
                   <Button variant="primary" size="lg">
                     Start for Free
                     <ArrowRight className="w-5 h-5" />
@@ -352,13 +385,37 @@ export default function LandingPage() {
         </div>
       </section>
 
+      {/* ── Integrations ── */}
+      <section id="integrations" className="py-12 px-4 sm:px-6 lg:px-8 border-b border-gray-800/40">
+        <div className="max-w-5xl mx-auto">
+          <p className="text-center text-sm text-gray-500 mb-8 uppercase tracking-wider font-medium">
+            Integrates With
+          </p>
+          <div className="flex flex-wrap items-center justify-center gap-8 md:gap-12">
+            {[
+              { icon: <Database className="w-5 h-5" />, label: "PostgreSQL" },
+              { icon: <Database className="w-5 h-5" />, label: "MySQL" },
+              { icon: <Database className="w-5 h-5" />, label: "Azure SQL" },
+              { icon: <Database className="w-5 h-5" />, label: "SQLite" },
+              { icon: <ShoppingCart className="w-5 h-5" />, label: "Amazon SP-API" },
+              { icon: <BarChart2 className="w-5 h-5" />, label: "E2B Sandbox" },
+            ].map((item) => (
+              <div key={item.label} className="flex items-center gap-2 text-gray-500 hover:text-gray-300 transition-colors">
+                {item.icon}
+                <span className="text-xs font-medium">{item.label}</span>
+              </div>
+            ))}
+          </div>
+        </div>
+      </section>
+
       {/* ── Features grid ── */}
       <section id="features" className="py-24 px-4 sm:px-6 lg:px-8">
         <div className="max-w-7xl mx-auto">
           <div className="text-center mb-16">
             <Badge variant="info" className="mb-4">What DocBot Does</Badge>
             <h2 className="text-3xl sm:text-4xl font-bold text-white mb-4">
-              One platform. Every data source.
+              Enterprise-grade intelligence across every data source
             </h2>
             <p className="text-lg text-gray-400 max-w-2xl mx-auto">
               DocBot unifies your documents and databases into a single conversational
@@ -385,6 +442,53 @@ export default function LandingPage() {
                 </p>
               </Card>
             ))}
+          </div>
+        </div>
+      </section>
+
+      {/* ── Comparison ── */}
+      <section className="py-24 px-4 sm:px-6 lg:px-8">
+        <div className="max-w-4xl mx-auto">
+          <div className="text-center mb-12">
+            <Badge variant="info" className="mb-4">Why DocBot?</Badge>
+            <h2 className="text-3xl sm:text-4xl font-bold text-white mb-4">
+              The only platform that does it all
+            </h2>
+            <p className="text-lg text-gray-400 max-w-2xl mx-auto">
+              Other tools handle documents OR databases. DocBot cross-references both in real time.
+            </p>
+          </div>
+          <div className="overflow-x-auto">
+            <table className="w-full text-sm">
+              <thead>
+                <tr className="border-b border-gray-800">
+                  <th className="text-left py-4 px-4 text-gray-400 font-medium">Capability</th>
+                  <th className="py-4 px-4 text-gray-400 font-medium">ChatGPT</th>
+                  <th className="py-4 px-4 text-gray-400 font-medium">Custom RAG</th>
+                  <th className="py-4 px-4 text-gray-400 font-medium">BI Tools</th>
+                  <th className="py-4 px-4 text-white font-bold bg-gradient-to-r from-blue-600/10 to-purple-600/10 rounded-t-lg">DocBot</th>
+                </tr>
+              </thead>
+              <tbody className="text-gray-300">
+                {[
+                  ["Document Q&A with citations", false, true, false, true],
+                  ["Live database queries", false, false, true, true],
+                  ["Cross-source discrepancy detection", false, false, false, true],
+                  ["Marketplace data sync", false, false, false, true],
+                  ["Multi-step auto-investigation", false, false, false, true],
+                  ["No infrastructure to manage", true, false, false, true],
+                ].map(([label, ...values], i) => (
+                  <tr key={i} className="border-b border-gray-800/50">
+                    <td className="py-3 px-4 text-gray-300">{label as string}</td>
+                    {(values as boolean[]).map((v, j) => (
+                      <td key={j} className={`py-3 px-4 text-center ${j === 3 ? "bg-gradient-to-r from-blue-600/5 to-purple-600/5" : ""}`}>
+                        {v ? <CheckCircle2 className="w-5 h-5 text-green-400 mx-auto" /> : <XCircle className="w-5 h-5 text-gray-700 mx-auto" />}
+                      </td>
+                    ))}
+                  </tr>
+                ))}
+              </tbody>
+            </table>
           </div>
         </div>
       </section>
@@ -430,6 +534,61 @@ export default function LandingPage() {
         </div>
       </section>
 
+      {/* ── Demo Video ── */}
+      <section className="py-20 px-4 sm:px-6 lg:px-8">
+        <div className="max-w-4xl mx-auto">
+          <div className="text-center mb-10">
+            <Badge variant="info" className="mb-4">See It In Action</Badge>
+            <h2 className="text-3xl sm:text-4xl font-bold text-white mb-4">
+              Watch DocBot analyze real data
+            </h2>
+          </div>
+          <div className="aspect-video bg-gray-900/50 border border-gray-800 rounded-2xl flex items-center justify-center group cursor-pointer hover:border-purple-500/40 transition-all duration-300">
+            <div className="w-20 h-20 rounded-full bg-gradient-to-br from-blue-500 to-purple-600 flex items-center justify-center shadow-2xl shadow-purple-900/40 group-hover:scale-110 transition-transform duration-300">
+              <Play className="w-8 h-8 text-white ml-1" />
+            </div>
+          </div>
+        </div>
+      </section>
+
+      {/* ── Pricing ── */}
+      <section id="pricing" className="py-24 px-4 sm:px-6 lg:px-8 bg-gray-900/20">
+        <div className="max-w-5xl mx-auto text-center">
+          <Badge variant="success" className="mb-4">Pricing</Badge>
+          <h2 className="text-3xl sm:text-4xl font-bold text-white mb-4">
+            Start free. Scale when ready.
+          </h2>
+          <p className="text-lg text-gray-400 mb-12 max-w-xl mx-auto">
+            No credit card required. Upgrade as your data needs grow.
+          </p>
+          <div className="grid sm:grid-cols-3 gap-6 max-w-3xl mx-auto">
+            {[
+              { name: "Starter", price: "Free", features: ["5 PDF uploads", "CSV analysis", "8 AI personas", "Community support"], cta: "Get Started", highlight: false },
+              { name: "Pro", price: "Coming Soon", features: ["Unlimited documents", "Live database connections", "Marketplace connectors", "Priority support"], cta: "Join Waitlist", highlight: true },
+              { name: "Enterprise", price: "Contact Us", features: ["SAML SSO & RBAC", "Audit logging", "PII auto-masking", "Dedicated support"], cta: "Talk to Us", highlight: false },
+            ].map((tier) => (
+              <div key={tier.name} className={`rounded-2xl p-6 text-left ${tier.highlight ? "bg-gradient-to-b from-blue-600/10 to-purple-600/10 border-2 border-blue-500/30 shadow-lg shadow-blue-900/20" : "bg-gray-900/40 border border-gray-800"}`}>
+                <h3 className="text-lg font-bold text-white mb-1">{tier.name}</h3>
+                <p className="text-2xl font-bold text-white mb-4">{tier.price}</p>
+                <ul className="space-y-2 mb-6">
+                  {tier.features.map((f) => (
+                    <li key={f} className="flex items-center gap-2 text-sm text-gray-300">
+                      <CheckCircle2 className="w-4 h-4 text-green-400 flex-shrink-0" />
+                      {f}
+                    </li>
+                  ))}
+                </ul>
+                <Link href="/chat">
+                  <Button variant={tier.highlight ? "primary" : "secondary"} size="sm" className="w-full">
+                    {tier.cta}
+                  </Button>
+                </Link>
+              </div>
+            ))}
+          </div>
+        </div>
+      </section>
+
       {/* ── CTA section ── */}
       <section className="py-24 px-4 sm:px-6 lg:px-8 relative overflow-hidden">
         <div className="absolute inset-0 -z-10 pointer-events-none" aria-hidden="true">
@@ -443,14 +602,13 @@ export default function LandingPage() {
           </div>
 
           <h2 className="text-3xl sm:text-4xl font-bold text-white mb-4">
-            Ready to query your data in plain English?
+            Stop switching between tools. Start getting answers.
           </h2>
           <p className="text-lg text-gray-400 mb-10 leading-relaxed">
-            Connect your first database or upload a document in under 60 seconds.
-            No credit card. No setup scripts.
+            Connect your first data source in under 60 seconds. No credit card required.
           </p>
 
-          <Link href="/">
+          <Link href="/chat">
             <Button variant="primary" size="lg" className="text-base px-8 py-3.5">
               Launch DocBot
               <ArrowRight className="w-5 h-5" />
@@ -468,7 +626,7 @@ export default function LandingPage() {
             </span>
             <span className="flex items-center gap-2">
               <CheckCircle2 className="w-4 h-4 text-green-500" />
-              385+ tests passing
+              567+ tests passing
             </span>
           </div>
         </div>
@@ -483,7 +641,7 @@ export default function LandingPage() {
             </div>
             <span className="font-medium text-gray-400">DocBot</span>
             <span className="hidden sm:inline text-gray-700">—</span>
-            <span className="hidden sm:inline">Built with Claude Code</span>
+            <span className="hidden sm:inline">AI-Powered Document Intelligence</span>
           </div>
 
           <div className="flex items-center gap-4">

@@ -151,7 +151,7 @@ export default function ChatArea(props: ChatAreaProps) {
   return (
     <main className="flex-1 flex flex-col min-w-0 bg-transparent relative z-10">
       {/* Header */}
-      <header className="px-4 pt-14 lg:pt-6 lg:px-6 flex-none">
+      <header className="px-4 pt-14 md:pt-8 md:px-5 lg:pt-6 lg:px-6 flex-none">
         <div className="relative overflow-hidden bg-gradient-to-br from-[#12121a]/95 to-[#1a1a28]/95 rounded-2xl border border-[#ffffff08] shadow-2xl p-4 lg:p-6 max-w-5xl mx-auto">
           <div className="absolute inset-0 bg-gradient-to-tr from-[#667eea]/5 via-transparent to-[#764ba2]/5"></div>
           <div className="relative z-10 flex flex-col lg:flex-row lg:items-center justify-between gap-4">
@@ -268,7 +268,7 @@ export default function ChatArea(props: ChatAreaProps) {
       </header>
 
       {/* Chat Output */}
-      <div ref={chatContainerRef} className="flex-1 overflow-y-auto px-4 lg:px-6 pb-4 max-w-5xl mx-auto w-full">
+      <div ref={chatContainerRef} className="flex-1 overflow-y-auto px-4 md:px-5 lg:px-6 pb-4 max-w-5xl mx-auto w-full">
         {!sessionId && !isDbConnected && messages.length === 0 ? (
           <div className="flex flex-col items-center justify-center h-full text-gray-500">
             <div className="relative">
@@ -374,7 +374,7 @@ export default function ChatArea(props: ChatAreaProps) {
                         const isCurrent = !completed && autopilotSteps.length === pi;
                         return (
                           <div key={pi} className={`flex items-start gap-2 text-xs py-1 ${completed ? "text-gray-400" : isCurrent ? "text-white" : "text-gray-600"}`}>
-                            <span className={`shrink-0 w-4 h-4 rounded-full flex items-center justify-center text-[9px] font-bold mt-0.5 ${
+                            <span className={`shrink-0 w-4 h-4 rounded-full flex items-center justify-center text-[10px] font-bold mt-0.5 ${
                               completed ? "bg-[#10b981]/20 text-[#10b981]" : isCurrent ? "bg-[#667eea]/30 text-[#a5b4fc]" : "bg-[#ffffff08] text-gray-600"
                             }`}>
                               {completed ? "✓" : pi + 1}
@@ -391,7 +391,7 @@ export default function ChatArea(props: ChatAreaProps) {
                       {autopilotSteps.map((step) => (
                         <div key={step.step_num} className="bg-[#ffffff05] rounded-xl p-2.5 text-xs">
                           <div className="flex items-center gap-1.5 mb-1">
-                            <span className={`px-1.5 py-0.5 rounded text-[9px] font-semibold uppercase tracking-wide ${
+                            <span className={`px-1.5 py-0.5 rounded text-[10px] font-semibold uppercase tracking-wide ${
                               step.tool === "sql_query" ? "bg-[#0ea5e9]/20 text-[#38bdf8]" :
                               step.tool === "doc_search" ? "bg-[#f59e0b]/20 text-[#fbbf24]" :
                               "bg-[#10b981]/20 text-[#34d399]"
@@ -414,7 +414,7 @@ export default function ChatArea(props: ChatAreaProps) {
                   {/* Spinner while running */}
                   <div className="flex items-center gap-2 mt-2 pt-2 border-t border-[#ffffff08]">
                     <div className="w-3 h-3 rounded-full bg-[#667eea]/40 animate-pulse" />
-                    <span className="text-[11px] text-gray-500">Investigating…</span>
+                    <span className="text-xs text-gray-500">Investigating…</span>
                   </div>
                 </div>
               </div>
@@ -450,12 +450,12 @@ export default function ChatArea(props: ChatAreaProps) {
         {/* Chart type selector — shown only when DB connected */}
         {isDbConnected && (
           <div className="flex items-center gap-2 mb-2 flex-wrap">
-            <span className="text-[11px] text-gray-500 shrink-0">Chart:</span>
+            <span className="text-xs text-gray-500 shrink-0">Chart:</span>
             {(["auto", "bar", "line", "scatter", "heatmap", "box", "multi"] as const).map((t) => (
               <button
                 key={t}
                 onClick={() => setChartType(t)}
-                className={`px-2 py-0.5 rounded-full text-[11px] border transition-all capitalize ${
+                className={`px-2 py-0.5 rounded-full text-xs border transition-all capitalize ${
                   chartType === t
                     ? "border-[#667eea]/60 bg-[#667eea]/15 text-[#a5b4fc]"
                     : "border-[#ffffff10] text-gray-500 hover:text-gray-300 hover:border-[#ffffff20]"
@@ -489,7 +489,7 @@ export default function ChatArea(props: ChatAreaProps) {
                     : "Upload a document or connect a database to start..."
               }
               disabled={(!sessionId && !isDbConnected) || isLoading}
-              className="w-full max-h-40 min-h-[60px] p-4 pr-12 bg-transparent outline-none resize-none text-white placeholder-gray-500 text-[15px] leading-relaxed disabled:opacity-50"
+              className="w-full max-h-40 min-h-[60px] p-4 pr-12 bg-transparent outline-none resize-none text-white placeholder-gray-500 text-sm leading-relaxed disabled:opacity-50"
               rows={1}
             />
             <div className="absolute bottom-3 right-3 text-[10px] text-gray-600 flex items-center gap-1.5">

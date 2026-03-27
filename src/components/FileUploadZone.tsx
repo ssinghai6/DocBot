@@ -40,7 +40,7 @@ export default function FileUploadZone({
   fileInputRef,
 }: FileUploadZoneProps) {
   return (
-    <div className="mb-6">
+    <div className="mb-5">
       <h3 className="text-sm font-semibold mb-3 text-white flex items-center gap-2">
         <FileText className="w-4 h-4 text-[#667eea]" />
         Documents
