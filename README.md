@@ -5,12 +5,12 @@
   <img src="https://img.shields.io/badge/Python-3.12+-blue.svg" alt="Python">
   <img src="https://img.shields.io/badge/Next.js-16+-black.svg" alt="Next.js">
   <img src="https://img.shields.io/badge/FastAPI-0.115+-teal.svg" alt="FastAPI">
-  <img src="https://img.shields.io/badge/Tests-353 passing-brightgreen.svg" alt="Tests">
+  <img src="https://img.shields.io/badge/Tests-567 passing-brightgreen.svg" alt="Tests">
 </p>
 
 **Ask Anything About Your Data.**
 
-DocBot is an AI-powered document + database analyst. Upload PDFs, connect a live database, or do both — get instant answers with source citations, SQL explanations, Python-generated charts, discrepancy detection, session memory, and a multi-step Autopilot agent that investigates complex questions autonomously.
+DocBot is an AI-powered document + database analyst. Upload PDFs, connect a live database, upload CSV files, or combine sources — get instant answers with source citations, SQL explanations, Python-generated charts, discrepancy detection, session memory, and a multi-step Autopilot agent that investigates complex questions autonomously.
 
 ---
 
@@ -18,26 +18,31 @@ DocBot is an AI-powered document + database analyst. Upload PDFs, connect a live
 
 | Capability | Description |
 |---|---|
-| **PDF Chat** | Upload PDFs, ask questions, get cited answers from 8 expert personas |
+| **PDF Chat** | Upload PDFs, ask questions, get cited answers from 8 expert personas with smart auto-routing |
 | **Live Database Chat** | Connect PostgreSQL, MySQL, SQLite, or Azure SQL — ask in plain English, get SQL + results |
+| **CSV Intelligence** | Upload CSV files — queries run via E2B pandas sandbox with automatic data profiling, error retry, and adaptive limits |
 | **Hybrid Mode** | One question answered from both your documents and your database in a single response |
 | **Discrepancy Detection** | Automatically flags when a number in your doc differs from what the DB shows |
 | **Python Analysis + Charts** | E2B sandbox executes pandas/matplotlib code and returns charts — bar, line, scatter, heatmap, box, multi-panel |
 | **Structured Extraction** | Pulls typed values (financial metrics, legal dates, medical measurements) from any document using Gemini 2.5 Flash |
+| **Deep Research** | Sub-question decomposition, parallel retrieval, and gap-fill loop for thorough document analysis |
+| **Analytical Autopilot** | LangGraph multi-step investigation agent — works with PDF + CSV + SQL, uses Deep Research for doc search |
+| **Commerce Connectors** | Marketplace connector framework with Amazon SP-API integration — OAuth, Orders, Finances |
+| **LLM Fallback** | Groq primary, Gemini 2.5 Flash automatic fallback — wired to all 8 production callsites |
+| **Conversational Memory** | Follow-up questions rephrased into standalone queries across all pipelines (CSV, SQL, hybrid, autopilot) |
 | **Azure SQL / Entra Auth** | Enterprise Microsoft Entra (Azure AD) Service Principal authentication for Azure SQL |
 | **SAML 2.0 SSO** | SP-initiated SSO with Okta, Azure AD, or any SAML 2.0 IdP; JIT user provisioning on first login |
 | **Consumer Auth** | GitHub OAuth, Google OAuth, email+password, or guest mode — no enterprise SSO required |
 | **Persistent Workspace** | Login restores your previous chat sessions and saved database connections across devices |
 | **Role-Based Access Control** | Three-tier roles (viewer / analyst / admin) enforced as FastAPI dependencies; admin UI for role management |
 | **Append-Only Audit Log** | Immutable PostgreSQL audit trail for all queries, logins, uploads, and connection events with CSV export |
-| **PII Masking** | Auto-detects and redacts names, emails, phone numbers, SSNs, credit cards before LLM synthesis |
+| **PII Masking** | Auto-detects and redacts emails, phone numbers, SSNs, credit cards before LLM synthesis — applied to all SSE, sandbox, and audit paths |
 | **Session Artifact Store** | DataFrames and charts from every query persisted in PostgreSQL; referenceable across turns |
 | **Context Compression** | Sessions with 20+ messages automatically summarized so long conversations stay fast and cheap |
 | **Schema-Aware Table Selection** | Question embeddings matched against table embeddings (cosine similarity) so the right tables are always selected — even with cryptic names like `cust_ord_hdr_rec` |
 | **Query History Panel** | Sidebar panel showing all past queries — click to re-run or inspect SQL |
-| **Analytical Autopilot** | LangGraph multi-step investigation agent — decomposes complex questions into ≤5 steps, executes SQL + Python + doc search autonomously, streams step-by-step progress, synthesizes a final cited answer |
 
-**Core differentiator**: Hybrid Docs+DB synthesis with discrepancy detection + Analytical Autopilot. No other tool does this.
+**Core differentiator**: Hybrid Docs+DB synthesis with discrepancy detection + Analytical Autopilot + Commerce Connectors. No other tool does this.
 
 ---
 
@@ -97,21 +102,36 @@ Connect to your database and ask questions in plain English:
 - **Schema-aware table selection**: Question and table schemas embedded with `all-MiniLM-L6-v2`; cosine similarity selects the top-5 most relevant tables per query instead of dumping all tables to the LLM
 - **Read-only enforcement**: 3-layer protection — LLM prompt + sqlglot AST validation + read-only transaction
 - **Result cap**: 500 rows, 15-second query timeout
+- **Views support**: Schema introspection discovers both tables and views (up to 200 objects)
+- **LRU engine pool**: Database connection engines pooled and reused with least-recently-used eviction
+- **Schema drift detection**: If a query fails due to table/column-not-found, the pipeline invalidates cache, re-introspects, regenerates SQL, and retries once automatically
+- **Manual schema refresh**: Force a schema cache refresh via `POST /api/db/refresh-schema/{connection_id}`
 
 ### SQL Generation Pipeline (7 Bounded Steps)
 
 ```
 NL Question
-  → [1] Schema Retrieval     (cache → miss → introspect)
-  → [2] Table Selector       (cosine similarity on table embeddings, top-5)
+  → [1] Schema Retrieval     (cache → miss → introspect tables+views, 200 cap)
+  → [2] Table Selector       (cosine similarity → LLM fallback, 20 cols/table, 8 tables max)
   → [3] Few-Shot Retrieval   (cosine similarity on stored queries)
   → [4] SQL Generator        (LLM call #1)
   → [5] SQL Validator        (sqlglot AST — deterministic, no LLM)
-  → [6] Executor             (SQLAlchemy, 15s timeout, 500 row cap)
+  → [6] Executor             (pooled engine, 15s timeout, 500 row cap, drift retry)
   → [7] Answer Generator     (LLM call #2, streaming)
 ```
 
-Max 2 LLM calls per query. No loops. Predictable latency and cost.
+Max 2-3 LLM calls per query. No loops. Predictable latency and cost.
+
+### CSV Intelligence
+
+Upload CSV files and query them using natural language — no SQL required:
+
+- **E2B pandas sandbox**: Queries execute as Python/pandas code in an isolated cloud sandbox, not through the SQL pipeline
+- **Automatic data profiling**: On upload, a `DataProfile` is computed (dtypes, sample rows, `describe()`, datetime column detection, null percentages, frequency inference) with zero LLM calls
+- **Profile-aware code generation**: The LLM sees actual data context (types, samples, statistics) when generating pandas code — not just column names
+- **Adaptive limits**: Complex queries (predict, forecast, model) get extended resources — 4000 max tokens, 150-line code limit, 60-second timeout
+- **Error retry with feedback**: If sandbox execution fails, the error message is fed back to the LLM for one corrective retry attempt
+- **Multi-section detection**: CSVs with multiple header rows or embedded sections are automatically detected and split
 
 ### Hybrid Mode
 
@@ -121,27 +141,72 @@ Ask one question — DocBot queries both your uploaded documents and your live d
 
 After SQL execution, DocBot generates pandas/matplotlib code and runs it in an isolated E2B cloud sandbox:
 
-- **Chart types**: bar, line, scatter, heatmap (correlation matrices), box (distribution), multi-panel (2×2 subplots)
+- **Chart types**: bar, line, scatter, heatmap (correlation matrices), box (distribution), multi-panel (2x2 subplots)
 - **Chart type selector**: choose before submitting or leave on "auto" to let the LLM decide
 - **Zoom & export**: click any chart to expand full-screen; download as PNG
 - **Chart metadata**: title, axis labels, series count shown as caption below each chart
 - Code shown in collapsible "Analysis code" block for full transparency
 - Sandbox isolation: no network access, no filesystem persistence
 
+### Deep Research
+
+Sub-question decomposition with parallel retrieval and iterative gap-fill for thorough document analysis:
+
+- Decomposes complex questions into targeted sub-questions
+- Retrieves answers for each sub-question in parallel
+- Runs a gap-detection loop — if retrieved context is insufficient, generates additional sub-questions and retrieves again
+- Integrated into Autopilot's `doc_search` tool for multi-step investigations
+- Also available as a standalone route for direct deep retrieval
+
 ### Analytical Autopilot (LangGraph Agent)
 
-Enable the Autopilot toggle in the DB chat header to activate multi-step investigation mode:
+Multi-step investigation agent that auto-triggers on analytical queries (why, diagnose, investigate, compare, trend, forecast):
 
 ```
 PlannerNode  →  ExecutorNode (loop, ≤5 steps)  →  SynthesizerNode
 ```
 
-- **PlannerNode**: Groq Llama decomposes the question into ≤5 investigation steps
+- **PlannerNode**: Groq Llama decomposes the question into ≤5 investigation steps with dynamic tool selection
 - **ExecutorNode**: For each step, routes to the right tool — `sql_query`, `python_analysis`, or `doc_search` — and executes it
+- **Deep doc search**: The `doc_search` tool uses `deep_retrieve()` (sub-question decomposition + parallel retrieval + gap-fill) instead of single-pass RAG
+- **Universal**: Works with PDF + CSV + SQL sources — the planner dynamically selects available tools based on connected data sources
 - **SynthesizerNode**: Groq Llama synthesizes all step results into a final cited answer, streamed token-by-token
 - **Hard limits**: max 5 iterations, 90-second wall-clock timeout — no infinite loops
 - **Streaming UI**: step-by-step progress shown live; charts and results visible per step; full investigation persists in the message bubble after completion
-- **Auto-detect nudge**: when your question contains diagnostic keywords (why, diagnose, investigate, compare, trend, forecast…) and Autopilot is off, a suggestion banner appears above the input
+
+### Conversational Memory
+
+All pipelines support multi-turn conversations with context-aware follow-up handling:
+
+- Frontend sends the last 6 messages as conversation context
+- All pipelines (CSV, SQL, hybrid, autopilot) rephrase follow-up questions into standalone queries before processing
+- Eliminates ambiguous references ("show me that again", "break it down by region") by resolving them against conversation history
+
+### LLM Fallback
+
+Automatic failover from Groq to Gemini 2.5 Flash across all production callsites:
+
+- Primary: Groq (Llama 3.3-70b for reasoning, Qwen/qwen3-32b for code generation)
+- Fallback: Gemini 2.5 Flash — activates automatically on Groq errors or rate limits
+- Wired to all 8 production callsites — SQL generation, hybrid synthesis, intent classification, answer generation, code generation, autopilot planning, autopilot synthesis, and deep research
+
+### Commerce Connectors (Phase 1)
+
+Pluggable marketplace connector framework for e-commerce data integration:
+
+- **Connector interface**: Abstract `MarketplaceConnector` base class with credential vault, normalized data models, and async token-bucket rate limiter
+- **Unified commerce schema**: Two-table schema (orders + financials) with PostgreSQL row-level security per `connection_id` — multi-tenant by design
+- **Amazon SP-API connector**: Full LWA OAuth flow, Orders API, and Finances API with automatic retry on throttling
+- **Frontend UI**: `MarketplacePanel.tsx` for registering, syncing, and disconnecting marketplace connections
+- Phase 2 deferred to post-funding: background sync worker (DOCBOT-704), Shopify connector (DOCBOT-705)
+
+### RAG Quality Enhancement
+
+Production-grade retrieval pipeline:
+
+- **Chroma persistent vector store**: Replaces in-memory vector store for durable document embeddings
+- **Cross-encoder reranker**: Re-ranks retrieval results for higher relevance precision
+- **SemanticChunker**: Splits documents at semantic boundaries (via `langchain-experimental`) instead of fixed character counts — better context preservation for financial and legal documents
 
 ### Session Artifact Store
 
@@ -185,7 +250,7 @@ LangExtract + Gemini 2.5 Flash extracts typed, span-verified values from any doc
 
 Connect to Azure SQL Database using Service Principal credentials — no username/password required:
 
-- Tenant ID + Client ID + Client Secret → token via `azure.identity`
+- Tenant ID + Client ID + Client Secret -> token via `azure.identity`
 - Token injected via `SQL_COPT_SS_ACCESS_TOKEN` — credentials never appear in the connection string
 - ODBC Driver 18 for SQL Server included in Docker image
 
@@ -228,7 +293,7 @@ Three-tier role hierarchy enforced as FastAPI `Depends` dependencies:
 | **analyst** | Run queries, manage own DB connections, upload documents (default for JIT-provisioned users) |
 | **admin** | Full access — audit log, user management, all connections |
 
-- Role enforcement is a no-op when SAML is not configured (open mode)
+- Role enforcement is a no-op when `AUTH_REQUIRED` is not set (open/demo mode)
 - Admins can promote/demote users via the Admin Panel or `PATCH /admin/users/{user_id}/role`
 - Admin self-demotion guard prevents accidental lockout
 
@@ -253,10 +318,11 @@ Every security-relevant event written to an immutable PostgreSQL table:
 
 Sensitive data detected and redacted before it reaches the LLM:
 
-- Detects: full names, email addresses, phone numbers (US + international), SSNs, credit card numbers
-- Masks with typed placeholders: `[NAME]`, `[EMAIL]`, `[PHONE]`, `[SSN]`, `[CC_NUMBER]`
-- Runs on DB query results before answer generation
+- Detects: email addresses, phone numbers (US, UK, India, EU), SSNs, credit card numbers
+- Masks with typed placeholders: `[EMAIL]`, `[PHONE]`, `[SSN]`, `[CC_NUMBER]`
+- Applied to all SSE responses, sandbox outputs, and audit response paths
 - Configurable: can be toggled per-request via `mask_pii: true/false` in the request body
+- Pure regex implementation — no external NLP dependencies, adds less than 5ms per 500 rows
 
 ---
 
@@ -275,21 +341,34 @@ Sensitive data detected and redacted before it reaches the LLM:
 │  ┌─────────────┐  ┌──────────────┐  ┌────────────────────┐  │
 │  │ db_service  │  │hybrid_service│  │ sandbox_service    │  │
 │  │ SQL pipeline│  │ RAG + intent │  │ E2B Python exec    │  │
+│  │ LRU pool   │  │              │  │ CSV code gen       │  │
 │  └─────────────┘  └──────────────┘  └────────────────────┘  │
 │  ┌─────────────┐  ┌──────────────┐  ┌────────────────────┐  │
-│  │autopilot_   │  │artifact_     │  │document_extractor  │  │
+│  │autopilot_   │  │deep_research_│  │document_extractor  │  │
 │  │service      │  │service       │  │LangExtract+Gemini  │  │
-│  │(LangGraph)  │  │              │  │                    │  │
+│  │(LangGraph)  │  │deep_retrieve │  │                    │  │
+│  └─────────────┘  └──────────────┘  └────────────────────┘  │
+│  ┌─────────────┐  ┌──────────────┐  ┌────────────────────┐  │
+│  │commerce_    │  │connectors/   │  │file_upload_        │  │
+│  │service      │  │amazon, rate  │  │service             │  │
+│  │unified schma│  │limiter, base │  │CSV + SQLite upload │  │
 │  └─────────────┘  └──────────────┘  └────────────────────┘  │
 │  ┌─────────────┐  ┌──────────────┐  ┌────────────────────┐  │
 │  │auth_service │  │rbac_service  │  │audit_service       │  │
 │  │SAML 2.0 SSO │  │viewer/analyst│  │append-only log     │  │
 │  │JIT provision│  │/admin roles  │  │immutability trigger│  │
 │  └─────────────┘  └──────────────┘  └────────────────────┘  │
+│  ┌─────────────┐  ┌──────────────┐  ┌────────────────────┐  │
+│  │oauth_service│  │artifact_     │  │metrics_service     │  │
+│  │GitHub/Google│  │service       │  │admin dashboard     │  │
+│  │email/pass   │  │              │  │                    │  │
+│  └─────────────┘  └──────────────┘  └────────────────────┘  │
 │  ┌─────────────────────────────────────────────────────────┐ │
 │  │  utils/  encryption · ssrf_validator · sql_validator    │ │
 │  │          embeddings · few_shot_store · table_selector   │ │
-│  │          context_compressor · pii_masking               │ │
+│  │          context_compressor · pii_masking · reranker    │ │
+│  │          chunker · vector_store · llm_provider          │ │
+│  │          csv_preprocessor · gemini_wrapper              │ │
 │  └─────────────────────────────────────────────────────────┘ │
 └──────────────────────────┬──────────────────────────────────┘
                            │
@@ -297,27 +376,35 @@ Sensitive data detected and redacted before it reaches the LLM:
               ▼            ▼            ▼
          PostgreSQL      Groq         E2B
          (Railway)   Llama/Qwen    Sandbox
+              │        Gemini
+              │       (fallback)
+              ▼
+           Chroma
+        (vector store)
 ```
 
 ### Tech Stack
 
 | Layer | Technology |
 |---|---|
-| Frontend | Next.js 16, React 19, TailwindCSS 4, TypeScript |
+| Frontend | Next.js 16, React 19, TailwindCSS 4, TypeScript, lucide-react, react-markdown |
 | Backend | FastAPI, Python 3.12, SQLAlchemy 2.x |
-| Agentic Orchestration | LangGraph (StateGraph — Planner → Executor → Synthesizer) |
-| LLM — SQL + Hybrid + Autopilot | Groq Llama 3.3-70b |
+| Agentic Orchestration | LangGraph (StateGraph — Planner -> Executor -> Synthesizer) |
+| LLM — SQL + Hybrid + Autopilot | Groq Llama 3.3-70b (primary), Gemini 2.5 Flash (fallback) |
 | LLM — Python codegen | Groq Qwen/qwen3-32b |
 | LLM — Doc extraction | Gemini 2.5 Flash (via LangExtract) |
 | Embeddings | sentence-transformers/all-MiniLM-L6-v2 (HuggingFace API) |
-| Vector Search | LangChain InMemoryVectorStore + PostgreSQL table_embeddings |
+| Vector Store | Chroma (persistent) + PostgreSQL table_embeddings |
+| Retrieval Enhancement | Cross-encoder reranker, SemanticChunker (langchain-experimental) |
 | SQL Validation | sqlglot AST parsing |
 | Credential Encryption | Fernet (cryptography) |
 | SSO / Auth | python3-saml (SAML 2.0), HttpOnly session cookies |
+| Consumer Auth | httpx (OAuth flows), bcrypt (passwords) |
 | RBAC | FastAPI Depends pattern, IntEnum role hierarchy |
-| PII Detection | spaCy NER + regex patterns |
+| PII Detection | Regex patterns (email, phone, SSN, credit card) |
 | DB Drivers | psycopg2, pymysql, pyodbc, azure-identity |
-| Python Sandbox | E2B Cloud |
+| Python Sandbox | E2B Cloud (code-interpreter) |
+| Commerce | Pluggable connector framework, Amazon SP-API, async rate limiter |
 | Storage | PostgreSQL on Railway |
 | Deployment | Railway (backend), Vercel (frontend) |
 
@@ -387,6 +474,30 @@ POST /api/db/chat
 # Returns: SSE stream — token, metadata, analysis_code, chart, done chunks
 ```
 
+### Schema Refresh
+
+```bash
+POST /api/db/refresh-schema/{connection_id}
+# Invalidates cached schema and re-introspects tables + views
+# Returns: { success: true, tables_count, message }
+```
+
+### File Upload (CSV / SQLite)
+
+```bash
+# Upload SQLite database file
+POST /api/db/upload
+Content-Type: multipart/form-data
+# Accepts: .db, .sqlite, .sqlite3 files
+# Returns: { connection_id, dialect: "sqlite", tables: [...] }
+
+# Upload CSV file
+POST /api/db/upload/csv
+Content-Type: multipart/form-data
+# Accepts: .csv files
+# Returns: { connection_id, dialect: "csv", filename, rows, columns, data_profile: {...} }
+```
+
 ### Hybrid Chat
 
 ```bash
@@ -439,6 +550,54 @@ GET /api/db/history/{connection_id}?limit=20
 ```bash
 GET /api/db/schema/{connection_id}
 # Returns: { tables: [{ name, columns: [{ name, type }] }] }
+```
+
+### Commerce Connectors
+
+```bash
+# Register a marketplace connector
+POST /api/connectors/register
+{
+  "connector_type": "amazon",
+  "credentials": { "refresh_token": "...", "lwa_client_id": "...", "lwa_client_secret": "..." }
+}
+
+# List registered connectors
+GET /api/connectors
+
+# List available connector types
+GET /api/connectors/types
+
+# Fetch orders from a connector
+POST /api/connectors/{connector_id}/orders
+
+# Fetch financials from a connector
+POST /api/connectors/{connector_id}/financials
+
+# Trigger sync (fetch + persist to unified schema)
+POST /api/connectors/{connector_id}/sync
+
+# Query persisted commerce data
+GET /api/commerce/{connector_id}/orders
+GET /api/commerce/{connector_id}/financials
+```
+
+### Sandbox Execution
+
+```bash
+POST /api/sandbox/execute
+{
+  "code": "import pandas as pd\nprint(pd.DataFrame({'a': [1,2,3]}).describe())",
+  "session_id": "sess-abc123"
+}
+# Returns: { stdout, stderr, charts: [{b64, metadata}], error? }
+```
+
+### Admin Metrics
+
+```bash
+GET /admin/metrics
+# Returns: aggregated usage metrics (requires admin role)
 ```
 
 ### Authentication (SSO)
@@ -508,11 +667,12 @@ GET /admin/audit-log?format=csv
 | `huggingface_api_key` | Yes | HuggingFace API for embeddings model |
 | `DATABASE_URL` | Yes | Railway PostgreSQL connection string |
 | `DB_ENCRYPTION_KEY` | Yes | Fernet key for credential encryption — generate with `cryptography.fernet.Fernet.generate_key()` |
-| `E2B_API_KEY` | Yes | E2B sandbox API key |
-| `GEMINI_API_KEY` | Yes | Gemini API key for LangExtract document extraction |
+| `E2B_API_KEY` | Yes | E2B sandbox API key (CSV queries + Python analysis) |
+| `GEMINI_API_KEY` | Yes | Gemini API key for LangExtract extraction and LLM fallback |
 | `ALLOWED_ORIGINS` | No | Comma-separated CORS origins (defaults to localhost:3000) |
 | `FRONTEND_URL` | Auth | Frontend public URL for post-login redirects (SAML and OAuth) |
 | `SESSION_TTL_HOURS` | No | SSO session lifetime in hours (default: 8) |
+| `AUTH_REQUIRED` | No | Set to `true` to enforce RBAC login on all protected routes. Default off (open/demo mode) |
 | `SAML_SP_ENTITY_ID` | SSO | SP Entity ID — e.g. `https://docbot.example.com` |
 | `SAML_SP_ACS_URL` | SSO | ACS callback URL — e.g. `https://docbot.example.com/api/auth/saml/acs` |
 | `SAML_IDP_ENTITY_ID` | SSO | IdP Entity ID from your IdP metadata |
@@ -525,10 +685,13 @@ GET /admin/audit-log?format=csv
 | `GOOGLE_CLIENT_ID` | Consumer auth | Google OAuth 2.0 client ID |
 | `GOOGLE_CLIENT_SECRET` | Consumer auth | Google OAuth 2.0 client secret |
 | `APP_BASE_URL` | Auth | Backend public URL used for OAuth callback URIs |
+| `OAUTH_REDIRECT_BASE_URL` | OAuth | Base URL for OAuth callback redirect |
 
 Never commit `.env`. Never hardcode secrets.
 
 > **SSO setup**: Set all `SAML_*` variables to enable SSO. When unset, the app runs in open mode — all role checks pass and the login UI is hidden.
+
+> **Auth enforcement**: Set `AUTH_REQUIRED=true` to require login on all protected routes. When unset (default), the app runs in open/demo mode — RBAC is decoupled from SAML configuration.
 
 ---
 
@@ -560,7 +723,7 @@ pytest tests/unit/ -v
 pytest tests/ -v -m "not external and not postgres"
 ```
 
-**353 tests passing** across:
+**567 tests passing** across:
 
 | File | Coverage |
 |---|---|
@@ -573,20 +736,32 @@ pytest tests/ -v -m "not external and not postgres"
 | `tests/unit/test_table_selector.py` | Cosine similarity table selection, schema summary, fallback |
 | `tests/unit/test_context_compressor.py` | Compression thresholds, summary injection, bypass |
 | `tests/unit/test_sandbox_service.py` | Chart type routing, metadata extraction, `<think>` stripping |
+| `tests/unit/test_sandbox_formatting.py` | Sandbox stdout formatting, markdown table conversion |
 | `tests/unit/test_autopilot_service.py` | Planner decomposition, executor routing, hard limits, SSE serialization |
 | `tests/unit/test_hybrid_service.py` | Intent classification, hybrid synthesis, discrepancy detection |
 | `tests/unit/test_hybrid_chat.py` | Hybrid chat routing, dual-citation format |
 | `tests/unit/test_personas.py` | Persona def completeness, response format contracts |
+| `tests/unit/test_persona_router.py` | Smart auto-routing — persona selection from query content |
 | `tests/unit/test_code_generation.py` | Python codegen prompt construction, chart type injection |
 | `tests/unit/test_query_expansion.py` | NL query expansion, synonym injection |
 | `tests/unit/test_deep_research_service.py` | Multi-source research orchestration, citation dedup |
 | `tests/unit/test_pii_masking.py` | Name/email/phone/SSN/CC detection and redaction |
 | `tests/unit/test_auth_service.py` | SAML settings builder, session CRUD, JIT provisioning |
+| `tests/unit/test_oauth_service.py` | GitHub/Google OAuth flows, email/password auth, token handling |
 | `tests/unit/test_audit_service.py` | Event types, DB write, fire-and-forget dispatcher, immutability DDL |
 | `tests/unit/test_rbac_service.py` | Role hierarchy, `require_role` dependency, wire-up |
+| `tests/unit/test_amazon_connector.py` | Amazon SP-API connector — LWA OAuth, Orders, Finances (22 tests) |
+| `tests/unit/test_commerce_service.py` | Unified commerce schema, RLS, persist/query helpers (31 tests) |
+| `tests/unit/test_discrepancy_detector.py` | Discrepancy detection — delta calculation, threshold logic |
+| `tests/unit/test_reranker.py` | Cross-encoder reranker scoring, fallback behavior |
+| `tests/unit/test_chunker.py` | SemanticChunker splitting, boundary detection |
+| `tests/unit/test_vector_store.py` | Chroma persistent vector store operations |
+| `tests/unit/test_llm_provider.py` | LLM fallback provider — Groq primary, Gemini fallback |
+| `tests/unit/test_metrics_service.py` | Admin metrics aggregation |
 | `tests/integration/test_db_pipeline.py` | Full SQL pipeline against SQLite |
 | `tests/integration/test_file_upload_service.py` | PDF upload and chunk extraction |
 | `tests/integration/test_artifact_service.py` | SQLite-backed artifact round-trip |
+| `tests/external/test_financebench_accuracy.py` | FinanceBench 20-question accuracy suite (requires live API keys) |
 
 ---
 
@@ -628,24 +803,51 @@ Set all environment variables in the Railway and Vercel dashboards.
 - **SAML assertion validation**: `python3-saml` validates signatures, conditions, and recipient before trusting any assertion
 - **HttpOnly session cookies**: Session tokens inaccessible to JavaScript; `SameSite=Lax` prevents CSRF
 - **Immutable audit log**: PostgreSQL `BEFORE UPDATE OR DELETE` trigger blocks any modification of audit records at the DB level
-- **PII masking**: Personally identifiable information detected and redacted before reaching the LLM
+- **PII masking**: Personally identifiable information detected and redacted before reaching the LLM — applied to all SSE, sandbox, and audit response paths
+- **Multi-tenant RLS**: Commerce data isolated per `connection_id` with PostgreSQL row-level security
 
 ---
 
 ## Roadmap
 
-### EPIC-07: Commerce Connectors (Not Started — Gated)
+### Phase 2: Commerce Connectors (Post-Funding)
 
-> **Gate condition**: Begin only after ≥3 of 5 discovery interviews confirm the commerce/seller segment.
+- DOCBOT-704: Background sync worker — APScheduler, incremental fetch, exponential backoff on rate limits
+- DOCBOT-705: Shopify connector — OAuth offline token, webhook-driven incremental sync
 
-- Pluggable `MarketplaceConnector` interface with credential vault extension
-- Unified commerce schema (orders, products, inventory, line items) with PostgreSQL row-level security per tenant
-- Amazon SP-API connector — LWA OAuth, Orders API, Finances API, incremental sync
-- Background sync worker — APScheduler, incremental fetch, exponential backoff on rate limits
-- Shopify connector — OAuth offline token, webhook-driven incremental sync
+### Future
+
+- FinanceBench accuracy benchmarking (test suite written, run pending)
+- Additional marketplace connectors (eBay, Walmart)
+- Real-time webhook-driven data ingestion
+
+---
+
+## Third-Party Licenses
+
+DocBot depends on the following key open-source libraries. All dependencies use permissive licenses compatible with commercial use.
+
+| Dependency | License | Notes |
+|---|---|---|
+| [LangChain](https://github.com/langchain-ai/langchain) | MIT | Core RAG framework — langchain, langchain-core, langchain-community, langchain-groq, langchain-huggingface |
+| [LangGraph](https://github.com/langchain-ai/langgraph) | MIT | Agentic state machine for Autopilot |
+| [LangExtract](https://github.com/google/langextract) | Apache 2.0 | Structured document extraction (Google) |
+| [langchain-experimental](https://github.com/langchain-ai/langchain-experimental) | MIT | SemanticChunker for document splitting |
+| [ChromaDB](https://github.com/chroma-core/chroma) | Apache 2.0 | Persistent vector store |
+| [E2B Code Interpreter](https://github.com/e2b-dev/code-interpreter) | MIT | Cloud sandbox for Python/pandas execution |
+| [sqlglot](https://github.com/tobymao/sqlglot) | MIT | SQL parsing, validation, and transpilation |
+| [FastAPI](https://github.com/tiangolo/fastapi) | MIT | Backend web framework |
+| [python3-saml](https://github.com/SAML-Toolkits/python3-saml) | MIT | SAML 2.0 SSO |
+| [google-generativeai](https://github.com/google/generative-ai-python) | Apache 2.0 | Gemini SDK for LLM fallback |
+| [cryptography](https://github.com/pyca/cryptography) | Apache 2.0 / BSD | Fernet credential encryption |
+| [SQLAlchemy](https://github.com/sqlalchemy/sqlalchemy) | MIT | Database ORM and connection management |
+
+No copyleft (GPL/LGPL/AGPL) dependencies are included. All licenses permit commercial use, modification, and redistribution.
 
 ---
 
 ## License
 
-MIT © [Sanshrit Singhai](https://github.com/ssinghai6)
+MIT (c) [Sanshrit Singhai](https://github.com/ssinghai6)
+
+> **Note**: A `LICENSE` file should be added to the repository root to formalize this declaration. Without a `LICENSE` file, the MIT claim in this README is informational but not legally binding.

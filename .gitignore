@@ -70,3 +70,8 @@ CLAUDE.md
 DocBot_v2.txt
 *.txt__pycache__
 .env.docker
+
+# local test data, AI memory, analysis docs
+DocBot_Real_Test/
+ai/
+docs/
