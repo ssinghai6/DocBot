@@ -182,7 +182,13 @@ All work is tracked in `project-tasks/docbot-v2-project-tracking.md`.
   - Placeholder color standardized to `placeholder-gray-500` across all inputs
   - Tablet breakpoints: sidebar `w-64 lg:w-80`, ChatArea `md:pt-8 md:px-5`
   - Sidebar section spacing normalized to `mb-5`
-- **567 tests passing, 0 failures**
+- **Hybrid Mode & Answer Quality Fix (2026-03-27) — Done**
+  - Simultaneous PDF+CSV upload now auto-switches to hybrid mode via useEffect watching both sessionId and connectionId
+  - RAG prompt: replaced "Answer based ONLY on context" with instruction to perform calculations when user provides parameters
+  - Finance Expert persona: added COMPUTATION guideline for step-by-step DCF, valuations, and projections
+  - Autopilot synthesizer: max_tokens 600→2000, removed "Max 400 words" cap, added computation instruction
+  - Hybrid synthesis: max_tokens 800→2000, added computation rule for user-provided inputs
+- **599 tests passing, 0 failures**
 
 > **PageIndex evaluated 2026-03-25 — not integrating.** Hard blockers: OpenAI-only (Groq incompatible), not on PyPI (Railway brittleness), no streaming (SSE conflict). Revisit if PyPI package + multi-backend support ships.
 
