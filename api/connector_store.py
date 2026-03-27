@@ -52,6 +52,8 @@ def register_connector_tables(metadata):
         Column("connector_type", String, nullable=False),
         Column("encrypted_credentials", Text, nullable=False),
         Column("is_active", Boolean, server_default="true", nullable=False),
+        Column("sync_status", String, server_default="idle"),  # idle | syncing | auth_failed | error
+        Column("sync_cursor", String),  # ISO date — fetch records after this
         Column("last_sync_at", DateTime(timezone=True)),
         Column(
             "created_at",
@@ -221,6 +223,8 @@ async def list_active_connectors() -> list[dict[str, Any]]:
             _connections_table.c.id,
             _connections_table.c.connector_type,
             _connections_table.c.is_active,
+            _connections_table.c.sync_status,
+            _connections_table.c.sync_cursor,
             _connections_table.c.last_sync_at,
             _connections_table.c.created_at,
             _connections_table.c.updated_at,
@@ -237,6 +241,8 @@ async def list_active_connectors() -> list[dict[str, Any]]:
             "connector_id": r.id,
             "connector_type": r.connector_type,
             "is_active": r.is_active,
+            "sync_status": r.sync_status,
+            "sync_cursor": r.sync_cursor,
             "last_sync_at": r.last_sync_at.isoformat() if r.last_sync_at else None,
             "created_at": r.created_at.isoformat() if r.created_at else None,
             "updated_at": r.updated_at.isoformat() if r.updated_at else None,
@@ -255,6 +261,8 @@ async def get_connector_info(connector_id: str) -> Optional[dict[str, Any]]:
             _connections_table.c.id,
             _connections_table.c.connector_type,
             _connections_table.c.is_active,
+            _connections_table.c.sync_status,
+            _connections_table.c.sync_cursor,
             _connections_table.c.last_sync_at,
             _connections_table.c.created_at,
             _connections_table.c.updated_at,
@@ -273,14 +281,42 @@ async def get_connector_info(connector_id: str) -> Optional[dict[str, Any]]:
         "connector_id": row.id,
         "connector_type": row.connector_type,
         "is_active": row.is_active,
+        "sync_status": row.sync_status,
+        "sync_cursor": row.sync_cursor,
         "last_sync_at": row.last_sync_at.isoformat() if row.last_sync_at else None,
         "created_at": row.created_at.isoformat() if row.created_at else None,
         "updated_at": row.updated_at.isoformat() if row.updated_at else None,
     }
 
 
-async def update_last_sync(connector_id: str) -> None:
-    """Set last_sync_at to now for a connector."""
+async def update_last_sync(
+    connector_id: str,
+    *,
+    sync_cursor: Optional[str] = None,
+) -> None:
+    """Set last_sync_at to now and optionally update sync_cursor."""
+    if _connections_table is None or _async_session_factory is None:
+        return
+
+    values: dict[str, Any] = {
+        "last_sync_at": datetime.now(timezone.utc),
+        "sync_status": "idle",
+        "updated_at": datetime.now(timezone.utc),
+    }
+    if sync_cursor is not None:
+        values["sync_cursor"] = sync_cursor
+
+    async with _async_session_factory() as session:
+        async with session.begin():
+            await session.execute(
+                update(_connections_table)
+                .where(_connections_table.c.id == connector_id)
+                .values(**values)
+            )
+
+
+async def update_sync_status(connector_id: str, status: str) -> None:
+    """Update sync_status for a connector (idle, syncing, auth_failed, error)."""
     if _connections_table is None or _async_session_factory is None:
         return
 
@@ -290,7 +326,20 @@ async def update_last_sync(connector_id: str) -> None:
                 update(_connections_table)
                 .where(_connections_table.c.id == connector_id)
                 .values(
-                    last_sync_at=datetime.now(timezone.utc),
+                    sync_status=status,
                     updated_at=datetime.now(timezone.utc),
                 )
             )
+
+
+async def get_sync_cursor(connector_id: str) -> Optional[str]:
+    """Return the sync_cursor for a connector, or None."""
+    if _connections_table is None or _async_session_factory is None:
+        return None
+
+    async with _async_session_factory() as session:
+        result = await session.execute(
+            select(_connections_table.c.sync_cursor)
+            .where(_connections_table.c.id == connector_id)
+        )
+        return result.scalar_one_or_none()

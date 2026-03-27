@@ -24,6 +24,18 @@ class ConnectorCredentials:
         return value
 
 
+class ConnectorAuthError(Exception):
+    """Raised when connector credentials are invalid or expired."""
+
+
+class ConnectorRateLimitError(Exception):
+    """Raised when the remote API returns 429 Too Many Requests."""
+
+    def __init__(self, retry_after: float = 2.0, message: str = "Rate limited"):
+        super().__init__(message)
+        self.retry_after = retry_after
+
+
 class BaseConnector(abc.ABC):
     """Abstract base for all commerce data connectors."""
 

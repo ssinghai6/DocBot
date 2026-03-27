@@ -328,6 +328,19 @@ async def lifespan(app: FastAPI):
     except Exception as exc:
         logger.warning("Connector restoration failed (non-fatal): %s", exc)
 
+    # DOCBOT-704: start background sync scheduler
+    from apscheduler.schedulers.asyncio import AsyncIOScheduler
+    from api.connectors.sync_jobs import (
+        wire_sync_scheduler,
+        register_all_active_connectors,
+    )
+    scheduler = AsyncIOScheduler()
+    wire_sync_scheduler(scheduler, app.state)
+    registered = register_all_active_connectors()
+    scheduler.start()
+    if registered:
+        logger.info("Startup: background sync scheduled for %d connector(s).", registered)
+
     # DOCBOT-1001: warm VECTOR_STORES from Chroma disk — recovers sessions after restart
     try:
         from api.utils.vector_store import list_stored_sessions, load_store
@@ -343,6 +356,9 @@ async def lifespan(app: FastAPI):
         logger.warning("Startup Chroma warm-up failed (non-fatal): %s", exc)
 
     yield
+    # DOCBOT-704: shut down background sync scheduler
+    if scheduler.running:
+        scheduler.shutdown(wait=False)
     await engine.dispose()
 
 app.router.lifespan_context = lifespan
@@ -2940,6 +2956,10 @@ async def register_connector(body: ConnectorRegisterRequest):
     from api.connector_store import save_connector
     await save_connector(connector_id, body.connector_type, body.credentials)
 
+    # DOCBOT-704: register background sync schedules
+    from api.connectors.sync_jobs import register_sync_schedules
+    register_sync_schedules(connector_id)
+
     logger.info(
         "Registered %s connector: %s",
         body.connector_type,
@@ -2967,10 +2987,12 @@ async def list_connectors():
 
 @app.delete("/api/connectors/{connector_id}")
 async def disconnect_connector(connector_id: str):
-    """Soft-delete a connector — removes from memory and marks inactive in DB."""
+    """Soft-delete a connector — removes from memory, DB, and sync schedules."""
     from api.connector_store import delete_connector
+    from api.connectors.sync_jobs import deregister_sync_schedules
     connectors = getattr(app.state, "connectors", {})
     connectors.pop(connector_id, None)
+    deregister_sync_schedules(connector_id)
     deleted = await delete_connector(connector_id)
     if not deleted:
         raise HTTPException(status_code=404, detail=f"Connector '{connector_id}' not found.")
