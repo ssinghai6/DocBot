@@ -869,7 +869,7 @@ Set all environment variables in the Railway and Vercel dashboards.
 
 - Additional marketplace connectors (eBay, Walmart)
 - Additional document connectors (UK Companies House, Canadian SEDAR)
-- Shopify OAuth app flow (currently custom app access token)
+- Shopify OAuth app marketplace listing (currently custom app access token)
 - Multi-region deployment and horizontal scaling
 
 ---

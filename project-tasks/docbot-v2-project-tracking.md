@@ -1368,7 +1368,7 @@ As an analyst, I want to search for public companies and ingest their SEC filing
 - [x] API routes: `POST /api/edgar/search`, `POST /api/edgar/filings`, `POST /api/edgar/ingest`, `POST /api/edgar/ingest-batch`, `GET /api/edgar/cache`
 - [x] Unit tests for connector (16 tests) and service (5 tests) — 21 total, all passing
 - [x] Frontend: `EdgarPanel.tsx` — search, browse, single/batch ingest from sidebar
-- [ ] Integration test: ingest a real 10-K, verify session created with chunks (in progress)
+- [x] Integration test: 17 end-to-end tests in `tests/external/test_edgar_integration.py` — search, list, fetch, full-flow for Apple + Microsoft
 
 **Engineering Tasks**
 
@@ -1383,7 +1383,7 @@ As an analyst, I want to search for public companies and ingest their SEC filing
 | 7 | Unit tests: `test_edgar_connector.py`, `test_edgar_service.py` | Backend | 2h |
 | 8 | Integration test: end-to-end ingest of a real filing | Backend | 1h |
 
-**Status**: Done (tasks 1-7 done, frontend shipped). Integration test (task 8) in progress.
+**Status**: ✅ Done — all 8 tasks complete. 21 unit tests + 17 external integration tests. Frontend panel shipped.
 
 ---
 
@@ -1751,7 +1751,7 @@ As a developer, I want an automated accuracy test harness against FinanceBench q
 | Phase 3 Fixes | Persona format contract removal, routing fallback fix, AcroForm RAG fix, SSE streaming, parallel retrieval | — | ✅ Complete |
 | EPIC-09 Sprint 1 | DOCBOT-901, 902, 903, 904 | 19 | ✅ Complete |
 | Enterprise Data Pipeline Hardening | CSV section splitter, DB pipeline upgrades, hybrid routing fix | — | ✅ Complete |
-| EPIC-10 Sprint 1 | DOCBOT-1001, 1002, 1003 | 11 | ✅ Complete (DOCBOT-1004 code complete, accuracy not yet run) |
+| EPIC-10 Sprint 1 | DOCBOT-1001, 1002, 1003, 1004 | 16 | ✅ Complete (100% FinanceBench accuracy — 20/20) |
 | EPIC-07 Phase 1 | DOCBOT-701, 702, 703 (connector interface + commerce schema + Amazon SP-API) | 29 | ✅ Complete |
 | Investor Readiness | CI, landing page, metrics, LLM fallback wired, PII masking, frontend refactor | — | ✅ Complete (all P0/P1 items done) |
 | CSV Intelligence & Memory | Data profiling, error retry, conversational memory across all pipelines | — | ✅ Complete |

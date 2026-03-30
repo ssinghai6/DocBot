@@ -177,7 +177,8 @@ All work is tracked in `project-tasks/docbot-v2-project-tracking.md`.
   - CSV chart bug fixed (narrowed "skip chart" prompt, improved fallback, `_format_stdout_as_markdown()`)
   - Universal Autopilot — works with PDF + CSV + SQL (dynamic planner tools, `_select_tool()` flags)
   - Auth 401 fix — RBAC decoupled from SAML config, new `AUTH_REQUIRED` env var (default off)
-  - Remaining: FinanceBench accuracy run (needs live keys), 85-test manual regression on prod
+  - FinanceBench accuracy: **100% (20/20)** — run 2026-03-29
+  - Remaining: 85-test manual regression on prod
 - **CSV Intelligence & Conversational Memory (2026-03-26) — Done**
   - Deterministic `DataProfile` on CSV upload (dtypes, sample rows, describe(), datetime detection, frequency inference) — zero LLM calls
   - Data profile wired into CSV code gen (LLM sees actual data, not just column names)
