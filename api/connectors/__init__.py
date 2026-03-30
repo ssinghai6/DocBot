@@ -11,6 +11,7 @@ from api.connectors.rate_limiter import RateLimiter
 # Import concrete connectors so their @register decorators execute on import
 from api.connectors import amazon_connector  # noqa: F401
 from api.connectors import edgar_connector  # noqa: F401
+from api.connectors import shopify_connector  # noqa: F401
 
 __all__ = [
     "BaseConnector",

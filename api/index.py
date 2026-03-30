@@ -3091,6 +3091,66 @@ async def get_commerce_financials(
     return {"connector_id": connector_id, "financials": financials}
 
 
+# ---------------------------------------------------------------------------
+# DOCBOT-705: Shopify Webhook Receiver
+# ---------------------------------------------------------------------------
+
+
+@app.post("/api/marketplace/webhook/shopify")
+async def shopify_webhook(request: Request):
+    """Handle incoming Shopify webhook with HMAC-SHA256 verification.
+
+    Triggers an incremental sync for the affected connector.
+    """
+    import json as _json
+
+    body = await request.body()
+    hmac_header = request.headers.get("X-Shopify-Hmac-SHA256", "")
+    shop_domain = request.headers.get("X-Shopify-Shop-Domain", "")
+    topic = request.headers.get("X-Shopify-Topic", "")
+
+    if not hmac_header or not shop_domain:
+        raise HTTPException(status_code=401, detail="Missing Shopify webhook headers")
+
+    # Find the connector for this shop domain
+    connector_id = None
+    for cid, conn in _connectors.items():
+        if conn.connector_type == "shopify":
+            cred_domain = conn._creds.credentials.get("shop_domain", "")
+            if cred_domain == shop_domain:
+                connector_id = cid
+                break
+
+    if not connector_id:
+        raise HTTPException(status_code=404, detail=f"No connector for shop {shop_domain}")
+
+    connector = _connectors[connector_id]
+    webhook_secret = connector._creds.credentials.get("webhook_secret", "")
+    if not webhook_secret:
+        raise HTTPException(status_code=401, detail="No webhook_secret configured for this connector")
+
+    from api.connectors.shopify_connector import verify_shopify_hmac
+    if not verify_shopify_hmac(body, webhook_secret, hmac_header):
+        raise HTTPException(status_code=401, detail="Invalid HMAC signature")
+
+    logger.info("Shopify webhook received: topic=%s shop=%s", topic, shop_domain)
+
+    # Trigger incremental sync in background (last 24 hours)
+    from datetime import datetime, timedelta, timezone
+    now = datetime.now(timezone.utc)
+    start = (now - timedelta(hours=24)).isoformat()
+    end = now.isoformat()
+
+    from api.commerce_service import sync_connector_data
+    try:
+        summary = await sync_connector_data(connector_id, connector, start, end)
+        logger.info("Shopify webhook sync complete: %s", summary)
+    except Exception as exc:
+        logger.error("Shopify webhook sync failed: %s", exc)
+
+    return {"status": "ok", "topic": topic}
+
+
 # ── SEC EDGAR Routes ─────────────────────────────────────────────────────────
 
 
