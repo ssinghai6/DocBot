@@ -452,6 +452,12 @@ export default function Home() {
         onConnectorRegister={handlers.handleConnectorRegister}
         onConnectorSync={handlers.handleConnectorSync}
         onConnectorDisconnect={handlers.handleConnectorDisconnect}
+        onEdgarFilingIngested={(sid: string, label: string) => {
+          setSessionId(sid)
+          setSelectedPersona("Finance Expert")
+          setMessages([])
+          showToast("success", `Ready to chat with ${label}`)
+        }}
       />
 
       <ChatArea

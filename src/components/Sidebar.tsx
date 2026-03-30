@@ -8,6 +8,7 @@ import {
 import FileUploadZone from "@/components/FileUploadZone"
 import ConnectionPanel from "@/components/ConnectionPanel"
 import MarketplacePanel from "@/components/MarketplacePanel"
+import EdgarPanel from "@/components/EdgarPanel"
 import PersonaSelector from "@/components/PersonaSelector"
 import type {
   AuthUser,
@@ -91,6 +92,9 @@ export interface SidebarProps {
   onConnectorRegister: (connectorType: string, credentials: Record<string, string>) => Promise<void>
   onConnectorSync: (connectorId: string, startDate: string, endDate: string) => Promise<ConnectorSyncResponse>
   onConnectorDisconnect: (connectorId: string) => void
+
+  // EDGAR SEC filings
+  onEdgarFilingIngested: (sessionId: string, label: string) => void
 }
 
 export default function Sidebar(props: SidebarProps) {
@@ -158,6 +162,7 @@ export default function Sidebar(props: SidebarProps) {
     onConnectorRegister,
     onConnectorSync,
     onConnectorDisconnect,
+    onEdgarFilingIngested,
   } = props;
 
   return (
@@ -326,6 +331,11 @@ export default function Sidebar(props: SidebarProps) {
           onRegister={onConnectorRegister}
           onSync={onConnectorSync}
           onDisconnect={onConnectorDisconnect}
+        />
+
+        <EdgarPanel
+          onFilingIngested={onEdgarFilingIngested}
+          showToast={showToast}
         />
 
         <PersonaSelector
