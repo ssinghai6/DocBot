@@ -5,12 +5,12 @@
   <img src="https://img.shields.io/badge/Python-3.12+-blue.svg" alt="Python">
   <img src="https://img.shields.io/badge/Next.js-16+-black.svg" alt="Next.js">
   <img src="https://img.shields.io/badge/FastAPI-0.115+-teal.svg" alt="FastAPI">
-  <img src="https://img.shields.io/badge/Tests-567 passing-brightgreen.svg" alt="Tests">
+  <img src="https://img.shields.io/badge/Tests-620+ passing-brightgreen.svg" alt="Tests">
 </p>
 
 **Ask Anything About Your Data.**
 
-DocBot is an AI-powered document + database analyst. Upload PDFs, connect a live database, upload CSV files, or combine sources — get instant answers with source citations, SQL explanations, Python-generated charts, discrepancy detection, session memory, and a multi-step Autopilot agent that investigates complex questions autonomously.
+DocBot is an AI-powered document + database analyst. Upload PDFs, connect a live database, upload CSV files, ingest SEC filings, or combine sources — get instant answers with source citations, SQL explanations, Python-generated charts, discrepancy detection, session memory, and a multi-step Autopilot agent that investigates complex questions autonomously.
 
 ---
 
@@ -27,7 +27,8 @@ DocBot is an AI-powered document + database analyst. Upload PDFs, connect a live
 | **Structured Extraction** | Pulls typed values (financial metrics, legal dates, medical measurements) from any document using Gemini 2.5 Flash |
 | **Deep Research** | Sub-question decomposition, parallel retrieval, and gap-fill loop for thorough document analysis |
 | **Analytical Autopilot** | LangGraph multi-step investigation agent — works with PDF + CSV + SQL, uses Deep Research for doc search |
-| **Commerce Connectors** | Marketplace connector framework with Amazon SP-API integration — OAuth, Orders, Finances |
+| **SEC EDGAR Integration** | Search public companies, browse 10-K/10-Q/8-K filings, ingest into RAG pipeline — no API key required |
+| **Commerce Connectors** | Marketplace connector framework with Amazon SP-API — OAuth, Orders, Finances, background sync (APScheduler), connector persistence |
 | **LLM Fallback** | Groq primary, Gemini 2.5 Flash automatic fallback — wired to all 8 production callsites |
 | **Conversational Memory** | Follow-up questions rephrased into standalone queries across all pipelines (CSV, SQL, hybrid, autopilot) |
 | **Azure SQL / Entra Auth** | Enterprise Microsoft Entra (Azure AD) Service Principal authentication for Azure SQL |
@@ -42,7 +43,7 @@ DocBot is an AI-powered document + database analyst. Upload PDFs, connect a live
 | **Schema-Aware Table Selection** | Question embeddings matched against table embeddings (cosine similarity) so the right tables are always selected — even with cryptic names like `cust_ord_hdr_rec` |
 | **Query History Panel** | Sidebar panel showing all past queries — click to re-run or inspect SQL |
 
-**Core differentiator**: Hybrid Docs+DB synthesis with discrepancy detection + Analytical Autopilot + Commerce Connectors. No other tool does this.
+**Core differentiator**: Hybrid Docs+DB synthesis with discrepancy detection + Analytical Autopilot + SEC EDGAR Integration + Commerce Connectors. No other tool does this.
 
 ---
 
@@ -190,15 +191,30 @@ Automatic failover from Groq to Gemini 2.5 Flash across all production callsites
 - Fallback: Gemini 2.5 Flash — activates automatically on Groq errors or rate limits
 - Wired to all 8 production callsites — SQL generation, hybrid synthesis, intent classification, answer generation, code generation, autopilot planning, autopilot synthesis, and deep research
 
-### Commerce Connectors (Phase 1)
+### SEC EDGAR Integration
+
+Ingest public company SEC filings directly into the RAG pipeline:
+
+- **Company search**: Search by ticker or name against SEC's full company index (10,000+ public companies)
+- **Filing browser**: List recent filings filtered by type (10-K, 10-Q, 8-K, 20-F, 6-K)
+- **Single/batch ingest**: Download one filing or batch-ingest the last N filings of a given type
+- **Filing cache**: PostgreSQL cache prevents re-downloading already-ingested filings
+- **HTML parsing**: BeautifulSoup4 strips SEC HTML/SGML, returns clean text for chunking
+- **Pipeline reuse**: Ingested filings go through the same SemanticChunker + ChromaDB + Gemini extraction as uploaded PDFs
+- **Frontend panel**: `EdgarPanel.tsx` in the sidebar for search, browse, and ingest with status indicators
+- **Rate limiting**: SEC fair-access policy enforced (10 req/s) via async token-bucket limiter
+
+### Commerce Connectors
 
 Pluggable marketplace connector framework for e-commerce data integration:
 
 - **Connector interface**: Abstract `MarketplaceConnector` base class with credential vault, normalized data models, and async token-bucket rate limiter
 - **Unified commerce schema**: Two-table schema (orders + financials) with PostgreSQL row-level security per `connection_id` — multi-tenant by design
 - **Amazon SP-API connector**: Full LWA OAuth flow, Orders API, and Finances API with automatic retry on throttling
+- **Connector persistence**: Marketplace connections persist to PostgreSQL and survive restarts
+- **Background sync worker**: APScheduler runs incremental syncs (Orders every 15 min, Inventory every 60 min, Finances every 4 hours) with exponential backoff on rate limits
 - **Frontend UI**: `MarketplacePanel.tsx` for registering, syncing, and disconnecting marketplace connections
-- Phase 2 deferred to post-funding: background sync worker (DOCBOT-704), Shopify connector (DOCBOT-705)
+- Shopify connector (DOCBOT-705) deferred to post-funding
 
 ### RAG Quality Enhancement
 
@@ -387,7 +403,7 @@ Sensitive data detected and redacted before it reaches the LLM:
 
 | Layer | Technology |
 |---|---|
-| Frontend | Next.js 16, React 19, TailwindCSS 4, TypeScript, lucide-react, react-markdown |
+| Frontend | Next.js 16, React 19, TailwindCSS 4, TypeScript, lucide-react, react-markdown, @vercel/analytics |
 | Backend | FastAPI, Python 3.12, SQLAlchemy 2.x |
 | Agentic Orchestration | LangGraph (StateGraph — Planner -> Executor -> Synthesizer) |
 | LLM — SQL + Hybrid + Autopilot | Groq Llama 3.3-70b (primary), Gemini 2.5 Flash (fallback) |
@@ -404,9 +420,11 @@ Sensitive data detected and redacted before it reaches the LLM:
 | PII Detection | Regex patterns (email, phone, SSN, credit card) |
 | DB Drivers | psycopg2, pymysql, pyodbc, azure-identity |
 | Python Sandbox | E2B Cloud (code-interpreter) |
+| SEC Filings | EDGAR API, BeautifulSoup4, lxml (HTML parsing) |
 | Commerce | Pluggable connector framework, Amazon SP-API, async rate limiter |
+| Background Sync | APScheduler (incremental marketplace sync, exponential backoff) |
 | Storage | PostgreSQL on Railway |
-| Deployment | Railway (backend), Vercel (frontend) |
+| Deployment | Railway (backend), Vercel (frontend), Vercel Analytics |
 
 ---
 
@@ -582,6 +600,34 @@ GET /api/commerce/{connector_id}/orders
 GET /api/commerce/{connector_id}/financials
 ```
 
+### SEC EDGAR
+
+```bash
+# Search companies by ticker or name
+POST /api/edgar/search
+{ "query": "AAPL" }
+# Returns: { results: [{ cik, ticker, name }], count }
+
+# List filings for a company
+POST /api/edgar/filings
+{ "cik": "320193", "filing_type": "10-K", "count": 5 }
+# Returns: { filings: [{ accession_number, filing_type, filing_date, primary_document }] }
+
+# Ingest a single filing into the RAG pipeline
+POST /api/edgar/ingest
+{ "cik": "320193", "accession_number": "...", "primary_document": "...", "filing_type": "10-K", "filing_date": "2024-11-01", "company_name": "Apple Inc", "ticker": "AAPL" }
+# Returns: { session_id, chunks_created, cached }
+
+# Batch ingest multiple filings
+POST /api/edgar/ingest-batch
+{ "cik": "320193", "ticker": "AAPL", "company_name": "Apple Inc", "filing_type": "10-K", "count": 5 }
+# Returns: { results: [...], summary: { total, ingested } }
+
+# List cached filings
+GET /api/edgar/cache?ticker=AAPL
+# Returns: { filings: [...], count }
+```
+
 ### Sandbox Execution
 
 ```bash
@@ -723,7 +769,7 @@ pytest tests/unit/ -v
 pytest tests/ -v -m "not external and not postgres"
 ```
 
-**567 tests passing** across:
+**620+ tests passing** across:
 
 | File | Coverage |
 |---|---|
@@ -761,7 +807,10 @@ pytest tests/ -v -m "not external and not postgres"
 | `tests/integration/test_db_pipeline.py` | Full SQL pipeline against SQLite |
 | `tests/integration/test_file_upload_service.py` | PDF upload and chunk extraction |
 | `tests/integration/test_artifact_service.py` | SQLite-backed artifact round-trip |
+| `tests/unit/test_edgar_connector.py` | EDGAR connector — search, list, fetch, rate limiter (16 tests) |
+| `tests/unit/test_edgar_service.py` | EDGAR ingestion service — cache, ingest, batch (5 tests) |
 | `tests/external/test_financebench_accuracy.py` | FinanceBench 20-question accuracy suite (requires live API keys) |
+| `tests/external/test_edgar_integration.py` | EDGAR end-to-end integration — search, list, fetch against live SEC API (17 tests) |
 
 ---
 
@@ -805,20 +854,18 @@ Set all environment variables in the Railway and Vercel dashboards.
 - **Immutable audit log**: PostgreSQL `BEFORE UPDATE OR DELETE` trigger blocks any modification of audit records at the DB level
 - **PII masking**: Personally identifiable information detected and redacted before reaching the LLM — applied to all SSE, sandbox, and audit response paths
 - **Multi-tenant RLS**: Commerce data isolated per `connection_id` with PostgreSQL row-level security
+- **SEC EDGAR rate limiting**: Async token-bucket limiter enforces SEC 10 req/s fair-access policy
 
 ---
 
 ## Roadmap
 
-### Phase 2: Commerce Connectors (Post-Funding)
+### Post-Funding
 
-- DOCBOT-704: Background sync worker — APScheduler, incremental fetch, exponential backoff on rate limits
 - DOCBOT-705: Shopify connector — OAuth offline token, webhook-driven incremental sync
-
-### Future
-
-- FinanceBench accuracy benchmarking (test suite written, run pending)
+- DOCBOT-1004: FinanceBench accuracy benchmarking (test suite written, run pending)
 - Additional marketplace connectors (eBay, Walmart)
+- Additional document connectors (UK Companies House, Canadian SEDAR)
 - Real-time webhook-driven data ingestion
 
 ---

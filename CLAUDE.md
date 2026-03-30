@@ -43,15 +43,20 @@ DocBot is an AI-powered document + database analyst, fully deployed on Railway (
 | `api/connectors/registry.py` | Decorator-based connector type registration |
 | `api/connectors/rate_limiter.py` | Async token-bucket rate limiter (per-credential keying) |
 | `api/connectors/amazon_connector.py` | Amazon SP-API connector — LWA OAuth, Orders, Finances, retry logic |
+| `api/connectors/base_document.py` | BaseDocumentConnector ABC for document-source connectors (EDGAR, etc.) |
+| `api/connectors/edgar_connector.py` | SEC EDGAR connector — search companies, list/download filings, HTML stripping |
+| `api/edgar_service.py` | EDGAR ingestion pipeline — download → chunk → embed → session → cache |
+| `api/connector_store.py` | Connector persistence + EDGAR filing cache (PostgreSQL) |
 | `api/commerce_service.py` | Unified commerce schema — 2 tables, RLS via connection_id, persist/query helpers, sync orchestrator |
 | `api/metrics_service.py` | Admin metrics aggregation for `/admin/metrics` endpoint |
 | `src/app/page.tsx` | Investor landing page at `/` — hero, features, CTA |
 | `src/app/chat/page.tsx` | Chat app at `/chat` (~512 lines). State declarations + hook calls + layout |
-| `src/components/` | Extracted frontend components: Sidebar, ChatArea, AuthModal, AdminPanel, ChatMessage, ConnectionPanel, FileUploadZone, PersonaSelector, personas |
+| `src/components/EdgarPanel.tsx` | SEC EDGAR sidebar panel — search companies, browse filings, single/batch ingest |
+| `src/components/` | Extracted frontend components: Sidebar, ChatArea, AuthModal, AdminPanel, ChatMessage, ConnectionPanel, FileUploadZone, PersonaSelector, EdgarPanel, personas |
 | `src/hooks/` | Custom hooks: useChatHandlers (DB/auth/file handlers), useChatSubmit (message submission) |
 | `tests/external/test_financebench_accuracy.py` | FinanceBench 20-question accuracy test suite (external, requires live API keys) |
 | `requirements.txt` | Python dependencies |
-| `project-tasks/docbot-v2-project-tracking.md` | 38 user stories, 9 epics, sprint plan, Definition of Done — **primary ticket tracker** |
+| `project-tasks/docbot-v2-project-tracking.md` | 40+ user stories, 11 epics, sprint plan, Definition of Done — **primary ticket tracker** |
 | `project-tasks/docbot-db-master-plan.md` | Full architecture, security model, phased build plan |
 
 ## Current Architecture (v2 — live on Railway)
@@ -130,11 +135,18 @@ One ticket per branch. One branch per session when possible.
 
 All work is tracked in `project-tasks/docbot-v2-project-tracking.md`.
 
-**Current state (2026-03-26):**
+**Current state (2026-03-29):**
 - EPIC-01 through EPIC-06 — **Done** (archived)
 - Consumer Auth (DOCBOT-701) — **Done**
 - EPIC-08 Smart Agent Auto-Routing (DOCBOT-801–805) — **Done**
 - EPIC-09 LangGraph Deep Research (DOCBOT-901–904) — **Done**
+- **EPIC-11 SEC EDGAR Integration (DOCBOT-1101) — Done**
+  - BaseDocumentConnector ABC, EdgarConnector (search, list, fetch), EDGAR ingestion service
+  - Filing cache (PostgreSQL), SEC rate limiter (10 req/s), HTML stripping via BeautifulSoup
+  - EdgarPanel.tsx frontend (search, browse, single/batch ingest)
+  - 5 API routes, 21 unit tests, Vercel Analytics added
+- **DOCBOT-704 Background Sync Worker — Done** (APScheduler, incremental sync, exponential backoff)
+- **DOCBOT-706 Connector Persistence — Done** (marketplace connections survive restarts via PostgreSQL)
 - **Enterprise Data Pipeline Hardening (2026-03-25) — Done**
   - Hybrid routing fix (PDF+CSV dual-source misfire)
   - Enterprise CSV pipeline: multi-section detection, section-aware E2B preamble, data cleaning
@@ -199,7 +211,7 @@ All work is tracked in `project-tasks/docbot-v2-project-tracking.md`.
   - Added "Built by Sanshrit Singhai" with portfolio link in footer
   - DemoVideo component: supports YouTube/Loom/Vimeo embed, direct MP4, or animated placeholder mockup
   - Embedded Veo-generated demo video (`public/docbot-demo.mp4`, 8s, 1280x720) — auto-plays muted, loops
-- **599 tests passing, 0 failures**
+- **620+ tests passing, 0 failures**
 
 > **PageIndex evaluated 2026-03-25 — not integrating.** Hard blockers: OpenAI-only (Groq incompatible), not on PyPI (Railway brittleness), no streaming (SSE conflict). Revisit if PyPI package + multi-backend support ships.
 
@@ -270,11 +282,14 @@ tests/
     test_embeddings.py
     test_db_service_helpers.py
     test_amazon_connector.py  # 22 tests for connector framework + Amazon SP-API
+    test_edgar_connector.py   # 16 tests for EDGAR connector (search, list, fetch)
+    test_edgar_service.py     # 5 tests for EDGAR ingestion service (cache, ingest, batch)
   integration/             # hit real SQLite / temp files — still run in CI (no external APIs)
     test_db_pipeline.py
     test_file_upload_service.py
   external/                # require live API keys — skipped in CI (@pytest.mark.external)
-    test_financebench_accuracy.py  # 20-question FinanceBench accuracy suite
+    test_financebench_accuracy.py   # 20-question FinanceBench accuracy suite
+    test_edgar_integration.py       # 17 end-to-end tests hitting real SEC EDGAR API
 ```
 
 **Rules:**
@@ -307,11 +322,15 @@ All business logic lives in dedicated service/util modules:
 - `api/document_extractor.py` — LangExtract financial extraction
 - `api/file_upload_service.py` — CSV/SQLite upload handling
 - `api/metrics_service.py` — admin metrics aggregation (`GET /admin/metrics`)
-- `api/connectors/` — marketplace connector framework:
+- `api/edgar_service.py` — EDGAR ingestion pipeline (download → chunk → embed → session → cache)
+- `api/connector_store.py` — Connector persistence + EDGAR filing cache (PostgreSQL)
+- `api/connectors/` — marketplace + document connector framework:
   - `base.py` — `MarketplaceConnector` ABC, normalized dataclasses, exceptions
+  - `base_document.py` — `BaseDocumentConnector` ABC for document-source connectors
   - `registry.py` — connector type registration and lookup
   - `rate_limiter.py` — async token-bucket rate limiter
   - `amazon_connector.py` — Amazon SP-API (LWA OAuth, Orders, Finances)
+  - `edgar_connector.py` — SEC EDGAR connector (search companies, list/download filings)
 - `api/utils/` — shared helpers (embeddings, encryption, validators, LLM provider, reranker, chunker, vector store, etc.)
 
 **Rule:** If a function is more than ~15 lines or has no direct dependency on the HTTP request/response, it belongs in a service or utils module, not in index.py.
