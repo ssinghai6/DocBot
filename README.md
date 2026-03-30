@@ -5,7 +5,7 @@
   <img src="https://img.shields.io/badge/Python-3.12+-blue.svg" alt="Python">
   <img src="https://img.shields.io/badge/Next.js-16+-black.svg" alt="Next.js">
   <img src="https://img.shields.io/badge/FastAPI-0.115+-teal.svg" alt="FastAPI">
-  <img src="https://img.shields.io/badge/Tests-620+ passing-brightgreen.svg" alt="Tests">
+  <img src="https://img.shields.io/badge/Tests-686+ passing-brightgreen.svg" alt="Tests">
 </p>
 
 **Ask Anything About Your Data.**
@@ -28,7 +28,7 @@ DocBot is an AI-powered document + database analyst. Upload PDFs, connect a live
 | **Deep Research** | Sub-question decomposition, parallel retrieval, and gap-fill loop for thorough document analysis |
 | **Analytical Autopilot** | LangGraph multi-step investigation agent — works with PDF + CSV + SQL, uses Deep Research for doc search |
 | **SEC EDGAR Integration** | Search public companies, browse 10-K/10-Q/8-K filings, ingest into RAG pipeline — no API key required |
-| **Commerce Connectors** | Marketplace connector framework with Amazon SP-API — OAuth, Orders, Finances, background sync (APScheduler), connector persistence |
+| **Commerce Connectors** | Marketplace connector framework with Amazon SP-API + Shopify — OAuth, Orders, Finances, background sync (APScheduler), connector persistence, webhook-driven sync |
 | **LLM Fallback** | Groq primary, Gemini 2.5 Flash automatic fallback — wired to all 8 production callsites |
 | **Conversational Memory** | Follow-up questions rephrased into standalone queries across all pipelines (CSV, SQL, hybrid, autopilot) |
 | **Azure SQL / Entra Auth** | Enterprise Microsoft Entra (Azure AD) Service Principal authentication for Azure SQL |
@@ -211,10 +211,11 @@ Pluggable marketplace connector framework for e-commerce data integration:
 - **Connector interface**: Abstract `MarketplaceConnector` base class with credential vault, normalized data models, and async token-bucket rate limiter
 - **Unified commerce schema**: Two-table schema (orders + financials) with PostgreSQL row-level security per `connection_id` — multi-tenant by design
 - **Amazon SP-API connector**: Full LWA OAuth flow, Orders API, and Finances API with automatic retry on throttling
+- **Shopify connector**: Admin REST API integration with cursor-based pagination, dual-status normalization (financial + fulfillment), HMAC-SHA256 webhook verification, and financial aggregation from orders
 - **Connector persistence**: Marketplace connections persist to PostgreSQL and survive restarts
 - **Background sync worker**: APScheduler runs incremental syncs (Orders every 15 min, Inventory every 60 min, Finances every 4 hours) with exponential backoff on rate limits
+- **Webhook receiver**: `POST /api/marketplace/webhook/shopify` with signature verification triggers incremental sync on order events
 - **Frontend UI**: `MarketplacePanel.tsx` for registering, syncing, and disconnecting marketplace connections
-- Shopify connector (DOCBOT-705) deferred to post-funding
 
 ### RAG Quality Enhancement
 
@@ -598,6 +599,9 @@ POST /api/connectors/{connector_id}/sync
 # Query persisted commerce data
 GET /api/commerce/{connector_id}/orders
 GET /api/commerce/{connector_id}/financials
+
+# Shopify webhook receiver (HMAC-verified)
+POST /api/marketplace/webhook/shopify
 ```
 
 ### SEC EDGAR
@@ -769,7 +773,7 @@ pytest tests/unit/ -v
 pytest tests/ -v -m "not external and not postgres"
 ```
 
-**620+ tests passing** across:
+**686+ tests passing** across:
 
 | File | Coverage |
 |---|---|
@@ -797,6 +801,7 @@ pytest tests/ -v -m "not external and not postgres"
 | `tests/unit/test_audit_service.py` | Event types, DB write, fire-and-forget dispatcher, immutability DDL |
 | `tests/unit/test_rbac_service.py` | Role hierarchy, `require_role` dependency, wire-up |
 | `tests/unit/test_amazon_connector.py` | Amazon SP-API connector — LWA OAuth, Orders, Finances (22 tests) |
+| `tests/unit/test_shopify_connector.py` | Shopify connector — orders, financials, pagination, HMAC, status normalization (36 tests) |
 | `tests/unit/test_commerce_service.py` | Unified commerce schema, RLS, persist/query helpers (31 tests) |
 | `tests/unit/test_discrepancy_detector.py` | Discrepancy detection — delta calculation, threshold logic |
 | `tests/unit/test_reranker.py` | Cross-encoder reranker scoring, fallback behavior |
@@ -862,11 +867,10 @@ Set all environment variables in the Railway and Vercel dashboards.
 
 ### Post-Funding
 
-- DOCBOT-705: Shopify connector — OAuth offline token, webhook-driven incremental sync
-- DOCBOT-1004: FinanceBench accuracy benchmarking (test suite written, run pending)
 - Additional marketplace connectors (eBay, Walmart)
 - Additional document connectors (UK Companies House, Canadian SEDAR)
-- Real-time webhook-driven data ingestion
+- Shopify OAuth app flow (currently custom app access token)
+- Multi-region deployment and horizontal scaling
 
 ---
 

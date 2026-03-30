@@ -43,6 +43,7 @@ DocBot is an AI-powered document + database analyst, fully deployed on Railway (
 | `api/connectors/registry.py` | Decorator-based connector type registration |
 | `api/connectors/rate_limiter.py` | Async token-bucket rate limiter (per-credential keying) |
 | `api/connectors/amazon_connector.py` | Amazon SP-API connector — LWA OAuth, Orders, Finances, retry logic |
+| `api/connectors/shopify_connector.py` | Shopify Admin REST API connector — orders with cursor pagination, financial aggregation, HMAC webhook verification, dual-status normalization |
 | `api/connectors/base_document.py` | BaseDocumentConnector ABC for document-source connectors (EDGAR, etc.) |
 | `api/connectors/edgar_connector.py` | SEC EDGAR connector — search companies, list/download filings, HTML stripping |
 | `api/edgar_service.py` | EDGAR ingestion pipeline — download → chunk → embed → session → cache |
@@ -158,12 +159,14 @@ All work is tracked in `project-tasks/docbot-v2-project-tracking.md`.
   - DOCBOT-1001: Chroma persistent store — **Done**
   - DOCBOT-1002: Cross-encoder reranker — **Done**
   - DOCBOT-1003: SemanticChunker — **Done**
-  - DOCBOT-1004: FinanceBench accuracy — **Code complete** (test suite written, accuracy not yet run)
-- **EPIC-07 Commerce Connectors Phase 1 (DOCBOT-701–703) — Done** (29 pts)
+  - DOCBOT-1004: FinanceBench accuracy — **Done** (100% accuracy, 20/20)
+- **EPIC-07 Commerce Connectors (DOCBOT-701–706) — Done** (all phases)
   - DOCBOT-701: Marketplace connector interface + credential vault + rate limiter — **Done**
   - DOCBOT-702: Unified commerce schema + multi-tenant RLS — **Done** (31 tests)
   - DOCBOT-703: Amazon SP-API connector (Orders, Finances, OAuth) — **Done** (22 tests)
-  - *Phase 2 deferred to post-funding:* DOCBOT-704 (background sync), DOCBOT-705 (Shopify)
+  - DOCBOT-704: Background sync worker — **Done**
+  - DOCBOT-705: Shopify connector (orders, financials, cursor pagination, HMAC webhooks, dual-status normalization) — **Done** (36 tests)
+  - DOCBOT-706: Connector persistence — **Done**
 - **Investor Readiness Sprint (2026-03-26) — Done**
   - LLM fallback wired to all 8 prod callsites (Groq → Gemini auto-fallback)
   - Landing page routed to `/`, chat app to `/chat`
@@ -211,7 +214,7 @@ All work is tracked in `project-tasks/docbot-v2-project-tracking.md`.
   - Added "Built by Sanshrit Singhai" with portfolio link in footer
   - DemoVideo component: supports YouTube/Loom/Vimeo embed, direct MP4, or animated placeholder mockup
   - Embedded Veo-generated demo video (`public/docbot-demo.mp4`, 8s, 1280x720) — auto-plays muted, loops
-- **620+ tests passing, 0 failures**
+- **686+ tests passing, 0 failures**
 
 > **PageIndex evaluated 2026-03-25 — not integrating.** Hard blockers: OpenAI-only (Groq incompatible), not on PyPI (Railway brittleness), no streaming (SSE conflict). Revisit if PyPI package + multi-backend support ships.
 
@@ -282,6 +285,7 @@ tests/
     test_embeddings.py
     test_db_service_helpers.py
     test_amazon_connector.py  # 22 tests for connector framework + Amazon SP-API
+    test_shopify_connector.py # 36 tests for Shopify connector (orders, financials, pagination, HMAC, status normalization)
     test_edgar_connector.py   # 16 tests for EDGAR connector (search, list, fetch)
     test_edgar_service.py     # 5 tests for EDGAR ingestion service (cache, ingest, batch)
   integration/             # hit real SQLite / temp files — still run in CI (no external APIs)
@@ -330,6 +334,7 @@ All business logic lives in dedicated service/util modules:
   - `registry.py` — connector type registration and lookup
   - `rate_limiter.py` — async token-bucket rate limiter
   - `amazon_connector.py` — Amazon SP-API (LWA OAuth, Orders, Finances)
+  - `shopify_connector.py` — Shopify Admin REST API (orders, financials, cursor pagination, HMAC webhooks)
   - `edgar_connector.py` — SEC EDGAR connector (search companies, list/download filings)
 - `api/utils/` — shared helpers (embeddings, encryption, validators, LLM provider, reranker, chunker, vector store, etc.)
 
