@@ -24,11 +24,17 @@ except ImportError:
 
 # Document types that benefit from semantic chunking (boundary-aware splitting
 # rather than fixed character windows).
-_SEMANTIC_DOC_TYPES = {"financial", "legal", "annual_report", "10k", "contract"}
+_SEMANTIC_DOC_TYPES = {"financial", "legal", "annual_report", "10k", "sec_filing", "contract"}
 
 # Keywords used for lightweight doc-type detection from the first 500 characters
 # of a document when the caller cannot provide an explicit type.
-_FINANCIAL_KEYWORDS = {"annual report", "10-k", "financial statements", "balance sheet", "income statement"}
+_FINANCIAL_KEYWORDS = {
+    "annual report", "10-k", "10-q", "financial statements", "balance sheet",
+    "income statement", "form 10-k", "form 10-q", "form 8-k",
+    "securities and exchange commission", "registrant",
+    "consolidated statements", "notes to financial statements",
+    "stockholders' equity", "cash flows",
+}
 _LEGAL_KEYWORDS = {"agreement", "contract", "whereas", "hereinafter", "indemnification"}
 
 
