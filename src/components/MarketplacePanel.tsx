@@ -19,6 +19,7 @@ type CredentialField = {
   label: string
   type: "text" | "password"
   placeholder: string
+  optional?: boolean
 }
 
 const CREDENTIAL_FIELDS: Record<string, CredentialField[]> = {
@@ -28,6 +29,11 @@ const CREDENTIAL_FIELDS: Record<string, CredentialField[]> = {
     { key: "refresh_token", label: "Refresh Token", type: "password", placeholder: "LWA Refresh Token" },
     { key: "marketplace_id", label: "Marketplace ID", type: "text", placeholder: "e.g. ATVPDKIKX0DER" },
   ],
+  shopify: [
+    { key: "shop_domain", label: "Shop Domain", type: "text", placeholder: "mystore.myshopify.com" },
+    { key: "access_token", label: "Access Token", type: "password", placeholder: "Admin API access token" },
+    { key: "webhook_secret", label: "Webhook Secret", type: "password", placeholder: "Optional — for webhook verification", optional: true },
+  ],
 }
 
 const CONNECTOR_TYPES = Object.keys(CREDENTIAL_FIELDS)
@@ -35,6 +41,7 @@ const CONNECTOR_TYPES = Object.keys(CREDENTIAL_FIELDS)
 function ConnectorTypeLabel({ type }: { type: string }) {
   const labels: Record<string, string> = {
     amazon: "Amazon SP-API",
+    shopify: "Shopify",
   }
   return <>{labels[type] ?? type}</>
 }
@@ -116,7 +123,7 @@ export default function MarketplacePanel({
   }
 
   const fields = CREDENTIAL_FIELDS[selectedType] ?? []
-  const allFieldsFilled = fields.every(f => credentials[f.key]?.trim())
+  const allFieldsFilled = fields.filter(f => !f.optional).every(f => credentials[f.key]?.trim())
 
   return (
     <div className="mb-5">
