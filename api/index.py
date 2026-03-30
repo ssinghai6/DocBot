@@ -89,6 +89,8 @@ sessions_table = Table(
     Column("message_count_at_compression", Integer, server_default="0"),
     # ── Persistent Workspace: link session to logged-in user ─────────────────
     Column("user_id", String, index=True),
+    # ── EDGAR: distinguish upload vs edgar-fetched sessions ────────────────
+    Column("source", String, server_default="upload"),  # upload | edgar
 )
 
 messages_table = Table(
@@ -211,8 +213,11 @@ from api.commerce_service import register_commerce_tables
 commerce_orders_table, commerce_financials_table = register_commerce_tables(metadata)
 
 # ── DOCBOT-706: Connector Persistence ─────────────────────────────────────────
-from api.connector_store import register_connector_tables
+from api.connector_store import register_connector_tables, register_edgar_cache_table
 marketplace_connections_table = register_connector_tables(metadata)
+
+# ── EDGAR filing cache ────────────────────────────────────────────────────────
+edgar_filings_cache_table = register_edgar_cache_table(metadata)
 
 # ── EPIC-06: RBAC dependencies (DOCBOT-603) ──────────────────────────────────
 # Imported here so Depends() objects can be declared at module level.
@@ -273,6 +278,10 @@ async def init_db() -> None:
             "ALTER TABLE db_connections ADD COLUMN IF NOT EXISTS user_id TEXT",
         ]:
             await conn.execute(text(col_ddl))
+        # EDGAR: source column on sessions (upload | edgar)
+        await conn.execute(text(
+            "ALTER TABLE sessions ADD COLUMN IF NOT EXISTS source TEXT DEFAULT 'upload'"
+        ))
     logger.info(
         "Database tables verified / created "
         "(sessions, messages, db_connections, schema_cache, query_history, "
@@ -291,8 +300,9 @@ async def lifespan(app: FastAPI):
     from api.commerce_service import wire_commerce
     wire_commerce(commerce_orders_table, commerce_financials_table, async_session_factory)
     # DOCBOT-706: wire connector store + restore connectors from DB
-    from api.connector_store import wire_connector_store, load_all_active_connectors
+    from api.connector_store import wire_connector_store, wire_edgar_cache, load_all_active_connectors
     wire_connector_store(marketplace_connections_table, async_session_factory)
+    wire_edgar_cache(edgar_filings_cache_table)
     # Clean up any expired file uploads from previous runs
     try:
         from api.file_upload_service import cleanup_expired_uploads
@@ -3079,3 +3089,120 @@ async def get_commerce_financials(
     from api.commerce_service import query_financials
     financials = await query_financials(connector_id, limit=limit, offset=offset)
     return {"connector_id": connector_id, "financials": financials}
+
+
+# ── SEC EDGAR Routes ─────────────────────────────────────────────────────────
+
+
+class EdgarSearchRequest(BaseModel):
+    query: str
+
+
+class EdgarFilingsRequest(BaseModel):
+    cik: str
+    filing_type: str = "10-K"
+    count: int = 5
+
+
+class EdgarIngestRequest(BaseModel):
+    cik: str
+    accession_number: str
+    primary_document: str
+    filing_type: str
+    filing_date: str
+    company_name: str
+    ticker: str
+
+
+class EdgarBatchIngestRequest(BaseModel):
+    cik: str
+    ticker: str
+    company_name: str
+    filing_type: str = "10-K"
+    count: int = 5
+
+
+@app.post("/api/edgar/search")
+async def edgar_search(body: EdgarSearchRequest):
+    """Search SEC EDGAR for a company by ticker or name."""
+    from api.connectors.edgar_connector import EdgarConnector
+
+    connector = EdgarConnector()
+    results = await connector.search_company(body.query)
+    return {"results": results, "count": len(results)}
+
+
+@app.post("/api/edgar/filings")
+async def edgar_list_filings(body: EdgarFilingsRequest):
+    """List available filings for a CIK."""
+    from api.connectors.edgar_connector import EdgarConnector
+
+    connector = EdgarConnector()
+    filings = await connector.list_filings(body.cik, body.filing_type, body.count)
+    return {"cik": body.cik, "filing_type": body.filing_type, "filings": filings}
+
+
+@app.post("/api/edgar/ingest")
+async def edgar_ingest_filing(request: Request, body: EdgarIngestRequest):
+    """Download a single SEC filing and ingest into the RAG pipeline."""
+    from api.edgar_service import ingest_edgar_filing
+
+    user = await get_optional_user(request)
+    user_id = user.id if user else None
+
+    result = await ingest_edgar_filing(
+        cik=body.cik,
+        accession_number=body.accession_number,
+        primary_document=body.primary_document,
+        filing_type=body.filing_type,
+        filing_date=body.filing_date,
+        company_name=body.company_name,
+        ticker=body.ticker,
+        user_id=user_id,
+        sessions_table=sessions_table,
+        async_session_factory=async_session_factory,
+        vector_stores=VECTOR_STORES,
+        get_embeddings_fn=get_embeddings,
+        extracted_fields_store=EXTRACTED_FIELDS,
+    )
+    return result
+
+
+@app.post("/api/edgar/ingest-batch")
+async def edgar_ingest_batch(request: Request, body: EdgarBatchIngestRequest):
+    """Ingest multiple years of SEC filings at once."""
+    from api.edgar_service import ingest_multiple_filings
+
+    user = await get_optional_user(request)
+    user_id = user.id if user else None
+
+    results = await ingest_multiple_filings(
+        cik=body.cik,
+        ticker=body.ticker,
+        company_name=body.company_name,
+        filing_type=body.filing_type,
+        count=body.count,
+        user_id=user_id,
+        sessions_table=sessions_table,
+        async_session_factory=async_session_factory,
+        vector_stores=VECTOR_STORES,
+        get_embeddings_fn=get_embeddings,
+        extracted_fields_store=EXTRACTED_FIELDS,
+    )
+    return {
+        "cik": body.cik,
+        "ticker": body.ticker,
+        "filing_type": body.filing_type,
+        "results": results,
+        "total": len(results),
+        "ingested": sum(1 for r in results if "session_id" in r),
+    }
+
+
+@app.get("/api/edgar/cache")
+async def edgar_list_cached(ticker: Optional[str] = None, cik: Optional[str] = None):
+    """List cached EDGAR filings, optionally filtered by ticker or CIK."""
+    from api.connector_store import list_cached_filings
+
+    filings = await list_cached_filings(ticker=ticker, cik=cik)
+    return {"filings": filings, "count": len(filings)}

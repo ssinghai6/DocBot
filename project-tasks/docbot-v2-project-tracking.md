@@ -62,6 +62,7 @@ Every story is only "done" when ALL of the following are true. No exceptions.
 | EPIC-05 | Memory and Context | 2 | ✅ Done | Session artifacts, context compression, multi-hop queries |
 | EPIC-06 | Enterprise Readiness | 4 | ✅ Done | SSO, RBAC, audit logging, PII masking, Docker Compose, admin UI — all shipped |
 | EPIC-07 | Commerce Connectors | 4+ | 🔄 Active (Phase 1) | Marketplace API integrations. **Phase 1:** DOCBOT-701 (connector interface) ✅ Done, DOCBOT-703 (Amazon SP-API) ✅ Done, DOCBOT-702 (unified commerce schema + RLS) remaining. **Phase 2 (post-funding):** Background sync worker, Shopify connector (DOCBOT-704–705, 16 pts). |
+| EPIC-11 | SEC EDGAR Integration | 4+ | 🔄 In Progress | SEC EDGAR filing connector — search companies, list/download filings, ingest into RAG pipeline. DOCBOT-1101 (connector + service) code complete, needs commit + tests. |
 | EPIC-08 | Smart Agent Auto-Routing | 3 | ✅ Done | Replace static persona picker with intelligent per-question agent routing, per-agent badges and rendering |
 | EPIC-09 | LangGraph Deep Research | 3+ | ✅ Done | Multi-step reasoning graph replacing single-shot Deep Research prompt — query planner, parallel retrieval, gap detection, streaming synthesis |
 | EPIC-10 | RAG Quality Enhancement | 4+ | 🔄 Active | Chroma persistent store (done), cross-encoder reranker (done), SemanticChunker (done), FinanceBench accuracy baseline (code complete, accuracy not yet run). PageIndex evaluated and rejected (2026-03-25). |
@@ -1331,6 +1332,55 @@ As a DTC brand owner on Shopify, I want to connect my Shopify store to DocBot, s
 | 6 | Add Shopify status normalization to `status_maps.py` | Backend | 0.5h |
 | 7 | Register `ShopifyConnector()` in `api/connectors/__init__.py` | Backend | 0.5h |
 | 8 | Test: connect Shopify development store; verify orders sync; verify webhook triggers incremental update | Backend | 2h |
+
+---
+
+---
+
+### EPIC-11: SEC EDGAR Integration
+
+---
+
+#### DOCBOT-1101: SEC EDGAR Connector + Ingestion Service
+
+**Story**
+As an analyst, I want to search for public companies and ingest their SEC filings (10-K, 10-Q, 8-K) directly into DocBot, so that I can ask questions about official regulatory filings alongside my other documents.
+
+**Phase**: 4+
+**Priority**: Should Have
+**Story Points**: 8
+**Dependencies**: DOCBOT-1001 (Chroma persistent store), DOCBOT-1003 (SemanticChunker)
+
+**Acceptance Criteria**
+- [x] `BaseDocumentConnector` ABC defines interface for document-source connectors (search, list, fetch)
+- [x] `EdgarConnector` implements `BaseDocumentConnector` with SEC EDGAR API (no API key required)
+- [x] `search_company(query)` searches by ticker or name, returns up to 10 matches
+- [x] `list_filings(cik, filing_type, count)` returns recent filings filtered by type (10-K, 10-Q, 8-K)
+- [x] `fetch_filing_text(cik, accession, doc)` downloads filing, strips HTML via BeautifulSoup, returns clean text
+- [x] Rate limiter enforces SEC fair-access policy (10 req/s)
+- [x] `edgar_service.py` orchestrates: download → chunk → embed → create session → cache
+- [x] Filing metadata (CIK, ticker, type, date) tagged on every chunk for filtering
+- [x] Filing cache prevents re-downloading already-ingested filings
+- [x] `ingest_multiple_filings()` batch-ingests last N filings of a given type
+- [x] Structured field extraction (Gemini) runs on ingested filings when available
+- [ ] API routes: `GET /api/edgar/search`, `POST /api/edgar/ingest`, `POST /api/edgar/ingest-batch`
+- [ ] Unit tests for connector (search, list, fetch) and service (ingest, cache hit)
+- [ ] Integration test: ingest a real 10-K, verify session created with chunks
+
+**Engineering Tasks**
+
+| # | Task | Role | Est. Hours |
+|---|------|------|-----------|
+| 1 | Create `api/connectors/base_document.py`: `BaseDocumentConnector` ABC | Backend | 0.5h |
+| 2 | Create `api/connectors/edgar_connector.py`: `EdgarConnector` with search, list, fetch | Backend | 3h |
+| 3 | Create `api/edgar_service.py`: `ingest_edgar_filing()` and `ingest_multiple_filings()` | Backend | 2h |
+| 4 | Add `connector_store.py` helpers: `get_cached_filing()`, `save_filing_cache()` | Backend | 1h |
+| 5 | Add API routes in `api/index.py`: search, ingest single, ingest batch | Backend | 1h |
+| 6 | Update `api/utils/chunker.py` for SEC filing doc type detection | Backend | 0.5h |
+| 7 | Unit tests: `test_edgar_connector.py`, `test_edgar_service.py` | Backend | 2h |
+| 8 | Integration test: end-to-end ingest of a real filing | Backend | 1h |
+
+**Status**: Code complete (tasks 1-6 done), tests and routes in progress.
 
 ---
 
