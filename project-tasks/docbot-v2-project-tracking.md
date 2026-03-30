@@ -65,7 +65,7 @@ Every story is only "done" when ALL of the following are true. No exceptions.
 | EPIC-11 | SEC EDGAR Integration | 4+ | ✅ Done | SEC EDGAR filing connector + ingestion service + frontend panel. DOCBOT-1101: connector, service, 3 API routes, EdgarPanel.tsx, 21 tests passing. |
 | EPIC-08 | Smart Agent Auto-Routing | 3 | ✅ Done | Replace static persona picker with intelligent per-question agent routing, per-agent badges and rendering |
 | EPIC-09 | LangGraph Deep Research | 3+ | ✅ Done | Multi-step reasoning graph replacing single-shot Deep Research prompt — query planner, parallel retrieval, gap detection, streaming synthesis |
-| EPIC-10 | RAG Quality Enhancement | 4+ | 🔄 Active | Chroma persistent store (done), cross-encoder reranker (done), SemanticChunker (done), FinanceBench accuracy baseline (code complete, accuracy not yet run). PageIndex evaluated and rejected (2026-03-25). |
+| EPIC-10 | RAG Quality Enhancement | 4+ | ✅ Done | Chroma persistent store, cross-encoder reranker, SemanticChunker, FinanceBench accuracy baseline (**100% — 20/20**). PageIndex evaluated and rejected (2026-03-25). |
 
 ---
 
@@ -1709,7 +1709,7 @@ As a developer, I want an automated accuracy test harness against FinanceBench q
 **Priority**: Should Have
 **Story Points**: 5
 **Dependencies**: DOCBOT-1001, DOCBOT-1002, DOCBOT-1003
-**Status**: 🔄 Code Complete (test suite written with 20 questions in `tests/external/test_financebench_accuracy.py`, accuracy not yet run/documented)
+**Status**: ✅ Done — **100% accuracy (20/20)** on FinanceBench baseline. Run 2026-03-29 against Groq Llama 3.3-70b. All 20 questions across 10 companies (Apple, Microsoft, Amazon, Alphabet, Meta, Tesla, JPMorgan Chase, J&J, Nvidia, Walmart) answered correctly within 11 seconds total.
 
 **Acceptance Criteria**
 - [ ] `tests/external/test_financebench_accuracy.py` with 20 curated FinanceBench questions + ground truth answers
