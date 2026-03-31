@@ -8,17 +8,13 @@ Falls back to original order if API unavailable.
 from __future__ import annotations
 
 import logging
-from typing import Any
 
-import httpx
+from huggingface_hub import InferenceClient
 
 logger = logging.getLogger(__name__)
 
-_HF_API_URL = (
-    "https://api-inference.huggingface.co/models/"
-    "cross-encoder/ms-marco-MiniLM-L-6-v2"
-)
-_TIMEOUT_SECONDS = 5.0
+_MODEL = "sentence-transformers/all-MiniLM-L6-v2"
+_TIMEOUT_SECONDS = 5
 
 
 def rerank(
@@ -57,16 +53,9 @@ def rerank(
     passages: list[str] = [doc.page_content for doc in docs]
 
     try:
-        response = httpx.post(
-            _HF_API_URL,
-            headers={"Authorization": f"Bearer {hf_api_key}"},
-            json={"inputs": {"query": query, "passages": passages}},
-            timeout=_TIMEOUT_SECONDS,
-        )
-        response.raise_for_status()
-        scores: Any = response.json()
+        client = InferenceClient(model=_MODEL, token=hf_api_key, timeout=_TIMEOUT_SECONDS)
+        scores: list[float] = client.sentence_similarity(query, other_sentences=passages)
 
-        # HF returns a list of floats, one per passage.
         if not isinstance(scores, list) or len(scores) != len(docs):
             logger.warning(
                 "rerank: unexpected response shape from HF API — "
