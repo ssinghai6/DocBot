@@ -910,6 +910,22 @@ def get_personas():
         ]
     }
 
+@app.post("/api/demo/init")
+async def init_demo():
+    """Initialize a sandbox demo session with pre-loaded financial data."""
+    from api.demo_service import init_demo_session
+
+    result = await init_demo_session(
+        vector_stores=VECTOR_STORES,
+        get_embeddings_fn=get_embeddings,
+        sessions_table=sessions_table,
+        db_connections_table=db_connections_table,
+        schema_cache_table=schema_cache_table,
+        async_session_factory=async_session_factory,
+    )
+    return result
+
+
 @app.post("/api/upload")
 async def upload_documents(
     request: Request,

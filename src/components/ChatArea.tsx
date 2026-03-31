@@ -121,6 +121,8 @@ export interface ChatAreaProps {
   onUploadClick?: () => void
   onConnectDatabase?: () => void
   onBrowseEdgar?: () => void
+  onTryDemo?: () => void
+  demoLoading?: boolean
 }
 
 export default function ChatArea(props: ChatAreaProps) {
@@ -157,6 +159,8 @@ export default function ChatArea(props: ChatAreaProps) {
     onUploadClick,
     onConnectDatabase,
     onBrowseEdgar,
+    onTryDemo,
+    demoLoading,
   } = props;
 
   const [personaDropdownOpen, setPersonaDropdownOpen] = useState(false);
@@ -306,6 +310,31 @@ export default function ChatArea(props: ChatAreaProps) {
                 </div>
               </button>
             </div>
+
+            {/* Divider + Try Demo */}
+            <div className="flex items-center gap-3 w-full max-w-xs mb-6">
+              <div className="flex-1 h-px bg-[#ffffff10]" />
+              <span className="text-xs text-gray-600">or try it instantly</span>
+              <div className="flex-1 h-px bg-[#ffffff10]" />
+            </div>
+
+            <button
+              onClick={onTryDemo}
+              disabled={demoLoading}
+              className="flex items-center gap-2 px-5 py-2.5 rounded-xl bg-gradient-to-r from-[#667eea] to-[#764ba2] text-white text-sm font-medium shadow-lg shadow-[#667eea]/20 hover:shadow-xl hover:shadow-[#667eea]/30 transition-all hover:scale-105 active:scale-95 disabled:opacity-60 disabled:cursor-not-allowed mb-8"
+            >
+              {demoLoading ? (
+                <>
+                  <Loader2 className="w-4 h-4 animate-spin" />
+                  Loading demo...
+                </>
+              ) : (
+                <>
+                  <Sparkles className="w-4 h-4" />
+                  Try Demo — TechCorp 10-K Analysis
+                </>
+              )}
+            </button>
 
             {/* Capability pills */}
             <div className="flex flex-wrap items-center justify-center gap-2 text-xs text-gray-500">

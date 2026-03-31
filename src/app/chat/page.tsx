@@ -75,6 +75,9 @@ export default function Home() {
   const [sidebarOpen, setSidebarOpen] = useState(true);
   const [isAutoMode, setIsAutoMode] = useState(true);
 
+  // Demo mode
+  const [demoLoading, setDemoLoading] = useState(false);
+
   // Command palette
   const cmdPalette = useCommandPalette();
 
@@ -386,6 +389,30 @@ export default function Home() {
     return () => window.removeEventListener('keydown', handleKeyDown);
   }, [input, sessionId, isDbConnected, isLoading]); // eslint-disable-line react-hooks/exhaustive-deps
 
+  // Demo mode handler
+  const handleTryDemo = useCallback(async () => {
+    setDemoLoading(true);
+    try {
+      const res = await fetch("/api/demo/init", { method: "POST" });
+      if (!res.ok) throw new Error("Demo initialization failed");
+      const data = await res.json();
+      setSessionId(data.session_id);
+      setConnectionId(data.connection_id);
+      setIsDbConnected(true);
+      setDbFileName("TechCorp-Financials.db");
+      setChatMode("hybrid");
+      setSelectedPersona("Finance Expert");
+      setIsAutoMode(false);
+      setUploadedFiles([new File([], "TechCorp-10K-2024.pdf")]);
+      setMessages([]);
+      showToast("success", "Demo loaded — TechCorp 10-K + financial database ready");
+    } catch {
+      showToast("error", "Failed to load demo. Please try again.");
+    } finally {
+      setDemoLoading(false);
+    }
+  }, [showToast]);
+
   // ── Render ─────────────────────────────────────────────────────────────────
 
   return (
@@ -499,6 +526,8 @@ export default function Home() {
         onUploadClick={() => { setSidebarOpen(true); fileInputRef.current?.click(); }}
         onConnectDatabase={() => { setSidebarOpen(true); setShowLiveDbForm(true); }}
         onBrowseEdgar={() => { setSidebarOpen(true); }}
+        onTryDemo={handleTryDemo}
+        demoLoading={demoLoading}
       />
 
       {/* Auth Modal */}
