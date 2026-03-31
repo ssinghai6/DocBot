@@ -45,9 +45,9 @@ export default function AdminPanel({
   const eventColors: Record<string, string> = {
     login: "bg-[#10b981]/20 text-[#34d399]",
     logout: "bg-[#6b7280]/20 text-[#9ca3af]",
-    upload: "bg-[#3b82f6]/20 text-[#60a5fa]",
-    query: "bg-[#8b5cf6]/20 text-[#a78bfa]",
-    db_connect: "bg-[#f59e0b]/20 text-[#fbbf24]",
+    upload: "bg-[#667eea]/20 text-[#60a5fa]",
+    query: "bg-[#667eea]/20 text-[#a5b4fc]",
+    db_connect: "bg-[#f97316]/20 text-[#fbbf24]",
     db_disconnect: "bg-[#ef4444]/20 text-[#f87171]",
   }
 
@@ -62,8 +62,8 @@ export default function AdminPanel({
       <div className="relative z-10 w-full max-w-4xl max-h-[85vh] flex flex-col bg-[#12121a] border border-[#ffffff10] rounded-2xl shadow-2xl overflow-hidden">
         {/* Header */}
         <div className="flex items-center gap-3 px-5 py-4 border-b border-[#ffffff08] shrink-0">
-          <div className="w-8 h-8 rounded-lg bg-[#f59e0b]/20 flex items-center justify-center">
-            <Shield className="w-4 h-4 text-[#f59e0b]" />
+          <div className="w-8 h-8 rounded-lg bg-[#f97316]/20 flex items-center justify-center">
+            <Shield className="w-4 h-4 text-[#f97316]" />
           </div>
           <div>
             <h2 className="text-sm font-semibold text-white">Admin Panel</h2>

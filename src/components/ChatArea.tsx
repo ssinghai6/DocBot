@@ -3,17 +3,19 @@
 import React, { useState } from "react"
 import {
   Send, Upload, Loader2,
-  Brain,
   FileText, MessageSquare,
-  Layers, ArrowRight,
-  Database,
+  Layers,
+  Database, BookOpen,
   Download, FileJson, FileText as FileTxt,
   Sparkles, HelpCircle,
-  Stethoscope, Terminal,
   Wand2, CheckCircle2, Hash, XCircle,
+  ChevronDown,
 } from "lucide-react"
 import ChatMessage from "@/components/ChatMessage"
 import type { Message, AutopilotStep, Toast } from "@/components/types"
+
+const PERSONA_OPTIONS = ["Generalist", "Finance Expert", "Data Analyst", "Consultant"] as const;
+const PERSONA_DISPLAY: Record<string, string> = { Consultant: "Strategy Analyst" };
 
 function TypingIndicator() {
   return (
@@ -21,7 +23,7 @@ function TypingIndicator() {
       <div className="flex gap-1">
         <div className="w-2 h-2 bg-[#667eea] rounded-full animate-bounce" style={{ animationDelay: '0ms' }} />
         <div className="w-2 h-2 bg-[#764ba2] rounded-full animate-bounce" style={{ animationDelay: '150ms' }} />
-        <div className="w-2 h-2 bg-[#8b5cf6] rounded-full animate-bounce" style={{ animationDelay: '300ms' }} />
+        <div className="w-2 h-2 bg-[#667eea] rounded-full animate-bounce" style={{ animationDelay: '300ms' }} />
       </div>
       <span className="text-sm text-gray-400 ml-2">Analyzing document</span>
     </div>
@@ -84,6 +86,9 @@ export interface ChatAreaProps {
   sessionId: string | null
   uploadedFiles: File[]
   selectedPersona: string
+  setSelectedPersona?: React.Dispatch<React.SetStateAction<string>>
+  isAutoMode?: boolean
+  setAutoMode?: React.Dispatch<React.SetStateAction<boolean>>
   isDbConnected: boolean
   connectionId: string | null
   chatMode: "docs" | "database" | "hybrid"
@@ -111,6 +116,11 @@ export interface ChatAreaProps {
   clearSession: () => void
   exportChat: (format: 'txt' | 'markdown' | 'json') => void
   showToast: (type: Toast['type'], message: string) => void
+
+  // Onboarding actions
+  onUploadClick?: () => void
+  onConnectDatabase?: () => void
+  onBrowseEdgar?: () => void
 }
 
 export default function ChatArea(props: ChatAreaProps) {
@@ -118,6 +128,9 @@ export default function ChatArea(props: ChatAreaProps) {
     sessionId,
     uploadedFiles,
     selectedPersona,
+    setSelectedPersona,
+    isAutoMode,
+    setAutoMode,
     isDbConnected,
     connectionId,
     chatMode,
@@ -141,7 +154,12 @@ export default function ChatArea(props: ChatAreaProps) {
     clearSession,
     exportChat,
     showToast,
+    onUploadClick,
+    onConnectDatabase,
+    onBrowseEdgar,
   } = props;
+
+  const [personaDropdownOpen, setPersonaDropdownOpen] = useState(false);
 
   const copyToClipboard = (text: string) => {
     navigator.clipboard.writeText(text);
@@ -150,120 +168,91 @@ export default function ChatArea(props: ChatAreaProps) {
 
   return (
     <main className="flex-1 flex flex-col min-w-0 bg-transparent relative z-10">
-      {/* Header */}
-      <header className="px-4 pt-14 md:pt-8 md:px-5 lg:pt-6 lg:px-6 flex-none">
-        <div className="relative overflow-hidden bg-gradient-to-br from-[#12121a]/95 to-[#1a1a28]/95 rounded-2xl border border-[#ffffff08] shadow-2xl p-4 lg:p-6 max-w-5xl mx-auto">
-          <div className="absolute inset-0 bg-gradient-to-tr from-[#667eea]/5 via-transparent to-[#764ba2]/5"></div>
-          <div className="relative z-10 flex flex-col lg:flex-row lg:items-center justify-between gap-4">
-            <div className="flex items-center gap-4">
-              <div className="hidden lg:block">
-                <h1 className="text-2xl lg:text-3xl font-bold text-white mb-1 flex items-center gap-3">
-                  <span className="bg-gradient-to-br from-[#667eea] to-[#764ba2] bg-clip-text text-transparent">
-                    Ask Anything About Your Data
-                  </span>
-                </h1>
-                <p className="text-gray-400 text-sm flex items-center gap-2">
-                  <Terminal className="w-3 h-3" />
-                  Upload PDFs or connect a database
-                </p>
-              </div>
-              <div className="lg:hidden">
-                <h1 className="text-xl font-bold text-white flex items-center gap-2">
-                  <span className="bg-gradient-to-br from-[#667eea] to-[#764ba2] bg-clip-text text-transparent">
-                    DocBot
-                  </span>
-                </h1>
-                <p className="text-gray-500 text-xs">Docs · Databases · Hybrid</p>
-              </div>
-            </div>
-
-            <div className="flex flex-wrap gap-2 items-center">
-              <SessionInfo
-                sessionId={sessionId}
-                fileCount={uploadedFiles.length}
-                persona={selectedPersona}
-                onClear={clearSession}
-              />
-
-              {/* HybridModeToggle */}
-              <div className="flex items-center gap-0.5 p-1 bg-[#1a1a24]/80 rounded-xl border border-[#ffffff08]">
-                {(["docs", "database", "hybrid"] as const).map((mode) => {
-                  const disabled =
-                    (mode === "database" && !connectionId) ||
-                    (mode === "hybrid" && (!connectionId || !sessionId));
-                  const labels = { docs: "Docs", database: "Database", hybrid: "Hybrid" };
-                  const icons = {
-                    docs: <FileText className="w-3 h-3" />,
-                    database: <Database className="w-3 h-3" />,
-                    hybrid: <Layers className="w-3 h-3" />,
-                  };
-                  return (
-                    <button
-                      key={mode}
-                      onClick={() => !disabled && setChatMode(mode)}
-                      title={
-                        mode === "database" && !connectionId
-                          ? "Connect a database first"
-                          : mode === "hybrid" && !connectionId
-                            ? "Connect a database first"
-                            : mode === "hybrid" && !sessionId
-                              ? "Upload a PDF first"
-                              : undefined
-                      }
-                      className={`flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg text-xs font-medium transition-all ${disabled
-                          ? "opacity-40 cursor-not-allowed pointer-events-none text-gray-400"
-                          : chatMode === mode
-                            ? "bg-gradient-to-r from-[#667eea] to-[#764ba2] text-white shadow-sm"
-                            : "text-gray-400 hover:text-gray-200 hover:bg-[#ffffff08]"
-                        }`}
-                    >
-                      {icons[mode]}
-                      {labels[mode]}
-                    </button>
-                  );
-                })}
-              </div>
-              {sessionId && messages.length > 0 && (
-                <div className="relative group">
-                  <button className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs text-gray-300 bg-[#1a1a24]/60 border border-[#ffffff08] hover:border-[#667eea]/30 hover:bg-[#1a1a24]/80 transition-all">
-                    <Download className="w-3 h-3" />
-                    Export
-                  </button>
-                  <div className="absolute top-full right-0 mt-1 py-1 bg-[#1a1a24]/95 backdrop-blur-xl rounded-lg border border-[#ffffff08] shadow-xl opacity-0 invisible group-hover:opacity-100 group-hover:visible transition-all z-50 min-w-[140px]">
-                    <button
-                      onClick={() => exportChat('txt')}
-                      className="w-full flex items-center gap-2 px-3 py-2 text-xs text-gray-300 hover:bg-[#ffffff08] hover:text-white transition-colors"
-                    >
-                      <FileTxt className="w-3 h-3" />
-                      Text (.txt)
-                    </button>
-                    <button
-                      onClick={() => exportChat('markdown')}
-                      className="w-full flex items-center gap-2 px-3 py-2 text-xs text-gray-300 hover:bg-[#ffffff08] hover:text-white transition-colors"
-                    >
-                      <FileText className="w-3 h-3" />
-                      Markdown (.md)
-                    </button>
-                    <button
-                      onClick={() => exportChat('json')}
-                      className="w-full flex items-center gap-2 px-3 py-2 text-xs text-gray-300 hover:bg-[#ffffff08] hover:text-white transition-colors"
-                    >
-                      <FileJson className="w-3 h-3" />
-                      JSON (.json)
-                    </button>
-                  </div>
-                </div>
-              )}
-              <div className="flex gap-2">
-                <span className="bg-[#667eea]/10 px-3 py-1.5 rounded-lg text-xs text-gray-300 border border-[#667eea]/20 flex items-center gap-1.5">
-                  <FileText className="w-3 h-3" /> PDF
-                </span>
-                <span className="bg-[#764ba2]/10 px-3 py-1.5 rounded-lg text-xs text-gray-300 border border-[#764ba2]/20 flex items-center gap-1.5">
-                  <Brain className="w-3 h-3" /> AI
-                </span>
-              </div>
-            </div>
+      {/* Compact Header Toolbar */}
+      <header className="px-4 pt-14 md:pt-4 lg:pt-3 lg:px-6 flex-none">
+        <div className="flex flex-wrap items-center gap-2 max-w-5xl mx-auto py-2">
+          {/* Mode toggle */}
+          <div className="flex items-center gap-0.5 p-1 bg-[#1a1a24]/80 rounded-xl border border-[#ffffff08]">
+            {(["docs", "database", "hybrid"] as const).map((mode) => {
+              const disabled =
+                (mode === "database" && !connectionId) ||
+                (mode === "hybrid" && (!connectionId || !sessionId));
+              const labels = { docs: "Docs", database: "Database", hybrid: "Hybrid" };
+              const icons = {
+                docs: <FileText className="w-3 h-3" />,
+                database: <Database className="w-3 h-3" />,
+                hybrid: <Layers className="w-3 h-3" />,
+              };
+              return (
+                <button
+                  key={mode}
+                  onClick={() => !disabled && setChatMode(mode)}
+                  title={
+                    mode === "database" && !connectionId
+                      ? "Connect a database first"
+                      : mode === "hybrid" && !connectionId
+                        ? "Connect a database first"
+                        : mode === "hybrid" && !sessionId
+                          ? "Upload a PDF first"
+                          : undefined
+                  }
+                  className={`flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg text-xs font-medium transition-all ${disabled
+                      ? "opacity-40 cursor-not-allowed pointer-events-none text-gray-400"
+                      : chatMode === mode
+                        ? "bg-gradient-to-r from-[#667eea] to-[#764ba2] text-white shadow-sm"
+                        : "text-gray-400 hover:text-gray-200 hover:bg-[#ffffff08]"
+                    }`}
+                >
+                  {icons[mode]}
+                  {labels[mode]}
+                </button>
+              );
+            })}
           </div>
+
+          {/* Session info */}
+          <SessionInfo
+            sessionId={sessionId}
+            fileCount={uploadedFiles.length}
+            persona={selectedPersona}
+            onClear={clearSession}
+          />
+
+          {/* Spacer */}
+          <div className="flex-1" />
+
+          {/* Export */}
+          {sessionId && messages.length > 0 && (
+            <div className="relative group">
+              <button className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs text-gray-300 bg-[#1a1a24]/60 border border-[#ffffff08] hover:border-[#667eea]/30 hover:bg-[#1a1a24]/80 transition-all">
+                <Download className="w-3 h-3" />
+                Export
+              </button>
+              <div className="absolute top-full right-0 mt-1 py-1 bg-[#1a1a24]/95 backdrop-blur-xl rounded-lg border border-[#ffffff08] shadow-xl opacity-0 invisible group-hover:opacity-100 group-hover:visible transition-all z-50 min-w-[140px]">
+                <button
+                  onClick={() => exportChat('txt')}
+                  className="w-full flex items-center gap-2 px-3 py-2 text-xs text-gray-300 hover:bg-[#ffffff08] hover:text-white transition-colors"
+                >
+                  <FileTxt className="w-3 h-3" />
+                  Text (.txt)
+                </button>
+                <button
+                  onClick={() => exportChat('markdown')}
+                  className="w-full flex items-center gap-2 px-3 py-2 text-xs text-gray-300 hover:bg-[#ffffff08] hover:text-white transition-colors"
+                >
+                  <FileText className="w-3 h-3" />
+                  Markdown (.md)
+                </button>
+                <button
+                  onClick={() => exportChat('json')}
+                  className="w-full flex items-center gap-2 px-3 py-2 text-xs text-gray-300 hover:bg-[#ffffff08] hover:text-white transition-colors"
+                >
+                  <FileJson className="w-3 h-3" />
+                  JSON (.json)
+                </button>
+              </div>
+            </div>
+          )}
         </div>
       </header>
 
@@ -271,33 +260,58 @@ export default function ChatArea(props: ChatAreaProps) {
       <div ref={chatContainerRef} className="flex-1 overflow-y-auto px-4 md:px-5 lg:px-6 pb-4 max-w-5xl mx-auto w-full">
         {!sessionId && !isDbConnected && messages.length === 0 ? (
           <div className="flex flex-col items-center justify-center h-full text-gray-500">
-            <div className="relative">
-              <div className="w-24 h-24 rounded-3xl bg-gradient-to-br from-[#667eea]/20 to-[#764ba2]/20 flex items-center justify-center mb-6 animate-pulse">
-                <Upload className="w-12 h-12 text-[#667eea]" />
-              </div>
-              <div className="absolute -bottom-2 -right-2 w-8 h-8 bg-[#10b981] rounded-full flex items-center justify-center shadow-lg">
-                <ArrowRight className="w-4 h-4 text-white" />
-              </div>
-            </div>
-            <p className="text-xl font-medium text-gray-300 mb-2 text-center">Upload a document or connect a database</p>
-            <p className="text-sm text-gray-500 text-center max-w-md mb-6">
-              Upload PDFs to chat with documents, or upload a CSV/SQLite file to query your data with AI.
+            <p className="text-2xl font-semibold text-gray-200 mb-2 text-center">What do you want to analyze?</p>
+            <p className="text-sm text-gray-500 text-center max-w-md mb-8">
+              Upload financial documents, connect a live database, or browse SEC filings.
             </p>
 
-            {/* Feature highlights */}
-            <div className="grid grid-cols-1 sm:grid-cols-3 gap-4 max-w-2xl">
-              <div className="flex flex-col items-center p-4 bg-[#12121a]/40 rounded-xl border border-[#ffffff06] max-w-[140px]">
-                <Stethoscope className="w-6 h-6 text-[#10b981] mb-2" />
-                <span className="text-xs text-gray-400 text-center">Medical Docs</span>
-              </div>
-              <div className="flex flex-col items-center p-4 bg-[#12121a]/40 rounded-xl border border-[#ffffff06] max-w-[140px]">
-                <Database className="w-6 h-6 text-[#f97316] mb-2" />
-                <span className="text-xs text-gray-400 text-center">CSV / SQLite</span>
-              </div>
-              <div className="flex flex-col items-center p-4 bg-[#12121a]/40 rounded-xl border border-[#ffffff06] max-w-[140px]">
-                <Layers className="w-6 h-6 text-[#8b5cf6] mb-2" />
-                <span className="text-xs text-gray-400 text-center">Hybrid Analysis</span>
-              </div>
+            {/* Action buttons */}
+            <div className="grid grid-cols-1 sm:grid-cols-3 gap-4 max-w-xl w-full mb-10">
+              <button
+                onClick={onUploadClick}
+                className="group flex flex-col items-center gap-3 p-5 bg-[#12121a]/60 rounded-2xl border border-[#ffffff08] hover:border-[#667eea]/40 hover:bg-[#667eea]/5 transition-all"
+              >
+                <div className="w-11 h-11 rounded-xl bg-[#667eea]/15 flex items-center justify-center group-hover:bg-[#667eea]/25 transition-colors">
+                  <Upload className="w-5 h-5 text-[#667eea]" />
+                </div>
+                <div className="text-center">
+                  <p className="text-sm font-medium text-gray-200">Upload Document</p>
+                  <p className="text-xs text-gray-500 mt-0.5">PDF, CSV, or SQLite</p>
+                </div>
+              </button>
+
+              <button
+                onClick={onConnectDatabase}
+                className="group flex flex-col items-center gap-3 p-5 bg-[#12121a]/60 rounded-2xl border border-[#ffffff08] hover:border-[#f97316]/40 hover:bg-[#f97316]/5 transition-all"
+              >
+                <div className="w-11 h-11 rounded-xl bg-[#f97316]/15 flex items-center justify-center group-hover:bg-[#f97316]/25 transition-colors">
+                  <Database className="w-5 h-5 text-[#f97316]" />
+                </div>
+                <div className="text-center">
+                  <p className="text-sm font-medium text-gray-200">Connect Database</p>
+                  <p className="text-xs text-gray-500 mt-0.5">PostgreSQL, MySQL, Azure</p>
+                </div>
+              </button>
+
+              <button
+                onClick={onBrowseEdgar}
+                className="group flex flex-col items-center gap-3 p-5 bg-[#12121a]/60 rounded-2xl border border-[#ffffff08] hover:border-[#10b981]/40 hover:bg-[#10b981]/5 transition-all"
+              >
+                <div className="w-11 h-11 rounded-xl bg-[#10b981]/15 flex items-center justify-center group-hover:bg-[#10b981]/25 transition-colors">
+                  <BookOpen className="w-5 h-5 text-[#10b981]" />
+                </div>
+                <div className="text-center">
+                  <p className="text-sm font-medium text-gray-200">Browse SEC Filings</p>
+                  <p className="text-xs text-gray-500 mt-0.5">10-K, 10-Q, Annual Reports</p>
+                </div>
+              </button>
+            </div>
+
+            {/* Capability pills */}
+            <div className="flex flex-wrap items-center justify-center gap-2 text-xs text-gray-500">
+              <span className="px-2.5 py-1 rounded-full bg-[#ffffff06] border border-[#ffffff08]">Hybrid Doc + DB Analysis</span>
+              <span className="px-2.5 py-1 rounded-full bg-[#ffffff06] border border-[#ffffff08]">Discrepancy Detection</span>
+              <span className="px-2.5 py-1 rounded-full bg-[#ffffff06] border border-[#ffffff08]">Analytical Autopilot</span>
             </div>
           </div>
         ) : messages.length === 0 && (sessionId || isDbConnected) ? (
@@ -306,12 +320,12 @@ export default function ChatArea(props: ChatAreaProps) {
               <MessageSquare className="w-8 h-8 text-[#667eea]" />
             </div>
             <p className="text-lg font-medium text-gray-300 mb-2">
-              {isDbConnected ? "Database connected — ready to query!" : "Ready to chat!"}
+              {isDbConnected ? "Database connected — ready to analyze" : "Ready to analyze"}
             </p>
             <p className="text-sm text-gray-500">
               {isDbConnected
-                ? `Ask questions about your data in ${chatMode} mode`
-                : "Ask me anything about your uploaded documents"}
+                ? `Query financials, metrics, and trends in ${chatMode} mode`
+                : "Ask about revenue, margins, risk factors, or any financial metric"}
             </p>
 
             {/* Suggested questions */}
@@ -319,16 +333,16 @@ export default function ChatArea(props: ChatAreaProps) {
               <p className="text-xs text-gray-500 text-center mb-2">Try asking:</p>
               {(isDbConnected
                 ? [
-                  "How many rows are in my dataset?",
-                  "Show me a summary of each column",
-                  "What are the top 10 records by value?",
-                  "Are there any missing or null values?",
+                  "What are the total revenue figures by quarter?",
+                  "Show me a breakdown of expenses by category",
+                  "Which accounts have the highest growth rate?",
+                  "Are there any anomalies or outliers in the data?",
                 ]
                 : [
-                  "Summarize the main points of this document",
-                  "What are the key findings?",
-                  "Extract all tables and figures",
-                  "What are the action items?",
+                  "Summarize the key financial highlights",
+                  "What are the revenue and net income figures?",
+                  "Compare year-over-year performance metrics",
+                  "What are the main risk factors mentioned?",
                 ]
               ).map((question, idx) => (
                 <button
@@ -392,8 +406,8 @@ export default function ChatArea(props: ChatAreaProps) {
                         <div key={step.step_num} className="bg-[#ffffff05] rounded-xl p-2.5 text-xs">
                           <div className="flex items-center gap-1.5 mb-1">
                             <span className={`px-1.5 py-0.5 rounded text-[10px] font-semibold uppercase tracking-wide ${
-                              step.tool === "sql_query" ? "bg-[#0ea5e9]/20 text-[#38bdf8]" :
-                              step.tool === "doc_search" ? "bg-[#f59e0b]/20 text-[#fbbf24]" :
+                              step.tool === "sql_query" ? "bg-[#667eea]/20 text-[#a5b4fc]" :
+                              step.tool === "doc_search" ? "bg-[#f97316]/20 text-[#fb923c]" :
                               "bg-[#10b981]/20 text-[#34d399]"
                             }`}>{step.tool.replace("_", " ")}</span>
                             <span className="text-gray-500 truncate">{step.step_label}</span>
@@ -466,6 +480,52 @@ export default function ChatArea(props: ChatAreaProps) {
             ))}
           </div>
         )}
+        {/* Persona quick-switch */}
+        {setSelectedPersona && (
+          <div className="flex items-center gap-2 mb-2">
+            <div className="relative">
+              <button
+                onClick={() => setPersonaDropdownOpen(!personaDropdownOpen)}
+                className="flex items-center gap-1.5 px-2.5 py-1 rounded-lg text-xs bg-[#1a1a24]/80 border border-[#ffffff10] hover:border-[#667eea]/30 transition-all text-gray-300"
+              >
+                <Sparkles className="w-3 h-3 text-[#667eea]" />
+                {isAutoMode ? "Auto" : (PERSONA_DISPLAY[selectedPersona] || selectedPersona)}
+                <ChevronDown className={`w-3 h-3 text-gray-500 transition-transform ${personaDropdownOpen ? "rotate-180" : ""}`} />
+              </button>
+              {personaDropdownOpen && (
+                <div className="absolute bottom-full left-0 mb-1 py-1 bg-[#1a1a24]/95 backdrop-blur-xl rounded-lg border border-[#ffffff08] shadow-xl z-50 min-w-[160px]">
+                  <button
+                    onClick={() => { setAutoMode?.(true); setPersonaDropdownOpen(false); }}
+                    className={`w-full flex items-center gap-2 px-3 py-2 text-xs transition-colors ${
+                      isAutoMode ? "text-[#a5b4fc] bg-[#667eea]/10" : "text-gray-300 hover:bg-[#ffffff08]"
+                    }`}
+                  >
+                    <Wand2 className="w-3 h-3" />
+                    Auto-routing
+                  </button>
+                  {PERSONA_OPTIONS.map((name) => (
+                    <button
+                      key={name}
+                      onClick={() => {
+                        setAutoMode?.(false);
+                        setSelectedPersona(name);
+                        setPersonaDropdownOpen(false);
+                      }}
+                      className={`w-full flex items-center gap-2 px-3 py-2 text-xs transition-colors ${
+                        !isAutoMode && selectedPersona === name
+                          ? "text-[#a5b4fc] bg-[#667eea]/10"
+                          : "text-gray-300 hover:bg-[#ffffff08]"
+                      }`}
+                    >
+                      {PERSONA_DISPLAY[name] || name}
+                    </button>
+                  ))}
+                </div>
+              )}
+            </div>
+          </div>
+        )}
+
         <form
           onSubmit={handleSendMessage}
           className="relative bg-[#12121a]/90 border border-[#ffffff10] rounded-2xl backdrop-blur-xl shadow-lg shadow-black/20 focus-within:border-[#667eea]/40 focus-within:shadow-[0_8px_30px_rgba(102,126,234,0.15)] transition-all overflow-hidden flex items-end"
@@ -483,10 +543,10 @@ export default function ChatArea(props: ChatAreaProps) {
               }}
               placeholder={
                 isDbConnected
-                  ? "Ask a question about your data..."
+                  ? "Ask about revenue, margins, trends..."
                   : sessionId
-                    ? "Ask a question about your document..."
-                    : "Upload a document or connect a database to start..."
+                    ? "Ask about financials, risk factors, key metrics..."
+                    : "Upload a filing or connect a database to start..."
               }
               disabled={(!sessionId && !isDbConnected) || isLoading}
               className="w-full max-h-40 min-h-[60px] p-4 pr-12 bg-transparent outline-none resize-none text-white placeholder-gray-500 text-sm leading-relaxed disabled:opacity-50"
@@ -506,7 +566,7 @@ export default function ChatArea(props: ChatAreaProps) {
         </form>
         <div className="text-center mt-3 text-xs text-gray-600 font-medium flex items-center justify-center gap-2">
           <HelpCircle className="w-3 h-3" />
-          AI can make mistakes. Consider verifying important information.
+          AI-generated analysis. Always verify against source documents.
         </div>
       </div>
 

@@ -10,6 +10,7 @@ import Sidebar from "@/components/Sidebar"
 import ChatArea from "@/components/ChatArea"
 import AuthModal from "@/components/AuthModal"
 import AdminPanel from "@/components/AdminPanel"
+import CommandPalette, { useCommandPalette, buildCommands } from "@/components/CommandPalette"
 import { useChatHandlers } from "@/hooks/useChatHandlers"
 import { useChatSubmit } from "@/hooks/useChatSubmit"
 
@@ -40,7 +41,7 @@ function ToastContainer({ toasts, onDismiss }: { toasts: Toast[]; onDismiss: (id
           className={`flex items-start gap-3 p-4 rounded-xl border backdrop-blur-xl shadow-lg animate-in slide-in-from-right duration-300 ${toast.type === "success" ? "bg-[#10b981]/10 border-[#10b981]/30 text-[#10b981]" :
             toast.type === "error" ? "bg-[#ef4444]/10 border-[#ef4444]/30 text-[#ef4444]" :
               toast.type === "warning" ? "bg-[#f59e0b]/10 border-[#f59e0b]/30 text-[#f59e0b]" :
-                "bg-[#3b82f6]/10 border-[#3b82f6]/30 text-[#3b82f6]"
+                "bg-[#667eea]/10 border-[#667eea]/30 text-[#667eea]"
             }`}
         >
           {toast.type === "success" && <CheckCircle2 className="w-5 h-5 shrink-0 mt-0.5" />}
@@ -73,6 +74,9 @@ export default function Home() {
   const [drProgress, setDrProgress] = useState<{ step: string; message: string } | null>(null);
   const [sidebarOpen, setSidebarOpen] = useState(true);
   const [isAutoMode, setIsAutoMode] = useState(true);
+
+  // Command palette
+  const cmdPalette = useCommandPalette();
 
   // Database connection state
   const [isDbConnected, setIsDbConnected] = useState(false);
@@ -464,6 +468,9 @@ export default function Home() {
         sessionId={sessionId}
         uploadedFiles={uploadedFiles}
         selectedPersona={selectedPersona}
+        setSelectedPersona={setSelectedPersona}
+        isAutoMode={isAutoMode}
+        setAutoMode={setIsAutoMode}
         isDbConnected={isDbConnected}
         connectionId={connectionId}
         chatMode={chatMode}
@@ -489,6 +496,9 @@ export default function Home() {
         clearSession={handlers.clearSession}
         exportChat={handlers.exportChat}
         showToast={showToast}
+        onUploadClick={() => { setSidebarOpen(true); fileInputRef.current?.click(); }}
+        onConnectDatabase={() => { setSidebarOpen(true); setShowLiveDbForm(true); }}
+        onBrowseEdgar={() => { setSidebarOpen(true); }}
       />
 
       {/* Auth Modal */}
@@ -531,6 +541,21 @@ export default function Home() {
           onClose={() => setAdminPanelOpen(false)}
         />
       )}
+
+      {/* Command Palette (Cmd+K) */}
+      <CommandPalette
+        isOpen={cmdPalette.isOpen}
+        onClose={cmdPalette.onClose}
+        commands={buildCommands({
+          onConnectDatabase: () => { setSidebarOpen(true); setShowLiveDbForm(true); },
+          onSearchEdgar: () => { setSidebarOpen(true); },
+          onAddConnector: () => { setSidebarOpen(true); },
+          onClearChat: messages.length > 0 ? handlers.clearChat : undefined,
+          onExportChat: sessionId && messages.length > 0 ? () => handlers.exportChat("markdown") : undefined,
+          onSwitchPersona: setSelectedPersona,
+          onSetAutoMode: setIsAutoMode,
+        })}
+      />
     </div>
   );
 }

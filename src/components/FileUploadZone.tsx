@@ -15,6 +15,9 @@ interface FileUploadZoneProps {
   onDrop: (e: React.DragEvent) => void
   onFileChange: (e: React.ChangeEvent<HTMLInputElement>) => void
   fileInputRef: React.RefObject<HTMLInputElement | null>
+  // Unified upload: CSV/SQLite routing
+  onDbUpload?: (file: File, type: "csv" | "sqlite") => void
+  dbUploadState?: "idle" | "uploading" | "connected" | "error"
 }
 
 function getFileUploadBorderColor(fileUploadState: FileUploadState): string {
@@ -25,6 +28,15 @@ function getFileUploadBorderColor(fileUploadState: FileUploadState): string {
     case "error":     return "border-[#ef4444] bg-[#ef4444]/5"
     default:          return "border-[#667eea]/30 bg-[#12121a]/50"
   }
+}
+
+/** Route a file to the correct handler based on extension */
+function getFileType(name: string): "pdf" | "csv" | "sqlite" | null {
+  const ext = name.split(".").pop()?.toLowerCase()
+  if (ext === "pdf") return "pdf"
+  if (ext === "csv") return "csv"
+  if (ext === "sqlite" || ext === "db" || ext === "sqlite3") return "sqlite"
+  return null
 }
 
 export default function FileUploadZone({
@@ -38,13 +50,56 @@ export default function FileUploadZone({
   onDrop,
   onFileChange,
   fileInputRef,
+  onDbUpload,
+  dbUploadState,
 }: FileUploadZoneProps) {
+  /** Handle unified file input change — routes PDF vs CSV/SQLite */
+  const handleUnifiedFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const files = e.target.files
+    if (!files || files.length === 0) return
+
+    // Check if any file is CSV/SQLite and route to DB handler
+    const file = files[0]
+    const ftype = getFileType(file.name)
+
+    if (ftype === "csv" && onDbUpload) {
+      onDbUpload(file, "csv")
+      e.target.value = ""
+    } else if (ftype === "sqlite" && onDbUpload) {
+      onDbUpload(file, "sqlite")
+      e.target.value = ""
+    } else {
+      // PDF — use existing handler
+      onFileChange(e)
+    }
+  }
+
+  /** Handle unified drop — routes PDF vs CSV/SQLite */
+  const handleUnifiedDrop = (e: React.DragEvent) => {
+    const files = e.dataTransfer?.files
+    if (files && files.length > 0) {
+      const file = files[0]
+      const ftype = getFileType(file.name)
+
+      if ((ftype === "csv" || ftype === "sqlite") && onDbUpload) {
+        e.preventDefault()
+        e.stopPropagation()
+        onDbUpload(file, ftype)
+        return
+      }
+    }
+    // PDF or fallback — use existing drop handler
+    onDrop(e)
+  }
+
+  const isUploading = fileUploadState === "uploading" || dbUploadState === "uploading"
+
   return (
     <div className="mb-5">
       <h3 className="text-sm font-semibold mb-3 text-white flex items-center gap-2">
-        <FileText className="w-4 h-4 text-[#667eea]" />
-        Documents
-        <span className="ml-auto text-[10px] text-gray-500 font-normal">PDF only</span>
+        <Upload className="w-4 h-4 text-[#667eea]" />
+        Upload
+        <span className="ml-auto text-[10px] text-gray-500 font-normal">PDF, CSV, SQLite</span>
       </h3>
 
       {/* Deep Visual Mode Toggle */}
@@ -73,12 +128,12 @@ export default function FileUploadZone({
         onClick={() => fileInputRef.current?.click()}
         onDragOver={onDragOver}
         onDragLeave={onDragLeave}
-        onDrop={onDrop}
+        onDrop={handleUnifiedDrop}
         className={`
           group relative border-2 border-dashed rounded-2xl p-5 text-center cursor-pointer transition-all
           ${getFileUploadBorderColor(fileUploadState)}
           hover:border-[#667eea]/60 hover:shadow-[0_0_30px_rgba(102,126,234,0.15)]
-          ${fileUploadState === "uploading" ? "pointer-events-none" : ""}
+          ${isUploading ? "pointer-events-none" : ""}
         `}
       >
         {fileUploadState === "uploading" ? (
@@ -124,8 +179,8 @@ export default function FileUploadZone({
             <div className="w-12 h-12 mx-auto mb-3 rounded-2xl bg-gradient-to-br from-[#667eea]/20 to-[#764ba2]/20 flex items-center justify-center group-hover:scale-110 transition-transform">
               <Upload className="w-6 h-6 text-[#667eea]" />
             </div>
-            <p className="text-sm font-medium text-gray-300 group-hover:text-white">Drop PDF files here</p>
-            <p className="text-xs text-gray-500 mt-1">or click to browse • Max 4.5MB</p>
+            <p className="text-sm font-medium text-gray-300 group-hover:text-white">Drop files here</p>
+            <p className="text-xs text-gray-500 mt-1">PDF, CSV, or SQLite • click to browse</p>
           </div>
         )}
 
@@ -133,9 +188,9 @@ export default function FileUploadZone({
           type="file"
           ref={fileInputRef}
           className="hidden"
-          accept="application/pdf"
+          accept="application/pdf,.csv,.sqlite,.db,.sqlite3"
           multiple
-          onChange={onFileChange}
+          onChange={handleUnifiedFileChange}
         />
       </div>
 

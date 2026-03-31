@@ -2,8 +2,8 @@
 
 import React from "react"
 import {
-  Sparkles, Brain, TrendingUp, Code, Cpu, Scale,
-  Briefcase, BarChart2, Stethoscope, Wand2, UserCog,
+  Sparkles, Brain, TrendingUp,
+  Briefcase, BarChart2, Wand2, UserCog,
   CheckCircle2, Info, Zap, Layers,
 } from "lucide-react"
 
@@ -17,7 +17,8 @@ type PersonaConfig = {
   accent: string
 }
 
-const EXPERT_PERSONAS: Record<string, PersonaConfig> = {
+// All personas — full registry (backend still supports all 8)
+const ALL_EXPERT_PERSONAS: Record<string, PersonaConfig> = {
   Generalist: {
     icon: <Sparkles className="w-5 h-5" />,
     description: "Balanced, general-purpose assistant for any document",
@@ -25,47 +26,12 @@ const EXPERT_PERSONAS: Record<string, PersonaConfig> = {
     gradient: "from-[#667eea] to-[#764ba2]",
     accent: "#667eea",
   },
-  Doctor: {
-    icon: <Stethoscope className="w-5 h-5" />,
-    description: "Medical & healthcare perspective - analyze clinical documents",
-    color: "text-[#10b981]",
-    gradient: "from-[#10b981] to-[#059669]",
-    accent: "#10b981",
-  },
   "Finance Expert": {
     icon: <TrendingUp className="w-5 h-5" />,
-    description: "Financial & investment analysis - parse reports & statements",
-    color: "text-[#f59e0b]",
-    gradient: "from-[#f59e0b] to-[#d97706]",
-    accent: "#f59e0b",
-  },
-  Engineer: {
-    icon: <Code className="w-5 h-5" />,
-    description: "Technical & engineering focus - documentation & specs",
-    color: "text-[#3b82f6]",
-    gradient: "from-[#3b82f6] to-[#2563eb]",
-    accent: "#3b82f6",
-  },
-  "AI/ML Expert": {
-    icon: <Cpu className="w-5 h-5" />,
-    description: "AI, ML & data science insights - research papers & models",
-    color: "text-[#8b5cf6]",
-    gradient: "from-[#8b5cf6] to-[#7c3aed]",
-    accent: "#8b5cf6",
-  },
-  Lawyer: {
-    icon: <Scale className="w-5 h-5" />,
-    description: "Legal analysis & compliance - contracts & policies",
-    color: "text-[#ef4444]",
-    gradient: "from-[#ef4444] to-[#dc2626]",
-    accent: "#ef4444",
-  },
-  Consultant: {
-    icon: <Briefcase className="w-5 h-5" />,
-    description: "Strategic business advisory - strategy & planning",
-    color: "text-[#06b6d4]",
-    gradient: "from-[#06b6d4] to-[#0891b2]",
-    accent: "#06b6d4",
+    description: "Financial & investment analysis - parse reports, statements & SEC filings",
+    color: "text-[#f97316]",
+    gradient: "from-[#f97316] to-[#ea580c]",
+    accent: "#f97316",
   },
   "Data Analyst": {
     icon: <BarChart2 className="w-5 h-5" />,
@@ -74,7 +40,22 @@ const EXPERT_PERSONAS: Record<string, PersonaConfig> = {
     gradient: "from-[#f97316] to-[#ea580c]",
     accent: "#f97316",
   },
+  Consultant: {
+    icon: <Briefcase className="w-5 h-5" />,
+    description: "Strategic business advisory - market sizing, competitive analysis & planning",
+    color: "text-[#667eea]",
+    gradient: "from-[#667eea] to-[#764ba2]",
+    accent: "#667eea",
+  },
 }
+
+// Display names (UI labels — keys match backend persona names)
+const DISPLAY_NAMES: Record<string, string> = {
+  Consultant: "Strategy Analyst",
+}
+
+// Visible personas (finance-vertical focus)
+const EXPERT_PERSONAS = ALL_EXPERT_PERSONAS
 
 interface PersonaSelectorProps {
   selectedPersona: string
@@ -96,12 +77,7 @@ export default function PersonaSelector({
   onDeepResearchChange,
 }: PersonaSelectorProps) {
   return (
-    <div className="mb-5 flex-1">
-      <div className="flex items-center gap-2 mb-3">
-        <Sparkles className="w-4 h-4 text-[#667eea]" />
-        <span className="text-xs font-semibold text-gray-400 uppercase tracking-wider">Expert Mode</span>
-      </div>
-
+    <div className="flex-1">
       {suggestedPersona && suggestedPersona !== "Generalist" && (
         <div className="bg-[#667eea]/10 border border-[#667eea]/20 p-3 rounded-xl mb-3 text-sm flex items-start gap-2">
           <Zap className="w-4 h-4 text-[#667eea] mt-0.5 shrink-0" />
@@ -160,7 +136,7 @@ export default function PersonaSelector({
                     {data.icon}
                   </div>
                   <div className={`text-xs font-medium ${isSelected ? "text-white" : "text-gray-300"}`}>
-                    {name}
+                    {DISPLAY_NAMES[name] || name}
                   </div>
                   {isSelected && (
                     <div className="absolute top-2 right-2">

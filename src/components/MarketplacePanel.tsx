@@ -128,10 +128,10 @@ export default function MarketplacePanel({
   return (
     <div className="mb-5">
       <h3 className="text-sm font-semibold mb-3 text-white flex items-center gap-2">
-        <ShoppingCart className="w-4 h-4 text-[#8b5cf6]" />
+        <ShoppingCart className="w-4 h-4 text-[#667eea]" />
         Marketplace
         {connectors.length > 0 && (
-          <span className="ml-auto text-[10px] text-[#8b5cf6] font-medium bg-[#8b5cf6]/15 px-1.5 py-0.5 rounded-full">
+          <span className="ml-auto text-[10px] text-[#667eea] font-medium bg-[#667eea]/15 px-1.5 py-0.5 rounded-full">
             {connectors.length}
           </span>
         )}
@@ -143,8 +143,8 @@ export default function MarketplacePanel({
           {connectors.map(conn => (
             <div key={conn.connector_id} className="rounded-xl border border-[#ffffff10] overflow-hidden">
               {/* Connector header */}
-              <div className="flex items-center gap-2 px-3 py-2.5 bg-[#8b5cf6]/10 text-xs">
-                <ShoppingCart className="w-3.5 h-3.5 text-[#8b5cf6] shrink-0" />
+              <div className="flex items-center gap-2 px-3 py-2.5 bg-[#667eea]/10 text-xs">
+                <ShoppingCart className="w-3.5 h-3.5 text-[#667eea] shrink-0" />
                 <div className="flex-1 min-w-0">
                   <span className="text-gray-300 font-medium">
                     <ConnectorTypeLabel type={conn.connector_type} />
@@ -155,7 +155,7 @@ export default function MarketplacePanel({
                 </div>
                 <button
                   onClick={() => setExpandedSyncId(expandedSyncId === conn.connector_id ? null : conn.connector_id)}
-                  className="text-gray-500 hover:text-[#8b5cf6] transition-colors shrink-0"
+                  className="text-gray-500 hover:text-[#667eea] transition-colors shrink-0"
                   title="Sync data"
                 >
                   <RefreshCw className="w-3.5 h-3.5" />
@@ -179,7 +179,7 @@ export default function MarketplacePanel({
                         type="date"
                         value={syncDates[conn.connector_id]?.start ?? ""}
                         onChange={e => updateSyncDate(conn.connector_id, "start", e.target.value)}
-                        className="w-full px-2 py-1.5 rounded-lg bg-[#1a1a24] border border-[#ffffff10] text-gray-300 text-xs focus:outline-none focus:border-[#8b5cf6]/40"
+                        className="w-full px-2 py-1.5 rounded-lg bg-[#1a1a24] border border-[#ffffff10] text-gray-300 text-xs focus:outline-none focus:border-[#667eea]/40"
                       />
                     </div>
                     <div className="flex-1">
@@ -188,7 +188,7 @@ export default function MarketplacePanel({
                         type="date"
                         value={syncDates[conn.connector_id]?.end ?? ""}
                         onChange={e => updateSyncDate(conn.connector_id, "end", e.target.value)}
-                        className="w-full px-2 py-1.5 rounded-lg bg-[#1a1a24] border border-[#ffffff10] text-gray-300 text-xs focus:outline-none focus:border-[#8b5cf6]/40"
+                        className="w-full px-2 py-1.5 rounded-lg bg-[#1a1a24] border border-[#ffffff10] text-gray-300 text-xs focus:outline-none focus:border-[#667eea]/40"
                       />
                     </div>
                   </div>
@@ -200,7 +200,7 @@ export default function MarketplacePanel({
                       !syncDates[conn.connector_id]?.start ||
                       !syncDates[conn.connector_id]?.end
                     }
-                    className="w-full flex items-center justify-center gap-2 px-3 py-1.5 rounded-lg bg-[#8b5cf6]/20 hover:bg-[#8b5cf6]/30 border border-[#8b5cf6]/30 text-[#8b5cf6] text-xs font-medium transition-all disabled:opacity-50 disabled:cursor-not-allowed"
+                    className="w-full flex items-center justify-center gap-2 px-3 py-1.5 rounded-lg bg-[#667eea]/20 hover:bg-[#667eea]/30 border border-[#667eea]/30 text-[#667eea] text-xs font-medium transition-all disabled:opacity-50 disabled:cursor-not-allowed"
                   >
                     {syncingId === conn.connector_id ? (
                       <><Loader2 className="w-3.5 h-3.5 animate-spin" /> Syncing...</>
@@ -238,9 +238,9 @@ export default function MarketplacePanel({
       {/* Connect Marketplace button / form */}
       <button
         onClick={() => { setShowForm(v => !v); setRegisterError(null); setRegisterState("idle"); }}
-        className="w-full flex items-center gap-2 px-3 py-2.5 rounded-xl border border-[#ffffff10] bg-[#1a1a24]/50 hover:border-[#8b5cf6]/40 hover:bg-[#8b5cf6]/5 transition-all text-xs text-gray-400"
+        className="w-full flex items-center gap-2 px-3 py-2.5 rounded-xl border border-[#ffffff10] bg-[#1a1a24]/50 hover:border-[#667eea]/40 hover:bg-[#667eea]/5 transition-all text-xs text-gray-400"
       >
-        <Plus className="w-3.5 h-3.5 text-[#8b5cf6] shrink-0" />
+        <Plus className="w-3.5 h-3.5 text-[#667eea] shrink-0" />
         <span>Connect Marketplace</span>
         <ChevronDown className={`w-3 h-3 ml-auto transition-transform ${showForm ? "rotate-180" : ""}`} />
       </button>
@@ -256,7 +256,7 @@ export default function MarketplacePanel({
               setVisibleFields(new Set())
               setRegisterError(null)
             }}
-            className="w-full px-3 py-2 rounded-lg bg-[#1a1a24] border border-[#ffffff10] text-gray-300 text-xs focus:outline-none focus:border-[#8b5cf6]/40"
+            className="w-full px-3 py-2 rounded-lg bg-[#1a1a24] border border-[#ffffff10] text-gray-300 text-xs focus:outline-none focus:border-[#667eea]/40"
           >
             {CONNECTOR_TYPES.map(t => (
               <option key={t} value={t}>
@@ -274,7 +274,7 @@ export default function MarketplacePanel({
                 placeholder={field.placeholder}
                 value={credentials[field.key] ?? ""}
                 onChange={e => setCredentials(prev => ({ ...prev, [field.key]: e.target.value }))}
-                className="w-full px-3 py-2 pr-8 rounded-lg bg-[#1a1a24] border border-[#ffffff10] text-gray-300 text-xs placeholder-gray-500 focus:outline-none focus:border-[#8b5cf6]/40"
+                className="w-full px-3 py-2 pr-8 rounded-lg bg-[#1a1a24] border border-[#ffffff10] text-gray-300 text-xs placeholder-gray-500 focus:outline-none focus:border-[#667eea]/40"
               />
               {field.type === "password" && (
                 <button
@@ -301,7 +301,7 @@ export default function MarketplacePanel({
           <button
             onClick={handleRegister}
             disabled={registerState === "submitting" || !allFieldsFilled}
-            className="w-full flex items-center justify-center gap-2 px-3 py-2 rounded-lg bg-[#8b5cf6]/20 hover:bg-[#8b5cf6]/30 border border-[#8b5cf6]/30 text-[#8b5cf6] text-xs font-medium transition-all disabled:opacity-50 disabled:cursor-not-allowed"
+            className="w-full flex items-center justify-center gap-2 px-3 py-2 rounded-lg bg-[#667eea]/20 hover:bg-[#667eea]/30 border border-[#667eea]/30 text-[#667eea] text-xs font-medium transition-all disabled:opacity-50 disabled:cursor-not-allowed"
           >
             {registerState === "submitting" ? (
               <><Loader2 className="w-3.5 h-3.5 animate-spin" /> Connecting...</>

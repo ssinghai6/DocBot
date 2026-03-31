@@ -2,7 +2,7 @@
 
 import React from "react"
 import {
-  Database, Upload, Loader2, RefreshCw, ChevronDown,
+  Database, Loader2, RefreshCw, ChevronDown,
   XCircle, Wand2, Clock, ArrowRight, Eye, EyeOff,
 } from "lucide-react"
 import type { LiveDbForm, QueryHistoryItem } from "./types"
@@ -177,58 +177,6 @@ export default function ConnectionPanel({
         </div>
       ) : (
         <div className="space-y-2">
-          {/* CSV upload */}
-          <label className={`flex items-center gap-2 px-3 py-2.5 rounded-xl border cursor-pointer transition-all text-xs ${
-            dbUploadState === "uploading"
-              ? "border-[#f97316]/40 bg-[#f97316]/5 pointer-events-none"
-              : dbUploadState === "error"
-                ? "border-[#ef4444]/40 bg-[#ef4444]/5"
-                : "border-[#ffffff10] bg-[#1a1a24]/50 hover:border-[#f97316]/40 hover:bg-[#f97316]/5"
-          }`}>
-            {dbUploadState === "uploading"
-              ? <Loader2 className="w-3.5 h-3.5 text-[#f97316] animate-spin shrink-0" />
-              : <Upload className="w-3.5 h-3.5 text-[#f97316] shrink-0" />
-            }
-            <span className="text-gray-400">Upload CSV</span>
-            <input
-              type="file"
-              className="hidden"
-              accept=".csv"
-              disabled={dbUploadState === "uploading"}
-              onChange={(e) => {
-                const file = e.target.files?.[0]
-                if (file) onDbUpload(file, "csv")
-                e.target.value = ""
-              }}
-            />
-          </label>
-
-          {/* SQLite upload */}
-          <label className={`flex items-center gap-2 px-3 py-2.5 rounded-xl border cursor-pointer transition-all text-xs ${
-            dbUploadState === "uploading"
-              ? "border-[#f97316]/40 bg-[#f97316]/5 pointer-events-none"
-              : dbUploadState === "error"
-                ? "border-[#ef4444]/40 bg-[#ef4444]/5"
-                : "border-[#ffffff10] bg-[#1a1a24]/50 hover:border-[#f97316]/40 hover:bg-[#f97316]/5"
-          }`}>
-            {dbUploadState === "uploading"
-              ? <Loader2 className="w-3.5 h-3.5 text-[#f97316] animate-spin shrink-0" />
-              : <Database className="w-3.5 h-3.5 text-[#f97316] shrink-0" />
-            }
-            <span className="text-gray-400">Upload SQLite / .db</span>
-            <input
-              type="file"
-              className="hidden"
-              accept=".sqlite,.db,.sqlite3"
-              disabled={dbUploadState === "uploading"}
-              onChange={(e) => {
-                const file = e.target.files?.[0]
-                if (file) onDbUpload(file, "sqlite")
-                e.target.value = ""
-              }}
-            />
-          </label>
-
           {/* Live DB connect toggle */}
           <button
             onClick={onToggleLiveDbForm}

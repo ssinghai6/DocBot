@@ -15,12 +15,12 @@ import type { Message, ChartMeta, AutopilotStep, Citation } from "./types"
 // This map drives per-persona badge styling in message headers.
 const PERSONA_ACCENT_COLORS: Record<string, string> = {
   Generalist: "#667eea",
-  Doctor: "#10b981",
-  "Finance Expert": "#f59e0b",
-  Engineer: "#3b82f6",
-  "AI/ML Expert": "#8b5cf6",
-  Lawyer: "#ef4444",
-  Consultant: "#06b6d4",
+  Doctor: "#667eea",
+  "Finance Expert": "#f97316",
+  Engineer: "#667eea",
+  "AI/ML Expert": "#667eea",
+  Lawyer: "#667eea",
+  Consultant: "#667eea",
   "Data Analyst": "#f97316",
 }
 
@@ -181,8 +181,8 @@ function AutopilotStepsList({ steps }: { steps: AutopilotStep[] }) {
         <div key={step.step_num} className="bg-[#ffffff04] rounded-xl p-2.5 text-xs border border-[#ffffff08]">
           <div className="flex items-center gap-1.5 mb-1.5">
             <span className={`px-1.5 py-0.5 rounded text-[10px] font-semibold uppercase tracking-wide ${
-              step.tool === "sql_query"  ? "bg-[#0ea5e9]/20 text-[#38bdf8]" :
-              step.tool === "doc_search" ? "bg-[#f59e0b]/20 text-[#fbbf24]" :
+              step.tool === "sql_query"  ? "bg-[#667eea]/20 text-[#a5b4fc]" :
+              step.tool === "doc_search" ? "bg-[#f97316]/20 text-[#fb923c]" :
                                           "bg-[#10b981]/20 text-[#34d399]"
             }`}>
               {step.tool.replace("_", " ")}
@@ -407,7 +407,7 @@ export default function ChatMessage({
                 <div className="flex items-center gap-1.5">
                   <div className="w-2 h-2 rounded-full bg-[#667eea] animate-bounce" style={{ animationDelay: "0ms", animationDuration: "1s" }} />
                   <div className="w-2 h-2 rounded-full bg-[#764ba2] animate-bounce" style={{ animationDelay: "180ms", animationDuration: "1s" }} />
-                  <div className="w-2 h-2 rounded-full bg-[#8b5cf6] animate-bounce" style={{ animationDelay: "360ms", animationDuration: "1s" }} />
+                  <div className="w-2 h-2 rounded-full bg-[#667eea] animate-bounce" style={{ animationDelay: "360ms", animationDuration: "1s" }} />
                 </div>
                 <span className="text-xs text-gray-500 animate-pulse">Thinking…</span>
               </div>
