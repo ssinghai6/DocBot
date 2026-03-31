@@ -272,15 +272,15 @@ async def init_demo_session(
     # 3. Create SQLite database with matching financial data
     db_path = _create_demo_sqlite()
 
-    # 4. Register as db_connection
+    # 4. Register as db_connection (dbname must be the actual file path for SQLite)
     creds_blob = encrypt_credentials({
         "dialect": "sqlite",
         "host": "__local_file__",
         "port": 0,
-        "dbname": "TechCorp-Financials.db",
+        "dbname": str(db_path),
         "user": "",
         "password": "",
-        "file_path": str(db_path),
+        "original_filename": "TechCorp-Financials.db",
     })
 
     async with async_session_factory() as session:
@@ -292,7 +292,7 @@ async def init_demo_session(
                     dialect="sqlite",
                     host="__local_file__",
                     port=0,
-                    dbname="TechCorp-Financials.db",
+                    dbname=str(db_path),
                     credentials_blob=creds_blob,
                 )
             )
