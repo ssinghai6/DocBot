@@ -1,13 +1,9 @@
 @import "tailwindcss";
 
 /* ============================================================================
-   DocBot Design Tokens — "Analyst Paper" Light Edition
-   Warm off-white surfaces, deep slate ink, indigo primary, rust AI accent.
-   Inspired by Linear Light, Stripe Dashboard, Hex, Vercel.
-
-   NOTE: Token *names* still say "cyan" / "amber" so existing components
-   (bg-[var(--color-cyan-500)], etc.) keep working without a sweeping rename.
-   Cyan slots → indigo. Amber slots → rust.
+   DocBot Design Tokens — Analytical Tool Edition
+   Dark-only for v1. Warm near-black + cyan (data) + amber (AI insight).
+   Light theme block stubbed on [data-theme="light"] for future.
    ============================================================================ */
 
 @theme {
@@ -15,102 +11,94 @@
   --font-sans: var(--font-inter), -apple-system, BlinkMacSystemFont, "Segoe UI", system-ui, sans-serif;
   --font-mono: "Berkeley Mono", var(--font-jetbrains-mono), "JetBrains Mono", "SF Mono", Consolas, monospace;
 
-  /* ---- Surfaces (warm off-white paper, tonal layering) ---- */
-  --color-bg-base: #fafaf7;       /* app background — warm paper */
-  --color-bg-surface: #ffffff;    /* cards, panels, sidebar */
-  --color-bg-elevated: #f4f3ee;   /* hover, secondary surfaces */
-  --color-bg-overlay: #ecebe4;    /* popovers, dropdowns, palette */
-  --color-bg-inset: #f0efe9;      /* code blocks, inputs, wells */
-  --color-bg-tinted: #eef2ff;     /* primary-tinted callouts */
+  /* ---- Surfaces (warm near-black, LCH-spaced) ---- */
+  --color-bg-base: #0b0b10;
+  --color-bg-surface: #12121a;
+  --color-bg-elevated: #181822;
+  --color-bg-overlay: #1f1f2b;
+  --color-bg-inset: #08080d;
 
-  /* ---- Text (deep slate ink, never pure black) ---- */
-  --color-text-primary: #18181b;
-  --color-text-secondary: #52525b;
-  --color-text-tertiary: #71717a;
-  --color-text-quaternary: #a1a1aa;
-  --color-text-inverse: #fafaf7;
+  /* ---- Text ---- */
+  --color-text-primary: #f5f5f7;
+  --color-text-secondary: #b8b8c4;
+  --color-text-tertiary: #787888;
+  --color-text-quaternary: #4a4a58;
+  --color-text-inverse: #0b0b10;
 
-  /* ---- Borders (hairlines do the elevation work) ---- */
-  --color-border-subtle: #ecebe4;
-  --color-border-default: #e0ded5;
-  --color-border-strong: #c9c7bc;
+  /* ---- Borders ---- */
+  --color-border-subtle: #1f1f2b;
+  --color-border-default: #2a2a38;
+  --color-border-strong: #3a3a4a;
 
-  /* ---- Primary: Indigo (was cyan — kept token names to avoid breakage) ---- */
-  --color-cyan-50: #eef2ff;
-  --color-cyan-200: #c7d2fe;
-  --color-cyan-500: #4f46e5;   /* main interactive — buttons, links, focus */
-  --color-cyan-600: #4338ca;   /* hover */
-  --color-cyan-900: #1e1b4b;
+  /* ---- Accent: Cyan (interactive / data / live state) ---- */
+  --color-cyan-50: #e6fbfc;
+  --color-cyan-200: #8ee8ee;
+  --color-cyan-500: #20c9d4;
+  --color-cyan-600: #15a3ad;
+  --color-cyan-900: #0a3438;
 
-  /* ---- Accent: Rust (was amber — AI insight / reasoning / generated) ---- */
-  --color-amber-50: #fff4ed;
-  --color-amber-200: #fecdaa;
-  --color-amber-500: #c2410c;  /* main accent — AI badges, autopilot */
-  --color-amber-600: #9a3412;
-  --color-amber-900: #7c2d12;
+  /* ---- Accent: Amber (AI insight / reasoning / generated) ---- */
+  --color-amber-50: #fff8e6;
+  --color-amber-200: #ffe19a;
+  --color-amber-500: #ffc857;
+  --color-amber-600: #d4a23d;
+  --color-amber-900: #3d2e0f;
 
-  /* ---- Semantic (muted, professional, not iOS-bright) ---- */
-  --color-success-500: #047857;
-  --color-success-900: #065f46;
-  --color-warning-500: #b45309;
-  --color-warning-900: #92400e;
-  --color-danger-500: #b91c1c;
-  --color-danger-900: #991b1b;
-  --color-info-500: #1d4ed8;
-  --color-info-900: #1e40af;
+  /* ---- Semantic ---- */
+  --color-success-500: #3dd68c;
+  --color-success-900: #0e2e1d;
+  --color-warning-500: #f5a524;
+  --color-warning-900: #3a2408;
+  --color-danger-500: #f4527a;
+  --color-danger-900: #3a0e1c;
+  --color-info-500: #7c8aff;
+  --color-info-900: #1a1d3d;
 
-  /* ---- Data viz categorical (tuned for warm paper background) ---- */
-  --color-viz-1: #4f46e5;  /* indigo  — primary series */
-  --color-viz-2: #0d9488;  /* teal    — comparison */
-  --color-viz-3: #c2410c;  /* rust    — highlight */
-  --color-viz-4: #7c3aed;  /* violet  — categorical */
-  --color-viz-5: #ca8a04;  /* ochre   — neutral series */
-  --color-viz-6: #be185d;  /* magenta — outliers */
-  --color-viz-7: #0369a1;  /* steel   — baseline */
-  --color-viz-8: #4d7c0f;  /* moss    — positive delta */
+  /* ---- Data viz categorical (equal perceived lightness) ---- */
+  --color-viz-1: #20c9d4;
+  --color-viz-2: #ffc857;
+  --color-viz-3: #7c8aff;
+  --color-viz-4: #3dd68c;
+  --color-viz-5: #f4527a;
+  --color-viz-6: #c490e8;
+  --color-viz-7: #5dd6c4;
+  --color-viz-8: #ffa07a;
 
-  /* ---- Radius (tight, tool-grade) ---- */
-  --radius-xs: 2px;
-  --radius-sm: 4px;
-  --radius-md: 6px;
-  --radius-lg: 8px;
-  --radius-xl: 12px;
+  /* ---- Radius ---- */
+  --radius-xs: 3px;
+  --radius-sm: 5px;
+  --radius-md: 8px;
+  --radius-lg: 12px;
+  --radius-xl: 16px;
 
   /* ---- Motion ---- */
   --ease-standard: cubic-bezier(0.2, 0, 0, 1);
   --ease-emphasized: cubic-bezier(0.3, 0, 0, 1);
 }
 
-/* Glows, scrim, shadows, and non-@theme tokens live on :root so they're consumable via var() */
+/* Glows, scrim, and non-@theme tokens live on :root so they're consumable via var() */
 :root {
-  color-scheme: light;
+  --cyan-glow: rgba(32, 201, 212, 0.18);
+  --amber-glow: rgba(255, 200, 87, 0.16);
+  --bg-scrim: rgba(8, 8, 13, 0.72);
 
-  /* Primary glow (indigo) — was --cyan-glow, kept the name */
-  --cyan-glow: rgba(79, 70, 229, 0.14);
-  /* Accent glow (rust) — was --amber-glow */
-  --amber-glow: rgba(194, 65, 12, 0.12);
-  /* Scrim for modals */
-  --bg-scrim: rgba(24, 24, 27, 0.35);
+  --elev-1: inset 0 1px 0 rgba(255, 255, 255, 0.04), 0 1px 2px rgba(0, 0, 0, 0.4);
+  --elev-2: inset 0 1px 0 rgba(255, 255, 255, 0.05), 0 4px 12px rgba(0, 0, 0, 0.5);
+  --elev-3: inset 0 1px 0 rgba(255, 255, 255, 0.06), 0 12px 32px rgba(0, 0, 0, 0.6);
+  --elev-4: inset 0 1px 0 rgba(255, 255, 255, 0.08), 0 24px 60px rgba(0, 0, 0, 0.7);
 
-  /* Elevation — light-mode appropriate (borders + tiny shadows, not heavy) */
-  --elev-1: 0 1px 0 0 rgba(24, 24, 27, 0.04);
-  --elev-2: 0 1px 2px 0 rgba(24, 24, 27, 0.05), 0 0 0 1px rgba(24, 24, 27, 0.04);
-  --elev-3: 0 2px 8px -2px rgba(24, 24, 27, 0.06), 0 0 0 1px rgba(24, 24, 27, 0.05);
-  --elev-4: 0 12px 32px -8px rgba(24, 24, 27, 0.12), 0 0 0 1px rgba(24, 24, 27, 0.08);
+  --glow-cyan: 0 0 0 1px var(--color-cyan-500), 0 0 16px var(--cyan-glow);
+  --glow-amber: 0 0 0 1px var(--color-amber-500), 0 0 16px var(--amber-glow);
 
-  --glow-cyan: 0 0 0 1px var(--color-cyan-500), 0 0 0 4px var(--cyan-glow);
-  --glow-amber: 0 0 0 1px var(--color-amber-500), 0 0 0 4px var(--amber-glow);
-
-  --duration-fast: 140ms;
-  --duration-base: 220ms;
-  --duration-slow: 360ms;
+  --duration-fast: 120ms;
+  --duration-base: 180ms;
+  --duration-slow: 280ms;
 }
 
 html {
-  color-scheme: light;
+  color-scheme: dark;
   -webkit-font-smoothing: antialiased;
   -moz-osx-font-smoothing: grayscale;
-  background-color: var(--color-bg-base);
 }
 
 body {
@@ -122,7 +110,6 @@ body {
   min-height: 100vh;
   font-size: 14px;
   line-height: 1.55;
-  letter-spacing: -0.005em;
 }
 
 /* Tabular numerals for data-heavy elements */
@@ -133,62 +120,43 @@ table,
   font-variant-numeric: tabular-nums;
 }
 
-/* ---- Scrollbar (thin, paper-toned, hover reveals) ---- */
+/* ---- Scrollbar (thin, subtle) ---- */
 ::-webkit-scrollbar {
-  width: 10px;
-  height: 10px;
+  width: 6px;
+  height: 6px;
 }
 ::-webkit-scrollbar-track {
   background: transparent;
 }
 ::-webkit-scrollbar-thumb {
-  background: #d4d2c8;
-  border-radius: 9999px;
-  border: 2px solid var(--color-bg-base);
-  transition: background-color var(--duration-fast) var(--ease-standard);
+  background: var(--color-border-default);
+  border-radius: 3px;
 }
 ::-webkit-scrollbar-thumb:hover {
-  background: #b8b6aa;
-}
-::-webkit-scrollbar-corner {
-  background: transparent;
+  background: var(--color-border-strong);
 }
 * {
   scrollbar-width: thin;
-  scrollbar-color: #d4d2c8 transparent;
+  scrollbar-color: var(--color-border-default) transparent;
 }
 
-/* ---- Selection (indigo wash) ---- */
+/* ---- Selection ---- */
 ::selection {
-  background: #c7d2fe;
-  color: #1e1b4b;
-}
-::-moz-selection {
-  background: #c7d2fe;
-  color: #1e1b4b;
+  background: rgba(32, 201, 212, 0.25);
+  color: var(--color-text-primary);
 }
 
-/* ---- Focus ring (indigo, light-mode safe) ---- */
-:focus {
-  outline: none;
-}
+/* ---- Focus ring (global, cyan) ---- */
 :focus-visible {
   outline: 2px solid var(--color-cyan-500);
   outline-offset: 2px;
+  box-shadow: 0 0 0 4px var(--cyan-glow);
   border-radius: var(--radius-sm);
-}
-
-/* Inputs get a softer focus — ring instead of outline */
-input:focus-visible,
-textarea:focus-visible,
-select:focus-visible {
-  outline: none;
-  border-color: var(--color-cyan-500);
-  box-shadow: 0 0 0 3px rgba(79, 70, 229, 0.12);
 }
 
 /* ============================================================================
    Fluid motion — global default transitions for interactive surfaces.
+   Kept short and tied to ease-standard so nothing feels sluggish.
    ============================================================================ */
 button, a, [role="button"], [role="tab"], [role="menuitem"], [data-interactive] {
   transition:
@@ -197,6 +165,18 @@ button, a, [role="button"], [role="tab"], [role="menuitem"], [data-interactive] 
     color var(--duration-fast) var(--ease-standard),
     box-shadow var(--duration-fast) var(--ease-standard),
     opacity var(--duration-fast) var(--ease-standard);
+}
+
+/* react-resizable-panels smooth collapse/expand */
+[data-panel-group] > [data-panel] {
+  transition: flex-grow var(--duration-base) var(--ease-standard);
+}
+[data-panel-group][data-panel-group-direction="horizontal"] > [data-panel-resize-handle-enabled] {
+  transition: background-color var(--duration-fast) var(--ease-standard);
+}
+/* Disable transition mid-drag so resize tracks the cursor */
+[data-panel-group][data-resizing="true"] > [data-panel] {
+  transition: none !important;
 }
 
 /* Fade-in for mounted content — applied via class */
@@ -208,7 +188,7 @@ button, a, [role="button"], [role="tab"], [role="menuitem"], [data-interactive] 
   animation: docbot-fade-in var(--duration-slow) var(--ease-standard) both;
 }
 
-/* Soft cursor for input fields */
+/* Soft cursor for input fields (smoother than default block caret) */
 textarea, input {
   caret-color: var(--color-cyan-500);
 }
@@ -285,7 +265,7 @@ textarea, input {
 }
 
 /* ============================================================================
-   Prose (React Markdown) — tuned for light surfaces
+   Prose (React Markdown)
    ============================================================================ */
 
 .prose {
@@ -324,7 +304,7 @@ textarea, input {
   border-bottom-color: var(--color-cyan-500);
 }
 .prose code {
-  color: var(--color-cyan-600);
+  color: var(--color-cyan-200);
   background: var(--color-bg-inset);
   padding: 0.125rem 0.375rem;
   border-radius: var(--radius-xs);
@@ -344,7 +324,7 @@ textarea, input {
 }
 .prose pre code {
   background: transparent;
-  color: var(--color-text-primary);
+  color: inherit;
   padding: 0;
   border: none;
   font-size: 12px;
@@ -389,7 +369,7 @@ textarea, input {
   color: var(--color-text-secondary);
 }
 .prose tr:hover td {
-  background: var(--color-bg-elevated);
+  background: var(--color-bg-overlay);
 }
 .prose img {
   max-width: 100%;

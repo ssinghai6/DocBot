@@ -14,6 +14,7 @@ import AdminPanel from "@/components/AdminPanel"
 import CommandPalette, { useCommandPalette, buildCommands } from "@/components/CommandPalette"
 import { useChatHandlers } from "@/hooks/useChatHandlers"
 import { useChatSubmit } from "@/hooks/useChatSubmit"
+import { PanelGroup, Panel, ResizeHandle, type PanelImperativeHandle } from "@/components/ui"
 import { useUIStore } from "@/store/uiStore"
 import { useBreakpoint } from "@/lib/useBreakpoint"
 
@@ -75,31 +76,14 @@ export default function Home() {
     }
   }, [bp, setInspectorOpen]);
 
-  // Inspector width (CSS-driven resize, not react-resizable-panels)
-  const INSPECTOR_MIN = 300;
-  const INSPECTOR_MAX = 560;
-  const [inspectorWidth, setInspectorWidth] = useState<number>(380);
-  const inspectorResizeRef = useRef<{ startX: number; startW: number } | null>(null);
-  const onInspectorResizeStart = (e: React.PointerEvent) => {
-    e.preventDefault();
-    (e.currentTarget as HTMLDivElement).setPointerCapture(e.pointerId);
-    inspectorResizeRef.current = { startX: e.clientX, startW: inspectorWidth };
-    document.body.style.cursor = "col-resize";
-    document.body.style.userSelect = "none";
-  };
-  const onInspectorResizeMove = (e: React.PointerEvent) => {
-    const s = inspectorResizeRef.current;
-    if (!s) return;
-    const next = Math.min(INSPECTOR_MAX, Math.max(INSPECTOR_MIN, s.startW - (e.clientX - s.startX)));
-    setInspectorWidth(next);
-  };
-  const onInspectorResizeEnd = (e: React.PointerEvent) => {
-    if (!inspectorResizeRef.current) return;
-    (e.currentTarget as HTMLDivElement).releasePointerCapture(e.pointerId);
-    inspectorResizeRef.current = null;
-    document.body.style.cursor = "";
-    document.body.style.userSelect = "";
-  };
+  // Imperative handle for the inspector panel — drives smooth collapse/expand
+  const inspectorPanelRef = useRef<PanelImperativeHandle>(null);
+  useEffect(() => {
+    const handle = inspectorPanelRef.current;
+    if (!handle) return;
+    if (inspectorOpen && handle.isCollapsed()) handle.expand();
+    if (!inspectorOpen && !handle.isCollapsed()) handle.collapse();
+  }, [inspectorOpen]);
 
   const [messages, setMessages] = useState<Message[]>([]);
   const [input, setInput] = useState("");
@@ -538,8 +522,12 @@ export default function Home() {
         }}
       />
 
-      <div className="flex-1 min-w-0 flex relative">
-      <main className="flex-1 min-w-0 h-full">
+      <PanelGroup
+        orientation="horizontal"
+        id="docbot-main-panels"
+        className="flex-1 min-w-0"
+      >
+      <Panel id="main" defaultSize={72} minSize={40}>
       <ChatArea
         sessionId={sessionId}
         uploadedFiles={uploadedFiles}
@@ -578,34 +566,27 @@ export default function Home() {
         onTryDemo={handleTryDemo}
         demoLoading={demoLoading}
       />
-      </main>
+      </Panel>
 
-      {/* Inspector resize handle — only visible when inspector is open */}
-      {inspectorOpen && (
-        <div
-          role="separator"
-          aria-label="Resize inspector"
-          aria-orientation="vertical"
-          onPointerDown={onInspectorResizeStart}
-          onPointerMove={onInspectorResizeMove}
-          onPointerUp={onInspectorResizeEnd}
-          onPointerCancel={onInspectorResizeEnd}
-          className="group relative w-[4px] shrink-0 cursor-col-resize"
-        >
-          <div className="absolute inset-y-0 left-1/2 w-px -translate-x-1/2 bg-[var(--color-border-subtle)] group-hover:bg-[var(--color-cyan-500)] transition-colors" />
-        </div>
-      )}
-
-      {/* Inspector panel — CSS width transition for fluid collapse/expand */}
-      <aside
-        style={{ width: inspectorOpen ? inspectorWidth : 0 }}
-        className="shrink-0 h-full overflow-hidden transition-[width] duration-[var(--duration-base)] ease-[var(--ease-standard)]"
+      <ResizeHandle />
+      <Panel
+        id="inspector"
+        panelRef={inspectorPanelRef}
+        defaultSize={28}
+        minSize={22}
+        maxSize={48}
+        collapsible
+        collapsedSize={0}
+        onResize={(size) => {
+          const pct = typeof size === "number" ? size : size.asPercentage
+          const isCollapsed = pct < 1
+          if (isCollapsed && inspectorOpen) setInspectorOpen(false)
+          if (!isCollapsed && !inspectorOpen) setInspectorOpen(true)
+        }}
       >
-        <div style={{ width: inspectorWidth }} className="h-full">
-          <InspectorPanel onClose={() => setInspectorOpen(false)} />
-        </div>
-      </aside>
-      </div>
+        <InspectorPanel onClose={() => setInspectorOpen(false)} />
+      </Panel>
+      </PanelGroup>
 
       {/* Auth Modal */}
       {authModalOpen && !authUser && (
