@@ -94,8 +94,8 @@ export default function PersonaSelector({
           onClick={() => onSetAutoMode(true)}
           className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-medium transition-all ${
             isAutoMode
-              ? "bg-[var(--color-cyan-500)]/20 text-[var(--color-cyan-500)] border border-[var(--color-cyan-500)]/40"
-              : "bg-white/5 text-[var(--color-text-secondary)] border border-white/10 hover:bg-white/10"
+              ? "bg-[var(--color-cyan-500)]/10 text-[var(--color-cyan-600)] border border-[var(--color-cyan-500)]/40"
+              : "bg-[var(--color-bg-surface)] text-[var(--color-text-secondary)] border border-[var(--color-border-default)] hover:bg-[var(--color-bg-elevated)]"
           }`}
         >
           <Wand2 className="w-3 h-3" />
@@ -105,8 +105,8 @@ export default function PersonaSelector({
           onClick={() => onSetAutoMode(false)}
           className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-medium transition-all ${
             !isAutoMode
-              ? "bg-white/10 text-gray-200 border border-white/20"
-              : "bg-white/5 text-[var(--color-text-secondary)] border border-white/10 hover:bg-white/10"
+              ? "bg-[var(--color-bg-elevated)] text-[var(--color-text-primary)] border border-[var(--color-border-strong)]"
+              : "bg-[var(--color-bg-surface)] text-[var(--color-text-secondary)] border border-[var(--color-border-default)] hover:bg-[var(--color-bg-elevated)]"
           }`}
         >
           <UserCog className="w-3 h-3" />

@@ -94,7 +94,7 @@ function QueryTab({ artifact }: { artifact: ReturnType<typeof useUIStore.getStat
   return (
     <div className="p-3 space-y-3">
       <SectionLabel>SQL</SectionLabel>
-      <Highlight code={sql} language="sql" theme={themes.vsDark}>
+      <Highlight code={sql} language="sql" theme={themes.github}>
         {({ className, style, tokens, getLineProps, getTokenProps }) => (
           <pre
             className={`${className} text-[12px] leading-[1.55] p-3 rounded-[5px] overflow-x-auto border border-[var(--color-border-subtle)]`}

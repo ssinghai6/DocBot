@@ -155,6 +155,19 @@ _mpl.use('Agg')
 import matplotlib.pyplot as _plt
 import io as _io, base64 as _b64, sys as _sys
 
+# Guarantee pandas/numpy/json/plt/sns are always available in the user's
+# namespace — LLM-generated code frequently omits these imports even after
+# being told to include them, leading to NameError: 'pd'/'np' is not defined.
+# Importing here is idempotent; re-importing in user code is a no-op.
+import pandas as pd  # noqa: E402,F401
+import numpy as np   # noqa: E402,F401
+import json          # noqa: E402,F401
+import matplotlib.pyplot as plt  # noqa: E402,F401
+try:
+    import seaborn as sns  # noqa: E402,F401
+except ImportError:
+    sns = None  # type: ignore
+
 _EMITTED_FIG_IDS = set()
 
 def _emit_figure(_fig):
@@ -486,20 +499,23 @@ async def generate_analysis_code(
     chart_instructions = _chart_type_instructions(chart_type)
 
     system_prompt = (
-        "You are a Python data analyst. Given a question and a dataset, write Python code that:\n"
-        "1. Imports pandas, numpy, json, matplotlib.pyplot as plt, and seaborn as sns if needed\n"
-        "2. Creates a DataFrame `df` from the provided data\n"
-        "3. Performs relevant analysis to answer the question\n"
-        f"4. CHART TYPE REQUIREMENT: {chart_instructions}\n"
-        "5. Calls plt.show() exactly once after creating the chart\n"
-        "6. Assigns a brief text summary to a variable named `result`\n"
-        "7. AFTER plt.show(), prints chart metadata in EXACTLY this format (one line):\n"
-        '   import json; print(\'CHART_META:\' + json.dumps({\'type\': \'<chart_type>\', '
+        "You are a Python data analyst. The sandbox has ALREADY imported:\n"
+        "  pandas as pd, numpy as np, matplotlib.pyplot as plt, seaborn as sns, json\n"
+        "You may use pd, np, plt, sns, json directly — do NOT re-import them.\n\n"
+        "Given a question and a dataset, write Python code that:\n"
+        "1. Creates a DataFrame `df` from the provided data (e.g. df = pd.DataFrame(data))\n"
+        "2. Performs relevant analysis to answer the question\n"
+        f"3. CHART TYPE REQUIREMENT: {chart_instructions}\n"
+        "4. Calls plt.show() exactly once after creating the chart\n"
+        "5. Assigns a brief text summary to a variable named `result`\n"
+        "6. AFTER plt.show(), prints chart metadata in EXACTLY this format (one line):\n"
+        "   print('CHART_META:' + json.dumps({'type': '<chart_type>', "
         "'title': '<chart_title>', 'x_label': '<x_axis_label>', "
         "'y_label': '<y_axis_label>', 'series_count': <int>}))\n\n"
         "Rules:\n"
         "- Output ONLY raw Python code, no markdown fences, no explanations\n"
         "- Do NOT call plt.savefig() — use plt.show() only\n"
+        "- Do NOT write `import pandas as pd` or similar — they are already imported\n"
         "- Keep code under 80 lines"
     )
 
