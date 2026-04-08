@@ -102,12 +102,23 @@ export function useChatSubmit(params: UseChatSubmitParams) {
     }
 
     // ── Smart autopilot auto-trigger ────────────────────────────────────────
-    // Auto-enable autopilot for analytical questions when a data source is loaded
-    const AUTOPILOT_TRIGGER = /\b(predict|forecast|trend|seasonal|correlat|regress|cluster|anomal|outli|compar|analy[sz]|investigat|diagnos|root.?cause|deep.?dive|break.?down|distribut|what.?if|simulat|project|model|classif|calculat|valu(?:e|ation)|discount|dcf|scenario|estimat|assess)/i;
+    // Auto-enable autopilot ONLY for genuinely multi-step analytical questions.
+    // Simple single-intent visualization requests (plot/show/graph/...) must
+    // stay on the fast path — autopilot cannot currently produce charts for
+    // CSV sources and hijacking these queries breaks the plotting pipeline.
+    const SIMPLE_VIZ = /^\s*(plot|show|graph|chart|draw|visualize|visualise|display|histogram|heatmap|render|what is|tell me)\b/i;
+    const MULTI_STEP_TRIGGER = /\b(predict|forecast|what.?if|simulat|root.?cause|deep.?dive|break.?down|investigat|diagnos|scenario|correlat|regress|cluster|anomal|outli)\b/i;
+    const COMPLEX_COMPARE = /\bcompar\w*\s+.+\s+(vs|versus|against|with|to)\b/i;
+
     let useAutopilot = autopilotMode;
-    if (!useAutopilot && (connectionId || sessionId) && AUTOPILOT_TRIGGER.test(input)) {
-      useAutopilot = true;
-      showToast("info", "Autopilot activated \u2014 multi-step analysis in progress");
+    if (!useAutopilot && (connectionId || sessionId)) {
+      if (SIMPLE_VIZ.test(input)) {
+        // Simple viz — never auto-trigger, use the fast path
+        useAutopilot = false;
+      } else if (MULTI_STEP_TRIGGER.test(input) || COMPLEX_COMPARE.test(input)) {
+        useAutopilot = true;
+        showToast("info", "Autopilot activated \u2014 multi-step analysis in progress");
+      }
     }
 
     // ── Autopilot path ─────────────────────────────────────────────────────

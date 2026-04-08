@@ -1053,8 +1053,10 @@ async def run_sql_pipeline(
         result_dicts = mask_rows(result_dicts)
 
     # ── Step 6.5: Python code generation + E2B sandbox (DOCBOT-301/302) ──
-    # Only runs when >= 5 rows; failure never blocks the main pipeline.
-    if len(rows) >= 5:
+    # Runs for any non-empty result set; failure never blocks the main pipeline.
+    # Small result sets (1–4 rows) are valid for bar/pie charts — the previous
+    # >= 5 gate killed legitimate small-result visualisations.
+    if len(rows) >= 1:
         try:
             from api.sandbox_service import generate_analysis_code, run_python as run_sandbox
 

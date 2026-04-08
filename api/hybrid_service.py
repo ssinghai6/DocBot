@@ -323,6 +323,8 @@ async def _collect_sql_result(
     try:
         metadata_result: dict | None = None
         answer_tokens: list[str] = []
+        chart_events: list[dict] = []
+        analysis_code_event: dict | None = None
 
         async for raw_chunk in run_sql_pipeline(
             connection_id=connection_id,
@@ -338,10 +340,15 @@ async def _collect_sql_result(
             if not raw_chunk.startswith("data: "):
                 continue
             data = json.loads(raw_chunk[6:].strip())
-            if data.get("type") == "metadata":
+            evt_type = data.get("type")
+            if evt_type == "metadata":
                 metadata_result = data
-            elif data.get("type") == "token":
+            elif evt_type == "token":
                 answer_tokens.append(data.get("content", ""))
+            elif evt_type == "chart":
+                chart_events.append(data)
+            elif evt_type == "analysis_code":
+                analysis_code_event = data
 
         # For CSV connections, metadata has empty result_preview.
         # Inject the streamed answer tokens as the result text so
@@ -350,6 +357,14 @@ async def _collect_sql_result(
             answer_text = "".join(answer_tokens).strip()
             if not metadata_result.get("result_preview") and answer_text:
                 metadata_result["csv_answer"] = answer_text[:3000]
+
+        # BUG #3 FIX: forward chart/analysis_code events back to hybrid_chat()
+        # so visualizations aren't silently dropped in hybrid mode.
+        if metadata_result is None and (chart_events or analysis_code_event):
+            metadata_result = {}
+        if metadata_result is not None:
+            metadata_result["chart_events"] = chart_events
+            metadata_result["analysis_code_event"] = analysis_code_event
 
         return metadata_result
     except Exception as exc:
@@ -466,6 +481,16 @@ async def hybrid_chat(
 
         if sql_task is not None:
             sql_metadata = await sql_task
+
+    # BUG #3 FIX: forward any chart/analysis_code events captured by
+    # _collect_sql_result so the frontend hybrid chart handler receives them.
+    # Without this, plotting requests via hybrid_chat() silently drop all charts.
+    if sql_metadata:
+        analysis_code_event = sql_metadata.get("analysis_code_event")
+        if analysis_code_event:
+            yield f"data: {json.dumps(analysis_code_event)}\n\n"
+        for chart_evt in sql_metadata.get("chart_events", []) or []:
+            yield f"data: {json.dumps(chart_evt)}\n\n"
 
     # ── Step 3: build synthesis prompt ───────────────────────────────────
     persona_def = (

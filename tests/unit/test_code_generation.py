@@ -23,20 +23,39 @@ import api.sandbox_service  # noqa: F401
 @pytest.mark.asyncio
 class TestGenerateAnalysisCode:
 
-    async def test_skips_when_fewer_than_5_rows(self):
-        """Must return None without calling LLM when < 5 rows."""
+    async def test_skips_when_empty_result_set(self):
+        """Must return None without calling LLM when no rows."""
         from api.sandbox_service import generate_analysis_code
 
         result = await generate_analysis_code(
-            result_dicts=[{"col": "val"}] * 4,
+            result_dicts=[],
             question="What are the trends?",
             persona_def="Data Analyst",
         )
 
         assert result is None
 
+    async def test_returns_code_for_small_result_set(self):
+        """Small result sets (1-4 rows) are valid for bar/pie charts and
+        must proceed to LLM code generation (regression for the old 5-row gate)."""
+        expected_code = "import pandas as pd\nresult = 'ok'"
+
+        with patch("api.utils.llm_provider.chat_completion", return_value=expected_code):
+            from api.sandbox_service import generate_analysis_code
+
+            with patch.dict("os.environ", {"groq_api_key": "test-key"}):
+                result = await generate_analysis_code(
+                    result_dicts=[{"quarter": "Q1", "revenue": 10}, {"quarter": "Q2", "revenue": 20}],
+                    question="Plot revenue by quarter",
+                    persona_def="Data Analyst",
+                )
+
+        assert result is not None
+        assert isinstance(result, str)
+        assert len(result) > 0
+
     async def test_returns_code_string_for_sufficient_rows(self):
-        """Must return a non-empty string when >= 5 rows."""
+        """Must return a non-empty string for larger result sets."""
         expected_code = "import pandas as pd\ndf = pd.DataFrame()\nresult = 'done'"
 
         with patch("api.utils.llm_provider.chat_completion", return_value=expected_code):

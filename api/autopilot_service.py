@@ -341,70 +341,181 @@ def make_executor_node(
 
             # ── python_analysis ────────────────────────────────────────────
             elif tool == "python_analysis":
-                # Load the most recent sql_result artifact as input data
-                prior_rows: list[dict] = []
-                for prior in reversed(state.get("steps_completed", [])):
-                    if prior.get("tool") == "sql_query" and prior.get("artifact_id"):
-                        if session_artifacts_table is not None:
-                            from api.artifact_service import get_artifact
-
-                            art = await get_artifact(
-                                prior["artifact_id"],
-                                session_artifacts_table=session_artifacts_table,
-                                async_session_factory=async_session_factory,
-                            )
-                            if art and art.data_json:
-                                prior_rows = json.loads(art.data_json)
-                                break
-
-                # Fallback: if no SQL artifact, try doc_search results as context
-                if not prior_rows:
-                    doc_context_parts: list[str] = []
-                    for prior in reversed(state.get("steps_completed", [])):
-                        if prior.get("tool") == "doc_search" and prior.get("result"):
-                            doc_context_parts.append(prior["result"])
-                    if doc_context_parts:
-                        # Synthesise doc results into a pseudo-data context for code gen
-                        prior_rows = [{"document_context": "\n\n".join(doc_context_parts)}]
-
-                if not prior_rows:
-                    result_entry["result"] = "No prior data available for analysis."
-                else:
-                    from api.sandbox_service import generate_analysis_code, run_python
-
-                    persona_data = expert_personas.get(persona, expert_personas.get("Generalist", {}))
-                    persona_def = persona_data.get("persona_def", "") if isinstance(persona_data, dict) else ""
-                    code = await generate_analysis_code(
-                        result_dicts=prior_rows,
-                        question=step,
-                        persona_def=persona_def,
-                        chart_type="auto",
-                    )
-                    if code:
-                        sandbox_result = await run_python(code)
-                        result_entry["result"] = (
-                            sandbox_result.stdout[:500] if sandbox_result.stdout
-                            else "Analysis complete."
+                # ── CSV path (Bug #2 fix) ─────────────────────────────────
+                # For CSV-backed sessions, load the CSV creds/profile directly
+                # and run pandas analysis on E2B. This bypasses the SQL-artifact
+                # lookup path which would otherwise yield empty prior_rows.
+                handled_csv = False
+                if state.get("has_csv") and connection_id:
+                    try:
+                        from sqlalchemy import select as _select
+                        from api.utils.encryption import decrypt_credentials
+                        from api.sandbox_service import (
+                            generate_csv_analysis_code,
+                            _run_csv_in_sandbox,
                         )
-                        if sandbox_result.error:
-                            result_entry["error"] = sandbox_result.error
-                        # Persist first chart as an artifact
-                        if sandbox_result.charts and session_artifacts_table is not None:
-                            from api.artifact_service import save_artifact
+                        import base64 as _base64
 
-                            artifact_id = await save_artifact(
-                                session_id=session_id,
-                                turn_id=iteration + 1,
-                                artifact_type="chart",
-                                name=f"Chart: {step[:60]}",
-                                chart_b64=sandbox_result.charts[0],
-                                session_artifacts_table=session_artifacts_table,
-                                async_session_factory=async_session_factory,
+                        async with async_session_factory() as _sess:
+                            _conn_result = await _sess.execute(
+                                _select(db_connections_table).where(
+                                    db_connections_table.c.id == connection_id
+                                )
                             )
-                            result_entry["artifact_id"] = artifact_id
-                            result_entry["chart_b64"] = sandbox_result.charts[0]
+                            _conn_row = _conn_result.fetchone()
+
+                        if _conn_row and _conn_row.dialect == "csv":
+                            handled_csv = True
+                            _creds = decrypt_credentials(_conn_row.credentials_blob)
+                            _table_name = _creds.get("table_name", "data")
+                            _column_names = _creds.get("columns", [])
+                            _csv_b64 = _creds.get("csv_content", "")
+                            _section_manifest = _creds.get("section_manifest")
+                            _sections = _creds.get("sections")
+                            _is_multi_section = bool(_sections and len(_sections) > 1)
+
+                            _data_profile = _creds.get("data_profile")
+                            _data_profile_str: Optional[str] = None
+                            if _data_profile and isinstance(_data_profile, dict):
+                                _data_profile_str = json.dumps(
+                                    _data_profile, indent=2, default=str
+                                )
+
+                            persona_data = expert_personas.get(
+                                persona, expert_personas.get("Generalist", {})
+                            )
+                            persona_def = (
+                                persona_data.get("persona_def", "")
+                                if isinstance(persona_data, dict)
+                                else ""
+                            )
+
+                            _csv_path = f"/tmp/{_table_name}.csv"
+                            _csv_code = await generate_csv_analysis_code(
+                                csv_path_in_sandbox=_csv_path,
+                                column_names=_column_names,
+                                question=step,
+                                persona_def=persona_def,
+                                chart_type="auto",
+                                section_manifest=_section_manifest,
+                                is_multi_section=_is_multi_section,
+                                data_profile=_data_profile_str,
+                                chat_history=None,
+                            )
+
+                            if not _csv_code:
+                                result_entry["result"] = (
+                                    "CSV code generation failed."
+                                )
+                            else:
+                                try:
+                                    _csv_bytes = _base64.b64decode(_csv_b64)
+                                except Exception:
+                                    _csv_bytes = b""
+                                sandbox_result = await _run_csv_in_sandbox(
+                                    code=_csv_code,
+                                    csv_path=_csv_path,
+                                    csv_bytes=_csv_bytes,
+                                    timeout_seconds=60,
+                                )
+                                result_entry["result"] = (
+                                    sandbox_result.stdout[:500]
+                                    if sandbox_result.stdout
+                                    else "Analysis complete."
+                                )
+                                if sandbox_result.error:
+                                    result_entry["error"] = sandbox_result.error
+                                if (
+                                    sandbox_result.charts
+                                    and session_artifacts_table is not None
+                                ):
+                                    from api.artifact_service import save_artifact
+
+                                    artifact_id = await save_artifact(
+                                        session_id=session_id,
+                                        turn_id=iteration + 1,
+                                        artifact_type="chart",
+                                        name=f"Chart: {step[:60]}",
+                                        chart_b64=sandbox_result.charts[0],
+                                        session_artifacts_table=session_artifacts_table,
+                                        async_session_factory=async_session_factory,
+                                    )
+                                    result_entry["artifact_id"] = artifact_id
+                                    result_entry["chart_b64"] = sandbox_result.charts[0]
+                    except Exception as csv_exc:
+                        logger.warning(
+                            "executor_node CSV python_analysis failed: %s", csv_exc
+                        )
+                        result_entry["result"] = f"CSV analysis failed: {csv_exc}"
+                        handled_csv = True  # don't fall through to SQL-artifact path
+
+                if handled_csv:
+                    pass  # already populated result_entry above
+                else:
+                    # Load the most recent sql_result artifact as input data
+                    prior_rows: list[dict] = []
+                    for prior in reversed(state.get("steps_completed", [])):
+                        if prior.get("tool") == "sql_query" and prior.get("artifact_id"):
+                            if session_artifacts_table is not None:
+                                from api.artifact_service import get_artifact
+
+                                art = await get_artifact(
+                                    prior["artifact_id"],
+                                    session_artifacts_table=session_artifacts_table,
+                                    async_session_factory=async_session_factory,
+                                )
+                                if art and art.data_json:
+                                    prior_rows = json.loads(art.data_json)
+                                    break
+
+                    # Fallback: if no SQL artifact, try doc_search results as context
+                    if not prior_rows:
+                        doc_context_parts: list[str] = []
+                        for prior in reversed(state.get("steps_completed", [])):
+                            if prior.get("tool") == "doc_search" and prior.get("result"):
+                                doc_context_parts.append(prior["result"])
+                        if doc_context_parts:
+                            # Synthesise doc results into a pseudo-data context for code gen
+                            prior_rows = [{"document_context": "\n\n".join(doc_context_parts)}]
+
+                    if not prior_rows:
+                        result_entry["result"] = "No prior data available for analysis."
                     else:
-                        result_entry["result"] = "Code generation failed or insufficient data."
+                        from api.sandbox_service import generate_analysis_code, run_python
+
+                        persona_data = expert_personas.get(persona, expert_personas.get("Generalist", {}))
+                        persona_def = persona_data.get("persona_def", "") if isinstance(persona_data, dict) else ""
+                        code = await generate_analysis_code(
+                            result_dicts=prior_rows,
+                            question=step,
+                            persona_def=persona_def,
+                            chart_type="auto",
+                        )
+                        if code:
+                            sandbox_result = await run_python(code)
+                            result_entry["result"] = (
+                                sandbox_result.stdout[:500] if sandbox_result.stdout
+                                else "Analysis complete."
+                            )
+                            if sandbox_result.error:
+                                result_entry["error"] = sandbox_result.error
+                            # Persist first chart as an artifact
+                            if sandbox_result.charts and session_artifacts_table is not None:
+                                from api.artifact_service import save_artifact
+
+                                artifact_id = await save_artifact(
+                                    session_id=session_id,
+                                    turn_id=iteration + 1,
+                                    artifact_type="chart",
+                                    name=f"Chart: {step[:60]}",
+                                    chart_b64=sandbox_result.charts[0],
+                                    session_artifacts_table=session_artifacts_table,
+                                    async_session_factory=async_session_factory,
+                                )
+                                result_entry["artifact_id"] = artifact_id
+                                result_entry["chart_b64"] = sandbox_result.charts[0]
+                        else:
+                            result_entry["result"] = "Code generation failed or insufficient data."
 
         except Exception as exc:
             logger.warning("executor_node step %d ('%s') failed: %s", iteration, tool, exc)

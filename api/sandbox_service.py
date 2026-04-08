@@ -327,14 +327,18 @@ async def generate_analysis_code(
     """Generate Python analysis code for a SQL result set using Qwen 2.5 Coder via Groq.
 
     Returns a Python code string suitable for run_python(), or None when
-    fewer than 5 rows are available (not worth analysing) or on any error.
+    the result set is empty or on any error.
+
+    Small result sets (1–4 rows) are perfectly valid for bar/pie charts
+    (e.g. "revenue by quarter" with 3 quarters) — the previous 5-row gate
+    was too conservative and killed legitimate visualisations.
 
     Parameters
     ----------
     chart_type : one of VALID_CHART_TYPES — controls which chart the LLM produces.
                  "auto" lets the LLM choose the best chart for the data.
     """
-    if len(result_dicts) < 5:
+    if len(result_dicts) < 1:
         return None
 
     # Normalise and validate chart_type
