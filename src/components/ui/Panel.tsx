@@ -3,6 +3,8 @@
 import { Group, Panel as RPPanel, Separator } from "react-resizable-panels"
 import type { ComponentProps } from "react"
 
+export type { PanelImperativeHandle } from "react-resizable-panels"
+
 /**
  * Thin wrappers around react-resizable-panels v4 API.
  *

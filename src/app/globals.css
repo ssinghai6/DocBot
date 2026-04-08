@@ -154,6 +154,45 @@ table,
   border-radius: var(--radius-sm);
 }
 
+/* ============================================================================
+   Fluid motion — global default transitions for interactive surfaces.
+   Kept short and tied to ease-standard so nothing feels sluggish.
+   ============================================================================ */
+button, a, [role="button"], [role="tab"], [role="menuitem"], [data-interactive] {
+  transition:
+    background-color var(--duration-fast) var(--ease-standard),
+    border-color var(--duration-fast) var(--ease-standard),
+    color var(--duration-fast) var(--ease-standard),
+    box-shadow var(--duration-fast) var(--ease-standard),
+    opacity var(--duration-fast) var(--ease-standard);
+}
+
+/* react-resizable-panels smooth collapse/expand */
+[data-panel-group] > [data-panel] {
+  transition: flex-grow var(--duration-base) var(--ease-standard);
+}
+[data-panel-group][data-panel-group-direction="horizontal"] > [data-panel-resize-handle-enabled] {
+  transition: background-color var(--duration-fast) var(--ease-standard);
+}
+/* Disable transition mid-drag so resize tracks the cursor */
+[data-panel-group][data-resizing="true"] > [data-panel] {
+  transition: none !important;
+}
+
+/* Fade-in for mounted content — applied via class */
+@keyframes docbot-fade-in {
+  from { opacity: 0; transform: translateY(4px); }
+  to   { opacity: 1; transform: translateY(0); }
+}
+.docbot-fade-in {
+  animation: docbot-fade-in var(--duration-slow) var(--ease-standard) both;
+}
+
+/* Soft cursor for input fields (smoother than default block caret) */
+textarea, input {
+  caret-color: var(--color-cyan-500);
+}
+
 /* ---- Reduced motion ---- */
 @media (prefers-reduced-motion: reduce) {
   *,

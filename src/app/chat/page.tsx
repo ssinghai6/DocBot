@@ -14,7 +14,7 @@ import AdminPanel from "@/components/AdminPanel"
 import CommandPalette, { useCommandPalette, buildCommands } from "@/components/CommandPalette"
 import { useChatHandlers } from "@/hooks/useChatHandlers"
 import { useChatSubmit } from "@/hooks/useChatSubmit"
-import { PanelGroup, Panel, ResizeHandle } from "@/components/ui"
+import { PanelGroup, Panel, ResizeHandle, type PanelImperativeHandle } from "@/components/ui"
 import { useUIStore } from "@/store/uiStore"
 import { useBreakpoint } from "@/lib/useBreakpoint"
 
@@ -75,6 +75,15 @@ export default function Home() {
       setInspectorOpen(false);
     }
   }, [bp, setInspectorOpen]);
+
+  // Imperative handle for the inspector panel — drives smooth collapse/expand
+  const inspectorPanelRef = useRef<PanelImperativeHandle>(null);
+  useEffect(() => {
+    const handle = inspectorPanelRef.current;
+    if (!handle) return;
+    if (inspectorOpen && handle.isCollapsed()) handle.expand();
+    if (!inspectorOpen && !handle.isCollapsed()) handle.collapse();
+  }, [inspectorOpen]);
 
   const [messages, setMessages] = useState<Message[]>([]);
   const [input, setInput] = useState("");
@@ -518,7 +527,7 @@ export default function Home() {
         id="docbot-main-panels"
         className="flex-1 min-w-0"
       >
-      <Panel id="main" defaultSize={inspectorOpen ? 70 : 100} minSize={40}>
+      <Panel id="main" defaultSize={72} minSize={40}>
       <ChatArea
         sessionId={sessionId}
         uploadedFiles={uploadedFiles}
@@ -559,14 +568,24 @@ export default function Home() {
       />
       </Panel>
 
-      {inspectorOpen && (
-        <>
-          <ResizeHandle />
-          <Panel id="inspector" defaultSize={30} minSize={20} maxSize={45} collapsible>
-            <InspectorPanel onClose={() => setInspectorOpen(false)} />
-          </Panel>
-        </>
-      )}
+      <ResizeHandle />
+      <Panel
+        id="inspector"
+        panelRef={inspectorPanelRef}
+        defaultSize={28}
+        minSize={22}
+        maxSize={48}
+        collapsible
+        collapsedSize={0}
+        onResize={(size) => {
+          const pct = typeof size === "number" ? size : size.asPercentage
+          const isCollapsed = pct < 1
+          if (isCollapsed && inspectorOpen) setInspectorOpen(false)
+          if (!isCollapsed && !inspectorOpen) setInspectorOpen(true)
+        }}
+      >
+        <InspectorPanel onClose={() => setInspectorOpen(false)} />
+      </Panel>
       </PanelGroup>
 
       {/* Auth Modal */}
