@@ -873,6 +873,18 @@ DEEP_RESEARCH_ADDON = (
 )
 
 
+# ── BUG #4 fix: detect plot/chart intent in doc-only chat mode ──────────────
+# The /api/chat endpoint is a pure RAG → LLM text pipeline with no sandbox or
+# matplotlib path. If a user has ONLY a PDF uploaded (no CSV, no DB) and asks
+# for a plot, we cannot render one. Instead of silently returning narrative
+# text, detect the intent and emit a friendly guidance message explaining the
+# limitation and how to unlock charts (upload CSV / connect a DB).
+_PLOT_INTENT_RE = re.compile(
+    r"\b(plot|chart|graph|histogram|visuali[sz]e?|draw|heatmap|scatter|bar\s*chart|pie\s*chart)\b",
+    re.IGNORECASE,
+)
+
+
 @app.get("/api/health")
 async def health_check():
     db_status = "ok"
@@ -1150,6 +1162,31 @@ async def chat(raw_request: Request, request: ChatRequest, _user=_rbac_viewer):
             logger.info("chat: lazy-loaded vector store for session %s from disk", request.session_id)
         else:
             raise HTTPException(status_code=404, detail="Session not found. Please upload documents again.")
+
+    # ── BUG #4 fix: plot/chart intent detection for doc-only mode ───────────
+    # /api/chat is a pure RAG → LLM text pipeline; there is no sandbox or
+    # matplotlib path here. If the user asks for a chart while in pure doc
+    # mode (no CSV / no DB — hybrid mode is handled by /api/hybrid-chat),
+    # short-circuit with a friendly guidance message so we never silently
+    # drop the visualization request.
+    if _PLOT_INTENT_RE.search(request.message or ""):
+        guidance = (
+            "I can extract and summarize text from your PDF, but I need a "
+            "CSV file or database connection to create charts and visualizations. "
+            "**Options:**\n\n"
+            "1. Upload a CSV file with the numerical data you want to plot\n"
+            "2. Connect a database (PostgreSQL, MySQL, SQLite, or Azure SQL)\n"
+            "3. For document questions, try: *\"summarize the financial highlights\"*, "
+            "*\"list key risk factors\"*, or *\"what is the total revenue mentioned\"*\n\n"
+            "Once you've added a data source, I can generate charts automatically."
+        )
+
+        async def _emit_guidance():
+            yield f"data: {json.dumps({'type': 'token', 'content': guidance})}\n\n"
+            yield f"data: {json.dumps({'type': 'citations', 'citations': [], 'routed_persona': request.persona})}\n\n"
+            yield f"data: {json.dumps({'type': 'done'})}\n\n"
+
+        return StreamingResponse(_emit_guidance(), media_type="text/event-stream")
 
     groq_api_key = os.getenv('groq_api_key')
     if not groq_api_key:

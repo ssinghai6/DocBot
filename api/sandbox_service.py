@@ -41,10 +41,60 @@ _SANDBOX_EXTRA_PACKAGES = [
     "lightgbm",
 ]
 
-def _install_sandbox_packages(sandbox) -> None:
-    """Install additional analysis packages in the E2B sandbox before code execution."""
+# Map top-level import module name -> pip package name.
+# Core packages (pandas, numpy, matplotlib) are pre-installed in E2B's
+# code-interpreter image, so they're intentionally omitted here.
+_IMPORT_TO_PACKAGE: dict[str, str] = {
+    "statsmodels": "statsmodels",
+    "sklearn": "scikit-learn",
+    "scipy": "scipy",
+    "seaborn": "seaborn",
+    "plotly": "plotly",
+    "xgboost": "xgboost",
+    "lightgbm": "lightgbm",
+}
+
+# Match both "import foo" and "from foo import bar", including dotted forms
+# like "import sklearn.linear_model" (we capture just the top-level name).
+_IMPORT_RE = _re_module.compile(
+    r"^\s*(?:from|import)\s+([a-zA-Z_][\w]*)",
+    _re_module.MULTILINE,
+)
+
+
+def _detect_needed_packages(code: str) -> list[str]:
+    """Scan generated code for imports and return the list of non-default
+    packages that must be pip-installed in the sandbox.
+
+    Returns a stable, de-duplicated list preserving first-seen order. Core
+    packages already baked into the E2B image (pandas, numpy, matplotlib)
+    are never returned.
+    """
+    if not code:
+        return []
+    imports = _IMPORT_RE.findall(code)
+    needed: list[str] = []
+    seen: set[str] = set()
+    for imp in imports:
+        pkg = _IMPORT_TO_PACKAGE.get(imp)
+        if pkg and pkg not in seen:
+            seen.add(pkg)
+            needed.append(pkg)
+    return needed
+
+
+def _install_sandbox_packages(sandbox, packages: Optional[list[str]] = None) -> None:
+    """Install only the specified extra packages in the E2B sandbox.
+
+    No-op when ``packages`` is empty or None — this is the common case for
+    simple pandas/matplotlib analyses and lets the sandbox boot in ~2s
+    instead of the 20-40s it took to eagerly install the full ML stack.
+    """
+    if not packages:
+        return
+    quoted = ", ".join(repr(p) for p in packages)
     install_result = sandbox.run_code(
-        f"import subprocess; subprocess.check_call(['pip', 'install', '-q', {', '.join(repr(p) for p in _SANDBOX_EXTRA_PACKAGES)}])"
+        f"import subprocess; subprocess.check_call(['pip', 'install', '-q', {quoted}])"
     )
     if install_result.error is not None:
         name = getattr(install_result.error, "name", "InstallError")
@@ -215,9 +265,14 @@ def _run_in_sandbox(code: str) -> SandboxResult:
     sandbox: Optional[Sandbox] = None
     start_ms = int(time.monotonic() * 1000)
 
+    # Determine which heavy packages (if any) the generated code actually
+    # imports. Doing this BEFORE sandbox creation lets us skip the pip
+    # install entirely for the common pandas/matplotlib-only case.
+    needed_packages = _detect_needed_packages(code)
+
     try:
         sandbox = Sandbox.create()
-        _install_sandbox_packages(sandbox)
+        _install_sandbox_packages(sandbox, needed_packages)
         # Prepend preamble + append suffix so all figures are captured
         full_code = _MATPLOTLIB_PREAMBLE + code + _MATPLOTLIB_SUFFIX
         execution = sandbox.run_code(full_code)
@@ -755,9 +810,13 @@ def _run_csv_in_sandbox_sync(code: str, csv_path: str, csv_bytes: bytes) -> Sand
     sandbox: Optional[Sandbox] = None
     start_ms = int(time.monotonic() * 1000)
 
+    # Conditionally install only the packages the generated code imports.
+    # Empty list → no install at all → sandbox boots ~20x faster.
+    needed_packages = _detect_needed_packages(code)
+
     try:
         sandbox = Sandbox.create()
-        _install_sandbox_packages(sandbox)
+        _install_sandbox_packages(sandbox, needed_packages)
         # Upload CSV bytes to the sandbox filesystem
         sandbox.files.write(csv_path, csv_bytes)
 
