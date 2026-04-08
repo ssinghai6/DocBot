@@ -230,17 +230,17 @@ export default function EdgarPanel({ onFilingIngested, showToast }: EdgarPanelPr
 
   return (
     <div className="mb-5">
-      <h3 className="text-sm font-semibold mb-3 text-white flex items-center gap-2">
-        <FileText className="w-4 h-4 text-[#10b981]" />
+      <h3 className="text-sm font-semibold mb-3 text-[var(--color-text-primary)] flex items-center gap-2">
+        <FileText className="w-4 h-4 text-[var(--color-success-500)]" />
         SEC Filings
       </h3>
 
       {/* Expand/collapse toggle */}
       <button
         onClick={() => setExpanded(v => !v)}
-        className="w-full flex items-center gap-2 px-3 py-2.5 rounded-xl border border-[#ffffff10] bg-[#1a1a24]/50 hover:border-[#10b981]/40 hover:bg-[#10b981]/5 transition-all text-xs text-gray-400"
+        className="w-full flex items-center gap-2 px-3 py-2.5 rounded-xl border border-[var(--color-border-default)] bg-[var(--color-bg-elevated)]/50 hover:border-[var(--color-success-500)]/40 hover:bg-[var(--color-success-500)]/5 transition-all text-xs text-[var(--color-text-secondary)]"
       >
-        <Search className="w-3.5 h-3.5 text-[#10b981] shrink-0" />
+        <Search className="w-3.5 h-3.5 text-[var(--color-success-500)] shrink-0" />
         <span>Search SEC EDGAR</span>
         <ChevronDown className={`w-3 h-3 ml-auto transition-transform ${expanded ? "rotate-180" : ""}`} />
       </button>
@@ -255,12 +255,12 @@ export default function EdgarPanel({ onFilingIngested, showToast }: EdgarPanelPr
               onChange={e => setSearchQuery(e.target.value)}
               onKeyDown={e => { if (e.key === "Enter") handleSearch() }}
               placeholder="Ticker or company name"
-              className="flex-1 px-3 py-2 rounded-lg bg-[#1a1a24] border border-[#ffffff10] text-gray-300 text-xs placeholder-gray-500 focus:outline-none focus:border-[#10b981]/40"
+              className="flex-1 px-3 py-2 rounded-lg bg-[var(--color-bg-elevated)] border border-[var(--color-border-default)] text-gray-300 text-xs placeholder-[var(--color-text-quaternary)] focus:outline-none focus:border-[var(--color-success-500)]/40"
             />
             <button
               onClick={handleSearch}
               disabled={searching || !searchQuery.trim()}
-              className="px-3 py-2 rounded-lg bg-[#10b981]/20 hover:bg-[#10b981]/30 border border-[#10b981]/30 text-[#10b981] text-xs font-medium transition-all disabled:opacity-50 disabled:cursor-not-allowed"
+              className="px-3 py-2 rounded-lg bg-[var(--color-success-500)]/20 hover:bg-[var(--color-success-500)]/30 border border-[var(--color-success-500)]/30 text-[var(--color-success-500)] text-xs font-medium transition-all disabled:opacity-50 disabled:cursor-not-allowed"
             >
               {searching ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Search className="w-3.5 h-3.5" />}
             </button>
@@ -280,13 +280,13 @@ export default function EdgarPanel({ onFilingIngested, showToast }: EdgarPanelPr
                 <button
                   key={company.cik}
                   onClick={() => handleSelectCompany(company)}
-                  className="w-full text-left px-3 py-2 rounded-lg hover:bg-[#10b981]/10 border border-transparent hover:border-[#10b981]/20 transition-all"
+                  className="w-full text-left px-3 py-2 rounded-lg hover:bg-[var(--color-success-500)]/10 border border-transparent hover:border-[var(--color-success-500)]/20 transition-all"
                 >
                   <div className="flex items-center gap-2">
-                    <span className="text-xs font-medium text-[#10b981]">{company.ticker}</span>
-                    <span className="text-xs text-gray-400 truncate flex-1">{company.name}</span>
+                    <span className="text-xs font-medium text-[var(--color-success-500)]">{company.ticker}</span>
+                    <span className="text-xs text-[var(--color-text-secondary)] truncate flex-1">{company.name}</span>
                   </div>
-                  <p className="text-[10px] text-gray-600 mt-0.5">CIK: {company.cik}</p>
+                  <p className="text-[10px] text-[var(--color-text-quaternary)] mt-0.5">CIK: {company.cik}</p>
                 </button>
               ))}
             </div>
@@ -296,11 +296,11 @@ export default function EdgarPanel({ onFilingIngested, showToast }: EdgarPanelPr
           {selectedCompany && (
             <div className="space-y-2">
               {/* Selected company header */}
-              <div className="flex items-center gap-2 px-3 py-2 rounded-lg bg-[#10b981]/10 border border-[#10b981]/20">
-                <FileText className="w-3.5 h-3.5 text-[#10b981] shrink-0" />
+              <div className="flex items-center gap-2 px-3 py-2 rounded-lg bg-[var(--color-success-500)]/10 border border-[var(--color-success-500)]/20">
+                <FileText className="w-3.5 h-3.5 text-[var(--color-success-500)] shrink-0" />
                 <div className="flex-1 min-w-0">
                   <span className="text-xs font-medium text-gray-300">{selectedCompany.ticker}</span>
-                  <p className="text-[10px] text-gray-500 truncate">{selectedCompany.name}</p>
+                  <p className="text-[10px] text-[var(--color-text-tertiary)] truncate">{selectedCompany.name}</p>
                 </div>
                 <button
                   onClick={() => {
@@ -308,7 +308,7 @@ export default function EdgarPanel({ onFilingIngested, showToast }: EdgarPanelPr
                     setFilings([])
                     setIngestResults({})
                   }}
-                  className="text-gray-500 hover:text-gray-300 text-[10px]"
+                  className="text-[var(--color-text-tertiary)] hover:text-gray-300 text-[10px]"
                 >
                   Change
                 </button>
@@ -319,7 +319,7 @@ export default function EdgarPanel({ onFilingIngested, showToast }: EdgarPanelPr
                 <select
                   value={filingType}
                   onChange={e => setFilingType(e.target.value)}
-                  className="flex-1 px-2 py-1.5 rounded-lg bg-[#1a1a24] border border-[#ffffff10] text-gray-300 text-xs focus:outline-none focus:border-[#10b981]/40"
+                  className="flex-1 px-2 py-1.5 rounded-lg bg-[var(--color-bg-elevated)] border border-[var(--color-border-default)] text-gray-300 text-xs focus:outline-none focus:border-[var(--color-success-500)]/40"
                 >
                   {FILING_TYPES.map(t => (
                     <option key={t} value={t}>{t}</option>
@@ -328,7 +328,7 @@ export default function EdgarPanel({ onFilingIngested, showToast }: EdgarPanelPr
                 <select
                   value={filingCount}
                   onChange={e => setFilingCount(Number(e.target.value))}
-                  className="w-16 px-2 py-1.5 rounded-lg bg-[#1a1a24] border border-[#ffffff10] text-gray-300 text-xs focus:outline-none focus:border-[#10b981]/40"
+                  className="w-16 px-2 py-1.5 rounded-lg bg-[var(--color-bg-elevated)] border border-[var(--color-border-default)] text-gray-300 text-xs focus:outline-none focus:border-[var(--color-success-500)]/40"
                 >
                   {[1, 2, 3, 5, 10].map(n => (
                     <option key={n} value={n}>{n}</option>
@@ -337,7 +337,7 @@ export default function EdgarPanel({ onFilingIngested, showToast }: EdgarPanelPr
                 <button
                   onClick={handleRefreshFilings}
                   disabled={loadingFilings}
-                  className="px-2 py-1.5 rounded-lg bg-[#10b981]/20 hover:bg-[#10b981]/30 border border-[#10b981]/30 text-[#10b981] text-xs transition-all disabled:opacity-50"
+                  className="px-2 py-1.5 rounded-lg bg-[var(--color-success-500)]/20 hover:bg-[var(--color-success-500)]/30 border border-[var(--color-success-500)]/30 text-[var(--color-success-500)] text-xs transition-all disabled:opacity-50"
                   title="Refresh filings"
                 >
                   {loadingFilings ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Search className="w-3.5 h-3.5" />}
@@ -348,7 +348,7 @@ export default function EdgarPanel({ onFilingIngested, showToast }: EdgarPanelPr
               <button
                 onClick={handleBatchIngest}
                 disabled={batchIngesting || !filings.length}
-                className="w-full flex items-center justify-center gap-2 px-3 py-2 rounded-lg bg-[#10b981]/20 hover:bg-[#10b981]/30 border border-[#10b981]/30 text-[#10b981] text-xs font-medium transition-all disabled:opacity-50 disabled:cursor-not-allowed"
+                className="w-full flex items-center justify-center gap-2 px-3 py-2 rounded-lg bg-[var(--color-success-500)]/20 hover:bg-[var(--color-success-500)]/30 border border-[var(--color-success-500)]/30 text-[var(--color-success-500)] text-xs font-medium transition-all disabled:opacity-50 disabled:cursor-not-allowed"
               >
                 {batchIngesting ? (
                   <><Loader2 className="w-3.5 h-3.5 animate-spin" /> Ingesting filings...</>
@@ -359,7 +359,7 @@ export default function EdgarPanel({ onFilingIngested, showToast }: EdgarPanelPr
 
               {/* Filing list */}
               {loadingFilings && (
-                <div className="flex items-center justify-center py-4 text-xs text-gray-500">
+                <div className="flex items-center justify-center py-4 text-xs text-[var(--color-text-tertiary)]">
                   <Loader2 className="w-4 h-4 animate-spin mr-2" /> Loading filings...
                 </div>
               )}
@@ -377,32 +377,32 @@ export default function EdgarPanel({ onFilingIngested, showToast }: EdgarPanelPr
                         key={filing.accession_number}
                         className={`px-3 py-2 rounded-lg border transition-all ${
                           isIngested
-                            ? "bg-[#10b981]/10 border-[#10b981]/20"
+                            ? "bg-[var(--color-success-500)]/10 border-[var(--color-success-500)]/20"
                             : hasError
                             ? "bg-red-500/10 border-red-500/20"
-                            : "bg-[#1a1a24]/50 border-[#ffffff08] hover:border-[#10b981]/20"
+                            : "bg-[var(--color-bg-elevated)]/50 border-[var(--color-border-subtle)] hover:border-[var(--color-success-500)]/20"
                         }`}
                       >
                         <div className="flex items-center gap-2">
                           <div className="flex-1 min-w-0">
                             <div className="flex items-center gap-1.5">
                               <span className="text-xs font-medium text-gray-300">{filing.filing_type}</span>
-                              <span className="text-[10px] text-gray-500">{filing.filing_date}</span>
+                              <span className="text-[10px] text-[var(--color-text-tertiary)]">{filing.filing_date}</span>
                             </div>
                             {filing.description && (
-                              <p className="text-[10px] text-gray-600 truncate mt-0.5">{filing.description}</p>
+                              <p className="text-[10px] text-[var(--color-text-quaternary)] truncate mt-0.5">{filing.description}</p>
                             )}
                           </div>
 
                           {isIngested ? (
-                            <CheckCircle2 className="w-3.5 h-3.5 text-[#10b981] shrink-0" />
+                            <CheckCircle2 className="w-3.5 h-3.5 text-[var(--color-success-500)] shrink-0" />
                           ) : hasError ? (
                             <AlertCircle className="w-3.5 h-3.5 text-red-400 shrink-0" />
                           ) : (
                             <button
                               onClick={() => handleIngestSingle(filing)}
                               disabled={isIngesting || batchIngesting}
-                              className="text-[#10b981] hover:text-[#10b981]/80 disabled:opacity-50 shrink-0"
+                              className="text-[var(--color-success-500)] hover:text-[var(--color-success-500)]/80 disabled:opacity-50 shrink-0"
                               title="Ingest this filing"
                             >
                               {isIngesting ? (
@@ -415,10 +415,10 @@ export default function EdgarPanel({ onFilingIngested, showToast }: EdgarPanelPr
                         </div>
 
                         {isIngested && result.cached && (
-                          <p className="text-[10px] text-[#10b981] mt-1">Loaded from cache</p>
+                          <p className="text-[10px] text-[var(--color-success-500)] mt-1">Loaded from cache</p>
                         )}
                         {isIngested && !result.cached && (
-                          <p className="text-[10px] text-[#10b981] mt-1">{result.chunks_created} chunks created</p>
+                          <p className="text-[10px] text-[var(--color-success-500)] mt-1">{result.chunks_created} chunks created</p>
                         )}
                         {hasError && (
                           <p className="text-[10px] text-red-400 mt-1">{result.error}</p>

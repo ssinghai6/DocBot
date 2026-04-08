@@ -33,6 +33,7 @@ DocBot is an AI-powered document + database analyst, fully deployed on Railway (
 | `api/rbac_service.py` | RBAC — viewer/analyst/admin roles, `require_role()` FastAPI dependency |
 | `api/audit_service.py` | Append-only audit log, PostgreSQL immutability trigger, CSV export |
 | `api/artifact_service.py` | Session artifact store — persists charts, code, SQL results |
+| `api/demo_service.py` | Sandbox demo mode — hardcoded TechCorp 10-K chunks + SQLite financial DB, one-click hybrid analysis |
 | `api/document_extractor.py` | LangExtract financial extraction (Gemini 2.5 Flash, full-doc coverage) |
 | `api/file_upload_service.py` | CSV/SQLite file uploads — CSV goes to E2B pandas, SQLite to SQL pipeline |
 | `api/utils/csv_preprocessor.py` | Multi-section CSV detection, section splitting, header detection, E2B preamble generation, `DataProfile` (dtypes, sample rows, datetime detection, frequency inference) |
@@ -53,7 +54,7 @@ DocBot is an AI-powered document + database analyst, fully deployed on Railway (
 | `src/app/page.tsx` | Investor landing page at `/` — hero, features, CTA |
 | `src/app/chat/page.tsx` | Chat app at `/chat` (~512 lines). State declarations + hook calls + layout |
 | `src/components/EdgarPanel.tsx` | SEC EDGAR sidebar panel — search companies, browse filings, single/batch ingest |
-| `src/components/` | Extracted frontend components: Sidebar, ChatArea, AuthModal, AdminPanel, ChatMessage, ConnectionPanel, FileUploadZone, PersonaSelector, EdgarPanel, personas |
+| `src/components/` | Extracted frontend components: Sidebar, ChatArea, AuthModal, AdminPanel, ChatMessage, ConnectionPanel, FileUploadZone, PersonaSelector, EdgarPanel, MarketplacePanel, CommandPalette, UnifiedUploadZone, personas |
 | `src/hooks/` | Custom hooks: useChatHandlers (DB/auth/file handlers), useChatSubmit (message submission) |
 | `tests/external/test_financebench_accuracy.py` | FinanceBench 20-question accuracy test suite (external, requires live API keys) |
 | `requirements.txt` | Python dependencies |
@@ -215,6 +216,16 @@ All work is tracked in `project-tasks/docbot-v2-project-tracking.md`.
   - Added "Built by Sanshrit Singhai" with portfolio link in footer
   - DemoVideo component: supports YouTube/Loom/Vimeo embed, direct MP4, or animated placeholder mockup
   - Embedded Veo-generated demo video (`public/docbot-demo.mp4`, 8s, 1280x720) — auto-plays muted, loops
+- **EPIC-12 UI Redesign & Finance Vertical (2026-03-31) — Done**
+  - Phase 1: Collapsed all sidebar sections by default, compact chat header, auto persona default
+  - Phase 2: Tabbed sidebar (Sources/Tools/Settings), Cmd+K command palette, unified file upload zone, persona dropdown in chat input
+  - Phase 3: Guided onboarding empty state ("What do you want to analyze?"), 3-color accent palette (#667eea/#10b981/#f97316), finance-focused copy and suggested questions
+  - 4 visible personas (Generalist, Finance Expert, Data Analyst, Strategy Analyst), 8 still on backend
+- **EPIC-13 Sandbox Demo Mode (2026-03-31) — Done**
+  - `api/demo_service.py`: hardcoded TechCorp 10-K chunks (7 docs) + SQLite financial DB (4 tables, 3 years)
+  - `POST /api/demo/init` creates vector store + session + SQLite + db_connection + schema cache in one call
+  - Deliberate discrepancies (Q4 net income $325M vs $330M, Professional Services $885M vs $890M) for demo
+  - One-click "Try Demo" button in guided onboarding empty state
 - **686+ tests passing, 0 failures**
 
 > **PageIndex evaluated 2026-03-25 — not integrating.** Hard blockers: OpenAI-only (Groq incompatible), not on PyPI (Railway brittleness), no streaming (SSE conflict). Revisit if PyPI package + multi-backend support ships.

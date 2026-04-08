@@ -127,11 +127,11 @@ export default function MarketplacePanel({
 
   return (
     <div className="mb-5">
-      <h3 className="text-sm font-semibold mb-3 text-white flex items-center gap-2">
-        <ShoppingCart className="w-4 h-4 text-[#667eea]" />
+      <h3 className="text-sm font-semibold mb-3 text-[var(--color-text-primary)] flex items-center gap-2">
+        <ShoppingCart className="w-4 h-4 text-[var(--color-cyan-500)]" />
         Marketplace
         {connectors.length > 0 && (
-          <span className="ml-auto text-[10px] text-[#667eea] font-medium bg-[#667eea]/15 px-1.5 py-0.5 rounded-full">
+          <span className="ml-auto text-[10px] text-[var(--color-cyan-500)] font-medium bg-[var(--color-cyan-500)]/15 px-1.5 py-0.5 rounded-full">
             {connectors.length}
           </span>
         )}
@@ -141,28 +141,28 @@ export default function MarketplacePanel({
       {connectors.length > 0 && (
         <div className="space-y-2 mb-2">
           {connectors.map(conn => (
-            <div key={conn.connector_id} className="rounded-xl border border-[#ffffff10] overflow-hidden">
+            <div key={conn.connector_id} className="rounded-xl border border-[var(--color-border-default)] overflow-hidden">
               {/* Connector header */}
-              <div className="flex items-center gap-2 px-3 py-2.5 bg-[#667eea]/10 text-xs">
-                <ShoppingCart className="w-3.5 h-3.5 text-[#667eea] shrink-0" />
+              <div className="flex items-center gap-2 px-3 py-2.5 bg-[var(--color-cyan-500)]/10 text-xs">
+                <ShoppingCart className="w-3.5 h-3.5 text-[var(--color-cyan-500)] shrink-0" />
                 <div className="flex-1 min-w-0">
                   <span className="text-gray-300 font-medium">
                     <ConnectorTypeLabel type={conn.connector_type} />
                   </span>
-                  <p className="text-[10px] text-gray-500 truncate mt-0.5">
+                  <p className="text-[10px] text-[var(--color-text-tertiary)] truncate mt-0.5">
                     {conn.connector_id.slice(0, 12)}...
                   </p>
                 </div>
                 <button
                   onClick={() => setExpandedSyncId(expandedSyncId === conn.connector_id ? null : conn.connector_id)}
-                  className="text-gray-500 hover:text-[#667eea] transition-colors shrink-0"
+                  className="text-[var(--color-text-tertiary)] hover:text-[var(--color-cyan-500)] transition-colors shrink-0"
                   title="Sync data"
                 >
                   <RefreshCw className="w-3.5 h-3.5" />
                 </button>
                 <button
                   onClick={() => onDisconnect(conn.connector_id)}
-                  className="text-gray-500 hover:text-red-400 transition-colors shrink-0"
+                  className="text-[var(--color-text-tertiary)] hover:text-red-400 transition-colors shrink-0"
                   title="Disconnect"
                 >
                   <XCircle className="w-3.5 h-3.5" />
@@ -171,24 +171,24 @@ export default function MarketplacePanel({
 
               {/* Sync panel (expandable) */}
               {expandedSyncId === conn.connector_id && (
-                <div className="border-t border-[#ffffff10] px-3 py-2.5 space-y-2">
+                <div className="border-t border-[var(--color-border-default)] px-3 py-2.5 space-y-2">
                   <div className="flex gap-2">
                     <div className="flex-1">
-                      <label className="text-[10px] text-gray-500 block mb-0.5">Start date</label>
+                      <label className="text-[10px] text-[var(--color-text-tertiary)] block mb-0.5">Start date</label>
                       <input
                         type="date"
                         value={syncDates[conn.connector_id]?.start ?? ""}
                         onChange={e => updateSyncDate(conn.connector_id, "start", e.target.value)}
-                        className="w-full px-2 py-1.5 rounded-lg bg-[#1a1a24] border border-[#ffffff10] text-gray-300 text-xs focus:outline-none focus:border-[#667eea]/40"
+                        className="w-full px-2 py-1.5 rounded-lg bg-[var(--color-bg-elevated)] border border-[var(--color-border-default)] text-gray-300 text-xs focus:outline-none focus:border-[var(--color-cyan-500)]/40"
                       />
                     </div>
                     <div className="flex-1">
-                      <label className="text-[10px] text-gray-500 block mb-0.5">End date</label>
+                      <label className="text-[10px] text-[var(--color-text-tertiary)] block mb-0.5">End date</label>
                       <input
                         type="date"
                         value={syncDates[conn.connector_id]?.end ?? ""}
                         onChange={e => updateSyncDate(conn.connector_id, "end", e.target.value)}
-                        className="w-full px-2 py-1.5 rounded-lg bg-[#1a1a24] border border-[#ffffff10] text-gray-300 text-xs focus:outline-none focus:border-[#667eea]/40"
+                        className="w-full px-2 py-1.5 rounded-lg bg-[var(--color-bg-elevated)] border border-[var(--color-border-default)] text-gray-300 text-xs focus:outline-none focus:border-[var(--color-cyan-500)]/40"
                       />
                     </div>
                   </div>
@@ -200,7 +200,7 @@ export default function MarketplacePanel({
                       !syncDates[conn.connector_id]?.start ||
                       !syncDates[conn.connector_id]?.end
                     }
-                    className="w-full flex items-center justify-center gap-2 px-3 py-1.5 rounded-lg bg-[#667eea]/20 hover:bg-[#667eea]/30 border border-[#667eea]/30 text-[#667eea] text-xs font-medium transition-all disabled:opacity-50 disabled:cursor-not-allowed"
+                    className="w-full flex items-center justify-center gap-2 px-3 py-1.5 rounded-lg bg-[var(--color-cyan-500)]/20 hover:bg-[var(--color-cyan-500)]/30 border border-[var(--color-cyan-500)]/30 text-[var(--color-cyan-500)] text-xs font-medium transition-all disabled:opacity-50 disabled:cursor-not-allowed"
                   >
                     {syncingId === conn.connector_id ? (
                       <><Loader2 className="w-3.5 h-3.5 animate-spin" /> Syncing...</>
@@ -211,7 +211,7 @@ export default function MarketplacePanel({
 
                   {/* Sync result */}
                   {syncResult && syncResult.id === conn.connector_id && (
-                    <div className="px-2 py-1.5 rounded-lg bg-[#10b981]/10 border border-[#10b981]/20 text-[10px] text-[#10b981]">
+                    <div className="px-2 py-1.5 rounded-lg bg-[var(--color-success-500)]/10 border border-[var(--color-success-500)]/20 text-[10px] text-[var(--color-success-500)]">
                       {syncResult.result.orders_persisted != null && (
                         <span>Orders: {syncResult.result.orders_persisted}</span>
                       )}
@@ -238,9 +238,9 @@ export default function MarketplacePanel({
       {/* Connect Marketplace button / form */}
       <button
         onClick={() => { setShowForm(v => !v); setRegisterError(null); setRegisterState("idle"); }}
-        className="w-full flex items-center gap-2 px-3 py-2.5 rounded-xl border border-[#ffffff10] bg-[#1a1a24]/50 hover:border-[#667eea]/40 hover:bg-[#667eea]/5 transition-all text-xs text-gray-400"
+        className="w-full flex items-center gap-2 px-3 py-2.5 rounded-xl border border-[var(--color-border-default)] bg-[var(--color-bg-elevated)]/50 hover:border-[var(--color-cyan-500)]/40 hover:bg-[var(--color-cyan-500)]/5 transition-all text-xs text-[var(--color-text-secondary)]"
       >
-        <Plus className="w-3.5 h-3.5 text-[#667eea] shrink-0" />
+        <Plus className="w-3.5 h-3.5 text-[var(--color-cyan-500)] shrink-0" />
         <span>Connect Marketplace</span>
         <ChevronDown className={`w-3 h-3 ml-auto transition-transform ${showForm ? "rotate-180" : ""}`} />
       </button>
@@ -256,7 +256,7 @@ export default function MarketplacePanel({
               setVisibleFields(new Set())
               setRegisterError(null)
             }}
-            className="w-full px-3 py-2 rounded-lg bg-[#1a1a24] border border-[#ffffff10] text-gray-300 text-xs focus:outline-none focus:border-[#667eea]/40"
+            className="w-full px-3 py-2 rounded-lg bg-[var(--color-bg-elevated)] border border-[var(--color-border-default)] text-gray-300 text-xs focus:outline-none focus:border-[var(--color-cyan-500)]/40"
           >
             {CONNECTOR_TYPES.map(t => (
               <option key={t} value={t}>
@@ -268,19 +268,19 @@ export default function MarketplacePanel({
           {/* Dynamic credential fields */}
           {fields.map(field => (
             <div key={field.key} className="relative">
-              <label className="text-[10px] text-gray-500 block mb-0.5 px-0.5">{field.label}</label>
+              <label className="text-[10px] text-[var(--color-text-tertiary)] block mb-0.5 px-0.5">{field.label}</label>
               <input
                 type={field.type === "password" && !visibleFields.has(field.key) ? "password" : "text"}
                 placeholder={field.placeholder}
                 value={credentials[field.key] ?? ""}
                 onChange={e => setCredentials(prev => ({ ...prev, [field.key]: e.target.value }))}
-                className="w-full px-3 py-2 pr-8 rounded-lg bg-[#1a1a24] border border-[#ffffff10] text-gray-300 text-xs placeholder-gray-500 focus:outline-none focus:border-[#667eea]/40"
+                className="w-full px-3 py-2 pr-8 rounded-lg bg-[var(--color-bg-elevated)] border border-[var(--color-border-default)] text-gray-300 text-xs placeholder-[var(--color-text-quaternary)] focus:outline-none focus:border-[var(--color-cyan-500)]/40"
               />
               {field.type === "password" && (
                 <button
                   type="button"
                   onClick={() => toggleFieldVisibility(field.key)}
-                  className="absolute right-2 bottom-[7px] text-gray-500 hover:text-gray-300"
+                  className="absolute right-2 bottom-[7px] text-[var(--color-text-tertiary)] hover:text-gray-300"
                 >
                   {visibleFields.has(field.key)
                     ? <EyeOff className="w-3.5 h-3.5" />
@@ -301,7 +301,7 @@ export default function MarketplacePanel({
           <button
             onClick={handleRegister}
             disabled={registerState === "submitting" || !allFieldsFilled}
-            className="w-full flex items-center justify-center gap-2 px-3 py-2 rounded-lg bg-[#667eea]/20 hover:bg-[#667eea]/30 border border-[#667eea]/30 text-[#667eea] text-xs font-medium transition-all disabled:opacity-50 disabled:cursor-not-allowed"
+            className="w-full flex items-center justify-center gap-2 px-3 py-2 rounded-lg bg-[var(--color-cyan-500)]/20 hover:bg-[var(--color-cyan-500)]/30 border border-[var(--color-cyan-500)]/30 text-[var(--color-cyan-500)] text-xs font-medium transition-all disabled:opacity-50 disabled:cursor-not-allowed"
           >
             {registerState === "submitting" ? (
               <><Loader2 className="w-3.5 h-3.5 animate-spin" /> Connecting...</>

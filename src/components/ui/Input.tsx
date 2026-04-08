@@ -12,6 +12,7 @@ interface InputProps {
   disabled?: boolean
   className?: string
   id?: string
+  autoFocus?: boolean
 }
 
 export default function Input({
@@ -24,15 +25,16 @@ export default function Input({
   disabled = false,
   className = "",
   id,
+  autoFocus,
 }: InputProps) {
   const inputId = id ?? (label ? label.toLowerCase().replace(/\s+/g, "-") : undefined)
 
   return (
-    <div className={["flex flex-col gap-1", className].filter(Boolean).join(" ")}>
+    <div className={["flex flex-col gap-1.5", className].filter(Boolean).join(" ")}>
       {label && (
         <label
           htmlFor={inputId}
-          className="text-sm font-medium text-gray-300"
+          className="text-[11px] font-medium text-[var(--color-text-tertiary)] uppercase tracking-wider"
         >
           {label}
         </label>
@@ -44,22 +46,23 @@ export default function Input({
         onChange={onChange}
         placeholder={placeholder}
         disabled={disabled}
+        autoFocus={autoFocus}
         aria-invalid={!!error}
         aria-describedby={error ? `${inputId}-error` : undefined}
         className={[
-          "w-full px-3 py-2 rounded-lg text-white placeholder-gray-500 text-sm",
-          "bg-gray-800 border transition-all duration-150",
+          "w-full px-3 h-9 rounded-[5px] text-[13px]",
+          "bg-[var(--color-bg-inset)] text-[var(--color-text-primary)] placeholder:text-[var(--color-text-quaternary)]",
+          "border transition-colors duration-[var(--duration-fast)] outline-none",
           error
-            ? "border-red-500 focus:border-red-400 focus:ring-2 focus:ring-red-500/20"
-            : "border-gray-700 focus:border-blue-500 focus:ring-2 focus:ring-blue-500/20",
-          disabled ? "opacity-50 cursor-not-allowed" : "",
-          "outline-none",
+            ? "border-[var(--color-danger-500)] focus:border-[var(--color-danger-500)]"
+            : "border-[var(--color-border-default)] focus:border-[var(--color-cyan-500)]",
+          disabled ? "opacity-40 cursor-not-allowed" : "",
         ]
           .filter(Boolean)
           .join(" ")}
       />
       {error && (
-        <p id={`${inputId}-error`} className="text-xs text-red-400 mt-0.5" role="alert">
+        <p id={`${inputId}-error`} className="text-[11px] text-[var(--color-danger-500)]" role="alert">
           {error}
         </p>
       )}

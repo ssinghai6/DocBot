@@ -8,11 +8,15 @@ import {
 
 import Sidebar from "@/components/Sidebar"
 import ChatArea from "@/components/ChatArea"
+import InspectorPanel from "@/components/InspectorPanel"
 import AuthModal from "@/components/AuthModal"
 import AdminPanel from "@/components/AdminPanel"
 import CommandPalette, { useCommandPalette, buildCommands } from "@/components/CommandPalette"
 import { useChatHandlers } from "@/hooks/useChatHandlers"
 import { useChatSubmit } from "@/hooks/useChatSubmit"
+import { PanelGroup, Panel, ResizeHandle } from "@/components/ui"
+import { useUIStore } from "@/store/uiStore"
+import { useBreakpoint } from "@/lib/useBreakpoint"
 
 import {
   AuthMeSchema,
@@ -38,17 +42,18 @@ function ToastContainer({ toasts, onDismiss }: { toasts: Toast[]; onDismiss: (id
       {toasts.map((toast) => (
         <div
           key={toast.id}
-          className={`flex items-start gap-3 p-4 rounded-xl border backdrop-blur-xl shadow-lg animate-in slide-in-from-right duration-300 ${toast.type === "success" ? "bg-[#10b981]/10 border-[#10b981]/30 text-[#10b981]" :
-            toast.type === "error" ? "bg-[#ef4444]/10 border-[#ef4444]/30 text-[#ef4444]" :
-              toast.type === "warning" ? "bg-[#f59e0b]/10 border-[#f59e0b]/30 text-[#f59e0b]" :
-                "bg-[#667eea]/10 border-[#667eea]/30 text-[#667eea]"
-            }`}
+          className={`flex items-start gap-2.5 p-3 rounded-[5px] border bg-[var(--color-bg-elevated)] shadow-[var(--elev-3)] ${
+            toast.type === "success" ? "border-[var(--color-success-500)]/40 text-[var(--color-success-500)]" :
+            toast.type === "error" ? "border-[var(--color-danger-500)]/40 text-[var(--color-danger-500)]" :
+            toast.type === "warning" ? "border-[var(--color-warning-500)]/40 text-[var(--color-warning-500)]" :
+            "border-[var(--color-cyan-500)]/40 text-[var(--color-cyan-500)]"
+          }`}
         >
           {toast.type === "success" && <CheckCircle2 className="w-5 h-5 shrink-0 mt-0.5" />}
           {toast.type === "error" && <AlertCircle className="w-5 h-5 shrink-0 mt-0.5" />}
           {toast.type === "warning" && <AlertTriangle className="w-5 h-5 shrink-0 mt-0.5" />}
           {toast.type === "info" && <Info className="w-5 h-5 shrink-0 mt-0.5" />}
-          <p className="text-sm font-medium flex-1 text-gray-200">{toast.message}</p>
+          <p className="text-[12px] font-medium flex-1 text-[var(--color-text-primary)]">{toast.message}</p>
           <button onClick={() => onDismiss(toast.id)} className="shrink-0 hover:opacity-70 transition-opacity">
             <X className="w-4 h-4" />
           </button>
@@ -59,6 +64,18 @@ function ToastContainer({ toasts, onDismiss }: { toasts: Toast[]; onDismiss: (id
 }
 
 export default function Home() {
+  // UI store (cross-cutting UI state)
+  const inspectorOpen = useUIStore((s) => s.inspectorOpen);
+  const setInspectorOpen = useUIStore((s) => s.setInspectorOpen);
+  const bp = useBreakpoint();
+
+  // Auto-collapse inspector on narrower screens
+  useEffect(() => {
+    if (bp === "xs" || bp === "sm" || bp === "md") {
+      setInspectorOpen(false);
+    }
+  }, [bp, setInspectorOpen]);
+
   const [messages, setMessages] = useState<Message[]>([]);
   const [input, setInput] = useState("");
   const [isLoading, setIsLoading] = useState(false);
@@ -383,11 +400,16 @@ export default function Home() {
         setInput("");
         textareaRef.current?.blur();
       }
+      // Cmd/Ctrl+I toggles inspector
+      if ((e.ctrlKey || e.metaKey) && (e.key === 'i' || e.key === 'I')) {
+        e.preventDefault();
+        setInspectorOpen(!inspectorOpen);
+      }
     };
 
     window.addEventListener('keydown', handleKeyDown);
     return () => window.removeEventListener('keydown', handleKeyDown);
-  }, [input, sessionId, isDbConnected, isLoading]); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [input, sessionId, isDbConnected, isLoading, inspectorOpen]); // eslint-disable-line react-hooks/exhaustive-deps
 
   // Demo mode handler
   const handleTryDemo = useCallback(async () => {
@@ -416,7 +438,7 @@ export default function Home() {
   // ── Render ─────────────────────────────────────────────────────────────────
 
   return (
-    <div className="flex h-screen relative z-10 text-[#e0e0e0] overflow-hidden bg-[#0a0a0f]">
+    <div className="flex h-screen relative z-10 text-[var(--color-text-secondary)] overflow-hidden bg-[var(--color-bg-base)]">
       <ToastContainer toasts={toasts} onDismiss={dismissToast} />
 
       <Sidebar
@@ -491,6 +513,12 @@ export default function Home() {
         }}
       />
 
+      <PanelGroup
+        orientation="horizontal"
+        id="docbot-main-panels"
+        className="flex-1 min-w-0"
+      >
+      <Panel id="main" defaultSize={inspectorOpen ? 70 : 100} minSize={40}>
       <ChatArea
         sessionId={sessionId}
         uploadedFiles={uploadedFiles}
@@ -529,6 +557,17 @@ export default function Home() {
         onTryDemo={handleTryDemo}
         demoLoading={demoLoading}
       />
+      </Panel>
+
+      {inspectorOpen && (
+        <>
+          <ResizeHandle />
+          <Panel id="inspector" defaultSize={30} minSize={20} maxSize={45} collapsible>
+            <InspectorPanel onClose={() => setInspectorOpen(false)} />
+          </Panel>
+        </>
+      )}
+      </PanelGroup>
 
       {/* Auth Modal */}
       {authModalOpen && !authUser && (

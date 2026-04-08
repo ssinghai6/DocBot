@@ -81,12 +81,12 @@ export default function ConnectionPanel({
 }: ConnectionPanelProps) {
   return (
     <div className="mb-5">
-      <h3 className="text-sm font-semibold mb-3 text-white flex items-center gap-2">
-        <Database className="w-4 h-4 text-[#f97316]" />
+      <h3 className="text-sm font-semibold mb-3 text-[var(--color-text-primary)] flex items-center gap-2">
+        <Database className="w-4 h-4 text-[var(--color-amber-500)]" />
         Database
         {isDbConnected && (
-          <span className="ml-auto text-[10px] text-[#10b981] font-medium flex items-center gap-1">
-            <div className="w-1.5 h-1.5 bg-[#10b981] rounded-full animate-pulse" />
+          <span className="ml-auto text-[10px] text-[var(--color-success-500)] font-medium flex items-center gap-1">
+            <div className="w-1.5 h-1.5 bg-[var(--color-success-500)] rounded-full animate-pulse" />
             Connected
           </span>
         )}
@@ -95,12 +95,12 @@ export default function ConnectionPanel({
       {isDbConnected ? (
         <div className="space-y-2">
           {/* Connected indicator */}
-          <div className="flex items-center gap-2 px-3 py-2.5 bg-[#10b981]/10 rounded-xl border border-[#10b981]/20 text-xs">
-            <Database className="w-3.5 h-3.5 text-[#10b981] shrink-0" />
+          <div className="flex items-center gap-2 px-3 py-2.5 bg-[var(--color-success-500)]/10 rounded-xl border border-[var(--color-success-500)]/20 text-xs">
+            <Database className="w-3.5 h-3.5 text-[var(--color-success-500)] shrink-0" />
             <span className="truncate text-gray-300 flex-1">{dbFileName}</span>
             <button
               onClick={onDbDisconnect}
-              className="text-gray-500 hover:text-red-400 transition-colors shrink-0"
+              className="text-[var(--color-text-tertiary)] hover:text-red-400 transition-colors shrink-0"
               title="Disconnect database"
             >
               <XCircle className="w-3.5 h-3.5" />
@@ -108,15 +108,15 @@ export default function ConnectionPanel({
           </div>
 
           {/* DOCBOT-504: Query History Panel */}
-          <div className="rounded-xl border border-[#ffffff10] overflow-hidden">
+          <div className="rounded-xl border border-[var(--color-border-default)] overflow-hidden">
             <button
               onClick={onHistoryToggle}
-              className="w-full flex items-center gap-2 px-3 py-2 text-xs text-gray-400 hover:text-white hover:bg-[#ffffff08] transition-colors"
+              className="w-full flex items-center gap-2 px-3 py-2 text-xs text-[var(--color-text-secondary)] hover:text-[var(--color-text-primary)] hover:bg-[var(--color-bg-overlay)] transition-colors"
             >
-              <Clock className="w-3.5 h-3.5 text-[#f97316] shrink-0" />
+              <Clock className="w-3.5 h-3.5 text-[var(--color-amber-500)] shrink-0" />
               <span className="flex-1 text-left font-medium">Query History</span>
               {queryHistory.length > 0 && (
-                <span className="bg-[#f97316]/20 text-[#f97316] text-[10px] px-1.5 py-0.5 rounded-full font-medium">
+                <span className="bg-[var(--color-amber-500)]/20 text-[var(--color-amber-500)] text-[10px] px-1.5 py-0.5 rounded-full font-medium">
                   {queryHistory.length}
                 </span>
               )}
@@ -124,26 +124,26 @@ export default function ConnectionPanel({
             </button>
 
             {historyOpen && (
-              <div className="border-t border-[#ffffff10] max-h-64 overflow-y-auto">
+              <div className="border-t border-[var(--color-border-default)] max-h-64 overflow-y-auto">
                 {queryHistory.length === 0 ? (
-                  <p className="px-3 py-3 text-xs text-gray-500 text-center">No queries yet</p>
+                  <p className="px-3 py-3 text-xs text-[var(--color-text-tertiary)] text-center">No queries yet</p>
                 ) : (
                   queryHistory.map((item) => (
-                    <div key={item.id} className="border-b border-[#ffffff08] last:border-b-0">
+                    <div key={item.id} className="border-b border-[var(--color-border-subtle)] last:border-b-0">
                       <button
-                        className="w-full flex items-start gap-2 px-3 py-2 text-left hover:bg-[#ffffff06] transition-colors group"
+                        className="w-full flex items-start gap-2 px-3 py-2 text-left hover:bg-[var(--color-bg-overlay)] transition-colors group"
                         onClick={() => onExpandedHistoryChange(expandedHistoryId === item.id ? null : item.id)}
                       >
                         <div className="flex-1 min-w-0">
                           <p className="text-xs text-gray-300 truncate leading-snug">{item.question}</p>
                           <div className="flex items-center gap-2 mt-0.5">
                             {item.row_count != null && (
-                              <span className="text-[10px] text-gray-500">
+                              <span className="text-[10px] text-[var(--color-text-tertiary)]">
                                 {item.row_count} row{item.row_count !== 1 ? "s" : ""}
                               </span>
                             )}
                             {item.executed_at && (
-                              <span className="text-[10px] text-gray-600">
+                              <span className="text-[10px] text-[var(--color-text-quaternary)]">
                                 {new Date(item.executed_at).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}
                               </span>
                             )}
@@ -151,7 +151,7 @@ export default function ConnectionPanel({
                         </div>
                         <button
                           title="Re-run this query"
-                          className="shrink-0 opacity-0 group-hover:opacity-100 transition-opacity text-gray-500 hover:text-[#f97316] mt-0.5"
+                          className="shrink-0 opacity-0 group-hover:opacity-100 transition-opacity text-[var(--color-text-tertiary)] hover:text-[var(--color-amber-500)] mt-0.5"
                           onClick={(e) => {
                             e.stopPropagation()
                             onSetInput(item.question)
@@ -163,7 +163,7 @@ export default function ConnectionPanel({
 
                       {expandedHistoryId === item.id && (
                         <div className="px-3 pb-2">
-                          <pre className="text-[10px] text-gray-400 bg-[#0d0d14] rounded-lg p-2 overflow-x-auto whitespace-pre-wrap break-all leading-relaxed">
+                          <pre className="text-[10px] text-[var(--color-text-secondary)] bg-[var(--color-bg-base)] rounded-lg p-2 overflow-x-auto whitespace-pre-wrap break-all leading-relaxed">
                             {item.sql}
                           </pre>
                         </div>
@@ -180,9 +180,9 @@ export default function ConnectionPanel({
           {/* Live DB connect toggle */}
           <button
             onClick={onToggleLiveDbForm}
-            className="w-full flex items-center gap-2 px-3 py-2.5 rounded-xl border border-[#ffffff10] bg-[#1a1a24]/50 hover:border-[#f97316]/40 hover:bg-[#f97316]/5 transition-all text-xs text-gray-400"
+            className="w-full flex items-center gap-2 px-3 py-2.5 rounded-xl border border-[var(--color-border-default)] bg-[var(--color-bg-elevated)]/50 hover:border-[var(--color-amber-500)]/40 hover:bg-[var(--color-amber-500)]/5 transition-all text-xs text-[var(--color-text-secondary)]"
           >
-            <RefreshCw className="w-3.5 h-3.5 text-[#f97316] shrink-0" />
+            <RefreshCw className="w-3.5 h-3.5 text-[var(--color-amber-500)] shrink-0" />
             <span>Connect Live DB</span>
             <ChevronDown className={`w-3 h-3 ml-auto transition-transform ${showLiveDbForm ? "rotate-180" : ""}`} />
           </button>
@@ -207,7 +207,7 @@ export default function ConnectionPanel({
                   })
                   onEntraReset()
                 }}
-                className="w-full px-3 py-2 rounded-lg bg-[#1a1a24] border border-[#ffffff10] text-gray-300 text-xs focus:outline-none focus:border-[#f97316]/40"
+                className="w-full px-3 py-2 rounded-lg bg-[var(--color-bg-elevated)] border border-[var(--color-border-default)] text-gray-300 text-xs focus:outline-none focus:border-[var(--color-amber-500)]/40"
               >
                 <option value="postgresql">PostgreSQL</option>
                 <option value="mysql">MySQL</option>
@@ -219,7 +219,7 @@ export default function ConnectionPanel({
                 placeholder="Host"
                 value={liveDbForm.host}
                 onChange={(e) => onLiveDbFormChange({ ...liveDbForm, host: e.target.value })}
-                className="w-full px-3 py-2 rounded-lg bg-[#1a1a24] border border-[#ffffff10] text-gray-300 text-xs placeholder-gray-500 focus:outline-none focus:border-[#f97316]/40"
+                className="w-full px-3 py-2 rounded-lg bg-[var(--color-bg-elevated)] border border-[var(--color-border-default)] text-gray-300 text-xs placeholder-[var(--color-text-quaternary)] focus:outline-none focus:border-[var(--color-amber-500)]/40"
               />
 
               <div className="flex gap-2">
@@ -228,14 +228,14 @@ export default function ConnectionPanel({
                   placeholder="Port"
                   value={liveDbForm.port}
                   onChange={(e) => onLiveDbFormChange({ ...liveDbForm, port: e.target.value })}
-                  className="w-20 px-3 py-2 rounded-lg bg-[#1a1a24] border border-[#ffffff10] text-gray-300 text-xs placeholder-gray-500 focus:outline-none focus:border-[#f97316]/40"
+                  className="w-20 px-3 py-2 rounded-lg bg-[var(--color-bg-elevated)] border border-[var(--color-border-default)] text-gray-300 text-xs placeholder-[var(--color-text-quaternary)] focus:outline-none focus:border-[var(--color-amber-500)]/40"
                 />
                 <input
                   type="text"
                   placeholder="Database name"
                   value={liveDbForm.dbname}
                   onChange={(e) => onLiveDbFormChange({ ...liveDbForm, dbname: e.target.value })}
-                  className="flex-1 px-3 py-2 rounded-lg bg-[#1a1a24] border border-[#ffffff10] text-gray-300 text-xs placeholder-gray-500 focus:outline-none focus:border-[#f97316]/40"
+                  className="flex-1 px-3 py-2 rounded-lg bg-[var(--color-bg-elevated)] border border-[var(--color-border-default)] text-gray-300 text-xs placeholder-[var(--color-text-quaternary)] focus:outline-none focus:border-[var(--color-amber-500)]/40"
                 />
               </div>
 
@@ -248,7 +248,7 @@ export default function ConnectionPanel({
                       <button
                         type="button"
                         onClick={onEntraReset}
-                        className="ml-auto text-gray-500 hover:text-gray-300 text-[10px]"
+                        className="ml-auto text-[var(--color-text-tertiary)] hover:text-gray-300 text-[10px]"
                       >
                         Change
                       </button>
@@ -280,7 +280,7 @@ export default function ConnectionPanel({
                     placeholder="Username"
                     value={liveDbForm.user}
                     onChange={(e) => onLiveDbFormChange({ ...liveDbForm, user: e.target.value })}
-                    className="w-full px-3 py-2 rounded-lg bg-[#1a1a24] border border-[#ffffff10] text-gray-300 text-xs placeholder-gray-500 focus:outline-none focus:border-[#f97316]/40"
+                    className="w-full px-3 py-2 rounded-lg bg-[var(--color-bg-elevated)] border border-[var(--color-border-default)] text-gray-300 text-xs placeholder-[var(--color-text-quaternary)] focus:outline-none focus:border-[var(--color-amber-500)]/40"
                   />
                   <div className="relative">
                     <input
@@ -288,12 +288,12 @@ export default function ConnectionPanel({
                       placeholder="Password"
                       value={liveDbForm.password}
                       onChange={(e) => onLiveDbFormChange({ ...liveDbForm, password: e.target.value })}
-                      className="w-full px-3 py-2 pr-8 rounded-lg bg-[#1a1a24] border border-[#ffffff10] text-gray-300 text-xs placeholder-gray-500 focus:outline-none focus:border-[#f97316]/40"
+                      className="w-full px-3 py-2 pr-8 rounded-lg bg-[var(--color-bg-elevated)] border border-[var(--color-border-default)] text-gray-300 text-xs placeholder-[var(--color-text-quaternary)] focus:outline-none focus:border-[var(--color-amber-500)]/40"
                     />
                     <button
                       type="button"
                       onClick={() => onShowDbPasswordChange(!showDbPassword)}
-                      className="absolute right-2 top-1/2 -translate-y-1/2 text-gray-500 hover:text-gray-300"
+                      className="absolute right-2 top-1/2 -translate-y-1/2 text-[var(--color-text-tertiary)] hover:text-gray-300"
                     >
                       {showDbPassword ? <EyeOff className="w-3.5 h-3.5" /> : <Eye className="w-3.5 h-3.5" />}
                     </button>
@@ -305,10 +305,10 @@ export default function ConnectionPanel({
               <button
                 type="button"
                 onClick={() => onLiveDbFormChange({ ...liveDbForm, pii_masking_enabled: !liveDbForm.pii_masking_enabled })}
-                className="w-full flex items-center justify-between px-3 py-2 rounded-lg bg-[#1a1a24] border border-[#ffffff10] hover:border-[#f97316]/20 transition-all"
+                className="w-full flex items-center justify-between px-3 py-2 rounded-lg bg-[var(--color-bg-elevated)] border border-[var(--color-border-default)] hover:border-[var(--color-amber-500)]/20 transition-all"
               >
-                <span className="text-xs text-gray-400">PII masking</span>
-                <div className={`relative w-8 h-4 rounded-full transition-colors ${liveDbForm.pii_masking_enabled ? "bg-[#f97316]" : "bg-[#ffffff15]"}`}>
+                <span className="text-xs text-[var(--color-text-secondary)]">PII masking</span>
+                <div className={`relative w-8 h-4 rounded-full transition-colors ${liveDbForm.pii_masking_enabled ? "bg-[var(--color-amber-500)]" : "bg-[#ffffff15]"}`}>
                   <div className={`absolute top-0.5 w-3 h-3 rounded-full bg-white shadow transition-transform ${liveDbForm.pii_masking_enabled ? "translate-x-4" : "translate-x-0.5"}`} />
                 </div>
               </button>
@@ -327,7 +327,7 @@ export default function ConnectionPanel({
                     ? !entraToken
                     : !liveDbForm.user)
                 }
-                className="w-full flex items-center justify-center gap-2 px-3 py-2 rounded-lg bg-[#f97316]/20 hover:bg-[#f97316]/30 border border-[#f97316]/30 text-[#f97316] text-xs font-medium transition-all disabled:opacity-50 disabled:cursor-not-allowed"
+                className="w-full flex items-center justify-center gap-2 px-3 py-2 rounded-lg bg-[var(--color-amber-500)]/20 hover:bg-[var(--color-amber-500)]/30 border border-[var(--color-amber-500)]/30 text-[var(--color-amber-500)] text-xs font-medium transition-all disabled:opacity-50 disabled:cursor-not-allowed"
               >
                 {liveDbConnectState === "connecting"
                   ? <><Loader2 className="w-3.5 h-3.5 animate-spin" /> Connecting...</>
@@ -345,14 +345,14 @@ export default function ConnectionPanel({
           onClick={onAutopilotToggle}
           className={`w-full flex items-center gap-2 px-3 py-2 rounded-xl text-xs border transition-all mt-2 ${
             autopilotMode
-              ? "border-[#667eea]/50 bg-[#667eea]/10 text-[#a5b4fc]"
-              : "border-[#ffffff10] text-gray-400 hover:text-white hover:bg-[#ffffff08]"
+              ? "border-[var(--color-cyan-500)]/50 bg-[var(--color-cyan-500)]/10 text-[var(--color-cyan-500)]"
+              : "border-[var(--color-border-default)] text-[var(--color-text-secondary)] hover:text-[var(--color-text-primary)] hover:bg-[var(--color-bg-overlay)]"
           }`}
         >
-          <Wand2 className={`w-3.5 h-3.5 shrink-0 ${autopilotMode ? "text-[#a5b4fc]" : "text-[#667eea]"}`} />
+          <Wand2 className={`w-3.5 h-3.5 shrink-0 ${autopilotMode ? "text-[var(--color-cyan-500)]" : "text-[var(--color-cyan-500)]"}`} />
           <span className="flex-1 text-left font-medium">Autopilot</span>
           <span className={`text-[10px] px-1.5 py-0.5 rounded-full font-medium ${
-            autopilotMode ? "bg-[#667eea]/30 text-[#a5b4fc]" : "bg-[#ffffff10] text-gray-500"
+            autopilotMode ? "bg-[var(--color-cyan-500)]/30 text-[var(--color-cyan-500)]" : "bg-[#ffffff10] text-[var(--color-text-tertiary)]"
           }`}>
             {autopilotMode ? "ON" : "OFF"}
           </span>

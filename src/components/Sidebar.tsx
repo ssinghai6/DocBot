@@ -166,7 +166,6 @@ export default function Sidebar(props: SidebarProps) {
     onEdgarFilingIngested,
   } = props;
 
-  const [dbSectionOpen, setDbSectionOpen] = useState(false);
   const [marketplaceOpen, setMarketplaceOpen] = useState(false);
   const [personaOpen, setPersonaOpen] = useState(false);
   const [activeTab, setActiveTab] = useState<"sources" | "tools" | "settings">("sources");
@@ -176,75 +175,76 @@ export default function Sidebar(props: SidebarProps) {
       {/* Mobile Menu Toggle */}
       <button
         onClick={() => setSidebarOpen(!sidebarOpen)}
-        className="lg:hidden fixed top-4 left-4 z-50 p-2 bg-[#12121a]/90 backdrop-blur-xl rounded-lg border border-[#ffffff08]"
+        className="lg:hidden fixed top-3 left-3 z-50 p-2 bg-[var(--color-bg-elevated)] rounded-[5px] border border-[var(--color-border-subtle)] text-[var(--color-text-secondary)]"
       >
-        {sidebarOpen ? <X className="w-5 h-5" /> : <Menu className="w-5 h-5" />}
+        {sidebarOpen ? <X className="w-4 h-4" /> : <Menu className="w-4 h-4" />}
       </button>
 
       {/* Mobile backdrop */}
       {sidebarOpen && (
         <div
-          className="fixed inset-0 bg-black/50 z-30 lg:hidden"
+          className="fixed inset-0 bg-[var(--bg-scrim)] z-30 lg:hidden"
           onClick={() => setSidebarOpen(false)}
         />
       )}
 
-      {/* Settings / Options Sidebar */}
+      {/* Sidebar */}
       <aside className={`
-        w-64 lg:w-80 backdrop-blur-2xl bg-[#12121a]/95 border-r border-[#ffffff08] flex flex-col p-5 z-40 shrink-0 shadow-2xl overflow-y-auto
-        transition-transform duration-300 ease-in-out
+        w-[260px] bg-[var(--color-bg-surface)] border-r border-[var(--color-border-subtle)]
+        flex flex-col p-4 z-40 shrink-0 overflow-y-auto
+        transition-transform duration-[var(--duration-base)] ease-in-out
         ${sidebarOpen ? 'translate-x-0' : '-translate-x-full lg:translate-x-0'}
         fixed lg:relative h-full
       `}>
         {/* Logo */}
-        <div className="flex items-center gap-3 mb-4">
-          <div className="w-10 h-10 rounded-xl bg-gradient-to-br from-[#667eea] to-[#764ba2] flex items-center justify-center shadow-lg shadow-[#667eea]/20">
-            <Brain className="w-5 h-5 text-white" />
+        <div className="flex items-center gap-2.5 mb-4 h-11">
+          <div className="w-8 h-8 rounded-[5px] bg-[var(--color-cyan-500)]/10 border border-[var(--color-cyan-500)]/30 flex items-center justify-center">
+            <Brain className="w-4 h-4 text-[var(--color-cyan-500)]" />
           </div>
-          <div className="flex-1">
-            <h2 className="text-lg font-bold text-white tracking-wide flex items-center gap-2">
+          <div className="flex-1 min-w-0">
+            <h2 className="text-[13px] font-semibold text-[var(--color-text-primary)] flex items-center gap-1.5 leading-none">
               DocBot
-              <span className="px-1.5 py-0.5 bg-[#667eea]/20 text-[#667eea] text-[10px] font-bold rounded">AI</span>
+              <span className="px-1 py-px bg-[var(--color-cyan-500)]/15 text-[var(--color-cyan-500)] text-[9px] font-bold rounded-[3px] uppercase tracking-wider">AI</span>
             </h2>
-            <p className="text-xs text-gray-500">Document Intelligence</p>
+            <p className="text-[10px] text-[var(--color-text-tertiary)] mt-0.5">Analytical workspace</p>
           </div>
         </div>
 
         {/* Auth widget */}
         {authChecked && (
-          <div className="mb-5">
+          <div className="mb-4">
             {authUser ? (
-              <div className="flex items-center gap-2 px-3 py-2.5 bg-[#1a1a24]/70 rounded-xl border border-[#ffffff08]">
-                <div className="w-7 h-7 rounded-lg bg-gradient-to-br from-[#667eea]/30 to-[#764ba2]/30 flex items-center justify-center shrink-0">
-                  <ShieldCheck className="w-3.5 h-3.5 text-[#a5b4fc]" />
+              <div className="flex items-center gap-2 px-2.5 py-2 bg-[var(--color-bg-elevated)] rounded-[5px] border border-[var(--color-border-subtle)]">
+                <div className="w-6 h-6 rounded-[3px] bg-[var(--color-cyan-500)]/10 border border-[var(--color-cyan-500)]/20 flex items-center justify-center shrink-0">
+                  <ShieldCheck className="w-3 h-3 text-[var(--color-cyan-500)]" />
                 </div>
                 <div className="flex-1 min-w-0">
-                  <p className="text-xs font-medium text-gray-200 truncate">{authUser.name || authUser.email}</p>
-                  <p className="text-[10px] text-gray-500 truncate">{authUser.email}</p>
+                  <p className="text-[11px] font-medium text-[var(--color-text-primary)] truncate">{authUser.name || authUser.email}</p>
+                  <p className="text-[10px] text-[var(--color-text-tertiary)] truncate">{authUser.email}</p>
                 </div>
                 {authUser.role === "admin" && (
                   <button
                     onClick={() => setAdminPanelOpen(true)}
-                    className="p-1.5 rounded-lg hover:bg-[#ffffff10] text-gray-500 hover:text-[#f97316] transition-colors"
+                    className="p-1 rounded-[3px] hover:bg-[var(--color-bg-overlay)] text-[var(--color-text-tertiary)] hover:text-[var(--color-amber-500)] transition-colors"
                     title="Admin panel"
                   >
-                    <Shield className="w-3.5 h-3.5" />
+                    <Shield className="w-3 h-3" />
                   </button>
                 )}
                 <button
                   onClick={handleLogout}
-                  className="p-1.5 rounded-lg hover:bg-red-500/10 text-gray-500 hover:text-red-400 transition-colors"
+                  className="p-1 rounded-[3px] hover:bg-[var(--color-danger-500)]/10 text-[var(--color-text-tertiary)] hover:text-[var(--color-danger-500)] transition-colors"
                   title="Sign out"
                 >
-                  <LogOut className="w-3.5 h-3.5" />
+                  <LogOut className="w-3 h-3" />
                 </button>
               </div>
             ) : (
               <button
                 onClick={() => { setAuthModalOpen(true); setAuthError(null); }}
-                className="flex items-center justify-center gap-2 w-full px-3 py-2.5 rounded-xl bg-[#667eea]/15 hover:bg-[#667eea]/25 border border-[#667eea]/30 text-[#a5b4fc] text-xs font-medium transition-all"
+                className="flex items-center justify-center gap-1.5 w-full px-3 py-2 rounded-[5px] bg-[var(--color-cyan-500)]/10 hover:bg-[var(--color-cyan-500)]/15 border border-[var(--color-cyan-500)]/30 text-[var(--color-cyan-500)] text-[11px] font-medium transition-colors"
               >
-                <ShieldCheck className="w-4 h-4" />
+                <ShieldCheck className="w-3.5 h-3.5" />
                 Sign in / Create account
               </button>
             )}
@@ -267,7 +267,7 @@ export default function Sidebar(props: SidebarProps) {
         />
 
         {/* ── Tab Bar ── */}
-        <div className="flex items-center gap-1 p-1 mb-4 bg-[#1a1a24]/60 rounded-xl border border-[#ffffff06]">
+        <div className="flex items-center border-b border-[var(--color-border-subtle)] mb-4">
           {([
             { key: "sources" as const, label: "Sources", icon: <Database className="w-3 h-3" />, badge: isDbConnected },
             { key: "tools" as const, label: "Tools", icon: <Wrench className="w-3 h-3" />, badge: false },
@@ -276,15 +276,15 @@ export default function Sidebar(props: SidebarProps) {
             <button
               key={tab.key}
               onClick={() => setActiveTab(tab.key)}
-              className={`flex-1 flex items-center justify-center gap-1.5 px-2 py-1.5 rounded-lg text-xs font-medium transition-all ${
+              className={`relative flex-1 flex items-center justify-center gap-1.5 h-8 text-[11px] font-medium transition-colors ${
                 activeTab === tab.key
-                  ? "bg-[#667eea]/20 text-[#a5b4fc] border border-[#667eea]/30"
-                  : "text-gray-500 hover:text-gray-300 hover:bg-[#ffffff06]"
+                  ? "text-[var(--color-text-primary)] after:content-[''] after:absolute after:left-0 after:right-0 after:-bottom-px after:h-[2px] after:bg-[var(--color-cyan-500)]"
+                  : "text-[var(--color-text-tertiary)] hover:text-[var(--color-text-secondary)]"
               }`}
             >
               {tab.icon}
               {tab.label}
-              {tab.badge && <span className="w-1.5 h-1.5 rounded-full bg-[#10b981]" />}
+              {tab.badge && <span className="w-1.5 h-1.5 rounded-full bg-[var(--color-success-500)]" />}
             </button>
           ))}
         </div>
@@ -297,11 +297,11 @@ export default function Sidebar(props: SidebarProps) {
               {/* Saved connections */}
               {authUser && workspaceConnections.filter(wc => wc.host !== "__local_file__").length > 0 && (
                 <div className="mb-4">
-                  <h3 className="text-xs font-semibold mb-2 text-gray-400 flex items-center gap-1.5">
-                    <Database className="w-3.5 h-3.5" />
+                  <h3 className="text-[10px] font-semibold uppercase tracking-wider mb-2 text-[var(--color-text-tertiary)] flex items-center gap-1.5">
+                    <Database className="w-3 h-3" />
                     Saved connections
                   </h3>
-                  <ul className="space-y-1">
+                  <ul className="space-y-0.5">
                     {workspaceConnections.filter(wc => wc.host !== "__local_file__").map((wc) => (
                       <li key={wc.id}>
                         <button
@@ -315,15 +315,15 @@ export default function Sidebar(props: SidebarProps) {
                             }));
                             showToast("info", "Connection details loaded — enter credentials and connect");
                           }}
-                          className="w-full text-left px-2.5 py-1.5 rounded-lg hover:bg-[#ffffff08] transition-colors"
+                          className="w-full text-left px-2 py-1.5 rounded-[3px] hover:bg-[var(--color-bg-overlay)] transition-colors"
                         >
                           <div className="flex items-center gap-2">
-                            <Database className="w-3 h-3 text-[#10b981] shrink-0" />
-                            <span className="text-[11px] text-gray-300 truncate flex-1">
+                            <Database className="w-3 h-3 text-[var(--color-success-500)] shrink-0" />
+                            <span className="text-[11px] text-[var(--color-text-secondary)] truncate flex-1">
                               {wc.dialect} · {wc.db_name}
                             </span>
                           </div>
-                          <p className="text-[10px] text-gray-600 mt-0.5 pl-5 truncate">{wc.host}</p>
+                          <p className="text-[10px] text-[var(--color-text-quaternary)] mt-0.5 pl-5 truncate">{wc.host}</p>
                         </button>
                       </li>
                     ))}
@@ -375,18 +375,18 @@ export default function Sidebar(props: SidebarProps) {
               />
 
               {/* Marketplace */}
-              <div className="mb-5">
+              <div className="mb-4">
                 <button
                   onClick={() => setMarketplaceOpen(!marketplaceOpen)}
-                  className="w-full flex items-center gap-2 mb-2 group"
+                  className="w-full flex items-center gap-2 mb-2"
                 >
-                  <span className="text-xs font-semibold text-gray-400 uppercase tracking-wider flex-1 text-left">Marketplace</span>
+                  <span className="text-[10px] font-semibold text-[var(--color-text-tertiary)] uppercase tracking-wider flex-1 text-left">Marketplace</span>
                   {connectors.length > 0 && (
-                    <span className="text-[10px] text-[#667eea] font-medium bg-[#667eea]/15 px-1.5 py-0.5 rounded-full">
+                    <span className="text-[10px] text-[var(--color-cyan-500)] font-medium bg-[var(--color-cyan-500)]/10 px-1.5 py-0.5 rounded-[3px]">
                       {connectors.length}
                     </span>
                   )}
-                  <ChevronDown className={`w-3 h-3 text-gray-500 transition-transform ${marketplaceOpen ? "rotate-180" : ""}`} />
+                  <ChevronDown className={`w-3 h-3 text-[var(--color-text-tertiary)] transition-transform ${marketplaceOpen ? "rotate-180" : ""}`} />
                 </button>
                 {marketplaceOpen && (
                   <MarketplacePanel
@@ -399,16 +399,16 @@ export default function Sidebar(props: SidebarProps) {
               </div>
 
               {/* Persona Selector */}
-              <div className="mb-5">
+              <div className="mb-4">
                 <button
                   onClick={() => setPersonaOpen(!personaOpen)}
-                  className="w-full flex items-center gap-2 mb-2 group"
+                  className="w-full flex items-center gap-2 mb-2"
                 >
-                  <Sparkles className="w-3.5 h-3.5 text-[#667eea]" />
-                  <span className="text-xs font-semibold text-gray-400 uppercase tracking-wider flex-1 text-left">
+                  <Sparkles className="w-3 h-3 text-[var(--color-amber-500)]" />
+                  <span className="text-[10px] font-semibold text-[var(--color-text-tertiary)] uppercase tracking-wider flex-1 text-left">
                     {isAutoMode ? "Auto-routing" : selectedPersona}
                   </span>
-                  <ChevronDown className={`w-3 h-3 text-gray-500 transition-transform ${personaOpen ? "rotate-180" : ""}`} />
+                  <ChevronDown className={`w-3 h-3 text-[var(--color-text-tertiary)] transition-transform ${personaOpen ? "rotate-180" : ""}`} />
                 </button>
                 {personaOpen && (
                   <PersonaSelector
@@ -432,34 +432,34 @@ export default function Sidebar(props: SidebarProps) {
               <button
                 onClick={clearChat}
                 disabled={messagesLength === 0}
-                className="w-full flex items-center justify-center py-2.5 px-4 rounded-xl bg-[#1a1a24]/80 border border-[#ffffff06] hover:bg-red-500/15 hover:border-red-500/30 hover:text-red-400 transition-all text-sm font-medium disabled:opacity-40 disabled:cursor-not-allowed disabled:hover:bg-[#1a1a24]/80 disabled:hover:border-[#ffffff06] disabled:hover:text-inherit mb-4"
+                className="w-full flex items-center justify-center h-8 rounded-[5px] bg-[var(--color-bg-elevated)] border border-[var(--color-border-subtle)] text-[var(--color-text-secondary)] hover:bg-[var(--color-danger-500)]/10 hover:border-[var(--color-danger-500)]/30 hover:text-[var(--color-danger-500)] transition-colors text-[11px] font-medium disabled:opacity-40 disabled:cursor-not-allowed disabled:hover:bg-[var(--color-bg-elevated)] disabled:hover:border-[var(--color-border-subtle)] disabled:hover:text-[var(--color-text-secondary)] mb-4"
               >
-                <Trash2 className="w-4 h-4 mr-2" />
-                Clear Chat
+                <Trash2 className="w-3.5 h-3.5 mr-1.5" />
+                Clear chat
               </button>
 
               {/* Keyboard Shortcuts */}
-              <div className="p-3 bg-[#1a1a24]/30 rounded-xl border border-[#ffffff06] mb-4">
-                <div className="flex items-center gap-2 text-xs text-gray-500 mb-2">
+              <div className="p-2.5 bg-[var(--color-bg-inset)] rounded-[5px] border border-[var(--color-border-subtle)] mb-4">
+                <div className="flex items-center gap-1.5 text-[10px] text-[var(--color-text-tertiary)] uppercase tracking-wider mb-2">
                   <Keyboard className="w-3 h-3" />
-                  <span className="font-medium">Keyboard Shortcuts</span>
+                  <span className="font-semibold">Keyboard shortcuts</span>
                 </div>
-                <div className="grid grid-cols-2 gap-1 text-[10px] text-gray-500">
+                <div className="grid grid-cols-2 gap-1.5 text-[10px] text-[var(--color-text-tertiary)]">
                   <div className="flex items-center gap-1">
-                    <kbd className="px-1.5 py-0.5 bg-[#ffffff10] rounded text-gray-400">Ctrl</kbd>
-                    <span>+</span>
-                    <kbd className="px-1.5 py-0.5 bg-[#ffffff10] rounded text-gray-400">↵</kbd>
+                    <kbd className="px-1 py-px bg-[var(--color-bg-overlay)] border border-[var(--color-border-default)] rounded-[3px] text-[var(--color-text-secondary)] font-mono">⌘↵</kbd>
                     <span className="ml-1">Send</span>
                   </div>
                   <div className="flex items-center gap-1">
-                    <kbd className="px-1.5 py-0.5 bg-[#ffffff10] rounded text-gray-400">Esc</kbd>
+                    <kbd className="px-1 py-px bg-[var(--color-bg-overlay)] border border-[var(--color-border-default)] rounded-[3px] text-[var(--color-text-secondary)] font-mono">Esc</kbd>
                     <span className="ml-1">Clear</span>
                   </div>
                   <div className="flex items-center gap-1">
-                    <kbd className="px-1.5 py-0.5 bg-[#ffffff10] rounded text-gray-400">⌘</kbd>
-                    <span>+</span>
-                    <kbd className="px-1.5 py-0.5 bg-[#ffffff10] rounded text-gray-400">K</kbd>
+                    <kbd className="px-1 py-px bg-[var(--color-bg-overlay)] border border-[var(--color-border-default)] rounded-[3px] text-[var(--color-text-secondary)] font-mono">⌘K</kbd>
                     <span className="ml-1">Commands</span>
+                  </div>
+                  <div className="flex items-center gap-1">
+                    <kbd className="px-1 py-px bg-[var(--color-bg-overlay)] border border-[var(--color-border-default)] rounded-[3px] text-[var(--color-text-secondary)] font-mono">⌘I</kbd>
+                    <span className="ml-1">Inspector</span>
                   </div>
                 </div>
               </div>
@@ -467,9 +467,9 @@ export default function Sidebar(props: SidebarProps) {
           )}
         </div>
 
-        {/* Footer — always visible */}
-        <div className="pt-3 mt-auto text-center text-xs text-gray-600">
-          <p>Built by <a href="https://sanshrit-singhai.vercel.app" className="text-[#667eea] hover:underline" target="_blank" rel="noopener noreferrer">Sanshrit Singhai</a></p>
+        {/* Footer */}
+        <div className="pt-3 mt-auto text-center text-[10px] text-[var(--color-text-quaternary)]">
+          <p>Built by <a href="https://sanshrit-singhai.vercel.app" className="text-[var(--color-cyan-500)] hover:underline" target="_blank" rel="noopener noreferrer">Sanshrit Singhai</a></p>
         </div>
       </aside>
     </>

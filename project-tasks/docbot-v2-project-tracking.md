@@ -1,6 +1,6 @@
 # DocBot v2 — Complete Project Tracking Document
 > Generated: 2026-03-17
-> **Last Updated: 2026-03-29** (DOCBOT-705 Shopify connector done, EPIC-11 SEC EDGAR done, DOCBOT-704 background sync done, DOCBOT-706 connector persistence done, Vercel Analytics, EDGAR frontend panel, 686+ tests)
+> **Last Updated: 2026-03-31** (UI redesign phases 1-3 done, sandbox demo mode done, 686+ tests)
 > Team size: 1–2 engineers
 > Tracking tool recommendation: Linear (see Section 6)
 
@@ -66,6 +66,8 @@ Every story is only "done" when ALL of the following are true. No exceptions.
 | EPIC-08 | Smart Agent Auto-Routing | 3 | ✅ Done | Replace static persona picker with intelligent per-question agent routing, per-agent badges and rendering |
 | EPIC-09 | LangGraph Deep Research | 3+ | ✅ Done | Multi-step reasoning graph replacing single-shot Deep Research prompt — query planner, parallel retrieval, gap detection, streaming synthesis |
 | EPIC-10 | RAG Quality Enhancement | 4+ | ✅ Done | Chroma persistent store, cross-encoder reranker, SemanticChunker, FinanceBench accuracy baseline (**100% — 20/20**). PageIndex evaluated and rejected (2026-03-25). |
+| EPIC-12 | UI Redesign & Finance Vertical | 5 | ✅ Done | Progressive disclosure UI (tabbed sidebar, collapsible sections, Cmd+K command palette), unified file upload, 3-color palette, finance-focused copy, guided onboarding empty state. |
+| EPIC-13 | Sandbox Demo Mode | 5 | ✅ Done | Pre-loaded TechCorp 10-K + SQLite financial database via `/api/demo/init`. One-click hybrid analysis demo with deliberate discrepancies for showcase. |
 
 ---
 
@@ -1389,6 +1391,65 @@ As an analyst, I want to search for public companies and ingest their SEC filing
 
 ---
 
+### EPIC-12: UI Redesign & Finance Vertical
+
+---
+
+#### DOCBOT-1201: Progressive Disclosure UI + Finance Vertical Positioning
+
+**Story**
+As a new user, I want a clean, progressive-disclosure UI that guides me toward my first analysis, so that I can start using DocBot within 15 seconds instead of being overwhelmed by 15+ visible controls.
+
+**Phase**: 5
+**Priority**: Must Have
+**Story Points**: 13
+**Dependencies**: None
+
+**Acceptance Criteria**
+- [x] All sidebar sections collapsed by default except file upload
+- [x] Compact chat header (removed gradient hero card, recovered 80-120px vertical space)
+- [x] Tabbed sidebar lower section (Sources / Tools / Settings) — only one tab visible at a time
+- [x] Cmd+K command palette for power features (connect DB, search SEC, switch persona)
+- [x] Unified file upload zone accepting .pdf, .csv, .sqlite, .db — routes to correct handler by extension
+- [x] Persona dropdown moved to chat input area (compact selector, not full grid)
+- [x] 4 visible personas: Generalist, Finance Expert, Data Analyst, Strategy Analyst (8 on backend)
+- [x] Guided onboarding empty state: "What do you want to analyze?" with 3 action buttons
+- [x] 3-color accent palette: primary #667eea, success #10b981, data #f97316
+- [x] Finance-focused suggested questions and input placeholders
+- [x] All 12+ component files standardized to 3-color palette
+
+**Status**: ✅ Done — all acceptance criteria met. Phases 1-3 shipped 2026-03-31.
+
+---
+
+### EPIC-13: Sandbox Demo Mode
+
+---
+
+#### DOCBOT-1301: One-Click Demo with Pre-Loaded Financial Data
+
+**Story**
+As a first-time visitor, I want to click "Try Demo" and immediately experience hybrid doc+DB analysis with discrepancy detection, so that I understand DocBot's value without uploading my own data.
+
+**Phase**: 5
+**Priority**: Must Have
+**Story Points**: 5
+**Dependencies**: DOCBOT-1201 (guided onboarding empty state)
+
+**Acceptance Criteria**
+- [x] `api/demo_service.py` contains hardcoded TechCorp 10-K document chunks (7 chunks, 15 pages simulated)
+- [x] SQLite database created at runtime with 4 tables (financials, quarterly, segments, balance_sheet)
+- [x] Deliberate discrepancies between doc and DB (Q4 net income, Professional Services revenue)
+- [x] `POST /api/demo/init` creates vector store + session + SQLite + db_connection + schema cache in one call
+- [x] Frontend "Try Demo" button in empty state triggers `/api/demo/init` and configures hybrid mode
+- [x] Demo session sets Finance Expert persona and hybrid chat mode automatically
+- [x] 4 suggested questions guide users toward discrepancy detection
+- [x] Demo works on production (Railway) without additional env vars or file dependencies
+
+**Status**: ✅ Done — shipped 2026-03-31. Production-verified.
+
+---
+
 ### EPIC-08: Smart Agent Auto-Routing
 
 ---
@@ -2148,11 +2209,12 @@ These risks should be tracked as Linear "issues" with label `risk` and priority 
 | Phase 4 (Commerce — Phase 1) | DOCBOT-701, 702, 703 | 29 pts | ✅ Done |
 | Phase 4 (Commerce — Phase 2+3) | DOCBOT-704, 705, 706 | ~20 pts | ✅ Done |
 | EPIC-11 (SEC EDGAR) | DOCBOT-1101 | 8 pts | ✅ Done |
-| EPIC-10 (RAG Quality) | DOCBOT-1001–1003 | 11 pts | ✅ Done |
-| EPIC-10 (Remaining) | DOCBOT-1004 (accuracy run) | 5 pts | 🔄 Code Complete |
-| **Delivered total** | **38 stories + post-ship fixes + connectors + RAG** | **~300 pts** | ✅ |
+| EPIC-10 (RAG Quality) | DOCBOT-1001–1004 | 16 pts | ✅ Done |
+| EPIC-12 (UI Redesign) | DOCBOT-1201 | 13 pts | ✅ Done |
+| EPIC-13 (Sandbox Demo) | DOCBOT-1301 | 5 pts | ✅ Done |
+| **Delivered total** | **40 stories + post-ship fixes + connectors + RAG + UI + demo** | **~330 pts** | ✅ |
 
-Note: Remaining work: human testing (85-test regression on prod). All code tasks complete. 686+ tests passing, 100% FinanceBench accuracy.
+Note: All code tasks complete. 686+ tests passing, 100% FinanceBench accuracy. Next: Stripe billing + launch.
 
 ### Post-Sprint Additions (2026-03-26)
 - Marketplace connector frontend UI (`MarketplacePanel.tsx`) — register/sync/disconnect flows
@@ -2162,15 +2224,13 @@ Note: Remaining work: human testing (85-test regression on prod). All code tasks
 
 ---
 
-## Immediate Next Actions (This Week)
+## Immediate Next Actions (This Week — 2026-03-31)
 
-Investor demo sprint P0/P1 items are complete. Remaining work:
+All feature development complete through EPIC-13. Monetization sprint begins:
 
-1. ~~**DOCBOT-702: Unified Commerce Schema + RLS**~~ — ✅ **Done** (2026-03-26). `api/commerce_service.py`, 2 tables, RLS, 31 tests.
-2. **DOCBOT-1004: Run FinanceBench accuracy** (~0.5 day) — Test suite exists; run against live Groq + HuggingFace and document baseline.
-3. ~~**Wire LLM fallback to production code paths**~~ — ✅ **Done** (2026-03-26). All 8 callsites wired.
-4. ~~**Fix #6: PII masking gaps**~~ — ✅ **Done** (2026-03-26). All response boundaries masked.
-5. **Human testing: 85-test manual regression** (~1 day) — Full regression across all feature areas on production.
+1. **Stripe billing integration** (~2-3 days) — 3-tier pricing ($49/$149/$349), 14-day free trial, usage gates
+2. **Product launch** (~1 week) — Product Hunt, Hacker News Show HN, LinkedIn outreach, r/fintech, r/datascience
+3. **First 10 customers** — LinkedIn DM to financial analysts, finance forum posts, 60-second demo video
 
 ---
 

@@ -3,8 +3,8 @@
 import React from "react"
 import { Loader2 } from "lucide-react"
 
-type ButtonVariant = "primary" | "secondary" | "ghost" | "danger"
-type ButtonSize = "sm" | "md" | "lg"
+type ButtonVariant = "primary" | "secondary" | "ghost" | "danger" | "amber"
+type ButtonSize = "xs" | "sm" | "md" | "lg"
 
 interface ButtonProps {
   variant?: ButtonVariant
@@ -15,23 +15,28 @@ interface ButtonProps {
   children: React.ReactNode
   className?: string
   type?: "button" | "submit" | "reset"
+  title?: string
+  "aria-label"?: string
 }
 
 const variantClasses: Record<ButtonVariant, string> = {
   primary:
-    "bg-gradient-to-r from-blue-600 to-purple-600 text-white hover:from-blue-500 hover:to-purple-500 shadow-lg shadow-blue-900/30",
+    "bg-[var(--color-cyan-500)] text-[var(--color-text-inverse)] border border-[var(--color-cyan-500)] hover:bg-[var(--color-cyan-600)] hover:border-[var(--color-cyan-600)]",
   secondary:
-    "bg-gray-800 text-gray-200 border border-gray-700 hover:bg-gray-700 hover:border-gray-600",
+    "bg-[var(--color-bg-elevated)] text-[var(--color-text-primary)] border border-[var(--color-border-default)] hover:bg-[var(--color-bg-overlay)] hover:border-[var(--color-border-strong)]",
   ghost:
-    "bg-transparent text-gray-300 hover:bg-gray-800 hover:text-white",
+    "bg-transparent text-[var(--color-text-secondary)] border border-transparent hover:bg-[var(--color-bg-overlay)] hover:text-[var(--color-text-primary)]",
   danger:
-    "bg-red-600 text-white hover:bg-red-500 shadow-lg shadow-red-900/30",
+    "bg-[var(--color-danger-900)] text-[var(--color-danger-500)] border border-[var(--color-danger-500)] hover:bg-[var(--color-danger-500)] hover:text-[var(--color-text-inverse)]",
+  amber:
+    "bg-[var(--color-amber-500)] text-[var(--color-text-inverse)] border border-[var(--color-amber-500)] hover:bg-[var(--color-amber-600)] hover:border-[var(--color-amber-600)]",
 }
 
 const sizeClasses: Record<ButtonSize, string> = {
-  sm: "px-3 py-1.5 text-sm rounded-lg gap-1.5",
-  md: "px-4 py-2 text-sm rounded-lg gap-2",
-  lg: "px-6 py-3 text-base rounded-xl gap-2",
+  xs: "h-6 px-2 text-[11px] rounded-[5px] gap-1",
+  sm: "h-7 px-2.5 text-xs rounded-[5px] gap-1.5",
+  md: "h-8 px-3 text-[13px] rounded-[5px] gap-1.5",
+  lg: "h-10 px-4 text-sm rounded-[6px] gap-2",
 }
 
 export default function Button({
@@ -43,6 +48,8 @@ export default function Button({
   children,
   className = "",
   type = "button",
+  title,
+  "aria-label": ariaLabel,
 }: ButtonProps) {
   const isDisabled = disabled || loading
 
@@ -51,20 +58,20 @@ export default function Button({
       type={type}
       onClick={onClick}
       disabled={isDisabled}
+      title={title}
+      aria-label={ariaLabel}
       className={[
-        "inline-flex items-center justify-center font-medium transition-all duration-150 cursor-pointer",
-        "focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-blue-500",
+        "inline-flex items-center justify-center font-medium whitespace-nowrap",
+        "transition-colors duration-[var(--duration-fast)] cursor-pointer",
         variantClasses[variant],
         sizeClasses[size],
-        isDisabled ? "opacity-50 cursor-not-allowed pointer-events-none" : "",
+        isDisabled ? "opacity-40 cursor-not-allowed pointer-events-none" : "",
         className,
       ]
         .filter(Boolean)
         .join(" ")}
     >
-      {loading && (
-        <Loader2 className="w-4 h-4 animate-spin shrink-0" aria-hidden="true" />
-      )}
+      {loading && <Loader2 className="w-3.5 h-3.5 animate-spin shrink-0" aria-hidden="true" />}
       {children}
     </button>
   )

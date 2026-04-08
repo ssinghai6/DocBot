@@ -1,34 +1,39 @@
 "use client"
 
-import React, { useState, useEffect, useRef, useCallback } from "react"
+import React, { useState, useEffect } from "react"
+import { Command } from "cmdk"
 import {
-  Search, Database, FileText, Sparkles, ShoppingCart,
-  Trash2, Download, BookOpen, Wand2, X,
+  Search, Database, Sparkles, ShoppingCart,
+  Trash2, Download, BookOpen, Wand2,
 } from "lucide-react"
+import { useUIStore } from "@/store/uiStore"
 
-interface Command {
+interface CommandItem {
   id: string
   label: string
   description: string
   icon: React.ReactNode
   action: () => void
   keywords: string[]
+  group: "Navigate" | "Personas" | "Actions"
 }
 
 interface CommandPaletteProps {
   isOpen: boolean
   onClose: () => void
-  commands: Command[]
+  commands: CommandItem[]
 }
 
 export function useCommandPalette() {
-  const [isOpen, setIsOpen] = useState(false)
+  // Kept for backwards-compat with handlers in chat/page.tsx; the store is the source of truth.
+  const isOpen = useUIStore((s) => s.commandPaletteOpen)
+  const setIsOpen = useUIStore((s) => s.setCommandPaletteOpen)
 
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
       if ((e.metaKey || e.ctrlKey) && e.key === "k") {
         e.preventDefault()
-        setIsOpen(prev => !prev)
+        setIsOpen(!isOpen)
       }
       if (e.key === "Escape") {
         setIsOpen(false)
@@ -36,7 +41,7 @@ export function useCommandPalette() {
     }
     window.addEventListener("keydown", handleKeyDown)
     return () => window.removeEventListener("keydown", handleKeyDown)
-  }, [])
+  }, [isOpen, setIsOpen])
 
   return { isOpen, setIsOpen, onClose: () => setIsOpen(false) }
 }
@@ -49,17 +54,19 @@ export function buildCommands(actions: {
   onExportChat?: () => void
   onSwitchPersona?: (name: string) => void
   onSetAutoMode?: (v: boolean) => void
-}): Command[] {
-  const commands: Command[] = []
+  onToggleInspector?: () => void
+}): CommandItem[] {
+  const commands: CommandItem[] = []
 
   if (actions.onConnectDatabase) {
     commands.push({
       id: "connect-db",
       label: "Connect Database",
-      description: "Connect to PostgreSQL, MySQL, or Azure SQL",
-      icon: <Database className="w-4 h-4 text-[#f97316]" />,
+      description: "PostgreSQL, MySQL, SQLite, Azure SQL",
+      icon: <Database className="w-3.5 h-3.5 text-[var(--color-cyan-500)]" />,
       action: actions.onConnectDatabase,
       keywords: ["database", "connect", "postgresql", "mysql", "sql", "live"],
+      group: "Navigate",
     })
   }
 
@@ -68,9 +75,10 @@ export function buildCommands(actions: {
       id: "search-edgar",
       label: "Search SEC Filings",
       description: "Search and ingest SEC EDGAR filings",
-      icon: <BookOpen className="w-4 h-4 text-[#10b981]" />,
+      icon: <BookOpen className="w-3.5 h-3.5 text-[var(--color-cyan-500)]" />,
       action: actions.onSearchEdgar,
       keywords: ["edgar", "sec", "filing", "10-k", "10-q", "annual"],
+      group: "Navigate",
     })
   }
 
@@ -79,9 +87,22 @@ export function buildCommands(actions: {
       id: "add-connector",
       label: "Add Marketplace Connector",
       description: "Connect Amazon or Shopify",
-      icon: <ShoppingCart className="w-4 h-4 text-[#667eea]" />,
+      icon: <ShoppingCart className="w-3.5 h-3.5 text-[var(--color-cyan-500)]" />,
       action: actions.onAddConnector,
       keywords: ["marketplace", "amazon", "shopify", "connector"],
+      group: "Navigate",
+    })
+  }
+
+  if (actions.onToggleInspector) {
+    commands.push({
+      id: "toggle-inspector",
+      label: "Toggle Inspector",
+      description: "Show or hide the right panel",
+      icon: <Sparkles className="w-3.5 h-3.5 text-[var(--color-cyan-500)]" />,
+      action: actions.onToggleInspector,
+      keywords: ["inspector", "panel", "right", "toggle"],
+      group: "Navigate",
     })
   }
 
@@ -91,9 +112,10 @@ export function buildCommands(actions: {
       id: "persona-auto",
       label: "Auto-routing",
       description: "Let AI pick the best expert",
-      icon: <Wand2 className="w-4 h-4 text-[#667eea]" />,
+      icon: <Wand2 className="w-3.5 h-3.5 text-[var(--color-amber-500)]" />,
       action: () => setAuto(true),
       keywords: ["auto", "routing", "persona"],
+      group: "Personas",
     })
   }
 
@@ -112,22 +134,12 @@ export function buildCommands(actions: {
         id: `persona-${p.name}`,
         label: `Switch to ${p.name}`,
         description: p.desc,
-        icon: <Sparkles className="w-4 h-4 text-[#667eea]" />,
-        action: () => { setAuto(false); switchFn(p.name); },
+        icon: <Sparkles className="w-3.5 h-3.5 text-[var(--color-amber-500)]" />,
+        action: () => { setAuto(false); switchFn(p.name) },
         keywords: ["persona", "switch", p.name.toLowerCase()],
+        group: "Personas",
       })
     }
-  }
-
-  if (actions.onClearChat) {
-    commands.push({
-      id: "clear-chat",
-      label: "Clear Chat",
-      description: "Clear all messages",
-      icon: <Trash2 className="w-4 h-4 text-red-400" />,
-      action: actions.onClearChat,
-      keywords: ["clear", "chat", "reset"],
-    })
   }
 
   if (actions.onExportChat) {
@@ -135,9 +147,22 @@ export function buildCommands(actions: {
       id: "export-chat",
       label: "Export Chat",
       description: "Export as text, markdown, or JSON",
-      icon: <Download className="w-4 h-4 text-gray-400" />,
+      icon: <Download className="w-3.5 h-3.5 text-[var(--color-text-tertiary)]" />,
       action: actions.onExportChat,
       keywords: ["export", "download", "save"],
+      group: "Actions",
+    })
+  }
+
+  if (actions.onClearChat) {
+    commands.push({
+      id: "clear-chat",
+      label: "Clear Chat",
+      description: "Remove all messages",
+      icon: <Trash2 className="w-3.5 h-3.5 text-[var(--color-danger-500)]" />,
+      action: actions.onClearChat,
+      keywords: ["clear", "chat", "reset"],
+      group: "Actions",
     })
   }
 
@@ -145,103 +170,114 @@ export function buildCommands(actions: {
 }
 
 export default function CommandPalette({ isOpen, onClose, commands }: CommandPaletteProps) {
-  const [query, setQuery] = useState("")
-  const [selectedIndex, setSelectedIndex] = useState(0)
-  const inputRef = useRef<HTMLInputElement>(null)
-
-  const filtered = query.trim()
-    ? commands.filter(cmd => {
-        const q = query.toLowerCase()
-        return (
-          cmd.label.toLowerCase().includes(q) ||
-          cmd.description.toLowerCase().includes(q) ||
-          cmd.keywords.some(k => k.includes(q))
-        )
-      })
-    : commands
+  const [value, setValue] = useState("")
 
   useEffect(() => {
-    if (isOpen) {
-      setQuery("")
-      setSelectedIndex(0)
-      setTimeout(() => inputRef.current?.focus(), 50)
-    }
+    if (isOpen) setValue("")
   }, [isOpen])
-
-  useEffect(() => {
-    setSelectedIndex(0)
-  }, [query])
-
-  const executeCommand = useCallback((cmd: Command) => {
-    onClose()
-    cmd.action()
-  }, [onClose])
-
-  const handleKeyDown = (e: React.KeyboardEvent) => {
-    if (e.key === "ArrowDown") {
-      e.preventDefault()
-      setSelectedIndex(i => Math.min(i + 1, filtered.length - 1))
-    } else if (e.key === "ArrowUp") {
-      e.preventDefault()
-      setSelectedIndex(i => Math.max(i - 1, 0))
-    } else if (e.key === "Enter" && filtered[selectedIndex]) {
-      e.preventDefault()
-      executeCommand(filtered[selectedIndex])
-    }
-  }
 
   if (!isOpen) return null
 
+  const groups: CommandItem["group"][] = ["Navigate", "Personas", "Actions"]
+
+  const executeCommand = (cmd: CommandItem) => {
+    onClose()
+    cmd.action()
+  }
+
   return (
-    <div className="fixed inset-0 z-[100] flex items-start justify-center pt-[20vh]">
+    <div className="fixed inset-0 z-[100] flex items-start justify-center pt-[18vh]">
       {/* Backdrop */}
-      <div className="absolute inset-0 bg-black/60 backdrop-blur-sm" onClick={onClose} />
+      <div
+        className="absolute inset-0 bg-[var(--bg-scrim,rgba(0,0,0,0.6))] backdrop-blur-sm"
+        onClick={onClose}
+        aria-hidden
+      />
 
       {/* Palette */}
-      <div className="relative w-full max-w-lg bg-[#12121a]/95 border border-[#ffffff10] rounded-2xl shadow-2xl shadow-black/40 overflow-hidden">
-        {/* Search input */}
-        <div className="flex items-center gap-3 px-4 py-3 border-b border-[#ffffff08]">
-          <Search className="w-4 h-4 text-gray-500 shrink-0" />
-          <input
-            ref={inputRef}
-            type="text"
-            value={query}
-            onChange={e => setQuery(e.target.value)}
-            onKeyDown={handleKeyDown}
-            placeholder="Type a command..."
-            className="flex-1 bg-transparent text-white text-sm outline-none placeholder-gray-500"
-          />
-          <kbd className="px-1.5 py-0.5 text-[10px] text-gray-500 bg-[#ffffff08] rounded border border-[#ffffff10]">ESC</kbd>
-        </div>
+      <div
+        className="relative w-full max-w-[560px] mx-4 bg-[var(--color-bg-elevated)] border border-[var(--color-border-default)] rounded-[12px] shadow-[var(--elev-4)] overflow-hidden"
+        role="dialog"
+        aria-label="Command palette"
+      >
+        <Command
+          shouldFilter
+          value={value}
+          onValueChange={setValue}
+          loop
+          className="flex flex-col"
+        >
+          {/* Search */}
+          <div className="flex items-center gap-3 px-4 h-[52px] border-b border-[var(--color-border-subtle)]">
+            <Search className="w-4 h-4 text-[var(--color-text-tertiary)] shrink-0" />
+            <Command.Input
+              autoFocus
+              placeholder="Type a command or search…"
+              className="flex-1 bg-transparent text-[14px] text-[var(--color-text-primary)] placeholder:text-[var(--color-text-quaternary)] outline-none"
+            />
+            <kbd className="text-[10px] h-5 px-1.5 inline-flex items-center rounded-[3px] border border-[var(--color-border-default)] bg-[var(--color-bg-overlay)] text-[var(--color-text-tertiary)] font-mono">
+              ESC
+            </kbd>
+          </div>
 
-        {/* Results */}
-        <div className="max-h-72 overflow-y-auto py-1">
-          {filtered.length === 0 ? (
-            <div className="px-4 py-6 text-center text-sm text-gray-500">
+          {/* Results */}
+          <Command.List className="max-h-[340px] overflow-y-auto py-2">
+            <Command.Empty className="px-4 py-8 text-center text-[12px] text-[var(--color-text-tertiary)]">
               No commands found
+            </Command.Empty>
+
+            {groups.map((group) => {
+              const items = commands.filter((c) => c.group === group)
+              if (!items.length) return null
+              return (
+                <Command.Group
+                  key={group}
+                  heading={group}
+                  className="[&_[cmdk-group-heading]]:px-3 [&_[cmdk-group-heading]]:py-1.5 [&_[cmdk-group-heading]]:text-[10px] [&_[cmdk-group-heading]]:font-semibold [&_[cmdk-group-heading]]:uppercase [&_[cmdk-group-heading]]:tracking-wider [&_[cmdk-group-heading]]:text-[var(--color-text-quaternary)]"
+                >
+                  {items.map((cmd) => (
+                    <Command.Item
+                      key={cmd.id}
+                      value={`${cmd.label} ${cmd.description} ${cmd.keywords.join(" ")}`}
+                      onSelect={() => executeCommand(cmd)}
+                      className="group relative flex items-center gap-3 px-3 h-9 mx-2 rounded-[5px] cursor-pointer text-[13px] text-[var(--color-text-secondary)] data-[selected=true]:bg-[var(--color-bg-overlay)] data-[selected=true]:text-[var(--color-text-primary)] data-[selected=true]:before:content-[''] data-[selected=true]:before:absolute data-[selected=true]:before:left-0 data-[selected=true]:before:top-1.5 data-[selected=true]:before:bottom-1.5 data-[selected=true]:before:w-[2px] data-[selected=true]:before:bg-[var(--color-cyan-500)] data-[selected=true]:before:rounded-full"
+                    >
+                      <span className="flex-none">{cmd.icon}</span>
+                      <span className="flex-1 min-w-0 truncate">{cmd.label}</span>
+                      <span className="flex-none text-[11px] text-[var(--color-text-tertiary)] truncate max-w-[220px]">
+                        {cmd.description}
+                      </span>
+                    </Command.Item>
+                  ))}
+                </Command.Group>
+              )
+            })}
+          </Command.List>
+
+          {/* Footer */}
+          <div className="flex items-center justify-between px-4 h-8 border-t border-[var(--color-border-subtle)] text-[10px] text-[var(--color-text-tertiary)]">
+            <div className="flex items-center gap-3">
+              <span className="flex items-center gap-1">
+                <Kbd>↑</Kbd><Kbd>↓</Kbd> navigate
+              </span>
+              <span className="flex items-center gap-1">
+                <Kbd>↵</Kbd> select
+              </span>
             </div>
-          ) : (
-            filtered.map((cmd, idx) => (
-              <button
-                key={cmd.id}
-                onClick={() => executeCommand(cmd)}
-                onMouseEnter={() => setSelectedIndex(idx)}
-                className={`w-full flex items-center gap-3 px-4 py-2.5 text-left transition-colors ${
-                  idx === selectedIndex ? "bg-[#667eea]/10" : "hover:bg-[#ffffff06]"
-                }`}
-              >
-                {cmd.icon}
-                <div className="flex-1 min-w-0">
-                  <p className={`text-sm font-medium ${idx === selectedIndex ? "text-white" : "text-gray-300"}`}>
-                    {cmd.label}
-                  </p>
-                  <p className="text-xs text-gray-500 truncate">{cmd.description}</p>
-                </div>
-              </button>
-            ))
-          )}
-        </div>
+            <span className="flex items-center gap-1">
+              <Kbd>⌘K</Kbd> toggle
+            </span>
+          </div>
+        </Command>
       </div>
     </div>
+  )
+}
+
+function Kbd({ children }: { children: React.ReactNode }) {
+  return (
+    <kbd className="inline-flex items-center justify-center min-w-[16px] h-4 px-1 rounded-[3px] border border-[var(--color-border-default)] bg-[var(--color-bg-overlay)] text-[9px] font-mono text-[var(--color-text-tertiary)]">
+      {children}
+    </kbd>
   )
 }

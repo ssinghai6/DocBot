@@ -1,7 +1,8 @@
 "use client"
 
 import React from "react"
-import { X, ShieldCheck } from "lucide-react"
+import { ShieldCheck } from "lucide-react"
+import { Dialog, DialogContent } from "@/components/ui"
 
 interface AuthConfig {
   email: boolean
@@ -27,6 +28,9 @@ interface AuthModalProps {
   onClose: () => void
 }
 
+const inputCx =
+  "w-full px-3 h-9 rounded-[5px] bg-[var(--color-bg-inset)] border border-[var(--color-border-default)] text-[13px] text-[var(--color-text-primary)] placeholder:text-[var(--color-text-quaternary)] outline-none focus:border-[var(--color-cyan-500)] focus:shadow-[0_0_0_3px_var(--glow-cyan)] transition-[border-color,box-shadow] duration-150"
+
 export default function AuthModal({
   authConfig,
   authModalTab,
@@ -44,38 +48,24 @@ export default function AuthModal({
   onClose,
 }: AuthModalProps) {
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center p-4">
-      <div
-        className="absolute inset-0 bg-black/70 backdrop-blur-sm"
-        onClick={onClose}
-      />
-      <div className="relative z-10 w-full max-w-sm bg-[#12121a] border border-[#ffffff10] rounded-2xl shadow-2xl overflow-hidden">
-        {/* Header */}
-        <div className="flex items-center justify-between px-5 py-4 border-b border-[#ffffff08]">
-          <div>
-            <h2 className="text-base font-bold text-white">Welcome to DocBot</h2>
-            <p className="text-xs text-gray-500 mt-0.5">Sign in to save your work across sessions</p>
-          </div>
-          <button
-            onClick={onClose}
-            className="p-1.5 rounded-lg hover:bg-[#ffffff10] text-gray-500 hover:text-white transition-colors"
-          >
-            <X className="w-4 h-4" />
-          </button>
+    <Dialog open onOpenChange={(o) => { if (!o) onClose() }}>
+      <DialogContent className="max-w-[420px]">
+        <div className="space-y-1 mb-4">
+          <h2 className="text-[15px] font-semibold text-[var(--color-text-primary)]">Welcome to DocBot</h2>
+          <p className="text-[12px] text-[var(--color-text-tertiary)]">Sign in to save your work across sessions</p>
         </div>
 
-        <div className="p-5 space-y-3">
-          {/* OAuth buttons */}
+        <div className="space-y-2.5">
           {authConfig?.github && (
             <button
               onClick={async () => {
                 try {
-                  const res = await fetch("/api/auth/github");
-                  const { url } = await res.json();
-                  window.location.href = url;
-                } catch { setAuthError("Failed to start GitHub sign-in."); }
+                  const res = await fetch("/api/auth/github")
+                  const { url } = await res.json()
+                  window.location.href = url
+                } catch { setAuthError("Failed to start GitHub sign-in.") }
               }}
-              className="flex items-center justify-center gap-2.5 w-full px-4 py-2.5 rounded-xl bg-[#24292e] hover:bg-[#2f363d] border border-[#ffffff15] text-white text-sm font-medium transition-all"
+              className="flex items-center justify-center gap-2 w-full h-9 rounded-[5px] bg-[var(--color-bg-inset)] hover:bg-[var(--color-bg-overlay)] border border-[var(--color-border-default)] text-[var(--color-text-primary)] text-[13px] font-medium transition-colors"
             >
               <svg className="w-4 h-4" viewBox="0 0 24 24" fill="currentColor">
                 <path d="M12 0C5.37 0 0 5.37 0 12c0 5.31 3.435 9.795 8.205 11.385.6.105.825-.255.825-.57 0-.285-.015-1.23-.015-2.235-3.015.555-3.795-.735-4.035-1.41-.135-.345-.72-1.41-1.23-1.695-.42-.225-1.02-.78-.015-.795.945-.015 1.62.87 1.845 1.23 1.08 1.815 2.805 1.305 3.495.99.105-.78.42-1.305.765-1.605-2.67-.3-5.46-1.335-5.46-5.925 0-1.305.465-2.385 1.23-3.225-.12-.3-.54-1.53.12-3.18 0 0 1.005-.315 3.3 1.23.96-.27 1.98-.405 3-.405s2.04.135 3 .405c2.295-1.56 3.3-1.23 3.3-1.23.66 1.65.24 2.88.12 3.18.765.84 1.23 1.905 1.23 3.225 0 4.605-2.805 5.625-5.475 5.925.435.375.81 1.095.81 2.22 0 1.605-.015 2.895-.015 3.3 0 .315.225.69.825.57A12.02 12.02 0 0024 12c0-6.63-5.37-12-12-12z" />
@@ -88,12 +78,12 @@ export default function AuthModal({
             <button
               onClick={async () => {
                 try {
-                  const res = await fetch("/api/auth/google");
-                  const { url } = await res.json();
-                  window.location.href = url;
-                } catch { setAuthError("Failed to start Google sign-in."); }
+                  const res = await fetch("/api/auth/google")
+                  const { url } = await res.json()
+                  window.location.href = url
+                } catch { setAuthError("Failed to start Google sign-in.") }
               }}
-              className="flex items-center justify-center gap-2.5 w-full px-4 py-2.5 rounded-xl bg-[#1a1a24] hover:bg-[#22222e] border border-[#ffffff10] text-white text-sm font-medium transition-all"
+              className="flex items-center justify-center gap-2 w-full h-9 rounded-[5px] bg-[var(--color-bg-inset)] hover:bg-[var(--color-bg-overlay)] border border-[var(--color-border-default)] text-[var(--color-text-primary)] text-[13px] font-medium transition-colors"
             >
               <svg className="w-4 h-4" viewBox="0 0 24 24">
                 <path d="M22.56 12.25c0-.78-.07-1.53-.2-2.25H12v4.26h5.92c-.26 1.37-1.04 2.53-2.21 3.31v2.77h3.57c2.08-1.92 3.28-4.74 3.28-8.09z" fill="#4285F4"/>
@@ -106,37 +96,39 @@ export default function AuthModal({
           )}
 
           {(authConfig?.github || authConfig?.google) && (
-            <div className="flex items-center gap-3 my-1">
-              <div className="flex-1 h-px bg-[#ffffff10]" />
-              <span className="text-[11px] text-gray-600">or</span>
-              <div className="flex-1 h-px bg-[#ffffff10]" />
+            <div className="flex items-center gap-3 py-1">
+              <div className="flex-1 h-px bg-[var(--color-border-subtle)]" />
+              <span className="text-[10px] uppercase tracking-wider text-[var(--color-text-quaternary)]">or</span>
+              <div className="flex-1 h-px bg-[var(--color-border-subtle)]" />
             </div>
           )}
 
-          {/* Email / Password */}
-          <div className="flex rounded-xl bg-[#1a1a24] border border-[#ffffff08] overflow-hidden text-xs">
+          {/* Segmented tab */}
+          <div className="flex rounded-[5px] bg-[var(--color-bg-inset)] border border-[var(--color-border-default)] overflow-hidden text-[11px] h-8">
             <button
-              onClick={() => { setAuthModalTab("login"); setAuthError(null); }}
-              className={`flex-1 py-2 font-medium transition-colors ${authModalTab === "login" ? "bg-[#667eea]/20 text-[#a5b4fc]" : "text-gray-500 hover:text-gray-300"}`}
+              type="button"
+              onClick={() => { setAuthModalTab("login"); setAuthError(null) }}
+              className={`flex-1 font-medium transition-colors ${authModalTab === "login" ? "bg-[var(--color-bg-overlay)] text-[var(--color-text-primary)]" : "text-[var(--color-text-tertiary)] hover:text-[var(--color-text-secondary)]"}`}
             >
               Sign in
             </button>
             <button
-              onClick={() => { setAuthModalTab("register"); setAuthError(null); }}
-              className={`flex-1 py-2 font-medium transition-colors ${authModalTab === "register" ? "bg-[#667eea]/20 text-[#a5b4fc]" : "text-gray-500 hover:text-gray-300"}`}
+              type="button"
+              onClick={() => { setAuthModalTab("register"); setAuthError(null) }}
+              className={`flex-1 font-medium transition-colors ${authModalTab === "register" ? "bg-[var(--color-bg-overlay)] text-[var(--color-text-primary)]" : "text-[var(--color-text-tertiary)] hover:text-[var(--color-text-secondary)]"}`}
             >
               Create account
             </button>
           </div>
 
-          <form onSubmit={handleEmailAuth} className="space-y-2.5">
+          <form onSubmit={handleEmailAuth} className="space-y-2">
             {authModalTab === "register" && (
               <input
                 type="text"
                 placeholder="Your name (optional)"
                 value={authName}
                 onChange={e => setAuthName(e.target.value)}
-                className="w-full px-3.5 py-2.5 rounded-xl bg-[#1a1a24] border border-[#ffffff10] text-white text-sm placeholder-gray-500 outline-none focus:border-[#667eea]/50 transition-colors"
+                className={inputCx}
               />
             )}
             <input
@@ -145,7 +137,7 @@ export default function AuthModal({
               value={authEmail}
               onChange={e => setAuthEmail(e.target.value)}
               required
-              className="w-full px-3.5 py-2.5 rounded-xl bg-[#1a1a24] border border-[#ffffff10] text-white text-sm placeholder-gray-500 outline-none focus:border-[#667eea]/50 transition-colors"
+              className={inputCx}
             />
             <input
               type="password"
@@ -153,24 +145,25 @@ export default function AuthModal({
               value={authPassword}
               onChange={e => setAuthPassword(e.target.value)}
               required
-              className="w-full px-3.5 py-2.5 rounded-xl bg-[#1a1a24] border border-[#ffffff10] text-white text-sm placeholder-gray-500 outline-none focus:border-[#667eea]/50 transition-colors"
+              className={inputCx}
             />
             {authError && (
-              <p className="text-xs text-red-400 bg-red-500/10 border border-red-500/20 rounded-lg px-3 py-2">{authError}</p>
+              <p className="text-[11px] text-[var(--color-danger-500)] bg-[var(--color-danger-500)]/10 border border-[var(--color-danger-500)]/30 rounded-[5px] px-2.5 py-1.5">
+                {authError}
+              </p>
             )}
             <button
               type="submit"
               disabled={authSubmitting || !authEmail || !authPassword}
-              className="w-full py-2.5 rounded-xl bg-[#667eea] hover:bg-[#5a6fd4] disabled:opacity-50 text-white text-sm font-medium transition-colors"
+              className="w-full h-9 rounded-[5px] bg-[var(--color-cyan-500)] hover:bg-[var(--color-cyan-600)] disabled:opacity-40 disabled:cursor-not-allowed text-[var(--color-bg-base)] text-[13px] font-semibold transition-colors"
             >
-              {authSubmitting ? "Please wait\u2026" : authModalTab === "register" ? "Create account" : "Sign in"}
+              {authSubmitting ? "Please wait…" : authModalTab === "register" ? "Create account" : "Sign in"}
             </button>
           </form>
 
-          {/* Guest option */}
           <button
             onClick={onClose}
-            className="w-full py-2 text-xs text-gray-600 hover:text-gray-400 transition-colors"
+            className="w-full py-1.5 text-[11px] text-[var(--color-text-tertiary)] hover:text-[var(--color-text-secondary)] transition-colors"
           >
             Continue as guest (no account needed)
           </button>
@@ -178,14 +171,14 @@ export default function AuthModal({
           {authConfig?.saml && (
             <a
               href="/api/auth/saml/login"
-              className="flex items-center justify-center gap-1.5 w-full text-xs text-gray-600 hover:text-[#a5b4fc] transition-colors"
+              className="flex items-center justify-center gap-1.5 w-full text-[11px] text-[var(--color-text-tertiary)] hover:text-[var(--color-cyan-500)] transition-colors"
             >
               <ShieldCheck className="w-3 h-3" />
               Sign in with enterprise SSO
             </a>
           )}
         </div>
-      </div>
-    </div>
+      </DialogContent>
+    </Dialog>
   )
 }

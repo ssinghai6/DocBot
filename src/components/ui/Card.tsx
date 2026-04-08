@@ -2,11 +2,24 @@
 
 import React from "react"
 
+type CardAccent = "none" | "cyan" | "amber" | "success" | "warning" | "danger"
+
 interface CardProps {
   children: React.ReactNode
   className?: string
   hoverable?: boolean
   onClick?: () => void
+  /** Optional 2px left rule — signals message/artifact origin */
+  accent?: CardAccent
+}
+
+const accentClasses: Record<CardAccent, string> = {
+  none: "",
+  cyan: "border-l-2 border-l-[var(--color-cyan-500)]",
+  amber: "border-l-2 border-l-[var(--color-amber-500)]",
+  success: "border-l-2 border-l-[var(--color-success-500)]",
+  warning: "border-l-2 border-l-[var(--color-warning-500)]",
+  danger: "border-l-2 border-l-[var(--color-danger-500)]",
 }
 
 export default function Card({
@@ -14,6 +27,7 @@ export default function Card({
   className = "",
   hoverable = false,
   onClick,
+  accent = "none",
 }: CardProps) {
   const isClickable = !!onClick
 
@@ -33,9 +47,10 @@ export default function Card({
           : undefined
       }
       className={[
-        "bg-gray-900 border border-gray-800 rounded-xl p-4",
+        "bg-[var(--color-bg-elevated)] border border-[var(--color-border-subtle)] rounded-[8px]",
+        accentClasses[accent],
         hoverable || isClickable
-          ? "transition-all duration-300 hover:border-gray-700 hover:shadow-lg hover:shadow-black/30 hover:-translate-y-0.5"
+          ? "transition-colors duration-[var(--duration-fast)] hover:border-[var(--color-border-default)]"
           : "",
         isClickable ? "cursor-pointer" : "",
         className,

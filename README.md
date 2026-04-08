@@ -8,9 +8,9 @@
   <img src="https://img.shields.io/badge/Tests-686+ passing-brightgreen.svg" alt="Tests">
 </p>
 
-**Ask Anything About Your Data.**
+**The AI Financial Analyst That Cross-Checks Everything.**
 
-DocBot is an AI-powered document + database analyst. Upload PDFs, connect a live database, upload CSV files, ingest SEC filings, or combine sources — get instant answers with source citations, SQL explanations, Python-generated charts, discrepancy detection, session memory, and a multi-step Autopilot agent that investigates complex questions autonomously.
+DocBot is an AI-powered financial document + database analyst. Upload 10-K filings, connect a live database, upload CSV files, ingest SEC filings from EDGAR, or combine sources — get instant answers with source citations, SQL explanations, Python-generated charts, discrepancy detection, and a multi-step Autopilot agent that investigates complex questions autonomously. Try the one-click sandbox demo with pre-loaded TechCorp financials — no setup required.
 
 ---
 
@@ -18,7 +18,7 @@ DocBot is an AI-powered document + database analyst. Upload PDFs, connect a live
 
 | Capability | Description |
 |---|---|
-| **PDF Chat** | Upload PDFs, ask questions, get cited answers from 8 expert personas with smart auto-routing |
+| **PDF Chat** | Upload PDFs, ask questions, get cited answers from expert personas with smart auto-routing |
 | **Live Database Chat** | Connect PostgreSQL, MySQL, SQLite, or Azure SQL — ask in plain English, get SQL + results |
 | **CSV Intelligence** | Upload CSV files — queries run via E2B pandas sandbox with automatic data profiling, error retry, and adaptive limits |
 | **Hybrid Mode** | One question answered from both your documents and your database in a single response |
@@ -28,9 +28,11 @@ DocBot is an AI-powered document + database analyst. Upload PDFs, connect a live
 | **Deep Research** | Sub-question decomposition, parallel retrieval, and gap-fill loop for thorough document analysis |
 | **Analytical Autopilot** | LangGraph multi-step investigation agent — works with PDF + CSV + SQL, uses Deep Research for doc search |
 | **SEC EDGAR Integration** | Search public companies, browse 10-K/10-Q/8-K filings, ingest into RAG pipeline — no API key required |
+| **Sandbox Demo Mode** | One-click demo with pre-loaded TechCorp 10-K + financial database — experience hybrid analysis and discrepancy detection instantly |
 | **Commerce Connectors** | Marketplace connector framework with Amazon SP-API + Shopify — OAuth, Orders, Finances, background sync (APScheduler), connector persistence, webhook-driven sync |
 | **LLM Fallback** | Groq primary, Gemini 2.5 Flash automatic fallback — wired to all 8 production callsites |
 | **Conversational Memory** | Follow-up questions rephrased into standalone queries across all pipelines (CSV, SQL, hybrid, autopilot) |
+| **Cmd+K Command Palette** | Searchable command palette for power users — quick access to all features without navigating the UI |
 | **Azure SQL / Entra Auth** | Enterprise Microsoft Entra (Azure AD) Service Principal authentication for Azure SQL |
 | **SAML 2.0 SSO** | SP-initiated SSO with Okta, Azure AD, or any SAML 2.0 IdP; JIT user provisioning on first login |
 | **Consumer Auth** | GitHub OAuth, Google OAuth, email+password, or guest mode — no enterprise SSO required |
@@ -43,7 +45,7 @@ DocBot is an AI-powered document + database analyst. Upload PDFs, connect a live
 | **Schema-Aware Table Selection** | Question embeddings matched against table embeddings (cosine similarity) so the right tables are always selected — even with cryptic names like `cust_ord_hdr_rec` |
 | **Query History Panel** | Sidebar panel showing all past queries — click to re-run or inspect SQL |
 
-**Core differentiator**: Hybrid Docs+DB synthesis with discrepancy detection + Analytical Autopilot + SEC EDGAR Integration + Commerce Connectors. No other tool does this.
+**Core differentiator**: Hybrid Docs+DB synthesis with discrepancy detection + Analytical Autopilot + SEC EDGAR Integration. No other tool cross-checks your documents against your database.
 
 ---
 
@@ -80,18 +82,18 @@ Open [http://localhost:3000](http://localhost:3000)
 
 ### Expert Persona System
 
-8 specialized AI personas, each with domain-optimized prompts:
+4 primary personas visible in the UI (8 supported on backend), each with domain-optimized prompts:
 
 | Persona | Best For |
 |---|---|
 | **Generalist** | Broad questions, general summarization |
-| **Doctor** | Medical documents, clinical notes, lab reports |
-| **Finance Expert** | Financial reports, P&L, investor materials |
-| **Engineer** | Technical specs, architecture documents |
-| **AI/ML Expert** | Research papers, model cards, ML documentation |
-| **Lawyer** | Contracts, legal agreements, case summaries |
-| **Consultant** | Strategy documents, business proposals |
+| **Finance Expert** | Financial reports, P&L, investor materials, DCF, valuations |
 | **Data Analyst** | Data-heavy documents, statistical analysis, BI reports |
+| **Strategy Analyst** | Strategy documents, business proposals, competitive analysis |
+
+Additional personas available via Cmd+K command palette: Doctor, Engineer, AI/ML Expert, Lawyer.
+
+Smart auto-routing is enabled by default — DocBot selects the best persona for each question automatically.
 
 ### Live Database Connectivity
 
@@ -216,6 +218,16 @@ Pluggable marketplace connector framework for e-commerce data integration:
 - **Background sync worker**: APScheduler runs incremental syncs (Orders every 15 min, Inventory every 60 min, Finances every 4 hours) with exponential backoff on rate limits
 - **Webhook receiver**: `POST /api/marketplace/webhook/shopify` with signature verification triggers incremental sync on order events
 - **Frontend UI**: `MarketplacePanel.tsx` for registering, syncing, and disconnecting marketplace connections
+
+### Sandbox Demo Mode
+
+One-click demo environment with pre-loaded financial data — no uploads or database connections required:
+
+- **TechCorp 10-K**: 7 hardcoded document chunks covering business overview, financial highlights, revenue by segment, quarterly performance, balance sheet, risk factors, and FY2025 guidance
+- **SQLite financial database**: 4 tables (financials, quarterly, segments, balance_sheet) with 3 years of data
+- **Deliberate discrepancies**: Q4 net income ($325M in DB vs $330M in doc) and Professional Services revenue ($885M vs $890M) to showcase discrepancy detection
+- **Instant hybrid mode**: Creates a RAG session + DB connection in one API call — user can immediately ask questions spanning both sources
+- **Suggested questions**: Pre-loaded prompts to guide first-time users through revenue analysis, quarterly comparison, and discrepancy detection
 
 ### RAG Quality Enhancement
 
@@ -367,8 +379,13 @@ Sensitive data detected and redacted before it reaches the LLM:
 │  └─────────────┘  └──────────────┘  └────────────────────┘  │
 │  ┌─────────────┐  ┌──────────────┐  ┌────────────────────┐  │
 │  │commerce_    │  │connectors/   │  │file_upload_        │  │
-│  │service      │  │amazon, rate  │  │service             │  │
-│  │unified schma│  │limiter, base │  │CSV + SQLite upload │  │
+│  │service      │  │amazon,shopify│  │service             │  │
+│  │unified schma│  │edgar, rate   │  │CSV + SQLite upload │  │
+│  └─────────────┘  └──────────────┘  └────────────────────┘  │
+│  ┌─────────────┐  ┌──────────────┐  ┌────────────────────┐  │
+│  │demo_service │  │edgar_service │  │connector_store     │  │
+│  │sandbox demo │  │EDGAR ingest  │  │persistence + cache │  │
+│  │TechCorp 10K │  │pipeline      │  │                    │  │
 │  └─────────────┘  └──────────────┘  └────────────────────┘  │
 │  ┌─────────────┐  ┌──────────────┐  ┌────────────────────┐  │
 │  │auth_service │  │rbac_service  │  │audit_service       │  │
@@ -632,6 +649,14 @@ GET /api/edgar/cache?ticker=AAPL
 # Returns: { filings: [...], count }
 ```
 
+### Demo Mode
+
+```bash
+POST /api/demo/init
+# Creates a fresh demo session with pre-loaded TechCorp 10-K document + SQLite financial database
+# Returns: { session_id, connection_id, company, filing, schema_summary, suggested_questions }
+```
+
 ### Sandbox Execution
 
 ```bash
@@ -865,10 +890,16 @@ Set all environment variables in the Railway and Vercel dashboards.
 
 ## Roadmap
 
-### Post-Funding
+### Next Up
+
+- Stripe billing integration (3-tier pricing: Starter $49, Professional $149, Enterprise $349)
+- Product launch — Product Hunt, Hacker News, LinkedIn outreach
+
+### Post-Launch
 
 - Additional marketplace connectors (eBay, Walmart)
 - Additional document connectors (UK Companies House, Canadian SEDAR)
+- XBRL parsing and financial ratio auto-calculation
 - Shopify OAuth app marketplace listing (currently custom app access token)
 - Multi-region deployment and horizontal scaling
 

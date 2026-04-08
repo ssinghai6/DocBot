@@ -2,7 +2,7 @@
 
 import React from "react"
 
-type BadgeVariant = "default" | "success" | "warning" | "error" | "info"
+type BadgeVariant = "default" | "success" | "warning" | "error" | "info" | "cyan" | "amber"
 
 interface BadgeProps {
   variant?: BadgeVariant
@@ -11,11 +11,20 @@ interface BadgeProps {
 }
 
 const variantClasses: Record<BadgeVariant, string> = {
-  default: "bg-gray-700 text-gray-300 border-gray-600",
-  success: "bg-green-900/40 text-green-400 border-green-700/50",
-  warning: "bg-yellow-900/40 text-yellow-400 border-yellow-700/50",
-  error: "bg-red-900/40 text-red-400 border-red-700/50",
-  info: "bg-blue-900/40 text-blue-400 border-blue-700/50",
+  default:
+    "bg-[var(--color-bg-inset)] text-[var(--color-text-tertiary)] border-[var(--color-border-default)]",
+  success:
+    "bg-[var(--color-success-900)] text-[var(--color-success-500)] border-[var(--color-success-500)]/40",
+  warning:
+    "bg-[var(--color-warning-900)] text-[var(--color-warning-500)] border-[var(--color-warning-500)]/40",
+  error:
+    "bg-[var(--color-danger-900)] text-[var(--color-danger-500)] border-[var(--color-danger-500)]/40",
+  info:
+    "bg-[var(--color-info-900)] text-[var(--color-info-500)] border-[var(--color-info-500)]/40",
+  cyan:
+    "bg-[var(--color-cyan-900)] text-[var(--color-cyan-200)] border-[var(--color-cyan-500)]/40",
+  amber:
+    "bg-[var(--color-amber-900)] text-[var(--color-amber-200)] border-[var(--color-amber-500)]/40",
 }
 
 export default function Badge({
@@ -26,7 +35,7 @@ export default function Badge({
   return (
     <span
       className={[
-        "inline-flex items-center px-2 py-0.5 rounded-full text-xs font-medium border",
+        "inline-flex items-center px-1.5 py-0.5 rounded-[3px] text-[10px] font-medium border uppercase tracking-wider",
         variantClasses[variant],
         className,
       ]
