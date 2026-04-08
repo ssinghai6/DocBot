@@ -312,6 +312,7 @@ async def _collect_sql_result(
     query_embeddings_table,
     async_session_factory,
     expert_personas: dict,
+    chart_type: str = "auto",
 ) -> dict | None:
     """Run the SQL pipeline and return the metadata dict, or None on failure.
 
@@ -336,6 +337,7 @@ async def _collect_sql_result(
             query_embeddings_table=query_embeddings_table,
             async_session_factory=async_session_factory,
             expert_personas=expert_personas,
+            chart_type=chart_type,
         ):
             if not raw_chunk.startswith("data: "):
                 continue
@@ -395,6 +397,7 @@ async def hybrid_chat(
     extracted_fields: list | None = None,
     deep_research: bool = False,
     chat_history: list[dict[str, str]] | None = None,
+    chart_type: str = "auto",
 ) -> AsyncGenerator[str, None]:
     """Hybrid chat pipeline: intent classification → SQL + RAG → synthesis.
 
@@ -457,6 +460,7 @@ async def hybrid_chat(
             query_embeddings_table=query_embeddings_table,
             async_session_factory=async_session_factory,
             expert_personas=expert_personas,
+            chart_type=chart_type,
         )
 
     else:  # hybrid — parallel gather
@@ -474,6 +478,7 @@ async def hybrid_chat(
                 query_embeddings_table=query_embeddings_table,
                 async_session_factory=async_session_factory,
                 expert_personas=expert_personas,
+                chart_type=chart_type,
             )
         ) if has_db and connection_id else None
 

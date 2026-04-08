@@ -2215,6 +2215,7 @@ class HybridChatRequest(BaseModel):
     has_docs: bool = True
     deep_research: bool = False
     history: List[ChatMessage] = []
+    chart_type: str = "auto"
 
 
 @app.post("/api/hybrid/chat")
@@ -2265,6 +2266,7 @@ async def hybrid_chat_route(raw_request: Request, request: HybridChatRequest, _u
                 extracted_fields=EXTRACTED_FIELDS.get(request.session_id),
                 deep_research=request.deep_research,
                 chat_history=_hybrid_history if _hybrid_history else None,
+                chart_type=request.chart_type,
             ):
                 yield chunk
         except Exception as exc:

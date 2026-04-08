@@ -251,6 +251,30 @@ def make_executor_node(
             has_docs=state.get("has_docs", False),
             has_csv=state.get("has_csv", False),
         )
+
+        # Bug #12: python_analysis needs prior data (a sql_query row-set or a
+        # doc_search context). If the planner picked it as the very first step,
+        # or if no prior step produced usable data, demote it to the best
+        # data-fetch alternative for the available source. CSV is exempt —
+        # its python_analysis branch loads the CSV directly.
+        if tool == "python_analysis" and not state.get("has_csv"):
+            _prior_has_data = any(
+                p.get("tool") in {"sql_query", "doc_search"} and not p.get("error")
+                for p in state.get("steps_completed", [])
+            )
+            if not _prior_has_data:
+                if state.get("has_db", True):
+                    tool = "sql_query"
+                    logger.info(
+                        "executor_node: demoted python_analysis → sql_query "
+                        "(no prior data for step: %s)", step[:80]
+                    )
+                elif state.get("has_docs"):
+                    tool = "doc_search"
+                    logger.info(
+                        "executor_node: demoted python_analysis → doc_search "
+                        "(no prior data for step: %s)", step[:80]
+                    )
         session_id = state["session_id"]
         connection_id = state["connection_id"]
         persona = state.get("persona", "Generalist")

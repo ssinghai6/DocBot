@@ -62,6 +62,49 @@ _IMPORT_RE = _re_module.compile(
 )
 
 
+# Bug #8: safer preamble prepender.
+#   - Strips the first real `pd.read_csv(...)` call (the preamble already ran it)
+#   - Strips a bare `import pandas as pd` line
+#   - Leaves anything else — including comments, f-strings, variable names
+#     that merely contain the substring "import pandas as pd" — untouched.
+_IMPORT_PANDAS_LINE_RE = _re_module.compile(
+    r"^[ \t]*import[ \t]+pandas[ \t]+as[ \t]+pd[ \t]*(?:#.*)?$",
+    _re_module.MULTILINE,
+)
+_READ_CSV_LINE_RE = _re_module.compile(
+    r"^(?![ \t]*#).*\bpd\.read_csv\s*\([^)]*\).*$",
+    _re_module.MULTILINE,
+)
+
+
+def _prepend_csv_preamble(code: str, preamble: str) -> str:
+    """Prepend the section-aware preamble to LLM-generated CSV code.
+
+    Strips any duplicate ``pd.read_csv(...)`` line (the first one only) and
+    any bare ``import pandas as pd`` lines, then prepends the preamble. Uses
+    strict anchored regexes so comments, string literals, and variable names
+    that happen to contain similar text are never modified.
+    """
+    if not code:
+        return preamble
+    code = _READ_CSV_LINE_RE.sub("# (read_csv handled by preamble)", code, count=1)
+    code = _IMPORT_PANDAS_LINE_RE.sub("", code)
+    return preamble + code
+
+
+def _normalise_for_diff(code: str) -> str:
+    """Normalise code for equality comparison between first + retry attempts.
+
+    Strips whitespace-only lines and collapses runs of spaces so tiny
+    cosmetic diffs (blank lines, extra spaces) don't cause a pointless
+    second sandbox invocation.
+    """
+    if not code:
+        return ""
+    lines = [ln.rstrip() for ln in code.splitlines() if ln.strip()]
+    return "\n".join(" ".join(ln.split()) for ln in lines)
+
+
 def _detect_needed_packages(code: str) -> list[str]:
     """Scan generated code for imports and return the list of non-default
     packages that must be pip-installed in the sandbox.
@@ -112,21 +155,55 @@ _mpl.use('Agg')
 import matplotlib.pyplot as _plt
 import io as _io, base64 as _b64, sys as _sys
 
+_EMITTED_FIG_IDS = set()
+
+def _emit_figure(_fig):
+    \"\"\"Encode a matplotlib Figure to stdout as a CHART_B64: line (idempotent).\"\"\"
+    _fid = id(_fig)
+    if _fid in _EMITTED_FIG_IDS:
+        return
+    _EMITTED_FIG_IDS.add(_fid)
+    _buf = _io.BytesIO()
+    _fig.savefig(_buf, format='png', bbox_inches='tight', dpi=150)
+    _buf.seek(0)
+    _sys.stdout.write('CHART_B64:' + _b64.b64encode(_buf.read()).decode() + '\\n')
+    _sys.stdout.flush()
+
 def _flush_open_figures():
     \"\"\"Capture any matplotlib figures that are still open and write to stdout.\"\"\"
     for _fnum in _plt.get_fignums():
-        _fig = _plt.figure(_fnum)
-        _buf = _io.BytesIO()
-        _fig.savefig(_buf, format='png', bbox_inches='tight', dpi=150)
-        _buf.seek(0)
-        _sys.stdout.write('CHART_B64:' + _b64.b64encode(_buf.read()).decode() + '\\n')
-        _sys.stdout.flush()
+        _emit_figure(_plt.figure(_fnum))
     _plt.close('all')
 
 _orig_show = _plt.show
 def _patched_show(*_args, **_kwargs):
     _flush_open_figures()
 _plt.show = _patched_show
+
+# Bug #10: also intercept plt.savefig() and Figure.savefig() so code that
+# writes to a file path (common pattern from LLMs) still emits the chart
+# back to the hybrid/SSE pipeline. We call the original first to preserve
+# the on-disk artifact, then emit the in-memory PNG.
+_orig_plt_savefig = _plt.savefig
+def _patched_plt_savefig(*args, **kwargs):
+    _result = _orig_plt_savefig(*args, **kwargs)
+    try:
+        _emit_figure(_plt.gcf())
+    except Exception:
+        pass
+    return _result
+_plt.savefig = _patched_plt_savefig
+
+from matplotlib.figure import Figure as _Figure  # noqa: E402
+_orig_fig_savefig = _Figure.savefig
+def _patched_fig_savefig(self, *args, **kwargs):
+    _result = _orig_fig_savefig(self, *args, **kwargs)
+    try:
+        _emit_figure(self)
+    except Exception:
+        pass
+    return _result
+_Figure.savefig = _patched_fig_savefig
 """
 
 # Appended after every execution — captures figures that were created but
@@ -922,14 +999,43 @@ def _format_stdout_as_markdown(text: str) -> str:
             raw_table_lines = []
 
     def _looks_like_raw_table(line: str) -> bool:
-        """Detect pandas .to_string() output: multiple whitespace-separated columns."""
+        """Detect pandas .to_string() output.
+
+        Bug #7: the old heuristic ("3+ tokens and 2 multi-space gaps") wrapped
+        ordinary narrative lines like ``Q1 revenue was $525M`` in code blocks.
+
+        Tightened rule: a raw-table line must
+          1. have >= 3 whitespace-separated tokens
+          2. have >= 2 multi-space gaps (column separators)
+          3. contain at least one purely numeric token OR start with an
+             index-like token (short alphanumeric label).
+        Prose sentences almost never satisfy (2) + (3) simultaneously.
+        """
         stripped = line.strip()
         if not stripped:
             return False
-        # Lines with 3+ whitespace-separated tokens and at least 2 multi-space gaps
         parts = stripped.split()
-        gaps = len([1 for i in range(len(stripped) - 1) if stripped[i:i+2] == '  '])
-        return len(parts) >= 3 and gaps >= 2
+        if len(parts) < 3:
+            return False
+        gaps = sum(1 for i in range(len(stripped) - 1) if stripped[i:i+2] == '  ')
+        if gaps < 2:
+            return False
+
+        def _is_numeric(tok: str) -> bool:
+            t = tok.strip(',.()%$')
+            if not t:
+                return False
+            try:
+                float(t.replace(',', ''))
+                return True
+            except ValueError:
+                return False
+
+        numeric_count = sum(1 for p in parts if _is_numeric(p))
+        # Require at least one numeric token, and either
+        #  - multiple numeric tokens (looks like a data row), or
+        #  - most tokens are numeric (looks like summary stats)
+        return numeric_count >= 2 or (numeric_count >= 1 and numeric_count / len(parts) >= 0.5)
 
     for line in lines:
         # Already markdown formatted (has pipes) — keep as-is
@@ -1108,16 +1214,7 @@ async def run_csv_query_on_e2b(
     else:
         # Prepend preamble to LLM-generated code, stripping any duplicate
         # pd.read_csv() / import pandas the LLM may have included
-        import re as _re
-        code = _re.sub(
-            r"^.*pd\.read_csv\s*\(.*\).*$",
-            "# (read_csv handled by preamble)",
-            code,
-            count=1,
-            flags=_re.MULTILINE,
-        )
-        code = _re.sub(r"^import pandas as pd\s*$", "", code, count=1, flags=_re.MULTILINE)
-        code = preamble + code
+        code = _prepend_csv_preamble(code, preamble)
 
     # Decode CSV and run on E2B
     try:
@@ -1158,27 +1255,23 @@ async def run_csv_query_on_e2b(
         )
         if retry_code:
             # Prepend preamble to retry code same as original
-            import re as _re
-            retry_code = _re.sub(
-                r"^.*pd\.read_csv\s*\(.*\).*$",
-                "# (read_csv handled by preamble)",
-                retry_code,
-                count=1,
-                flags=_re.MULTILINE,
-            )
-            retry_code = _re.sub(r"^import pandas as pd\s*$", "", retry_code, count=1, flags=_re.MULTILINE)
-            retry_code = preamble + retry_code
+            retry_code = _prepend_csv_preamble(retry_code, preamble)
 
-            retry_result = await _run_csv_in_sandbox(
-                retry_code, csv_path_in_sandbox, csv_bytes, timeout_seconds=sandbox_timeout
-            )
-            if retry_result.error is None:
-                logger.info("CSV retry succeeded")
-                result = retry_result
-                code = retry_code
+            # Bug #9: skip retry if LLM returned effectively identical code —
+            # rerunning broken code just wastes 30-60 seconds.
+            if _normalise_for_diff(retry_code) == _normalise_for_diff(code):
+                logger.info("CSV retry produced identical code — skipping")
             else:
-                logger.warning("CSV retry also failed: %s, using original error", retry_result.error[:200])
-                # Keep original result (don't show retry error)
+                retry_result = await _run_csv_in_sandbox(
+                    retry_code, csv_path_in_sandbox, csv_bytes, timeout_seconds=sandbox_timeout
+                )
+                if retry_result.error is None:
+                    logger.info("CSV retry succeeded")
+                    result = retry_result
+                    code = retry_code
+                else:
+                    logger.warning("CSV retry also failed: %s, using original error", retry_result.error[:200])
+                    # Keep original result (don't show retry error)
 
     # --- SSE: metadata chunk ---
     cols_summary = ", ".join(column_names[:6])
