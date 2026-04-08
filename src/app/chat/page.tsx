@@ -583,8 +583,13 @@ export default function Home() {
           if (isCollapsed && inspectorOpen) setInspectorOpen(false)
           if (!isCollapsed && !inspectorOpen) setInspectorOpen(true)
         }}
+        className="min-w-0"
       >
-        <InspectorPanel onClose={() => setInspectorOpen(false)} />
+        {inspectorOpen ? (
+          <InspectorPanel onClose={() => setInspectorOpen(false)} />
+        ) : (
+          <div className="h-full w-full" aria-hidden="true" />
+        )}
       </Panel>
       </PanelGroup>
 

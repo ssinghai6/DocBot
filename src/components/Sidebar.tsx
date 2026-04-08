@@ -191,11 +191,12 @@ export default function Sidebar(props: SidebarProps) {
       {/* Sidebar */}
       <aside className={`
         w-[260px] bg-[var(--color-bg-surface)] border-r border-[var(--color-border-subtle)]
-        flex flex-col p-4 z-40 shrink-0 overflow-y-auto
+        flex flex-col z-40 shrink-0
         transition-transform duration-[var(--duration-base)] ease-in-out
         ${sidebarOpen ? 'translate-x-0' : '-translate-x-full lg:translate-x-0'}
         fixed lg:relative h-full
       `}>
+        <div className="flex-1 min-h-0 overflow-y-auto p-4 flex flex-col">
         {/* Logo */}
         <div className="flex items-center gap-2.5 mb-4 h-11">
           <div className="w-8 h-8 rounded-[5px] bg-[var(--color-cyan-500)]/10 border border-[var(--color-cyan-500)]/30 flex items-center justify-center">
@@ -467,8 +468,10 @@ export default function Sidebar(props: SidebarProps) {
           )}
         </div>
 
-        {/* Footer */}
-        <div className="pt-3 mt-auto text-center text-[10px] text-[var(--color-text-quaternary)]">
+        </div>
+
+        {/* Footer — pinned outside scroll area */}
+        <div className="shrink-0 px-4 py-3 border-t border-[var(--color-border-subtle)] text-center text-[10px] text-[var(--color-text-tertiary)]">
           <p>Built by <a href="https://sanshrit-singhai.vercel.app" className="text-[var(--color-cyan-500)] hover:underline" target="_blank" rel="noopener noreferrer">Sanshrit Singhai</a></p>
         </div>
       </aside>

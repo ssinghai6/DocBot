@@ -264,7 +264,7 @@ export default function ChatArea(props: ChatAreaProps) {
         {!sessionId && !isDbConnected && messages.length === 0 ? (
           <div className="flex flex-col items-center justify-center h-full">
             <p className="text-[22px] font-semibold text-[var(--color-text-primary)] mb-2 text-center">What do you want to analyze?</p>
-            <p className="text-[13px] text-[var(--color-text-tertiary)] text-center max-w-md mb-10">
+            <p className="text-[13px] text-[var(--color-text-secondary)] text-center max-w-md mb-10">
               Upload financial documents, connect a live database, or browse SEC filings.
             </p>
 
@@ -272,49 +272,49 @@ export default function ChatArea(props: ChatAreaProps) {
             <div className="grid grid-cols-1 sm:grid-cols-3 gap-3 max-w-xl w-full mb-8">
               <button
                 onClick={onUploadClick}
-                className="group flex flex-col items-center gap-3 p-5 bg-[var(--color-bg-surface)] rounded-[8px] border border-[var(--color-border-subtle)] hover:border-[var(--color-cyan-500)]/40 transition-colors"
+                className="group flex flex-col items-center gap-3 p-5 bg-[var(--color-bg-surface)] rounded-[8px] border border-[var(--color-border-subtle)] hover:border-[var(--color-cyan-500)]/40 hover:-translate-y-0.5 hover:shadow-[var(--elev-2)] transition-all duration-[var(--duration-base)] ease-[var(--ease-standard)]"
               >
                 <div className="w-10 h-10 rounded-[5px] bg-[var(--color-cyan-500)]/10 border border-[var(--color-cyan-500)]/20 flex items-center justify-center">
                   <Upload className="w-4 h-4 text-[var(--color-cyan-500)]" />
                 </div>
                 <div className="text-center">
                   <p className="text-[13px] font-medium text-[var(--color-text-primary)]">Upload Document</p>
-                  <p className="text-[11px] text-[var(--color-text-tertiary)] mt-0.5">PDF, CSV, or SQLite</p>
+                  <p className="text-[11px] text-[var(--color-text-secondary)] mt-0.5">PDF, CSV, or SQLite</p>
                 </div>
               </button>
 
               <button
                 onClick={onConnectDatabase}
-                className="group flex flex-col items-center gap-3 p-5 bg-[var(--color-bg-surface)] rounded-[8px] border border-[var(--color-border-subtle)] hover:border-[var(--color-cyan-500)]/40 transition-colors"
+                className="group flex flex-col items-center gap-3 p-5 bg-[var(--color-bg-surface)] rounded-[8px] border border-[var(--color-border-subtle)] hover:border-[var(--color-cyan-500)]/40 hover:-translate-y-0.5 hover:shadow-[var(--elev-2)] transition-all duration-[var(--duration-base)] ease-[var(--ease-standard)]"
               >
                 <div className="w-10 h-10 rounded-[5px] bg-[var(--color-cyan-500)]/10 border border-[var(--color-cyan-500)]/20 flex items-center justify-center">
                   <Database className="w-4 h-4 text-[var(--color-cyan-500)]" />
                 </div>
                 <div className="text-center">
                   <p className="text-[13px] font-medium text-[var(--color-text-primary)]">Connect Database</p>
-                  <p className="text-[11px] text-[var(--color-text-tertiary)] mt-0.5">PostgreSQL, MySQL, Azure</p>
+                  <p className="text-[11px] text-[var(--color-text-secondary)] mt-0.5">PostgreSQL, MySQL, Azure</p>
                 </div>
               </button>
 
               <button
                 onClick={onBrowseEdgar}
-                className="group flex flex-col items-center gap-3 p-5 bg-[var(--color-bg-surface)] rounded-[8px] border border-[var(--color-border-subtle)] hover:border-[var(--color-cyan-500)]/40 transition-colors"
+                className="group flex flex-col items-center gap-3 p-5 bg-[var(--color-bg-surface)] rounded-[8px] border border-[var(--color-border-subtle)] hover:border-[var(--color-cyan-500)]/40 hover:-translate-y-0.5 hover:shadow-[var(--elev-2)] transition-all duration-[var(--duration-base)] ease-[var(--ease-standard)]"
               >
                 <div className="w-10 h-10 rounded-[5px] bg-[var(--color-cyan-500)]/10 border border-[var(--color-cyan-500)]/20 flex items-center justify-center">
                   <BookOpen className="w-4 h-4 text-[var(--color-cyan-500)]" />
                 </div>
                 <div className="text-center">
                   <p className="text-[13px] font-medium text-[var(--color-text-primary)]">Browse SEC Filings</p>
-                  <p className="text-[11px] text-[var(--color-text-tertiary)] mt-0.5">10-K, 10-Q, Annual Reports</p>
+                  <p className="text-[11px] text-[var(--color-text-secondary)] mt-0.5">10-K, 10-Q, Annual Reports</p>
                 </div>
               </button>
             </div>
 
             {/* Divider + Try Demo */}
             <div className="flex items-center gap-3 w-full max-w-xs mb-5">
-              <div className="flex-1 h-px bg-[var(--color-border-subtle)]" />
-              <span className="text-[10px] text-[var(--color-text-quaternary)] uppercase tracking-wider">or try instantly</span>
-              <div className="flex-1 h-px bg-[var(--color-border-subtle)]" />
+              <div className="flex-1 h-px bg-[var(--color-border-default)]" />
+              <span className="text-[10px] text-[var(--color-text-secondary)] uppercase tracking-wider font-medium">or try instantly</span>
+              <div className="flex-1 h-px bg-[var(--color-border-default)]" />
             </div>
 
             <button
@@ -336,10 +336,10 @@ export default function ChatArea(props: ChatAreaProps) {
             </button>
 
             {/* Capability pills */}
-            <div className="flex flex-wrap items-center justify-center gap-1.5 text-[10px] text-[var(--color-text-tertiary)] uppercase tracking-wider">
-              <span className="px-2 py-1 rounded-[3px] bg-[var(--color-bg-surface)] border border-[var(--color-border-subtle)]">Hybrid Doc + DB</span>
-              <span className="px-2 py-1 rounded-[3px] bg-[var(--color-bg-surface)] border border-[var(--color-border-subtle)]">Discrepancy Detection</span>
-              <span className="px-2 py-1 rounded-[3px] bg-[var(--color-bg-surface)] border border-[var(--color-border-subtle)]">Analytical Autopilot</span>
+            <div className="flex flex-wrap items-center justify-center gap-1.5 text-[10px] uppercase tracking-wider font-medium">
+              <span className="px-2.5 py-1 rounded-[3px] bg-[var(--color-bg-elevated)] border border-[var(--color-border-default)] text-[var(--color-text-secondary)]">Hybrid Doc + DB</span>
+              <span className="px-2.5 py-1 rounded-[3px] bg-[var(--color-bg-elevated)] border border-[var(--color-border-default)] text-[var(--color-text-secondary)]">Discrepancy Detection</span>
+              <span className="px-2.5 py-1 rounded-[3px] bg-[var(--color-bg-elevated)] border border-[var(--color-border-default)] text-[var(--color-text-secondary)]">Analytical Autopilot</span>
             </div>
           </div>
         ) : messages.length === 0 && (sessionId || isDbConnected) ? (
@@ -582,7 +582,7 @@ export default function ChatArea(props: ChatAreaProps) {
                       : "Upload a filing or connect a database to start..."
                 }
                 disabled={(!sessionId && !isDbConnected) || isLoading}
-                className="w-full max-h-40 min-h-[56px] p-3 pr-12 bg-transparent outline-none resize-none text-[var(--color-text-primary)] placeholder-[var(--color-text-quaternary)] text-[13px] leading-relaxed disabled:opacity-50"
+                className="w-full max-h-40 min-h-[56px] p-3 pr-12 bg-transparent outline-none resize-none text-[var(--color-text-primary)] placeholder-[var(--color-text-tertiary)] text-[13px] leading-relaxed disabled:opacity-50"
                 rows={1}
               />
               <div className="absolute bottom-2.5 right-3 text-[10px] text-[var(--color-text-quaternary)] tabular-nums">

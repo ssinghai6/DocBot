@@ -24,9 +24,9 @@ export default function InspectorPanel({ onClose }: InspectorPanelProps) {
   const selectedArtifact = useUIStore((s) => s.selectedArtifact)
 
   return (
-    <aside className="h-full flex flex-col bg-[var(--color-bg-surface)] border-l border-[var(--color-border-subtle)] overflow-hidden">
+    <aside className="h-full min-w-0 w-full flex flex-col bg-[var(--color-bg-surface)] border-l border-[var(--color-border-subtle)] overflow-hidden">
       {/* Header */}
-      <header className="h-11 flex items-center justify-between px-3 border-b border-[var(--color-border-subtle)] flex-none">
+      <header className="h-11 flex items-center justify-between px-3 border-b border-[var(--color-border-subtle)] flex-none min-w-0">
         <div className="flex items-center gap-2">
           <PanelRight className="w-3.5 h-3.5 text-[var(--color-text-tertiary)]" />
           <span className="text-[11px] font-semibold uppercase tracking-wider text-[var(--color-text-tertiary)]">

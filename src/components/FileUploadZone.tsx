@@ -53,43 +53,69 @@ export default function FileUploadZone({
   onDbUpload,
   dbUploadState,
 }: FileUploadZoneProps) {
-  /** Handle unified file input change — routes PDF vs CSV/SQLite */
+  /** Split a FileList into PDF and DB (CSV/SQLite) buckets */
+  const splitFiles = (files: FileList | File[]) => {
+    const pdfs: File[] = []
+    const dbs: { file: File; type: "csv" | "sqlite" }[] = []
+    for (let i = 0; i < files.length; i++) {
+      const f = (files as FileList)[i] ?? (files as File[])[i]
+      const ftype = getFileType(f.name)
+      if (ftype === "pdf") pdfs.push(f)
+      else if (ftype === "csv" || ftype === "sqlite") dbs.push({ file: f, type: ftype })
+    }
+    return { pdfs, dbs }
+  }
+
+  /** Build a synthetic input change event whose files contain only `pdfs` */
+  const dispatchPdfs = (pdfs: File[]) => {
+    if (pdfs.length === 0) return
+    const dt = new DataTransfer()
+    pdfs.forEach((f) => dt.items.add(f))
+    const synthetic = { target: { files: dt.files } } as unknown as React.ChangeEvent<HTMLInputElement>
+    onFileChange(synthetic)
+  }
+
+  /** Handle unified file input change — routes PDFs and CSV/SQLite in parallel */
   const handleUnifiedFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
     const files = e.target.files
     if (!files || files.length === 0) return
 
-    // Check if any file is CSV/SQLite and route to DB handler
-    const file = files[0]
-    const ftype = getFileType(file.name)
+    const { pdfs, dbs } = splitFiles(files)
 
-    if (ftype === "csv" && onDbUpload) {
-      onDbUpload(file, "csv")
-      e.target.value = ""
-    } else if (ftype === "sqlite" && onDbUpload) {
-      onDbUpload(file, "sqlite")
-      e.target.value = ""
-    } else {
-      // PDF — use existing handler
-      onFileChange(e)
+    if (dbs.length > 0 && onDbUpload) {
+      dbs.forEach(({ file, type }) => onDbUpload(file, type))
     }
+    if (pdfs.length > 0) {
+      dispatchPdfs(pdfs)
+    }
+
+    e.target.value = ""
   }
 
-  /** Handle unified drop — routes PDF vs CSV/SQLite */
+  /** Handle unified drop — routes PDFs and CSV/SQLite in parallel */
   const handleUnifiedDrop = (e: React.DragEvent) => {
     const files = e.dataTransfer?.files
-    if (files && files.length > 0) {
-      const file = files[0]
-      const ftype = getFileType(file.name)
-
-      if ((ftype === "csv" || ftype === "sqlite") && onDbUpload) {
-        e.preventDefault()
-        e.stopPropagation()
-        onDbUpload(file, ftype)
-        return
-      }
+    if (!files || files.length === 0) {
+      onDrop(e)
+      return
     }
-    // PDF or fallback — use existing drop handler
-    onDrop(e)
+
+    const { pdfs, dbs } = splitFiles(files)
+
+    if (pdfs.length === 0 && dbs.length === 0) {
+      onDrop(e)
+      return
+    }
+
+    e.preventDefault()
+    e.stopPropagation()
+
+    if (dbs.length > 0 && onDbUpload) {
+      dbs.forEach(({ file, type }) => onDbUpload(file, type))
+    }
+    if (pdfs.length > 0) {
+      dispatchPdfs(pdfs)
+    }
   }
 
   const isUploading = fileUploadState === "uploading" || dbUploadState === "uploading"
