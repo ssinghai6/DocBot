@@ -24,12 +24,12 @@ export default function InspectorPanel({ onClose }: InspectorPanelProps) {
   const selectedArtifact = useUIStore((s) => s.selectedArtifact)
 
   return (
-    <aside className="h-full min-w-0 w-full flex flex-col bg-[var(--color-bg-surface)] border-l border-[var(--color-border-subtle)] overflow-hidden">
+    <aside className="h-full min-w-[280px] w-full flex flex-col bg-[var(--color-bg-surface)] border-l border-[var(--color-border-subtle)] overflow-hidden">
       {/* Header */}
-      <header className="h-11 flex items-center justify-between px-3 border-b border-[var(--color-border-subtle)] flex-none min-w-0">
-        <div className="flex items-center gap-2">
-          <PanelRight className="w-3.5 h-3.5 text-[var(--color-text-tertiary)]" />
-          <span className="text-[11px] font-semibold uppercase tracking-wider text-[var(--color-text-tertiary)]">
+      <header className="h-11 flex items-center justify-between gap-2 px-3 border-b border-[var(--color-border-subtle)] flex-none min-w-0">
+        <div className="flex items-center gap-2 min-w-0 flex-1">
+          <PanelRight className="w-3.5 h-3.5 text-[var(--color-text-tertiary)] flex-none" />
+          <span className="text-[11px] font-semibold uppercase tracking-wider text-[var(--color-text-tertiary)] truncate whitespace-nowrap">
             Inspector
           </span>
         </div>
@@ -37,7 +37,7 @@ export default function InspectorPanel({ onClose }: InspectorPanelProps) {
           <button
             onClick={onClose}
             aria-label="Close inspector"
-            className="text-[var(--color-text-tertiary)] hover:text-[var(--color-text-primary)] transition-colors text-[11px]"
+            className="flex-none text-[var(--color-text-tertiary)] hover:text-[var(--color-text-primary)] transition-colors text-[11px] whitespace-nowrap"
           >
             Hide
           </button>
@@ -50,11 +50,11 @@ export default function InspectorPanel({ onClose }: InspectorPanelProps) {
         onValueChange={(v) => setInspectorTab(v as InspectorTab)}
         className="flex-1 flex flex-col min-h-0"
       >
-        <TabsList className="px-2 flex-none overflow-x-auto">
+        <TabsList className="px-2 flex-none overflow-x-auto whitespace-nowrap">
           {TABS.map((t) => (
-            <TabsTrigger key={t.id} value={t.id} className="flex items-center gap-1.5">
-              {t.icon}
-              {t.label}
+            <TabsTrigger key={t.id} value={t.id} className="flex items-center gap-1.5 shrink-0 whitespace-nowrap">
+              <span className="flex-none">{t.icon}</span>
+              <span className="whitespace-nowrap">{t.label}</span>
             </TabsTrigger>
           ))}
         </TabsList>
@@ -274,9 +274,9 @@ function SectionLabel({ children }: { children: React.ReactNode }) {
 
 function EmptyTab({ label, hint }: { label: string; hint: string }) {
   return (
-    <div className="flex flex-col items-center justify-center py-12 text-center">
-      <p className="text-[13px] text-[var(--color-text-secondary)] mb-1">No {label.toLowerCase()} selected</p>
-      <p className="text-[11px] text-[var(--color-text-tertiary)] max-w-[240px]">{hint}</p>
+    <div className="flex flex-col items-center justify-center py-12 px-4 text-center h-full min-w-0">
+      <p className="text-[13px] text-[var(--color-text-secondary)] mb-1 whitespace-nowrap">No {label.toLowerCase()} selected</p>
+      <p className="text-[11px] text-[var(--color-text-tertiary)] max-w-[240px] leading-relaxed break-words">{hint}</p>
     </div>
   )
 }

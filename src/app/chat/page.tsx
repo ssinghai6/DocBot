@@ -572,11 +572,11 @@ export default function Home() {
       <Panel
         id="inspector"
         panelRef={inspectorPanelRef}
-        defaultSize={28}
-        minSize={22}
-        maxSize={48}
+        defaultSize="380px"
+        minSize="280px"
+        maxSize="640px"
         collapsible
-        collapsedSize={0}
+        collapsedSize="0px"
         onResize={(size) => {
           const pct = typeof size === "number" ? size : size.asPercentage
           const isCollapsed = pct < 1
