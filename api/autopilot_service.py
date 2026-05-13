@@ -516,7 +516,15 @@ def make_executor_node(
                             chart_type="auto",
                         )
                         if code:
-                            sandbox_result = await run_python(code)
+                            # Deterministic preamble — bind `df` from prior_rows so the
+                            # LLM-generated code never hits NameError on `df`.
+                            preamble = (
+                                "import json as _json\n"
+                                "import pandas as pd\n"
+                                f"data = _json.loads({json.dumps(json.dumps(prior_rows, default=str))})\n"
+                                "df = pd.DataFrame(data)\n"
+                            )
+                            sandbox_result = await run_python(preamble + code)
                             result_entry["result"] = (
                                 sandbox_result.stdout[:500] if sandbox_result.stdout
                                 else "Analysis complete."
