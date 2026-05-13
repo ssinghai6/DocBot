@@ -182,6 +182,8 @@ export function useChatSubmit(params: UseChatSubmitParams) {
                   content: data.content,
                   artifact_id: data.artifact_id ?? null,
                   chart_b64: data.chart_b64 ?? null,
+                  sql: data.sql ?? null,
+                  explanation: data.explanation ?? null,
                   error: data.error ?? null,
                 };
                 localSteps.push(stepEntry);
@@ -198,16 +200,38 @@ export function useChatSubmit(params: UseChatSubmitParams) {
                 });
 
               } else if (data.type === "done") {
-                if (localSteps.length > 0) {
-                  setMessages(prev => {
-                    const updated = [...prev];
-                    const last = updated[updated.length - 1];
-                    if (last?.role === "assistant") {
-                      updated[updated.length - 1] = { ...last, autopilotSteps: [...localSteps] };
-                    }
-                    return updated;
-                  });
-                }
+                // Aggregate per-step artifacts onto the message so SqlCard,
+                // ChartThumbnail, and CitationsBlock render → Inspector populates on click.
+                const sqlSteps = localSteps.filter(s => s.sql);
+                const aggregatedSql = sqlSteps.length === 1
+                  ? sqlSteps[0].sql!
+                  : sqlSteps.map(s => `-- Step ${s.step_num}: ${s.step_label}\n${s.sql}`).join("\n\n");
+                const aggregatedExplanation = sqlSteps
+                  .map(s => s.explanation)
+                  .filter(Boolean)
+                  .join("\n\n");
+                const aggregatedCharts = localSteps
+                  .map(s => s.chart_b64)
+                  .filter((b): b is string => !!b);
+                const doneCitations = Array.isArray(data.citations) ? data.citations : [];
+
+                setMessages(prev => {
+                  const updated = [...prev];
+                  const last = updated[updated.length - 1];
+                  if (last?.role === "assistant") {
+                    updated[updated.length - 1] = {
+                      ...last,
+                      autopilotSteps: localSteps.length > 0 ? [...localSteps] : last.autopilotSteps,
+                      sql: aggregatedSql || last.sql,
+                      explanation: aggregatedExplanation || last.explanation,
+                      charts: aggregatedCharts.length > 0
+                        ? [...(last.charts ?? []), ...aggregatedCharts]
+                        : last.charts,
+                      citations: doneCitations.length > 0 ? doneCitations : last.citations,
+                    };
+                  }
+                  return updated;
+                });
 
               } else if (data.type === "warning" || data.type === "error") {
                 setMessages(prev => {

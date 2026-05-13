@@ -111,6 +111,8 @@ export type AutopilotStep = {
   content: string
   artifact_id?: string | null
   chart_b64?: string | null
+  sql?: string | null
+  explanation?: string | null
   error?: string | null
 }
 

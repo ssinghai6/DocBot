@@ -312,7 +312,8 @@ def make_executor_node(
                         f"{row_count} rows returned. "
                         f"Preview: {json.dumps(preview[:3], default=str)}"
                     )
-                    result_entry["sql"] = sql_meta.get("sql")
+                    result_entry["sql"] = sql_meta.get("sql_query") or sql_meta.get("sql")
+                    result_entry["explanation"] = sql_meta.get("explanation")
                     # Persist artifact for potential python_analysis in a later step
                     if preview and session_artifacts_table is not None:
                         from api.artifact_service import save_artifact
@@ -769,6 +770,8 @@ async def run_autopilot(
                             "content": step_result.get("result", ""),
                             "artifact_id": step_result.get("artifact_id"),
                             "chart_b64": step_result.get("chart_b64"),
+                            "sql": step_result.get("sql"),
+                            "explanation": step_result.get("explanation"),
                             "error": step_result.get("error"),
                         })
                     # Accumulate citations from doc_search steps
