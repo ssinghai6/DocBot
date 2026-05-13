@@ -104,8 +104,6 @@ export interface ChatAreaProps {
   autopilotRunning: boolean
   autopilotSteps: AutopilotStep[]
   autopilotPlan: string[]
-  deepResearch: boolean
-  drProgress: { step: string; message: string } | null
 
   chatContainerRef: React.RefObject<HTMLDivElement | null>
   lastMessageRef: React.RefObject<HTMLDivElement | null>
@@ -146,8 +144,6 @@ export default function ChatArea(props: ChatAreaProps) {
     autopilotRunning,
     autopilotSteps,
     autopilotPlan,
-    deepResearch,
-    drProgress,
     chatContainerRef,
     lastMessageRef,
     messagesEndRef,
@@ -334,13 +330,6 @@ export default function ChatArea(props: ChatAreaProps) {
                 </>
               )}
             </button>
-
-            {/* Capability pills */}
-            <div className="flex flex-wrap items-center justify-center gap-1.5 text-[10px] uppercase tracking-wider font-medium">
-              <span className="px-2.5 py-1 rounded-[3px] bg-[var(--color-bg-elevated)] border border-[var(--color-border-default)] text-[var(--color-text-secondary)]">Hybrid Doc + DB</span>
-              <span className="px-2.5 py-1 rounded-[3px] bg-[var(--color-bg-elevated)] border border-[var(--color-border-default)] text-[var(--color-text-secondary)]">Discrepancy Detection</span>
-              <span className="px-2.5 py-1 rounded-[3px] bg-[var(--color-bg-elevated)] border border-[var(--color-border-default)] text-[var(--color-text-secondary)]">Analytical Autopilot</span>
-            </div>
           </div>
         ) : messages.length === 0 && (sessionId || isDbConnected) ? (
           <div className="flex flex-col items-center justify-center h-full">
@@ -462,22 +451,7 @@ export default function ChatArea(props: ChatAreaProps) {
               </div>
             )}
 
-            {/* Deep Research progress strip */}
-            {isLoading && drProgress && deepResearch && (
-              <div className="flex justify-start mb-2">
-                <div className="flex items-center gap-2 px-2.5 py-1.5 rounded-[5px] bg-[var(--color-bg-surface)] border border-[var(--color-cyan-500)]/30 text-[var(--color-cyan-500)] text-[11px] max-w-sm">
-                  <span className="animate-pulse shrink-0">
-                    {drProgress.step === "planning" && "🧠"}
-                    {drProgress.step === "retrieving" && "🔍"}
-                    {drProgress.step === "evaluating" && "✅"}
-                    {drProgress.step === "gap_fill" && "🔄"}
-                    {drProgress.step === "synthesizing" && "📝"}
-                  </span>
-                  <span className="truncate">{drProgress.message}</span>
-                </div>
-              </div>
-            )}
-            {isLoading && messages.length > 0 && messages[messages.length - 1].role === "user" && !autopilotRunning && !drProgress && (
+            {isLoading && messages.length > 0 && messages[messages.length - 1].role === "user" && !autopilotRunning && (
               <div className="flex justify-start">
                 <TypingIndicator />
               </div>

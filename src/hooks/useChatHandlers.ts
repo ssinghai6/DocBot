@@ -23,7 +23,6 @@ import type {
 interface UseChatHandlersParams {
   sessionId: string | null
   anonymousSessionIdRef: React.RefObject<string>
-  deepVisualMode: boolean
   authModalTab: "login" | "register"
   authEmail: string
   authPassword: string
@@ -81,7 +80,6 @@ export function useChatHandlers(params: UseChatHandlersParams) {
   const {
     sessionId,
     anonymousSessionIdRef,
-    deepVisualMode,
     authModalTab,
     authEmail,
     authPassword,
@@ -435,7 +433,6 @@ export function useChatHandlers(params: UseChatHandlersParams) {
     files.forEach(file => {
       formData.append('files', file);
     });
-    formData.append('deep_visual_mode', String(deepVisualMode));
 
     try {
       const progressInterval = setInterval(() => {

@@ -401,7 +401,6 @@ class ChatRequest(BaseModel):
     message: str
     history: List[ChatMessage] = []
     persona: str = "Generalist"
-    deep_research: bool = False
 
 class Citation(BaseModel):
     source: str
@@ -864,15 +863,6 @@ for _name, _data in EXPERT_PERSONAS.items():
         _data["persona_def"] = _data["persona_def"] + _contract
 
 
-DEEP_RESEARCH_ADDON = (
-    "\n\nDEEP RESEARCH MODE IS ACTIVE: Provide a comprehensive, thorough analysis. "
-    "Think through all angles of the question. Structure your response with clear markdown headers "
-    "(## for main sections, ### for subsections) to organize complex multi-part answers. "
-    "Provide detailed reasoning and cite every claim with [Source: filename, Page X]. "
-    "Cover what the document says, what it implies, what is uncertain, and what the user should know beyond the literal answer."
-)
-
-
 # ── BUG #4 fix: detect plot/chart intent in doc-only chat mode ──────────────
 # The /api/chat endpoint is a pure RAG → LLM text pipeline with no sandbox or
 # matplotlib path. If a user has ONLY a PDF uploaded (no CSV, no DB) and asks
@@ -942,7 +932,6 @@ async def init_demo():
 async def upload_documents(
     request: Request,
     files: List[UploadFile] = File(...),
-    deep_visual_mode: bool = Form(False)
 ):
     session_id = str(uuid.uuid4())
     
@@ -1204,7 +1193,6 @@ async def chat(raw_request: Request, request: ChatRequest, _user=_rbac_viewer):
             metadata={
                 "source": "doc_chat",
                 "persona": request.persona,
-                "deep_research": request.deep_research,
                 "ip_address": get_client_ip(raw_request),
             },
         )
@@ -1223,28 +1211,6 @@ async def chat(raw_request: Request, request: ChatRequest, _user=_rbac_viewer):
                 )
         else:
             effective_persona = request.persona
-
-        # ── Deep Research path: LangGraph multi-step reasoning graph ─────────
-        # NOTE (legacy): Deep Research's retrieval pipeline (sub-question
-        # decomposition + gap-fill) is now also used by Autopilot's doc_search
-        # tool via deep_retrieve(). This standalone route is kept for backwards
-        # compatibility with the frontend Deep Research toggle.
-        if request.deep_research:
-            try:
-                from api.deep_research_service import run_deep_research
-                persona_data = EXPERT_PERSONAS.get(effective_persona, EXPERT_PERSONAS["Generalist"])
-                async for sse_line in run_deep_research(
-                    question=request.message,
-                    session_id=request.session_id,
-                    persona_def=persona_data["persona_def"],
-                    vector_store=VECTOR_STORES[request.session_id],
-                    groq_api_key=groq_api_key,
-                ):
-                    yield sse_line
-            except Exception as e:
-                logger.exception("Deep Research error:")
-                yield f"data: {json.dumps({'type': 'error', 'detail': safe_error_message(e)})}\n\n"
-            return
 
         # ── Standard single-shot path ─────────────────────────────────────────
         from api.utils.llm_provider import get_llm
@@ -1315,8 +1281,6 @@ async def chat(raw_request: Request, request: ChatRequest, _user=_rbac_viewer):
             persona_data = EXPERT_PERSONAS.get(effective_persona, EXPERT_PERSONAS["Generalist"])
             persona_def = persona_data["persona_def"]
             effective_persona_def = persona_def
-            if request.deep_research:
-                effective_persona_def = persona_def + DEEP_RESEARCH_ADDON
 
             disclaimer_note = ""
             if effective_persona in ["Doctor", "Finance Expert", "Lawyer"]:
@@ -2213,7 +2177,6 @@ class HybridChatRequest(BaseModel):
     connection_id: Optional[str] = None
     persona: str = "Data Analyst"
     has_docs: bool = True
-    deep_research: bool = False
     history: List[ChatMessage] = []
     chart_type: str = "auto"
 
@@ -2264,7 +2227,6 @@ async def hybrid_chat_route(raw_request: Request, request: HybridChatRequest, _u
                 expert_personas=EXPERT_PERSONAS,
                 vector_stores=VECTOR_STORES,
                 extracted_fields=EXTRACTED_FIELDS.get(request.session_id),
-                deep_research=request.deep_research,
                 chat_history=_hybrid_history if _hybrid_history else None,
                 chart_type=request.chart_type,
             ):

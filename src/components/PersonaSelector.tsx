@@ -2,9 +2,9 @@
 
 import React from "react"
 import {
-  Sparkles, Brain, TrendingUp,
+  Sparkles, TrendingUp,
   Briefcase, BarChart2, Wand2, UserCog,
-  CheckCircle2, Info, Zap, Layers,
+  CheckCircle2, Info, Zap,
 } from "lucide-react"
 
 // ── Persona definitions (mirrors EXPERT_PERSONAS in page.tsx exactly) ────────
@@ -61,20 +61,16 @@ interface PersonaSelectorProps {
   selectedPersona: string
   suggestedPersona: string | null
   isAutoMode: boolean
-  deepResearch: boolean
   onSelectPersona: (name: string) => void
   onSetAutoMode: (value: boolean) => void
-  onDeepResearchChange: (value: boolean) => void
 }
 
 export default function PersonaSelector({
   selectedPersona,
   suggestedPersona,
   isAutoMode,
-  deepResearch,
   onSelectPersona,
   onSetAutoMode,
-  onDeepResearchChange,
 }: PersonaSelectorProps) {
   return (
     <div className="flex-1">
@@ -165,37 +161,6 @@ export default function PersonaSelector({
         </div>
       )}
 
-      {/* Deep Research Toggle */}
-      {selectedPersona !== "Generalist" && (
-        <div className="mt-4 bg-[var(--color-bg-elevated)]/50 rounded-xl p-3 border border-[var(--color-border-subtle)]">
-          <h3 className="text-sm font-semibold mb-3 text-[var(--color-text-primary)] flex items-center gap-2">
-            <Layers className="w-4 h-4 text-[#764ba2]" />
-            Analysis Mode
-          </h3>
-          <label className="flex items-center justify-between cursor-pointer group">
-            <div className="flex items-center gap-3">
-              <div className={`w-9 h-5 flex items-center bg-gray-700/50 rounded-full p-0.5 transition-colors ${deepResearch ? "bg-[#764ba2]" : ""}`}>
-                <div className={`bg-white w-4 h-4 rounded-full shadow-md transform transition-transform ${deepResearch ? "translate-x-4" : ""}`} />
-              </div>
-              <div>
-                <span className="text-sm font-medium text-gray-300 group-hover:text-[var(--color-text-primary)] transition-colors">Deep Research</span>
-                <p className="text-[10px] text-[var(--color-text-tertiary)]">Enhanced reasoning</p>
-              </div>
-            </div>
-            <input
-              type="checkbox"
-              className="hidden"
-              checked={deepResearch}
-              onChange={() => onDeepResearchChange(!deepResearch)}
-            />
-          </label>
-          {deepResearch && (
-            <p className="text-xs text-[var(--color-text-tertiary)] mt-2 ml-12 flex items-center gap-1">
-              <Brain className="w-3 h-3 text-[#764ba2]" /> Advanced analysis enabled
-            </p>
-          )}
-        </div>
-      )}
     </div>
   )
 }

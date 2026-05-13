@@ -8,8 +8,6 @@ interface FileUploadZoneProps {
   fileUploadState: FileUploadState
   uploadProgress: number | null
   uploadedFiles: File[]
-  deepVisualMode: boolean
-  onDeepVisualModeChange: (value: boolean) => void
   onDragOver: (e: React.DragEvent) => void
   onDragLeave: (e: React.DragEvent) => void
   onDrop: (e: React.DragEvent) => void
@@ -43,8 +41,6 @@ export default function FileUploadZone({
   fileUploadState,
   uploadProgress,
   uploadedFiles,
-  deepVisualMode,
-  onDeepVisualModeChange,
   onDragOver,
   onDragLeave,
   onDrop,
@@ -127,27 +123,6 @@ export default function FileUploadZone({
         Upload
         <span className="ml-auto text-[10px] text-[var(--color-text-tertiary)] font-normal">PDF, CSV, SQLite</span>
       </h3>
-
-      {/* Deep Visual Mode Toggle */}
-      <div className="mb-4 bg-[var(--color-bg-elevated)]/50 rounded-xl p-3 border border-[var(--color-border-subtle)]">
-        <label className="flex items-center justify-between cursor-pointer group">
-          <div className="flex items-center gap-3">
-            <div className={`w-9 h-5 flex items-center bg-gray-700/50 rounded-full p-0.5 transition-colors ${deepVisualMode ? "bg-[var(--color-cyan-500)]" : ""}`}>
-              <div className={`bg-white w-4 h-4 rounded-full shadow-md transform transition-transform ${deepVisualMode ? "translate-x-4" : ""}`} />
-            </div>
-            <div>
-              <span className="text-sm font-medium text-gray-300 group-hover:text-[var(--color-text-primary)] transition-colors">Deep Visual</span>
-              <p className="text-[10px] text-[var(--color-text-tertiary)]">Full page OCR analysis</p>
-            </div>
-          </div>
-          <input
-            type="checkbox"
-            className="hidden"
-            checked={deepVisualMode}
-            onChange={() => onDeepVisualModeChange(!deepVisualMode)}
-          />
-        </label>
-      </div>
 
       {/* Upload Area */}
       <div

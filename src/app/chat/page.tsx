@@ -95,9 +95,6 @@ export default function Home() {
   // Sidebar State
   const [selectedPersona, setSelectedPersona] = useState("Generalist");
   const [suggestedPersona, setSuggestedPersona] = useState<string | null>(null);
-  const [deepVisualMode, setDeepVisualMode] = useState(false);
-  const [deepResearch, setDeepResearch] = useState(false);
-  const [drProgress, setDrProgress] = useState<{ step: string; message: string } | null>(null);
   const [sidebarOpen, setSidebarOpen] = useState(true);
   const [isAutoMode, setIsAutoMode] = useState(true);
 
@@ -215,7 +212,6 @@ export default function Home() {
   const handlers = useChatHandlers({
     sessionId,
     anonymousSessionIdRef,
-    deepVisualMode,
     authModalTab,
     authEmail,
     authPassword,
@@ -280,7 +276,6 @@ export default function Home() {
     autopilotMode,
     isCsvConnection,
     chartType,
-    deepResearch,
     messages,
 
     setMessages,
@@ -290,7 +285,6 @@ export default function Home() {
     setAutopilotRunning,
     setAutopilotSteps,
     setAutopilotPlan,
-    setDrProgress,
 
     showToast,
     loadQueryHistory: handlers.loadQueryHistory,
@@ -466,8 +460,6 @@ export default function Home() {
         fileUploadState={fileUploadState}
         uploadProgress={uploadProgress}
         uploadedFiles={uploadedFiles}
-        deepVisualMode={deepVisualMode}
-        onDeepVisualModeChange={setDeepVisualMode}
         onDragOver={handlers.handleDragOver}
         onDragLeave={handlers.handleDragLeave}
         onDrop={handlers.handleDrop}
@@ -504,10 +496,8 @@ export default function Home() {
         selectedPersona={selectedPersona}
         suggestedPersona={suggestedPersona}
         isAutoMode={isAutoMode}
-        deepResearch={deepResearch}
         onSelectPersona={setSelectedPersona}
         onSetAutoMode={setIsAutoMode}
-        onDeepResearchChange={setDeepResearch}
         clearChat={handlers.clearChat}
         messagesLength={messages.length}
         connectors={connectors}
@@ -550,8 +540,6 @@ export default function Home() {
         autopilotRunning={autopilotRunning}
         autopilotSteps={autopilotSteps}
         autopilotPlan={autopilotPlan}
-        deepResearch={deepResearch}
-        drProgress={drProgress}
         chatContainerRef={chatContainerRef}
         lastMessageRef={lastMessageRef}
         messagesEndRef={messagesEndRef}

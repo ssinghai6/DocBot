@@ -40,8 +40,6 @@ export interface SidebarProps {
   fileUploadState: FileUploadState
   uploadProgress: number | null
   uploadedFiles: File[]
-  deepVisualMode: boolean
-  onDeepVisualModeChange: React.Dispatch<React.SetStateAction<boolean>>
   onDragOver: (e: React.DragEvent) => void
   onDragLeave: (e: React.DragEvent) => void
   onDrop: (e: React.DragEvent) => void
@@ -80,10 +78,8 @@ export interface SidebarProps {
   selectedPersona: string
   suggestedPersona: string | null
   isAutoMode: boolean
-  deepResearch: boolean
   onSelectPersona: React.Dispatch<React.SetStateAction<string>>
   onSetAutoMode: React.Dispatch<React.SetStateAction<boolean>>
-  onDeepResearchChange: React.Dispatch<React.SetStateAction<boolean>>
 
   clearChat: () => void
   messagesLength: number
@@ -115,8 +111,6 @@ export default function Sidebar(props: SidebarProps) {
     fileUploadState,
     uploadProgress,
     uploadedFiles,
-    deepVisualMode,
-    onDeepVisualModeChange,
     onDragOver,
     onDragLeave,
     onDrop,
@@ -153,10 +147,8 @@ export default function Sidebar(props: SidebarProps) {
     selectedPersona,
     suggestedPersona,
     isAutoMode,
-    deepResearch,
     onSelectPersona,
     onSetAutoMode,
-    onDeepResearchChange,
     clearChat,
     messagesLength,
     connectors,
@@ -256,8 +248,6 @@ export default function Sidebar(props: SidebarProps) {
           fileUploadState={fileUploadState}
           uploadProgress={uploadProgress}
           uploadedFiles={uploadedFiles}
-          deepVisualMode={deepVisualMode}
-          onDeepVisualModeChange={onDeepVisualModeChange}
           onDragOver={onDragOver}
           onDragLeave={onDragLeave}
           onDrop={onDrop}
@@ -416,10 +406,8 @@ export default function Sidebar(props: SidebarProps) {
                     selectedPersona={selectedPersona}
                     suggestedPersona={suggestedPersona}
                     isAutoMode={isAutoMode}
-                    deepResearch={deepResearch}
                     onSelectPersona={onSelectPersona}
                     onSetAutoMode={onSetAutoMode}
-                    onDeepResearchChange={onDeepResearchChange}
                   />
                 )}
               </div>

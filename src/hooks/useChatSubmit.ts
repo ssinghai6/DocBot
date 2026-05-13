@@ -19,7 +19,6 @@ interface UseChatSubmitParams {
   autopilotMode: boolean
   isCsvConnection: boolean
   chartType: string
-  deepResearch: boolean
   messages: Message[]
 
   setMessages: React.Dispatch<React.SetStateAction<Message[]>>
@@ -29,7 +28,6 @@ interface UseChatSubmitParams {
   setAutopilotRunning: React.Dispatch<React.SetStateAction<boolean>>
   setAutopilotSteps: React.Dispatch<React.SetStateAction<AutopilotStep[]>>
   setAutopilotPlan: React.Dispatch<React.SetStateAction<string[]>>
-  setDrProgress: React.Dispatch<React.SetStateAction<{ step: string; message: string } | null>>
 
   showToast: (type: Toast['type'], message: string) => void
   loadQueryHistory: (connId: string) => void
@@ -47,7 +45,6 @@ export function useChatSubmit(params: UseChatSubmitParams) {
     autopilotMode,
     isCsvConnection,
     chartType,
-    deepResearch,
     messages,
 
     setMessages,
@@ -57,7 +54,6 @@ export function useChatSubmit(params: UseChatSubmitParams) {
     setAutopilotRunning,
     setAutopilotSteps,
     setAutopilotPlan,
-    setDrProgress,
 
     showToast,
     loadQueryHistory,
@@ -72,7 +68,6 @@ export function useChatSubmit(params: UseChatSubmitParams) {
     setMessages(prev => [...prev, userMsg]);
     setInput("");
     setIsLoading(true);
-    setDrProgress(null);
 
     // Build recent conversation history (last 6 messages = 3 turns) for
     // follow-up context in DB, CSV, hybrid, and autopilot pipelines.
@@ -382,7 +377,6 @@ export function useChatSubmit(params: UseChatSubmitParams) {
             connection_id: connectionId,
             persona: personaToSend,
             has_docs: true,
-            deep_research: deepResearch,
             history: recentHistory,
           }),
         });
@@ -465,7 +459,6 @@ export function useChatSubmit(params: UseChatSubmitParams) {
           message: userMsg.content,
           history: messages,
           persona: personaToSend,
-          deep_research: deepResearch
         })
       });
 
@@ -487,10 +480,7 @@ export function useChatSubmit(params: UseChatSubmitParams) {
           if (!jsonStr) continue;
           try {
             const chunk = JSON.parse(jsonStr);
-            if (chunk.type === "progress") {
-              setDrProgress({ step: chunk.step, message: chunk.message });
-            } else if (chunk.type === "token") {
-              setDrProgress(null);
+            if (chunk.type === "token") {
               setMessages(prev => prev.map((m, i) =>
                 i === prev.length - 1 ? { ...m, content: m.content + chunk.content } : m
               ));
