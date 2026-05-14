@@ -1,6 +1,6 @@
 import React from "react"
 import {
-  Sparkles, Stethoscope, TrendingUp, Code, Cpu,
+  Sparkles, Stethoscope, TrendingUp,
   Scale, Briefcase, BarChart2,
 } from "lucide-react"
 
@@ -21,6 +21,9 @@ export interface PersonaConfig {
   }
 }
 
+// Canonical FE persona registry. Mirrors api/personas.py keys exactly.
+// PR5 (DOCBOT-1200): Engineer and AI/ML Expert collapsed into Generalist
+// (their detection keywords moved here). Consultant renamed Strategy Analyst.
 export const EXPERT_PERSONAS: Record<string, PersonaConfig> = {
   Generalist: {
     icon: <Sparkles className="w-5 h-5" />,
@@ -29,7 +32,20 @@ export const EXPERT_PERSONAS: Record<string, PersonaConfig> = {
     gradient: "from-[#667eea] to-[#764ba2]",
     accent: "#667eea",
     response_format: "general",
-    detection_keywords: { primary: [], secondary: [] },
+    detection_keywords: {
+      primary: [
+        "specification", "architecture", "api", "protocol", "deployment",
+        "infrastructure", "algorithm", "system design",
+        "neural network", "transformer", "llm", "embedding",
+        "fine-tuning", "training data", "accuracy", "benchmark",
+        "classification", "nlp", "computer vision",
+      ],
+      secondary: [
+        "technical", "engineering", "component", "interface",
+        "machine learning", "deep learning", "artificial intelligence",
+        "model", "inference", "pipeline", "feature",
+      ],
+    },
     tool_preference: "balanced",
     output_conventions: { number_format: "raw", disclaimer_position: null, highlight_pattern: null, accent_color: "#667eea" },
   },
@@ -61,34 +77,6 @@ export const EXPERT_PERSONAS: Record<string, PersonaConfig> = {
     tool_preference: "sql_first",
     output_conventions: { number_format: "currency", disclaimer_position: "footer", highlight_pattern: null, accent_color: "#f97316" },
   },
-  Engineer: {
-    icon: <Code className="w-5 h-5" />,
-    description: "Technical & engineering focus - documentation & specs",
-    color: "text-[#667eea]",
-    gradient: "from-[#667eea] to-[#764ba2]",
-    accent: "#667eea",
-    response_format: "technical",
-    detection_keywords: {
-      primary: ["specification", "architecture", "api", "circuit", "firmware", "schematic", "protocol", "bandwidth", "latency", "deployment", "infrastructure", "algorithm", "system design", "mechanical", "structural"],
-      secondary: ["technical", "engineering", "component", "interface", "dependency", "compliance", "standard", "tolerance", "performance"],
-    },
-    tool_preference: "balanced",
-    output_conventions: { number_format: "raw", disclaimer_position: null, highlight_pattern: null, accent_color: "#667eea" },
-  },
-  "AI/ML Expert": {
-    icon: <Cpu className="w-5 h-5" />,
-    description: "AI, ML & data science insights - research papers & models",
-    color: "text-[#667eea]",
-    gradient: "from-[#667eea] to-[#764ba2]",
-    accent: "#667eea",
-    response_format: "research",
-    detection_keywords: {
-      primary: ["neural network", "transformer", "llm", "embedding", "gradient", "fine-tuning", "training data", "overfitting", "accuracy", "benchmark", "dataset", "classification", "nlp", "computer vision"],
-      secondary: ["machine learning", "deep learning", "artificial intelligence", "model", "inference", "pipeline", "feature", "epoch", "loss function", "attention"],
-    },
-    tool_preference: "balanced",
-    output_conventions: { number_format: "percentage", disclaimer_position: null, highlight_pattern: null, accent_color: "#667eea" },
-  },
   Lawyer: {
     icon: <Scale className="w-5 h-5" />,
     description: "Legal analysis & compliance - contracts & policies",
@@ -103,7 +91,7 @@ export const EXPERT_PERSONAS: Record<string, PersonaConfig> = {
     tool_preference: "rag_first",
     output_conventions: { number_format: "raw", disclaimer_position: "footer", highlight_pattern: "\\b(RISK|WARNING|VOID|BREACH|PENALTY|PROHIBITED|LIMITATION OF LIABILITY)\\b", accent_color: "#ef4444" },
   },
-  Consultant: {
+  "Strategy Analyst": {
     icon: <Briefcase className="w-5 h-5" />,
     description: "Strategic business advisory - strategy & planning",
     color: "text-[#667eea]",

@@ -167,7 +167,7 @@ async def _planner_node(state: AutopilotState) -> dict:
 # ---------------------------------------------------------------------------
 
 
-def _select_tool(step: str, has_db: bool = True, has_docs: bool = False, has_csv: bool = False) -> str:
+def _select_tool_heuristic(step: str, has_db: bool = True, has_docs: bool = False, has_csv: bool = False) -> str:
     """Choose sql_query | doc_search | python_analysis based on step wording.
 
     Data-fetch verbs (query/fetch/get/retrieve/select/find) always win over
@@ -245,7 +245,7 @@ def make_executor_node(
             return {"iteration": iteration}
 
         step = plan[iteration]
-        tool = _select_tool(
+        tool = _select_tool_heuristic(
             step,
             has_db=state.get("has_db", True),
             has_docs=state.get("has_docs", False),

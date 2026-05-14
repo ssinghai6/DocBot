@@ -1,7 +1,7 @@
 """Unit tests for api/autopilot_service.py — DOCBOT-405.
 
 Covers:
-- _select_tool() heuristic routing
+- _select_tool_heuristic() heuristic routing
 - _should_continue() graph edge logic (max iterations, plan exhaustion, timed_out flag)
 - _sse() serialisation helper
 - AutopilotState TypedDict field defaults
@@ -24,7 +24,7 @@ from api.autopilot_service import (
     TOTAL_TIMEOUT_S,
     AutopilotState,
     _planner_node,
-    _select_tool,
+    _select_tool_heuristic,
     _should_continue,
     _sse,
     _synthesizer_node,
@@ -69,57 +69,57 @@ class TestSse:
 
 
 # ---------------------------------------------------------------------------
-# _select_tool()
+# _select_tool_heuristic()
 # ---------------------------------------------------------------------------
 
 
 class TestSelectTool:
     def test_sql_is_default(self):
-        assert _select_tool("Query total revenue by region") == "sql_query"
+        assert _select_tool_heuristic("Query total revenue by region") == "sql_query"
 
     def test_chart_keywords_route_to_python(self):
-        assert _select_tool("Create a bar chart of sales") == "python_analysis"
+        assert _select_tool_heuristic("Create a bar chart of sales") == "python_analysis"
 
     def test_plot_keyword(self):
-        assert _select_tool("Plot the distribution") == "python_analysis"
+        assert _select_tool_heuristic("Plot the distribution") == "python_analysis"
 
     def test_visualize_keyword(self):
-        assert _select_tool("Visualise revenue trend") == "python_analysis"
+        assert _select_tool_heuristic("Visualise revenue trend") == "python_analysis"
 
     def test_correlat_keyword(self):
-        assert _select_tool("Correlation between price and volume") == "python_analysis"
+        assert _select_tool_heuristic("Correlation between price and volume") == "python_analysis"
 
     def test_analys_keyword(self):
-        assert _select_tool("Analyse the Q3 data with Python") == "python_analysis"
+        assert _select_tool_heuristic("Analyse the Q3 data with Python") == "python_analysis"
 
     def test_document_keyword_routes_to_doc_search(self):
-        assert _select_tool("Search the uploaded document for policy details") == "doc_search"
+        assert _select_tool_heuristic("Search the uploaded document for policy details") == "doc_search"
 
     def test_pdf_keyword(self):
-        assert _select_tool("Find the clause in the PDF") == "doc_search"
+        assert _select_tool_heuristic("Find the clause in the PDF") == "doc_search"
 
     def test_contract_keyword(self):
-        assert _select_tool("According to the contract agreement") == "doc_search"
+        assert _select_tool_heuristic("According to the contract agreement") == "doc_search"
 
     def test_generic_query_is_sql(self):
-        assert _select_tool("What was Q3 revenue by region?") == "sql_query"
+        assert _select_tool_heuristic("What was Q3 revenue by region?") == "sql_query"
 
     def test_case_insensitive(self):
-        assert _select_tool("CHART of top products") == "python_analysis"
+        assert _select_tool_heuristic("CHART of top products") == "python_analysis"
 
     def test_fetch_verb_beats_chart_keyword(self):
         """'Fetch data for heatmap' should stay sql_query — fetch verb wins."""
-        assert _select_tool("Fetch data for heatmap generation") == "sql_query"
+        assert _select_tool_heuristic("Fetch data for heatmap generation") == "sql_query"
 
     def test_retrieve_with_chart_keyword_is_sql(self):
-        assert _select_tool("Retrieve revenue data for scatter plot") == "sql_query"
+        assert _select_tool_heuristic("Retrieve revenue data for scatter plot") == "sql_query"
 
     def test_generate_heatmap_without_fetch_is_python(self):
         """'Generate a heatmap' with no fetch verb → python_analysis."""
-        assert _select_tool("Generate a heatmap of the correlation matrix") == "python_analysis"
+        assert _select_tool_heuristic("Generate a heatmap of the correlation matrix") == "python_analysis"
 
     def test_create_chart_without_fetch_is_python(self):
-        assert _select_tool("Create a line chart of the results") == "python_analysis"
+        assert _select_tool_heuristic("Create a line chart of the results") == "python_analysis"
 
 
 # ---------------------------------------------------------------------------
@@ -273,15 +273,15 @@ class TestMakeExecutorNode:
 
 
 # ---------------------------------------------------------------------------
-# _select_tool() with data-source flags
+# _select_tool_heuristic() with data-source flags
 # ---------------------------------------------------------------------------
 
 
 class TestSelectToolDataSourceFlags:
-    """Test _select_tool() respects has_db / has_docs flags."""
+    """Test _select_tool_heuristic() respects has_db / has_docs flags."""
 
     def test_no_db_never_returns_sql_query(self):
-        """When has_db=False, _select_tool never returns sql_query."""
+        """When has_db=False, _select_tool_heuristic never returns sql_query."""
         steps = [
             "Query total revenue by region",
             "Fetch all customer records",
@@ -290,37 +290,37 @@ class TestSelectToolDataSourceFlags:
             "Count active users",
         ]
         for step in steps:
-            result = _select_tool(step, has_db=False, has_docs=True)
+            result = _select_tool_heuristic(step, has_db=False, has_docs=True)
             assert result != "sql_query", f"Step '{step}' returned sql_query with has_db=False"
 
     def test_no_db_data_fetch_falls_back_to_doc_search(self):
         """Data-fetch verbs with has_db=False and has_docs=True → doc_search."""
-        assert _select_tool("Fetch revenue data", has_db=False, has_docs=True) == "doc_search"
-        assert _select_tool("Query total by region", has_db=False, has_docs=True) == "doc_search"
+        assert _select_tool_heuristic("Fetch revenue data", has_db=False, has_docs=True) == "doc_search"
+        assert _select_tool_heuristic("Query total by region", has_db=False, has_docs=True) == "doc_search"
 
     def test_no_db_no_docs_falls_back_to_python(self):
         """Data-fetch verbs with no db and no docs → python_analysis."""
-        assert _select_tool("Fetch the data", has_db=False, has_docs=False) == "python_analysis"
+        assert _select_tool_heuristic("Fetch the data", has_db=False, has_docs=False) == "python_analysis"
 
     def test_has_docs_returns_doc_search_for_document_steps(self):
         """Doc keywords route to doc_search regardless of flags."""
-        assert _select_tool("Search the uploaded document", has_db=True, has_docs=True) == "doc_search"
-        assert _select_tool("Find in the PDF report", has_db=False, has_docs=True) == "doc_search"
+        assert _select_tool_heuristic("Search the uploaded document", has_db=True, has_docs=True) == "doc_search"
+        assert _select_tool_heuristic("Find in the PDF report", has_db=False, has_docs=True) == "doc_search"
 
     def test_chart_keywords_still_python_with_no_db(self):
         """Chart/viz keywords → python_analysis even without DB."""
-        assert _select_tool("Create a bar chart of results", has_db=False, has_docs=True) == "python_analysis"
-        assert _select_tool("Plot the distribution", has_db=False, has_docs=False) == "python_analysis"
+        assert _select_tool_heuristic("Create a bar chart of results", has_db=False, has_docs=True) == "python_analysis"
+        assert _select_tool_heuristic("Plot the distribution", has_db=False, has_docs=False) == "python_analysis"
 
     def test_default_flags_preserve_existing_behavior(self):
         """With default flags (has_db=True, has_docs=False), behavior is unchanged."""
-        assert _select_tool("Query total revenue") == "sql_query"
-        assert _select_tool("Create a bar chart") == "python_analysis"
-        assert _select_tool("Search the uploaded document") == "doc_search"
+        assert _select_tool_heuristic("Query total revenue") == "sql_query"
+        assert _select_tool_heuristic("Create a bar chart") == "python_analysis"
+        assert _select_tool_heuristic("Search the uploaded document") == "doc_search"
 
     def test_generic_step_with_docs_only(self):
         """A generic question with only docs → doc_search."""
-        result = _select_tool("What was the revenue?", has_db=False, has_docs=True)
+        result = _select_tool_heuristic("What was the revenue?", has_db=False, has_docs=True)
         assert result == "doc_search"
 
 

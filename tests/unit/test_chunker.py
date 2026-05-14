@@ -1,6 +1,6 @@
 """Unit tests for api/utils/chunker.py — DOCBOT-1003.
 
-All tests are CI-safe: HuggingFaceEmbeddings and SemanticChunker are mocked.
+All tests are CI-safe: HuggingFaceEndpointEmbeddings and SemanticChunker are mocked.
 No network calls, no API keys required.
 """
 
@@ -64,7 +64,7 @@ class TestSemanticChunkerPath:
             Document(page_content=text[50:100] if len(text) > 50 else text),
         ]
 
-    @patch("api.utils.chunker.HuggingFaceEmbeddings")
+    @patch("api.utils.chunker.HuggingFaceEndpointEmbeddings")
     @patch("api.utils.chunker.SemanticChunker")
     def test_financial_doc_uses_semantic_chunker(self, mock_chunker_cls, mock_emb_cls):
         sample_text = "Annual report financial statements revenue profit loss " * 10
@@ -82,7 +82,7 @@ class TestSemanticChunkerPath:
         assert len(result) == 2
         assert result[0].page_content == "chunk1"
 
-    @patch("api.utils.chunker.HuggingFaceEmbeddings")
+    @patch("api.utils.chunker.HuggingFaceEndpointEmbeddings")
     @patch("api.utils.chunker.SemanticChunker")
     def test_legal_doc_uses_semantic_chunker(self, mock_chunker_cls, mock_emb_cls):
         mock_instance = MagicMock()
@@ -94,7 +94,7 @@ class TestSemanticChunkerPath:
         mock_chunker_cls.assert_called_once()
         assert result[0].page_content == "legal chunk"
 
-    @patch("api.utils.chunker.HuggingFaceEmbeddings")
+    @patch("api.utils.chunker.HuggingFaceEndpointEmbeddings")
     @patch("api.utils.chunker.SemanticChunker")
     def test_annual_report_uses_semantic_chunker(self, mock_chunker_cls, mock_emb_cls):
         mock_instance = MagicMock()
@@ -104,7 +104,7 @@ class TestSemanticChunkerPath:
         result = chunk_document("text", hf_api_key="hf_key", doc_type="annual_report")
         mock_chunker_cls.assert_called_once()
 
-    @patch("api.utils.chunker.HuggingFaceEmbeddings")
+    @patch("api.utils.chunker.HuggingFaceEndpointEmbeddings")
     @patch("api.utils.chunker.SemanticChunker")
     def test_10k_uses_semantic_chunker(self, mock_chunker_cls, mock_emb_cls):
         mock_instance = MagicMock()
@@ -114,7 +114,7 @@ class TestSemanticChunkerPath:
         result = chunk_document("text", hf_api_key="hf_key", doc_type="10k")
         mock_chunker_cls.assert_called_once()
 
-    @patch("api.utils.chunker.HuggingFaceEmbeddings")
+    @patch("api.utils.chunker.HuggingFaceEndpointEmbeddings")
     @patch("api.utils.chunker.SemanticChunker")
     def test_contract_uses_semantic_chunker(self, mock_chunker_cls, mock_emb_cls):
         mock_instance = MagicMock()
@@ -124,7 +124,7 @@ class TestSemanticChunkerPath:
         result = chunk_document("text", hf_api_key="hf_key", doc_type="contract")
         mock_chunker_cls.assert_called_once()
 
-    @patch("api.utils.chunker.HuggingFaceEmbeddings")
+    @patch("api.utils.chunker.HuggingFaceEndpointEmbeddings")
     @patch("api.utils.chunker.SemanticChunker")
     def test_semantic_chunker_receives_correct_params(self, mock_chunker_cls, mock_emb_cls):
         mock_instance = MagicMock()
@@ -151,7 +151,7 @@ class TestSemanticChunkerPath:
 
 
 class TestRecursiveSplitterPath:
-    @patch("api.utils.chunker.HuggingFaceEmbeddings")
+    @patch("api.utils.chunker.HuggingFaceEndpointEmbeddings")
     @patch("api.utils.chunker.SemanticChunker")
     def test_general_doc_uses_recursive_splitter(self, mock_chunker_cls, mock_emb_cls):
         text = "This is a general document about weather. " * 50  # >200 chars
@@ -162,7 +162,7 @@ class TestRecursiveSplitterPath:
         assert len(result) > 0
         assert all(isinstance(d, Document) for d in result)
 
-    @patch("api.utils.chunker.HuggingFaceEmbeddings")
+    @patch("api.utils.chunker.HuggingFaceEndpointEmbeddings")
     @patch("api.utils.chunker.SemanticChunker")
     def test_empty_hf_key_skips_semantic_chunker(self, mock_chunker_cls, mock_emb_cls):
         result = chunk_document("annual report text " * 30, hf_api_key="", doc_type="financial")
@@ -177,7 +177,7 @@ class TestRecursiveSplitterPath:
 
 
 class TestSemanticChunkerFallback:
-    @patch("api.utils.chunker.HuggingFaceEmbeddings")
+    @patch("api.utils.chunker.HuggingFaceEndpointEmbeddings")
     @patch("api.utils.chunker.SemanticChunker")
     def test_falls_back_on_semantic_chunker_exception(self, mock_chunker_cls, mock_emb_cls):
         mock_chunker_cls.side_effect = RuntimeError("embeddings unavailable")
@@ -189,7 +189,7 @@ class TestSemanticChunkerFallback:
         assert len(result) > 0
         assert all(isinstance(d, Document) for d in result)
 
-    @patch("api.utils.chunker.HuggingFaceEmbeddings")
+    @patch("api.utils.chunker.HuggingFaceEndpointEmbeddings")
     @patch("api.utils.chunker.SemanticChunker")
     def test_falls_back_on_create_documents_exception(self, mock_chunker_cls, mock_emb_cls):
         mock_instance = MagicMock()

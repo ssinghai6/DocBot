@@ -123,7 +123,7 @@ export function buildCommands(actions: {
     { name: "Finance Expert", desc: "Financial & investment analysis" },
     { name: "Data Analyst", desc: "Quantitative analysis with SQL transparency" },
     { name: "Generalist", desc: "General-purpose assistant" },
-    { name: "Consultant", desc: "Strategic business advisory" },
+    { name: "Strategy Analyst", desc: "Strategic business advisory" },
   ]
 
   if (actions.onSwitchPersona && actions.onSetAutoMode) {

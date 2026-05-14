@@ -2,60 +2,16 @@
 
 import React from "react"
 import {
-  Sparkles, TrendingUp,
-  Briefcase, BarChart2, Wand2, UserCog,
+  Wand2, UserCog,
   CheckCircle2, Info,
 } from "lucide-react"
 
-// ── Persona definitions (mirrors EXPERT_PERSONAS in page.tsx exactly) ────────
+import { EXPERT_PERSONAS } from "@/components/personas"
 
-type PersonaConfig = {
-  icon: React.ReactNode
-  description: string
-  color: string
-  gradient: string
-  accent: string
-}
-
-// All personas — full registry (backend still supports all 8)
-const ALL_EXPERT_PERSONAS: Record<string, PersonaConfig> = {
-  Generalist: {
-    icon: <Sparkles className="w-5 h-5" />,
-    description: "Balanced, general-purpose assistant for any document",
-    color: "text-[var(--color-cyan-500)]",
-    gradient: "from-[var(--color-cyan-500)] to-[var(--color-cyan-600)]",
-    accent: "#667eea",
-  },
-  "Finance Expert": {
-    icon: <TrendingUp className="w-5 h-5" />,
-    description: "Financial & investment analysis - parse reports, statements & SEC filings",
-    color: "text-[var(--color-amber-500)]",
-    gradient: "from-[var(--color-amber-500)] to-[var(--color-amber-600)]",
-    accent: "#f97316",
-  },
-  "Data Analyst": {
-    icon: <BarChart2 className="w-5 h-5" />,
-    description: "Quantitative analysis with full SQL transparency and data quality flags",
-    color: "text-[var(--color-amber-500)]",
-    gradient: "from-[var(--color-amber-500)] to-[var(--color-amber-600)]",
-    accent: "#f97316",
-  },
-  Consultant: {
-    icon: <Briefcase className="w-5 h-5" />,
-    description: "Strategic business advisory - market sizing, competitive analysis & planning",
-    color: "text-[var(--color-cyan-500)]",
-    gradient: "from-[var(--color-cyan-500)] to-[var(--color-cyan-600)]",
-    accent: "#667eea",
-  },
-}
-
-// Display names (UI labels — keys match backend persona names)
-const DISPLAY_NAMES: Record<string, string> = {
-  Consultant: "Strategy Analyst",
-}
-
-// Visible personas (finance-vertical focus)
-const EXPERT_PERSONAS = ALL_EXPERT_PERSONAS
+// Visible personas in the Tools tab (Generalist, Finance Expert, Data Analyst,
+// Strategy Analyst). Lawyer + Doctor stay in EXPERT_PERSONAS for auto-routing
+// but are not surfaced here, since the visible product is finance-vertical.
+const VISIBLE_PERSONA_KEYS = ["Generalist", "Finance Expert", "Data Analyst", "Strategy Analyst"] as const
 
 interface PersonaSelectorProps {
   selectedPersona: string
@@ -105,7 +61,9 @@ export default function PersonaSelector({
         <div>
           {/* Persona Cards Grid */}
           <div className="grid grid-cols-2 gap-2 mb-2">
-            {Object.entries(EXPERT_PERSONAS).map(([name, data]) => {
+            {VISIBLE_PERSONA_KEYS.map((name) => {
+              const data = EXPERT_PERSONAS[name]
+              if (!data) return null
               const isSelected = selectedPersona === name
               return (
                 <button
@@ -121,7 +79,7 @@ export default function PersonaSelector({
                     {data.icon}
                   </div>
                   <div className={`text-xs font-medium ${isSelected ? "text-[var(--color-text-primary)]" : "text-gray-300"}`}>
-                    {DISPLAY_NAMES[name] || name}
+                    {name}
                   </div>
                   {isSelected && (
                     <div className="absolute top-2 right-2">
