@@ -1,8 +1,13 @@
-"""DOCBOT-1004: FinanceBench Accuracy Baseline Test Suite.
+"""DOCBOT-1004: LLM extraction baseline (formerly FinanceBench accuracy).
 
-20 curated FinanceBench questions with ground truth answers drawn from
-real public-company 10-K filings. Each question is answered end-to-end
-through the RAG pipeline (upload PDF chunks -> query -> compare answer).
+NOTE: This is NOT a RAG benchmark. The test feeds a hand-picked
+single-paragraph ground-truth context directly into the LLM prompt. There is
+no retrieval, no chunking, no embedding lookup, no reranker. It measures
+"given the answer paragraph, can the LLM extract the value." Use it as a
+smoke test for prompt + LLM extraction quality, not as a retrieval score.
+
+20 curated questions with ground truth answers drawn from real public-company
+10-K filings, with their answer paragraphs pre-extracted as `context`.
 
 Marked @pytest.mark.external because it requires live Groq + HuggingFace
 API keys. Skipped automatically in CI.

@@ -140,7 +140,7 @@ export default function Home() {
   const [chartType, setChartType] = useState<string>("auto");
   const [zoomedChart, setZoomedChart] = useState<string | null>(null);
 
-  // Analytical Autopilot
+  // Autopilot
   const [autopilotMode, setAutopilotMode] = useState(false);
   const [autopilotRunning, setAutopilotRunning] = useState(false);
   const [autopilotSteps, setAutopilotSteps] = useState<AutopilotStep[]>([]);

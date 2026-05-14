@@ -27,7 +27,7 @@ import { Button, Badge, Card } from "@/components/ui"
 const features = [
   {
     icon: <Layers className="w-6 h-6" />,
-    title: "Hybrid Analysis",
+    title: "Hybrid Mode",
     description:
       "Ask questions that span your PDFs and live database simultaneously. Get unified answers with dual citations and automatic discrepancy detection.",
     badge: "Core Feature",
@@ -37,9 +37,9 @@ const features = [
   },
   {
     icon: <Brain className="w-6 h-6" />,
-    title: "8 Expert Personas",
+    title: "4 Expert Personas",
     description:
-      "Specialized AI analysts: Financial, Legal, Medical, Technical, and more. Each persona is tuned for domain-specific reasoning and output conventions.",
+      "Specialized AI analysts: Finance Expert, Data Analyst, Strategy Analyst, and Generalist. Each persona is tuned for domain-specific reasoning and output conventions.",
     badge: "AI-Powered",
     badgeVariant: "info" as const,
     iconColor: "text-purple-400",
@@ -67,7 +67,7 @@ const features = [
   },
   {
     icon: <Wand2 className="w-6 h-6" />,
-    title: "Analytical Autopilot",
+    title: "Autopilot",
     description:
       "Auto-triggers multi-step investigations when it detects complex questions. Plans steps, queries databases, searches documents, runs Python analysis, and synthesizes findings.",
     badge: "Auto-Triggers",
@@ -108,8 +108,8 @@ const features = [
 // ── Stats data ─────────────────────────────────────────────────────────────────
 
 const stats = [
-  { label: "Test Coverage", value: "567+" },
-  { label: "Expert AI Personas", value: "8" },
+  { label: "Tests Passing", value: "686+" },
+  { label: "Expert AI Personas", value: "4" },
   { label: "Data Sources", value: "6+" },
   { label: "SQL Pipeline Steps", value: "7" },
 ]
@@ -279,12 +279,6 @@ export default function LandingPage() {
               className="hover:text-white transition-colors duration-150"
             >
               How It Works
-            </a>
-            <a
-              href="#pricing"
-              className="hover:text-white transition-colors duration-150"
-            >
-              Pricing
             </a>
           </div>
           <Link href="/chat">
@@ -519,7 +513,7 @@ export default function LandingPage() {
               The only platform that does it all
             </h2>
             <p className="text-lg text-gray-400 max-w-2xl mx-auto">
-              Other tools handle documents OR databases. DocBot cross-references both in real time.
+              Other tools handle one source at a time. DocBot cross-references both in real time.
             </p>
           </div>
           <div className="overflow-x-auto">
