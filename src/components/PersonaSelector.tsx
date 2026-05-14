@@ -4,7 +4,7 @@ import React from "react"
 import {
   Sparkles, TrendingUp,
   Briefcase, BarChart2, Wand2, UserCog,
-  CheckCircle2, Info, Zap,
+  CheckCircle2, Info,
 } from "lucide-react"
 
 // ── Persona definitions (mirrors EXPERT_PERSONAS in page.tsx exactly) ────────
@@ -59,7 +59,6 @@ const EXPERT_PERSONAS = ALL_EXPERT_PERSONAS
 
 interface PersonaSelectorProps {
   selectedPersona: string
-  suggestedPersona: string | null
   isAutoMode: boolean
   onSelectPersona: (name: string) => void
   onSetAutoMode: (value: boolean) => void
@@ -67,22 +66,12 @@ interface PersonaSelectorProps {
 
 export default function PersonaSelector({
   selectedPersona,
-  suggestedPersona,
   isAutoMode,
   onSelectPersona,
   onSetAutoMode,
 }: PersonaSelectorProps) {
   return (
     <div className="flex-1">
-      {suggestedPersona && suggestedPersona !== "Generalist" && (
-        <div className="bg-[var(--color-cyan-500)]/10 border border-[var(--color-cyan-500)]/20 p-3 rounded-xl mb-3 text-sm flex items-start gap-2">
-          <Zap className="w-4 h-4 text-[var(--color-cyan-500)] mt-0.5 shrink-0" />
-          <div>
-            <span className="text-gray-300">Recommended: </span>
-            <strong className="text-[var(--color-text-primary)]">{suggestedPersona}</strong>
-          </div>
-        </div>
-      )}
 
       {/* AUTO / Manual toggle */}
       <div className="flex gap-2 mb-3">

@@ -24,6 +24,8 @@ import type {
 export interface SidebarProps {
   sidebarOpen: boolean
   setSidebarOpen: React.Dispatch<React.SetStateAction<boolean>>
+  activeTab: "sources" | "tools" | "settings"
+  setActiveTab: React.Dispatch<React.SetStateAction<"sources" | "tools" | "settings">>
 
   authChecked: boolean
   authUser: AuthUser | null
@@ -76,7 +78,6 @@ export interface SidebarProps {
   onEntraReset: () => void
 
   selectedPersona: string
-  suggestedPersona: string | null
   isAutoMode: boolean
   onSelectPersona: React.Dispatch<React.SetStateAction<string>>
   onSetAutoMode: React.Dispatch<React.SetStateAction<boolean>>
@@ -98,6 +99,8 @@ export default function Sidebar(props: SidebarProps) {
   const {
     sidebarOpen,
     setSidebarOpen,
+    activeTab,
+    setActiveTab,
     authChecked,
     authUser,
     handleLogout,
@@ -145,7 +148,6 @@ export default function Sidebar(props: SidebarProps) {
     onMicrosoftSignIn,
     onEntraReset,
     selectedPersona,
-    suggestedPersona,
     isAutoMode,
     onSelectPersona,
     onSetAutoMode,
@@ -160,7 +162,6 @@ export default function Sidebar(props: SidebarProps) {
 
   const [marketplaceOpen, setMarketplaceOpen] = useState(false);
   const [personaOpen, setPersonaOpen] = useState(false);
-  const [activeTab, setActiveTab] = useState<"sources" | "tools" | "settings">("sources");
 
   return (
     <>
@@ -404,7 +405,6 @@ export default function Sidebar(props: SidebarProps) {
                 {personaOpen && (
                   <PersonaSelector
                     selectedPersona={selectedPersona}
-                    suggestedPersona={suggestedPersona}
                     isAutoMode={isAutoMode}
                     onSelectPersona={onSelectPersona}
                     onSetAutoMode={onSetAutoMode}

@@ -136,9 +136,9 @@ export const EXPERT_PERSONAS: Record<string, PersonaConfig> = {
 // DOCBOT-802: Client-side keyword router
 export function routeQuestion(
   question: string,
-  chatMode: string,
-  isDbConnected: boolean,
-  hasDocSession: boolean,
+  _chatMode: string,
+  _isDbConnected: boolean,
+  _hasDocSession: boolean,
   personas: typeof EXPERT_PERSONAS
 ): { persona: string; confidence: "high" | "medium" | "low" } {
   const q = question.toLowerCase();
@@ -179,15 +179,6 @@ export function routeQuestion(
   } else {
     confidence = "low";
   }
-
-  // Context tie-break: when top two are very close and DB is connected, prefer Data Analyst
-  if (bestScore - secondScore <= 1 && isDbConnected && bestPersona !== "Data Analyst") {
-    // intentional no-op: keep bestPersona as-is, let tool_preference handle mode biasing
-  }
-
-  // Suppress unused-variable warnings for params used only for future tie-breaking
-  void chatMode;
-  void hasDocSession;
 
   return { persona: bestPersona, confidence };
 }
