@@ -14,9 +14,6 @@ import {
 import ChatMessage from "@/components/ChatMessage"
 import type { Message, AutopilotStep, Toast } from "@/components/types"
 
-const PERSONA_OPTIONS = ["Generalist", "Finance Expert", "Data Analyst", "Consultant"] as const;
-const PERSONA_DISPLAY: Record<string, string> = { Consultant: "Strategy Analyst" };
-
 function TypingIndicator() {
   return (
     <div className="flex items-center gap-1.5 px-3 py-2">
@@ -104,8 +101,6 @@ export interface ChatAreaProps {
   autopilotRunning: boolean
   autopilotSteps: AutopilotStep[]
   autopilotPlan: string[]
-  deepResearch: boolean
-  drProgress: { step: string; message: string } | null
 
   chatContainerRef: React.RefObject<HTMLDivElement | null>
   lastMessageRef: React.RefObject<HTMLDivElement | null>
@@ -146,8 +141,6 @@ export default function ChatArea(props: ChatAreaProps) {
     autopilotRunning,
     autopilotSteps,
     autopilotPlan,
-    deepResearch,
-    drProgress,
     chatContainerRef,
     lastMessageRef,
     messagesEndRef,
@@ -162,8 +155,6 @@ export default function ChatArea(props: ChatAreaProps) {
     onTryDemo,
     demoLoading,
   } = props;
-
-  const [personaDropdownOpen, setPersonaDropdownOpen] = useState(false);
 
   const copyToClipboard = (text: string) => {
     navigator.clipboard.writeText(text);
@@ -334,13 +325,6 @@ export default function ChatArea(props: ChatAreaProps) {
                 </>
               )}
             </button>
-
-            {/* Capability pills */}
-            <div className="flex flex-wrap items-center justify-center gap-1.5 text-[10px] uppercase tracking-wider font-medium">
-              <span className="px-2.5 py-1 rounded-[3px] bg-[var(--color-bg-elevated)] border border-[var(--color-border-default)] text-[var(--color-text-secondary)]">Hybrid Doc + DB</span>
-              <span className="px-2.5 py-1 rounded-[3px] bg-[var(--color-bg-elevated)] border border-[var(--color-border-default)] text-[var(--color-text-secondary)]">Discrepancy Detection</span>
-              <span className="px-2.5 py-1 rounded-[3px] bg-[var(--color-bg-elevated)] border border-[var(--color-border-default)] text-[var(--color-text-secondary)]">Analytical Autopilot</span>
-            </div>
           </div>
         ) : messages.length === 0 && (sessionId || isDbConnected) ? (
           <div className="flex flex-col items-center justify-center h-full">
@@ -462,22 +446,7 @@ export default function ChatArea(props: ChatAreaProps) {
               </div>
             )}
 
-            {/* Deep Research progress strip */}
-            {isLoading && drProgress && deepResearch && (
-              <div className="flex justify-start mb-2">
-                <div className="flex items-center gap-2 px-2.5 py-1.5 rounded-[5px] bg-[var(--color-bg-surface)] border border-[var(--color-cyan-500)]/30 text-[var(--color-cyan-500)] text-[11px] max-w-sm">
-                  <span className="animate-pulse shrink-0">
-                    {drProgress.step === "planning" && "🧠"}
-                    {drProgress.step === "retrieving" && "🔍"}
-                    {drProgress.step === "evaluating" && "✅"}
-                    {drProgress.step === "gap_fill" && "🔄"}
-                    {drProgress.step === "synthesizing" && "📝"}
-                  </span>
-                  <span className="truncate">{drProgress.message}</span>
-                </div>
-              </div>
-            )}
-            {isLoading && messages.length > 0 && messages[messages.length - 1].role === "user" && !autopilotRunning && !drProgress && (
+            {isLoading && messages.length > 0 && messages[messages.length - 1].role === "user" && !autopilotRunning && (
               <div className="flex justify-start">
                 <TypingIndicator />
               </div>
@@ -493,7 +462,7 @@ export default function ChatArea(props: ChatAreaProps) {
         {isDbConnected && (
           <div className="flex items-center gap-1.5 mb-2 flex-wrap">
             <span className="text-[10px] text-[var(--color-text-tertiary)] uppercase tracking-wider shrink-0">Chart</span>
-            {(["auto", "bar", "line", "scatter", "heatmap", "box", "multi"] as const).map((t) => (
+            {(["auto", "bar", "line", "scatter", "heatmap"] as const).map((t) => (
               <button
                 key={t}
                 onClick={() => setChartType(t)}
@@ -513,55 +482,6 @@ export default function ChatArea(props: ChatAreaProps) {
           onSubmit={handleSendMessage}
           className="relative bg-[var(--color-bg-elevated)] border border-[var(--color-border-default)] rounded-[8px] shadow-[var(--elev-1)] focus-within:border-[var(--color-cyan-500)]/60 focus-within:shadow-[0_0_0_3px_var(--glow-cyan)] transition-all overflow-hidden"
         >
-          {/* Header row: persona selector */}
-          {setSelectedPersona && (
-            <div className="flex items-center gap-2 px-3 pt-2 pb-1 border-b border-[var(--color-border-subtle)]">
-              <div className="relative">
-                <button
-                  type="button"
-                  onClick={() => setPersonaDropdownOpen(!personaDropdownOpen)}
-                  className="flex items-center gap-1.5 h-6 px-2 rounded-[3px] text-[10px] uppercase tracking-wider font-semibold bg-[var(--color-bg-overlay)] hover:bg-[var(--color-bg-surface)] text-[var(--color-text-secondary)] transition-colors"
-                >
-                  <Sparkles className="w-3 h-3 text-[var(--color-amber-500)]" />
-                  {isAutoMode ? "Auto" : (PERSONA_DISPLAY[selectedPersona] || selectedPersona)}
-                  <ChevronDown className={`w-3 h-3 text-[var(--color-text-tertiary)] transition-transform ${personaDropdownOpen ? "rotate-180" : ""}`} />
-                </button>
-                {personaDropdownOpen && (
-                  <div className="absolute bottom-full left-0 mb-1 py-1 bg-[var(--color-bg-elevated)] rounded-[5px] border border-[var(--color-border-default)] shadow-[var(--elev-3)] z-50 min-w-[160px]">
-                    <button
-                      type="button"
-                      onClick={() => { setAutoMode?.(true); setPersonaDropdownOpen(false); }}
-                      className={`w-full flex items-center gap-2 px-2.5 py-1.5 text-[11px] transition-colors ${
-                        isAutoMode ? "text-[var(--color-amber-500)] bg-[var(--color-amber-500)]/10" : "text-[var(--color-text-secondary)] hover:bg-[var(--color-bg-overlay)]"
-                      }`}
-                    >
-                      <Wand2 className="w-3 h-3" />
-                      Auto-routing
-                    </button>
-                    {PERSONA_OPTIONS.map((name) => (
-                      <button
-                        key={name}
-                        type="button"
-                        onClick={() => {
-                          setAutoMode?.(false);
-                          setSelectedPersona(name);
-                          setPersonaDropdownOpen(false);
-                        }}
-                        className={`w-full flex items-center gap-2 px-2.5 py-1.5 text-[11px] transition-colors ${
-                          !isAutoMode && selectedPersona === name
-                            ? "text-[var(--color-cyan-500)] bg-[var(--color-cyan-500)]/10"
-                            : "text-[var(--color-text-secondary)] hover:bg-[var(--color-bg-overlay)]"
-                        }`}
-                      >
-                        {PERSONA_DISPLAY[name] || name}
-                      </button>
-                    ))}
-                  </div>
-                )}
-              </div>
-            </div>
-          )}
-
           <div className="flex items-end">
             <div className="flex-1 relative">
               <textarea

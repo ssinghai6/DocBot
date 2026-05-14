@@ -182,6 +182,24 @@ async def classify_intent(
 # ---------------------------------------------------------------------------
 
 
+# PR5 telemetry: when both sources are connected, count how often the LLM
+# classifier diverges from the rule-of-thumb "default to hybrid". If the
+# divergence rate stays low after a sprint of real traffic, we can replace
+# the LLM call with a deterministic rule (docs+db → hybrid; else single
+# source) and save one LLM call per hybrid query.
+_intent_telemetry: dict[str, int] = {
+    "both_connected_calls": 0,
+    "both_connected_hybrid": 0,
+    "both_connected_diverged": 0,
+    "fallback_applied": 0,
+}
+
+
+def get_intent_telemetry() -> dict[str, int]:
+    """Return a snapshot of the in-process intent-classifier counters."""
+    return dict(_intent_telemetry)
+
+
 async def classify_intent_safe(
     question: str,
     has_db: bool,
@@ -200,6 +218,10 @@ async def classify_intent_safe(
     """
     question_hash = _hash_question(question)
     fallback_applied = not has_db or not has_docs
+    both_connected = has_db and has_docs
+
+    if fallback_applied:
+        _intent_telemetry["fallback_applied"] += 1
 
     try:
         intent = await classify_intent(
@@ -211,6 +233,17 @@ async def classify_intent_safe(
             async_session_factory=async_session_factory,
             query_history_table=query_history_table,
         )
+        if both_connected:
+            _intent_telemetry["both_connected_calls"] += 1
+            if intent == "hybrid":
+                _intent_telemetry["both_connected_hybrid"] += 1
+            else:
+                _intent_telemetry["both_connected_diverged"] += 1
+                logger.info(
+                    "classify_intent_safe: both sources connected but classifier "
+                    "chose intent=%r (not 'hybrid') — counted for telemetry",
+                    intent,
+                )
         return IntentClassification(
             intent=intent,
             fallback_applied=fallback_applied,
@@ -395,7 +428,6 @@ async def hybrid_chat(
     expert_personas: dict,
     vector_stores: dict,
     extracted_fields: list | None = None,
-    deep_research: bool = False,
     chat_history: list[dict[str, str]] | None = None,
     chart_type: str = "auto",
 ) -> AsyncGenerator[str, None]:
@@ -502,10 +534,6 @@ async def hybrid_chat(
         expert_personas.get(persona, expert_personas.get("Generalist", {}))
         .get("persona_def", "You are a helpful data analyst.")
     )
-
-    if deep_research:
-        from api.index import DEEP_RESEARCH_ADDON
-        persona_def = persona_def + DEEP_RESEARCH_ADDON
 
     doc_note = ""
     sql_note = ""

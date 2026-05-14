@@ -27,7 +27,7 @@ import { Button, Badge, Card } from "@/components/ui"
 const features = [
   {
     icon: <Layers className="w-6 h-6" />,
-    title: "Hybrid Analysis",
+    title: "Hybrid Mode",
     description:
       "Ask questions that span your PDFs and live database simultaneously. Get unified answers with dual citations and automatic discrepancy detection.",
     badge: "Core Feature",
@@ -37,9 +37,9 @@ const features = [
   },
   {
     icon: <Brain className="w-6 h-6" />,
-    title: "8 Expert Personas",
+    title: "4 Expert Personas",
     description:
-      "Specialized AI analysts: Financial, Legal, Medical, Technical, and more. Each persona is tuned for domain-specific reasoning and output conventions.",
+      "Specialized AI analysts: Finance Expert, Data Analyst, Strategy Analyst, and Generalist. Each persona is tuned for domain-specific reasoning and output conventions.",
     badge: "AI-Powered",
     badgeVariant: "info" as const,
     iconColor: "text-purple-400",
@@ -67,7 +67,7 @@ const features = [
   },
   {
     icon: <Wand2 className="w-6 h-6" />,
-    title: "Analytical Autopilot",
+    title: "Autopilot",
     description:
       "Auto-triggers multi-step investigations when it detects complex questions. Plans steps, queries databases, searches documents, runs Python analysis, and synthesizes findings.",
     badge: "Auto-Triggers",
@@ -80,8 +80,6 @@ const features = [
     title: "Enterprise Security",
     description:
       "RBAC with viewer/analyst/admin roles, append-only audit logging, PII auto-masking, SAML SSO, and Fernet-encrypted credential storage.",
-    badge: "WCAG AA",
-    badgeVariant: "success" as const,
     iconColor: "text-emerald-400",
     iconBg: "bg-emerald-900/30",
   },
@@ -110,8 +108,8 @@ const features = [
 // ── Stats data ─────────────────────────────────────────────────────────────────
 
 const stats = [
-  { label: "Test Coverage", value: "567+" },
-  { label: "Expert AI Personas", value: "8" },
+  { label: "Tests Passing", value: "686+" },
+  { label: "Expert AI Personas", value: "4" },
   { label: "Data Sources", value: "6+" },
   { label: "SQL Pipeline Steps", value: "7" },
 ]
@@ -245,84 +243,7 @@ function DemoVideo() {
     )
   }
 
-  // Placeholder — animated mockup preview
-  return (
-    <div className="aspect-video bg-gray-900/50 border border-gray-800 rounded-2xl overflow-hidden relative group cursor-pointer hover:border-purple-500/40 transition-all duration-300">
-      {/* Simulated UI background */}
-      <div className="absolute inset-0 p-6 sm:p-10 flex gap-4 opacity-60 group-hover:opacity-80 transition-opacity duration-500">
-        {/* Sidebar mock */}
-        <div className="hidden sm:flex flex-col w-48 shrink-0 gap-3">
-          <div className="h-8 rounded-lg bg-gradient-to-r from-blue-500/20 to-purple-600/20 border border-purple-500/10" />
-          <div className="h-5 w-32 rounded bg-gray-800/60" />
-          <div className="h-5 w-28 rounded bg-gray-800/40" />
-          <div className="mt-4 h-5 w-36 rounded bg-gray-800/60" />
-          <div className="flex items-center gap-2 mt-2 px-2 py-1.5 rounded-lg bg-green-500/10 border border-green-500/20">
-            <div className="w-2 h-2 rounded-full bg-green-400" />
-            <div className="h-3 w-20 rounded bg-green-400/30" />
-          </div>
-          <div className="mt-4 flex-1 rounded-xl border border-dashed border-gray-700/50 flex items-center justify-center">
-            <div className="h-4 w-16 rounded bg-gray-700/30" />
-          </div>
-          <div className="flex items-center gap-2 px-2 py-1.5 rounded-lg bg-purple-500/10 border border-purple-500/20">
-            <div className="w-3 h-3 rounded bg-purple-400/40" />
-            <div className="h-3 w-24 rounded bg-purple-400/20" />
-          </div>
-        </div>
-        {/* Chat area mock */}
-        <div className="flex-1 flex flex-col gap-3">
-          <div className="flex gap-2 mb-2">
-            <div className="h-7 w-16 rounded-full bg-blue-500/20 border border-blue-500/10" />
-            <div className="h-7 w-20 rounded-full bg-purple-500/20 border border-purple-500/10" />
-            <div className="h-7 w-16 rounded-full bg-gray-800/40" />
-          </div>
-          {/* User message */}
-          <div className="self-end max-w-[70%] rounded-2xl rounded-br-md bg-blue-600/20 border border-blue-500/10 px-4 py-2.5">
-            <div className="h-3 w-full rounded bg-white/20 mb-1.5" />
-            <div className="h-3 w-3/4 rounded bg-white/15" />
-          </div>
-          {/* AI response */}
-          <div className="self-start max-w-[80%] rounded-2xl rounded-bl-md bg-gray-800/60 border border-gray-700/30 px-4 py-3">
-            <div className="flex items-center gap-2 mb-2">
-              <div className="h-5 w-24 rounded-full bg-amber-500/20 border border-amber-500/10" />
-            </div>
-            <div className="h-3 w-full rounded bg-white/10 mb-1.5" />
-            <div className="h-3 w-5/6 rounded bg-white/10 mb-3" />
-            {/* Mini table */}
-            <div className="rounded-lg bg-gray-900/60 border border-gray-700/20 p-2 mb-2">
-              <div className="grid grid-cols-4 gap-1.5">
-                {Array.from({ length: 12 }).map((_, i) => (
-                  <div key={i} className={`h-2.5 rounded ${i < 4 ? "bg-purple-400/30" : "bg-gray-700/30"}`} />
-                ))}
-              </div>
-            </div>
-            {/* Mini chart */}
-            <div className="h-16 rounded-lg bg-gray-900/60 border border-gray-700/20 p-2 flex items-end gap-0.5">
-              {[40, 55, 45, 65, 50, 70, 60, 80, 75, 90, 85, 95].map((h, i) => (
-                <div
-                  key={i}
-                  className="flex-1 rounded-t bg-gradient-to-t from-blue-500/40 to-purple-500/40"
-                  style={{ height: `${h}%` }}
-                />
-              ))}
-            </div>
-            <div className="flex gap-2 mt-2">
-              <div className="h-4 w-28 rounded-full bg-purple-500/15 border border-purple-500/10" />
-              <div className="h-4 w-24 rounded-full bg-purple-500/15 border border-purple-500/10" />
-            </div>
-          </div>
-        </div>
-      </div>
-      {/* Play button overlay */}
-      <div className="absolute inset-0 flex items-center justify-center bg-black/20">
-        <div className="flex flex-col items-center gap-3">
-          <div className="w-20 h-20 rounded-full bg-gradient-to-br from-blue-500 to-purple-600 flex items-center justify-center shadow-2xl shadow-purple-900/40 group-hover:scale-110 transition-transform duration-300">
-            <Play className="w-8 h-8 text-white ml-1" />
-          </div>
-          <span className="text-sm text-gray-400 font-medium">Demo coming soon</span>
-        </div>
-      </div>
-    </div>
-  )
+  return null
 }
 
 // ── Component ─────────────────────────────────────────────────────────────────
@@ -358,12 +279,6 @@ export default function LandingPage() {
               className="hover:text-white transition-colors duration-150"
             >
               How It Works
-            </a>
-            <a
-              href="#pricing"
-              className="hover:text-white transition-colors duration-150"
-            >
-              Pricing
             </a>
           </div>
           <Link href="/chat">
@@ -425,10 +340,6 @@ export default function LandingPage() {
                 <span className="flex items-center gap-1.5">
                   <CheckCircle2 className="w-4 h-4 text-green-500" />
                   No SQL knowledge required
-                </span>
-                <span className="flex items-center gap-1.5">
-                  <CheckCircle2 className="w-4 h-4 text-green-500" />
-                  WCAG AA accessible
                 </span>
               </div>
             </div>
@@ -602,7 +513,7 @@ export default function LandingPage() {
               The only platform that does it all
             </h2>
             <p className="text-lg text-gray-400 max-w-2xl mx-auto">
-              Other tools handle documents OR databases. DocBot cross-references both in real time.
+              Other tools handle one source at a time. DocBot cross-references both in real time.
             </p>
           </div>
           <div className="overflow-x-auto">
@@ -697,44 +608,6 @@ export default function LandingPage() {
         </div>
       </section>
 
-      {/* ── Pricing ── */}
-      <section id="pricing" className="py-24 px-4 sm:px-6 lg:px-8 bg-gray-900/20">
-        <div className="max-w-5xl mx-auto text-center">
-          <Badge variant="success" className="mb-4">Pricing</Badge>
-          <h2 className="text-3xl sm:text-4xl font-bold text-white mb-4">
-            Start free. Scale when ready.
-          </h2>
-          <p className="text-lg text-gray-400 mb-12 max-w-xl mx-auto">
-            No credit card required. Upgrade as your data needs grow.
-          </p>
-          <div className="grid sm:grid-cols-3 gap-6 max-w-3xl mx-auto">
-            {[
-              { name: "Starter", price: "Free", features: ["5 PDF uploads", "CSV analysis", "8 AI personas", "Community support"], cta: "Get Started", highlight: false },
-              { name: "Pro", price: "Coming Soon", features: ["Unlimited documents", "Live database connections", "Marketplace connectors", "Priority support"], cta: "Join Waitlist", highlight: true },
-              { name: "Enterprise", price: "Contact Us", features: ["SAML SSO & RBAC", "Audit logging", "PII auto-masking", "Dedicated support"], cta: "Talk to Us", highlight: false },
-            ].map((tier) => (
-              <div key={tier.name} className={`rounded-2xl p-6 text-left ${tier.highlight ? "bg-gradient-to-b from-blue-600/10 to-purple-600/10 border-2 border-blue-500/30 shadow-lg shadow-blue-900/20" : "bg-gray-900/40 border border-gray-800"}`}>
-                <h3 className="text-lg font-bold text-white mb-1">{tier.name}</h3>
-                <p className="text-2xl font-bold text-white mb-4">{tier.price}</p>
-                <ul className="space-y-2 mb-6">
-                  {tier.features.map((f) => (
-                    <li key={f} className="flex items-center gap-2 text-sm text-gray-300">
-                      <CheckCircle2 className="w-4 h-4 text-green-400 flex-shrink-0" />
-                      {f}
-                    </li>
-                  ))}
-                </ul>
-                <Link href="/chat">
-                  <Button variant={tier.highlight ? "primary" : "secondary"} size="sm" className="w-full">
-                    {tier.cta}
-                  </Button>
-                </Link>
-              </div>
-            ))}
-          </div>
-        </div>
-      </section>
-
       {/* ── CTA section ── */}
       <section className="py-24 px-4 sm:px-6 lg:px-8 relative overflow-hidden">
         <div className="absolute inset-0 -z-10 pointer-events-none" aria-hidden="true">
@@ -768,11 +641,7 @@ export default function LandingPage() {
             </span>
             <span className="flex items-center gap-2">
               <CheckCircle2 className="w-4 h-4 text-green-500" />
-              Deployed on Railway
-            </span>
-            <span className="flex items-center gap-2">
-              <CheckCircle2 className="w-4 h-4 text-green-500" />
-              567+ tests passing
+              686+ tests passing
             </span>
           </div>
         </div>
@@ -792,7 +661,7 @@ export default function LandingPage() {
 
           <div className="flex items-center gap-4">
             <a
-              href="https://github.com"
+              href="https://github.com/ssinghai6/DocBot"
               target="_blank"
               rel="noopener noreferrer"
               className="flex items-center gap-1.5 hover:text-gray-300 transition-colors duration-150"

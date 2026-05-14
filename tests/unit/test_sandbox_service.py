@@ -27,11 +27,11 @@ from api.sandbox_service import (
 
 class TestValidChartTypes:
     def test_contains_required_types(self):
-        required = {"auto", "bar", "line", "scatter", "heatmap", "box", "multi"}
+        required = {"auto", "bar", "line", "scatter", "heatmap"}
         assert required == VALID_CHART_TYPES
 
     def test_no_unexpected_types(self):
-        assert len(VALID_CHART_TYPES) == 7
+        assert len(VALID_CHART_TYPES) == 5
 
     def test_all_lowercase(self):
         for t in VALID_CHART_TYPES:
@@ -120,14 +120,6 @@ class TestChartTypeInstructions:
         instr = _chart_type_instructions("heatmap")
         assert "heatmap" in instr.lower()
 
-    def test_box_mentions_box(self):
-        instr = _chart_type_instructions("box")
-        assert "box" in instr.lower()
-
-    def test_multi_mentions_subplot(self):
-        instr = _chart_type_instructions("multi")
-        assert "subplot" in instr.lower()
-
     def test_unknown_type_returns_default(self):
         instr = _chart_type_instructions("unknown_xyz")
         # Should not raise — returns a sensible fallback
@@ -135,7 +127,7 @@ class TestChartTypeInstructions:
         assert len(instr) > 0
 
     def test_all_named_types_return_non_empty(self):
-        for chart_type in ("bar", "line", "scatter", "heatmap", "box", "multi"):
+        for chart_type in ("bar", "line", "scatter", "heatmap"):
             assert len(_chart_type_instructions(chart_type)) > 0
 
 

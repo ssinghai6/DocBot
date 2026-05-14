@@ -18,9 +18,7 @@ const PERSONA_ACCENT: Record<string, "cyan" | "amber"> = {
   Generalist: "cyan",
   "Finance Expert": "amber",
   "Data Analyst": "amber",
-  Engineer: "cyan",
-  "AI/ML Expert": "cyan",
-  Consultant: "cyan",
+  "Strategy Analyst": "cyan",
   Doctor: "cyan",
   Lawyer: "cyan",
 }

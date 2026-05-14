@@ -23,7 +23,6 @@ import type {
 interface UseChatHandlersParams {
   sessionId: string | null
   anonymousSessionIdRef: React.RefObject<string>
-  deepVisualMode: boolean
   authModalTab: "login" | "register"
   authEmail: string
   authPassword: string
@@ -40,7 +39,6 @@ interface UseChatHandlersParams {
   setSessionId: React.Dispatch<React.SetStateAction<string | null>>
   setUploadProgress: React.Dispatch<React.SetStateAction<number | null>>
   setSelectedPersona: React.Dispatch<React.SetStateAction<string>>
-  setSuggestedPersona: React.Dispatch<React.SetStateAction<string | null>>
   setIsDbConnected: React.Dispatch<React.SetStateAction<boolean>>
   setConnectionId: React.Dispatch<React.SetStateAction<string | null>>
   setDbUploadState: React.Dispatch<React.SetStateAction<"idle" | "uploading" | "connected" | "error">>
@@ -81,7 +79,6 @@ export function useChatHandlers(params: UseChatHandlersParams) {
   const {
     sessionId,
     anonymousSessionIdRef,
-    deepVisualMode,
     authModalTab,
     authEmail,
     authPassword,
@@ -98,7 +95,6 @@ export function useChatHandlers(params: UseChatHandlersParams) {
     setSessionId,
     setUploadProgress,
     setSelectedPersona,
-    setSuggestedPersona,
     setIsDbConnected,
     setConnectionId,
     setDbUploadState,
@@ -435,7 +431,6 @@ export function useChatHandlers(params: UseChatHandlersParams) {
     files.forEach(file => {
       formData.append('files', file);
     });
-    formData.append('deep_visual_mode', String(deepVisualMode));
 
     try {
       const progressInterval = setInterval(() => {
@@ -459,7 +454,6 @@ export function useChatHandlers(params: UseChatHandlersParams) {
       setSessionId(data.session_id);
 
       if (data.suggested_persona && data.suggested_persona !== "Generalist") {
-        setSuggestedPersona(data.suggested_persona);
         setSelectedPersona(data.suggested_persona);
         showToast("info", `Switched to ${data.suggested_persona} mode for your document`);
       } else {
@@ -524,7 +518,6 @@ export function useChatHandlers(params: UseChatHandlersParams) {
     setSessionId(null);
     setUploadedFiles([]);
     setMessages([]);
-    setSuggestedPersona(null);
     showToast("info", "Session cleared");
   };
 

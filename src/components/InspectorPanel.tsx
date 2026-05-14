@@ -2,7 +2,7 @@
 
 import { useMemo } from "react"
 import { Highlight, themes } from "prism-react-renderer"
-import { PanelRight, Database, Table as TableIcon, FileText, Image as ImageIcon, Code2, Download, ExternalLink } from "lucide-react"
+import { PanelRight, FileText, Image as ImageIcon, Code2, Download, ExternalLink } from "lucide-react"
 import { Tabs, TabsList, TabsTrigger, TabsContent } from "@/components/ui"
 import { useUIStore, type InspectorTab } from "@/store/uiStore"
 
@@ -12,8 +12,6 @@ interface InspectorPanelProps {
 
 const TABS: Array<{ id: InspectorTab; label: string; icon: React.ReactNode }> = [
   { id: "query",    label: "Query",    icon: <Code2 className="w-3 h-3" /> },
-  { id: "schema",   label: "Schema",   icon: <Database className="w-3 h-3" /> },
-  { id: "profile",  label: "Profile",  icon: <TableIcon className="w-3 h-3" /> },
   { id: "metadata", label: "Metadata", icon: <FileText className="w-3 h-3" /> },
   { id: "artifact", label: "Artifact", icon: <ImageIcon className="w-3 h-3" /> },
 ]
@@ -62,12 +60,6 @@ export default function InspectorPanel({ onClose }: InspectorPanelProps) {
         <div className="flex-1 overflow-y-auto">
           <TabsContent value="query" className="p-0">
             <QueryTab artifact={selectedArtifact} />
-          </TabsContent>
-          <TabsContent value="schema" className="p-4">
-            <EmptyTab label="Schema" hint="Connect a database to browse tables and columns here." />
-          </TabsContent>
-          <TabsContent value="profile" className="p-4">
-            <EmptyTab label="Profile" hint="Upload a CSV to see dtypes, null counts, and summary stats." />
           </TabsContent>
           <TabsContent value="metadata" className="p-0">
             <MetadataTab artifact={selectedArtifact} />

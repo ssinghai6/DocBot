@@ -56,7 +56,7 @@ DocBot is an AI-powered document + database analyst, fully deployed on Railway (
 | `src/components/EdgarPanel.tsx` | SEC EDGAR sidebar panel — search companies, browse filings, single/batch ingest |
 | `src/components/` | Extracted frontend components: Sidebar, ChatArea, AuthModal, AdminPanel, ChatMessage, ConnectionPanel, FileUploadZone, PersonaSelector, EdgarPanel, MarketplacePanel, CommandPalette, UnifiedUploadZone, personas |
 | `src/hooks/` | Custom hooks: useChatHandlers (DB/auth/file handlers), useChatSubmit (message submission) |
-| `tests/external/test_financebench_accuracy.py` | FinanceBench 20-question accuracy test suite (external, requires live API keys) |
+| `tests/external/test_llm_extraction_baseline.py` | LLM extraction baseline (20 hand-picked contexts, external API keys). Not a RAG benchmark — retrieval is bypassed. |
 | `requirements.txt` | Python dependencies |
 | `project-tasks/docbot-v2-project-tracking.md` | 40+ user stories, 11 epics, sprint plan, Definition of Done — **primary ticket tracker** |
 | `project-tasks/docbot-db-master-plan.md` | Full architecture, security model, phased build plan |
@@ -160,7 +160,7 @@ All work is tracked in `project-tasks/docbot-v2-project-tracking.md`.
   - DOCBOT-1001: Chroma persistent store — **Done**
   - DOCBOT-1002: Cross-encoder reranker — **Done**
   - DOCBOT-1003: SemanticChunker — **Done**
-  - DOCBOT-1004: FinanceBench accuracy — **Done** (100% accuracy, 20/20)
+  - DOCBOT-1004: LLM extraction baseline (formerly "FinanceBench accuracy") — **Done**. NOTE: the original test feeds ground-truth context directly to the LLM; it is an extraction smoke test, not a RAG retrieval benchmark. Do not cite as a RAG accuracy number.
 - **EPIC-07 Commerce Connectors (DOCBOT-701–706) — Done** (all phases)
   - DOCBOT-701: Marketplace connector interface + credential vault + rate limiter — **Done**
   - DOCBOT-702: Unified commerce schema + multi-tenant RLS — **Done** (31 tests)
@@ -178,7 +178,7 @@ All work is tracked in `project-tasks/docbot-v2-project-tracking.md`.
   - CSV chart bug fixed (narrowed "skip chart" prompt, improved fallback, `_format_stdout_as_markdown()`)
   - Universal Autopilot — works with PDF + CSV + SQL (dynamic planner tools, `_select_tool()` flags)
   - Auth 401 fix — RBAC decoupled from SAML config, new `AUTH_REQUIRED` env var (default off)
-  - FinanceBench accuracy: **100% (20/20)** — run 2026-03-29
+  - LLM extraction baseline: 20/20 against hand-picked single-paragraph contexts. Not a RAG benchmark — retrieval is bypassed. Do not cite externally.
   - Remaining: 85-test manual regression on prod
 - **CSV Intelligence & Conversational Memory (2026-03-26) — Done**
   - Deterministic `DataProfile` on CSV upload (dtypes, sample rows, describe(), datetime detection, frequency inference) — zero LLM calls
@@ -304,7 +304,7 @@ tests/
     test_db_pipeline.py
     test_file_upload_service.py
   external/                # require live API keys — skipped in CI (@pytest.mark.external)
-    test_financebench_accuracy.py   # 20-question FinanceBench accuracy suite
+    test_llm_extraction_baseline.py # 20-context LLM extraction smoke test (not a RAG benchmark)
     test_edgar_integration.py       # 17 end-to-end tests hitting real SEC EDGAR API
 ```
 

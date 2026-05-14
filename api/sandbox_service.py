@@ -22,7 +22,7 @@ from pydantic import BaseModel
 logger = logging.getLogger(__name__)
 
 # DOCBOT-305: supported chart types for validate + prompt routing
-VALID_CHART_TYPES = {"auto", "bar", "line", "scatter", "heatmap", "box", "multi"}
+VALID_CHART_TYPES = {"auto", "bar", "line", "scatter", "heatmap"}
 
 # Regex to detect complex analytical queries that need more code/time
 _COMPLEX_QUERY_RE = _re_module.compile(
@@ -449,15 +449,6 @@ def _chart_type_instructions(chart_type: str) -> str:
             "Create a heatmap. If the data has numeric columns, compute a correlation "
             "matrix with df.corr() and plot it using matplotlib imshow or seaborn heatmap. "
             "Annotate cells with values."
-        ),
-        "box": (
-            "Create a box plot showing the distribution of numeric columns. "
-            "Use plt.boxplot or df.boxplot."
-        ),
-        "multi": (
-            "Create a 2x2 subplot grid (fig, axes = plt.subplots(2, 2, figsize=(12, 10))). "
-            "Fill each panel with the most informative chart for the data: "
-            "e.g. bar, line, scatter, box. Ensure tight_layout() is called."
         ),
     }
     return instructions.get(chart_type, "Choose the most appropriate chart type for the data and question.")

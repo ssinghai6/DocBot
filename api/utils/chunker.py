@@ -1,7 +1,13 @@
 """Semantic chunker for financial and legal documents.
 
-Uses LangChain SemanticChunker with HuggingFace embeddings.
+Uses LangChain SemanticChunker with HuggingFace Endpoint embeddings (API).
 Falls back to RecursiveCharacterTextSplitter if embeddings unavailable.
+
+PR5 (DOCBOT-1200): switched from ``HuggingFaceEmbeddings`` (which downloads
+sentence-transformers locally — ~90MB on Railway cold start, plus torch) to
+``HuggingFaceEndpointEmbeddings`` which calls the HuggingFace Inference API
+the rest of the codebase already uses. Keeps the SemanticChunker semantics
+intact and aligns with the "HuggingFace API only" claim in CLAUDE.md.
 """
 
 from __future__ import annotations
@@ -15,11 +21,11 @@ logger = logging.getLogger(__name__)
 
 try:
     from langchain_experimental.text_splitter import SemanticChunker
-    from langchain_huggingface import HuggingFaceEmbeddings
+    from langchain_huggingface import HuggingFaceEndpointEmbeddings
     _SEMANTIC_AVAILABLE = True
 except ImportError:
     SemanticChunker = None  # type: ignore[assignment,misc]
-    HuggingFaceEmbeddings = None  # type: ignore[assignment,misc]
+    HuggingFaceEndpointEmbeddings = None  # type: ignore[assignment,misc]
     _SEMANTIC_AVAILABLE = False
 
 # Document types that benefit from semantic chunking (boundary-aware splitting
@@ -87,8 +93,9 @@ def chunk_document(
     """
     if doc_type in _SEMANTIC_DOC_TYPES and hf_api_key and SemanticChunker is not None:
         try:
-            embeddings = HuggingFaceEmbeddings(
-                model_name="sentence-transformers/all-MiniLM-L6-v2",
+            embeddings = HuggingFaceEndpointEmbeddings(
+                model="sentence-transformers/all-MiniLM-L6-v2",
+                huggingfacehub_api_token=hf_api_key,
             )
             chunker = SemanticChunker(
                 embeddings,

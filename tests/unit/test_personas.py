@@ -73,6 +73,13 @@ class TestAllPersonasStructure:
             )
 
     def test_persona_count_includes_data_analyst(self):
-        assert len(EXPERT_PERSONAS) >= 8, (
-            f"Expected at least 8 personas, found {len(EXPERT_PERSONAS)}"
+        # PR5 (DOCBOT-1200): Engineer + AI/ML Expert folded into Generalist;
+        # Consultant renamed Strategy Analyst. Expect exactly six.
+        assert len(EXPERT_PERSONAS) == 6, (
+            f"Expected exactly 6 personas after PR5 consolidation, found {len(EXPERT_PERSONAS)}"
         )
+        assert "Data Analyst" in EXPERT_PERSONAS
+        assert "Strategy Analyst" in EXPERT_PERSONAS
+        assert "Consultant" not in EXPERT_PERSONAS
+        assert "Engineer" not in EXPERT_PERSONAS
+        assert "AI/ML Expert" not in EXPERT_PERSONAS

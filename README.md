@@ -839,7 +839,7 @@ pytest tests/ -v -m "not external and not postgres"
 | `tests/integration/test_artifact_service.py` | SQLite-backed artifact round-trip |
 | `tests/unit/test_edgar_connector.py` | EDGAR connector — search, list, fetch, rate limiter (16 tests) |
 | `tests/unit/test_edgar_service.py` | EDGAR ingestion service — cache, ingest, batch (5 tests) |
-| `tests/external/test_financebench_accuracy.py` | FinanceBench 20-question accuracy suite (requires live API keys) |
+| `tests/external/test_llm_extraction_baseline.py` | 20-question LLM extraction baseline (requires live API keys). Feeds ground-truth context directly to the LLM — not a RAG benchmark. |
 | `tests/external/test_edgar_integration.py` | EDGAR end-to-end integration — search, list, fetch against live SEC API (17 tests) |
 
 ---

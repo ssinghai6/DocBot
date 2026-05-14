@@ -24,6 +24,8 @@ import type {
 export interface SidebarProps {
   sidebarOpen: boolean
   setSidebarOpen: React.Dispatch<React.SetStateAction<boolean>>
+  activeTab: "sources" | "tools" | "settings"
+  setActiveTab: React.Dispatch<React.SetStateAction<"sources" | "tools" | "settings">>
 
   authChecked: boolean
   authUser: AuthUser | null
@@ -40,8 +42,6 @@ export interface SidebarProps {
   fileUploadState: FileUploadState
   uploadProgress: number | null
   uploadedFiles: File[]
-  deepVisualMode: boolean
-  onDeepVisualModeChange: React.Dispatch<React.SetStateAction<boolean>>
   onDragOver: (e: React.DragEvent) => void
   onDragLeave: (e: React.DragEvent) => void
   onDrop: (e: React.DragEvent) => void
@@ -78,12 +78,9 @@ export interface SidebarProps {
   onEntraReset: () => void
 
   selectedPersona: string
-  suggestedPersona: string | null
   isAutoMode: boolean
-  deepResearch: boolean
   onSelectPersona: React.Dispatch<React.SetStateAction<string>>
   onSetAutoMode: React.Dispatch<React.SetStateAction<boolean>>
-  onDeepResearchChange: React.Dispatch<React.SetStateAction<boolean>>
 
   clearChat: () => void
   messagesLength: number
@@ -102,6 +99,8 @@ export default function Sidebar(props: SidebarProps) {
   const {
     sidebarOpen,
     setSidebarOpen,
+    activeTab,
+    setActiveTab,
     authChecked,
     authUser,
     handleLogout,
@@ -115,8 +114,6 @@ export default function Sidebar(props: SidebarProps) {
     fileUploadState,
     uploadProgress,
     uploadedFiles,
-    deepVisualMode,
-    onDeepVisualModeChange,
     onDragOver,
     onDragLeave,
     onDrop,
@@ -151,12 +148,9 @@ export default function Sidebar(props: SidebarProps) {
     onMicrosoftSignIn,
     onEntraReset,
     selectedPersona,
-    suggestedPersona,
     isAutoMode,
-    deepResearch,
     onSelectPersona,
     onSetAutoMode,
-    onDeepResearchChange,
     clearChat,
     messagesLength,
     connectors,
@@ -168,7 +162,6 @@ export default function Sidebar(props: SidebarProps) {
 
   const [marketplaceOpen, setMarketplaceOpen] = useState(false);
   const [personaOpen, setPersonaOpen] = useState(false);
-  const [activeTab, setActiveTab] = useState<"sources" | "tools" | "settings">("sources");
 
   return (
     <>
@@ -256,8 +249,6 @@ export default function Sidebar(props: SidebarProps) {
           fileUploadState={fileUploadState}
           uploadProgress={uploadProgress}
           uploadedFiles={uploadedFiles}
-          deepVisualMode={deepVisualMode}
-          onDeepVisualModeChange={onDeepVisualModeChange}
           onDragOver={onDragOver}
           onDragLeave={onDragLeave}
           onDrop={onDrop}
@@ -414,12 +405,9 @@ export default function Sidebar(props: SidebarProps) {
                 {personaOpen && (
                   <PersonaSelector
                     selectedPersona={selectedPersona}
-                    suggestedPersona={suggestedPersona}
                     isAutoMode={isAutoMode}
-                    deepResearch={deepResearch}
                     onSelectPersona={onSelectPersona}
                     onSetAutoMode={onSetAutoMode}
-                    onDeepResearchChange={onDeepResearchChange}
                   />
                 )}
               </div>

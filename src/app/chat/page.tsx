@@ -94,11 +94,8 @@ export default function Home() {
 
   // Sidebar State
   const [selectedPersona, setSelectedPersona] = useState("Generalist");
-  const [suggestedPersona, setSuggestedPersona] = useState<string | null>(null);
-  const [deepVisualMode, setDeepVisualMode] = useState(false);
-  const [deepResearch, setDeepResearch] = useState(false);
-  const [drProgress, setDrProgress] = useState<{ step: string; message: string } | null>(null);
   const [sidebarOpen, setSidebarOpen] = useState(true);
+  const [sidebarTab, setSidebarTab] = useState<"sources" | "tools" | "settings">("sources");
   const [isAutoMode, setIsAutoMode] = useState(true);
 
   // Demo mode
@@ -143,7 +140,7 @@ export default function Home() {
   const [chartType, setChartType] = useState<string>("auto");
   const [zoomedChart, setZoomedChart] = useState<string | null>(null);
 
-  // Analytical Autopilot
+  // Autopilot
   const [autopilotMode, setAutopilotMode] = useState(false);
   const [autopilotRunning, setAutopilotRunning] = useState(false);
   const [autopilotSteps, setAutopilotSteps] = useState<AutopilotStep[]>([]);
@@ -215,7 +212,6 @@ export default function Home() {
   const handlers = useChatHandlers({
     sessionId,
     anonymousSessionIdRef,
-    deepVisualMode,
     authModalTab,
     authEmail,
     authPassword,
@@ -232,7 +228,6 @@ export default function Home() {
     setSessionId,
     setUploadProgress,
     setSelectedPersona,
-    setSuggestedPersona,
     setIsDbConnected,
     setConnectionId,
     setDbUploadState,
@@ -280,7 +275,6 @@ export default function Home() {
     autopilotMode,
     isCsvConnection,
     chartType,
-    deepResearch,
     messages,
 
     setMessages,
@@ -290,7 +284,6 @@ export default function Home() {
     setAutopilotRunning,
     setAutopilotSteps,
     setAutopilotPlan,
-    setDrProgress,
 
     showToast,
     loadQueryHistory: handlers.loadQueryHistory,
@@ -453,6 +446,8 @@ export default function Home() {
       <Sidebar
         sidebarOpen={sidebarOpen}
         setSidebarOpen={setSidebarOpen}
+        activeTab={sidebarTab}
+        setActiveTab={setSidebarTab}
         authChecked={authChecked}
         authUser={authUser}
         handleLogout={handlers.handleLogout}
@@ -466,8 +461,6 @@ export default function Home() {
         fileUploadState={fileUploadState}
         uploadProgress={uploadProgress}
         uploadedFiles={uploadedFiles}
-        deepVisualMode={deepVisualMode}
-        onDeepVisualModeChange={setDeepVisualMode}
         onDragOver={handlers.handleDragOver}
         onDragLeave={handlers.handleDragLeave}
         onDrop={handlers.handleDrop}
@@ -502,12 +495,9 @@ export default function Home() {
         onMicrosoftSignIn={handlers.handleMicrosoftSignIn}
         onEntraReset={() => { setEntraToken(null); setEntraEmail(null); setEntraSignInState("idle"); }}
         selectedPersona={selectedPersona}
-        suggestedPersona={suggestedPersona}
         isAutoMode={isAutoMode}
-        deepResearch={deepResearch}
         onSelectPersona={setSelectedPersona}
         onSetAutoMode={setIsAutoMode}
-        onDeepResearchChange={setDeepResearch}
         clearChat={handlers.clearChat}
         messagesLength={messages.length}
         connectors={connectors}
@@ -550,8 +540,6 @@ export default function Home() {
         autopilotRunning={autopilotRunning}
         autopilotSteps={autopilotSteps}
         autopilotPlan={autopilotPlan}
-        deepResearch={deepResearch}
-        drProgress={drProgress}
         chatContainerRef={chatContainerRef}
         lastMessageRef={lastMessageRef}
         messagesEndRef={messagesEndRef}
@@ -560,9 +548,9 @@ export default function Home() {
         clearSession={handlers.clearSession}
         exportChat={handlers.exportChat}
         showToast={showToast}
-        onUploadClick={() => { setSidebarOpen(true); fileInputRef.current?.click(); }}
-        onConnectDatabase={() => { setSidebarOpen(true); setShowLiveDbForm(true); }}
-        onBrowseEdgar={() => { setSidebarOpen(true); }}
+        onUploadClick={() => { setSidebarOpen(true); setSidebarTab("sources"); fileInputRef.current?.click(); }}
+        onConnectDatabase={() => { setSidebarOpen(true); setSidebarTab("sources"); setShowLiveDbForm(true); }}
+        onBrowseEdgar={() => { setSidebarOpen(true); setSidebarTab("tools"); }}
         onTryDemo={handleTryDemo}
         demoLoading={demoLoading}
       />
@@ -639,9 +627,10 @@ export default function Home() {
         isOpen={cmdPalette.isOpen}
         onClose={cmdPalette.onClose}
         commands={buildCommands({
-          onConnectDatabase: () => { setSidebarOpen(true); setShowLiveDbForm(true); },
-          onSearchEdgar: () => { setSidebarOpen(true); },
-          onAddConnector: () => { setSidebarOpen(true); },
+          onConnectDatabase: () => { setSidebarOpen(true); setSidebarTab("sources"); setShowLiveDbForm(true); },
+          onSearchEdgar: () => { setSidebarOpen(true); setSidebarTab("tools"); },
+          onAddConnector: () => { setSidebarOpen(true); setSidebarTab("tools"); },
+          onToggleInspector: () => setInspectorOpen(!inspectorOpen),
           onClearChat: messages.length > 0 ? handlers.clearChat : undefined,
           onExportChat: sessionId && messages.length > 0 ? () => handlers.exportChat("markdown") : undefined,
           onSwitchPersona: setSelectedPersona,
