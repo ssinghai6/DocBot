@@ -1629,9 +1629,19 @@ class PersonaTestRequest(BaseModel):
     session_id: str
     test_question: str
 
+# Dev-only flag for /api/test-* and /api/auth/debug-urls. Production deploys
+# (Railway sets ENV=production) get a 404 on these paths instead of leaking
+# persona prompts or SAML internals.
+_DEV_ROUTES_ENABLED = os.getenv("ENV", "").lower() == "dev"
+
 @app.post("/api/test-persona-switch")
 async def test_persona_switch(request: PersonaTestRequest):
-    """Test persona switching by getting the persona prompt without making an LLM call"""
+    """Test persona switching by getting the persona prompt without making an LLM call.
+
+    Dev-only — returns 404 unless ``ENV=dev``.
+    """
+    if not _DEV_ROUTES_ENABLED:
+        raise HTTPException(status_code=404, detail="Not found")
     try:
         # Get session info
         async with engine.connect() as conn:
@@ -1683,7 +1693,9 @@ async def test_persona_switch(request: PersonaTestRequest):
 
 @app.get("/api/test-personas")
 def test_personas():
-    """Get all personas with their full details for testing"""
+    """Dev-only — returns 404 unless ``ENV=dev``. Returns all personas with their full details for testing."""
+    if not _DEV_ROUTES_ENABLED:
+        raise HTTPException(status_code=404, detail="Not found")
     return {
         "personas": [
             {
@@ -2431,7 +2443,12 @@ async def saml_acs(request: Request, response: Response):
 
 @app.get("/api/auth/debug-urls")
 async def auth_debug_urls():
-    """Show exactly what redirect URIs the app will send to OAuth providers."""
+    """Show exactly what redirect URIs the app will send to OAuth providers.
+
+    Dev-only — returns 404 unless ``ENV=dev``.
+    """
+    if not _DEV_ROUTES_ENABLED:
+        raise HTTPException(status_code=404, detail="Not found")
     from api.oauth_service import _app_base_url, _frontend_url
     base = _app_base_url()
     return {

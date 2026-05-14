@@ -1,7 +1,7 @@
 import { create } from "zustand";
 import { persist } from "zustand/middleware";
 
-export type InspectorTab = "query" | "schema" | "profile" | "metadata" | "artifact";
+export type InspectorTab = "query" | "metadata" | "artifact";
 
 export interface SelectedArtifact {
   messageId: string;
