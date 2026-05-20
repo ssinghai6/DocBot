@@ -298,9 +298,9 @@ class TestSelectToolDataSourceFlags:
         assert _select_tool_heuristic("Fetch revenue data", has_db=False, has_docs=True) == "doc_search"
         assert _select_tool_heuristic("Query total by region", has_db=False, has_docs=True) == "doc_search"
 
-    def test_no_db_no_docs_falls_back_to_python(self):
-        """Data-fetch verbs with no db and no docs → python_analysis."""
-        assert _select_tool_heuristic("Fetch the data", has_db=False, has_docs=False) == "python_analysis"
+    def test_no_db_no_docs_no_csv_returns_unsupported(self):
+        """No data source at all → unsupported (autopilot can't fetch external data)."""
+        assert _select_tool_heuristic("Fetch the data", has_db=False, has_docs=False, has_csv=False) == "unsupported"
 
     def test_has_docs_returns_doc_search_for_document_steps(self):
         """Doc keywords route to doc_search regardless of flags."""
@@ -308,9 +308,12 @@ class TestSelectToolDataSourceFlags:
         assert _select_tool_heuristic("Find in the PDF report", has_db=False, has_docs=True) == "doc_search"
 
     def test_chart_keywords_still_python_with_no_db(self):
-        """Chart/viz keywords → python_analysis even without DB."""
+        """Chart/viz keywords → python_analysis when at least one data source exists."""
         assert _select_tool_heuristic("Create a bar chart of results", has_db=False, has_docs=True) == "python_analysis"
-        assert _select_tool_heuristic("Plot the distribution", has_db=False, has_docs=False) == "python_analysis"
+        # No data source at all → unsupported, even for chart keywords
+        assert _select_tool_heuristic("Plot the distribution", has_db=False, has_docs=False, has_csv=False) == "unsupported"
+        # CSV alone is enough to keep python_analysis
+        assert _select_tool_heuristic("Plot the distribution", has_db=False, has_docs=False, has_csv=True) == "python_analysis"
 
     def test_default_flags_preserve_existing_behavior(self):
         """With default flags (has_db=True, has_docs=False), behavior is unchanged."""

@@ -168,7 +168,7 @@ async def _planner_node(state: AutopilotState) -> dict:
 
 
 def _select_tool_heuristic(step: str, has_db: bool = True, has_docs: bool = False, has_csv: bool = False) -> str:
-    """Choose sql_query | doc_search | python_analysis based on step wording.
+    """Choose sql_query | doc_search | python_analysis | unsupported based on step wording.
 
     Data-fetch verbs (query/fetch/get/retrieve/select/find) always win over
     visualisation keywords so "Fetch data for heatmap" stays sql_query.
@@ -179,7 +179,13 @@ def _select_tool_heuristic(step: str, has_db: bool = True, has_docs: bool = Fals
     When ``has_db`` is False the function never returns ``"sql_query"`` —
     data-fetch verbs fall back to ``"doc_search"`` (if docs available) or
     ``"python_analysis"``.
+
+    Returns ``"unsupported"`` when no data source is available (no DB, no docs,
+    no CSV). Autopilot cannot fetch external data, so steps that need data
+    cannot be executed — the executor surfaces this as a refusal.
     """
+    if not has_db and not has_docs and not has_csv:
+        return "unsupported"
     s = step.lower()
     # Data-fetch verbs take priority — these are SQL steps even if chart words present
     DATA_FETCH = ("fetch ", "retrieve ", "get ", "select ", "find ", "query ", "calculate ",
@@ -275,6 +281,12 @@ def make_executor_node(
                         "executor_node: demoted python_analysis → doc_search "
                         "(no prior data for step: %s)", step[:80]
                     )
+                else:
+                    tool = "unsupported"
+                    logger.info(
+                        "executor_node: demoted python_analysis → unsupported "
+                        "(no data source for step: %s)", step[:80]
+                    )
         session_id = state["session_id"]
         connection_id = state["connection_id"]
         persona = state.get("persona", "Generalist")
@@ -290,8 +302,20 @@ def make_executor_node(
         new_citations: list[dict] = []
 
         try:
+            # ── unsupported ────────────────────────────────────────────────
+            # No data source (no DB, no docs, no CSV) — autopilot can't fetch
+            # external data. Surface as a clean refusal instead of silently
+            # running python on an undefined `df`.
+            if tool == "unsupported":
+                msg = (
+                    "This step needs a data source. Connect a database, "
+                    "upload a document (PDF), or upload a CSV to proceed."
+                )
+                result_entry["result"] = msg
+                result_entry["error"] = "No data source available"
+
             # ── sql_query ──────────────────────────────────────────────────
-            if tool == "sql_query":
+            elif tool == "sql_query":
                 from api.hybrid_service import _collect_sql_result
 
                 sql_meta = await _collect_sql_result(
@@ -432,6 +456,7 @@ def make_executor_node(
                                 result_entry["result"] = (
                                     "CSV code generation failed."
                                 )
+                                result_entry["error"] = "CSV code generation failed"
                             else:
                                 try:
                                     _csv_bytes = _base64.b64decode(_csv_b64)
@@ -443,13 +468,21 @@ def make_executor_node(
                                     csv_bytes=_csv_bytes,
                                     timeout_seconds=60,
                                 )
-                                result_entry["result"] = (
-                                    sandbox_result.stdout[:500]
-                                    if sandbox_result.stdout
-                                    else "Analysis complete."
-                                )
                                 if sandbox_result.error:
                                     result_entry["error"] = sandbox_result.error
+                                    # Surface error in result so synthesizer + UI
+                                    # see the failure, not a misleading "complete".
+                                    result_entry["result"] = (
+                                        sandbox_result.stdout[:500]
+                                        if sandbox_result.stdout
+                                        else f"Step failed: {sandbox_result.error}"
+                                    )
+                                else:
+                                    result_entry["result"] = (
+                                        sandbox_result.stdout[:500]
+                                        if sandbox_result.stdout
+                                        else "Analysis complete."
+                                    )
                                 if (
                                     sandbox_result.charts
                                     and session_artifacts_table is not None
@@ -526,12 +559,17 @@ def make_executor_node(
                                 "df = pd.DataFrame(data)\n"
                             )
                             sandbox_result = await run_python(preamble + code)
-                            result_entry["result"] = (
-                                sandbox_result.stdout[:500] if sandbox_result.stdout
-                                else "Analysis complete."
-                            )
                             if sandbox_result.error:
                                 result_entry["error"] = sandbox_result.error
+                                result_entry["result"] = (
+                                    sandbox_result.stdout[:500] if sandbox_result.stdout
+                                    else f"Step failed: {sandbox_result.error}"
+                                )
+                            else:
+                                result_entry["result"] = (
+                                    sandbox_result.stdout[:500] if sandbox_result.stdout
+                                    else "Analysis complete."
+                                )
                             # Persist first chart as an artifact
                             if sandbox_result.charts and session_artifacts_table is not None:
                                 from api.artifact_service import save_artifact
