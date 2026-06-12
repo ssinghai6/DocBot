@@ -123,6 +123,10 @@ def _detect_needed_packages(code: str) -> list[str]:
         if pkg and pkg not in seen:
             seen.add(pkg)
             needed.append(pkg)
+    # df.to_markdown() requires tabulate but never produces an import statement
+    if ".to_markdown(" in code and "tabulate" not in seen:
+        seen.add("tabulate")
+        needed.append("tabulate")
     return needed
 
 
@@ -761,7 +765,10 @@ async def generate_csv_analysis_code(
     # Detect complex queries for adaptive limits
     is_complex = bool(_COMPLEX_QUERY_RE.search(question))
     max_code_lines = 150 if is_complex else 70
-    code_gen_max_tokens = 4000 if is_complex else 2000
+    # 8000 for complex: Qwen3-32b emits long <think> blocks that consume
+    # most of the budget; truncation mid-think leaves an unclosed tag →
+    # SyntaxError → None. 8000 gives enough room for thinking + code.
+    code_gen_max_tokens = 8000 if is_complex else 2000
 
     # --- Conversational rephrase (Task 4) ---
     effective_question = question
@@ -856,9 +863,13 @@ async def generate_csv_analysis_code(
         )
         code = response_text
 
-        # Strip <think>…</think> reasoning blocks
+        # Strip <think>…</think> reasoning blocks (Qwen3). Also handle
+        # truncated responses where </think> was never emitted — take
+        # everything before the opening tag in that case.
         import re as _re
         code = _re.sub(r"<think>.*?</think>", "", code, flags=_re.DOTALL).strip()
+        if "<think>" in code:
+            code = code[: code.index("<think>")].strip()
 
         # Strip markdown fences
         lines = code.splitlines()
