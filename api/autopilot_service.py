@@ -458,6 +458,36 @@ def make_executor_node(
                                 )
                                 result_entry["error"] = "CSV code generation failed"
                             else:
+                                # Build preamble that defines `df` — same logic as
+                                # run_csv_query_on_e2b. Without this, the sandbox never
+                                # defines `df` and every generated reference raises
+                                # NameError: name 'df' is not defined.
+                                if _sections:
+                                    from api.utils.csv_preprocessor import (
+                                        dicts_to_sections,
+                                        generate_section_preamble,
+                                    )
+                                    _csv_preamble = generate_section_preamble(
+                                        dicts_to_sections(_sections), _csv_path
+                                    )
+                                else:
+                                    _csv_preamble = (
+                                        "import pandas as pd\n"
+                                        "import re as _re\n"
+                                        "import numpy as np\n"
+                                        "\n"
+                                        f"df = pd.read_csv('{_csv_path}')\n"
+                                        "df.columns = [_re.sub(r'[^a-z0-9_]', '_', str(c).strip().lower().replace(' ', '_')) for c in df.columns]\n"
+                                        "df = df.dropna(how='all').dropna(axis=1, how='all')\n"
+                                        "for _c in df.columns:\n"
+                                        "    _v = pd.to_numeric(df[_c], errors='coerce')\n"
+                                        "    if _v.notna().sum() / max(df[_c].notna().sum(), 1) > 0.5:\n"
+                                        "        df[_c] = _v\n"
+                                        "# --- end preamble ---\n\n"
+                                    )
+                                from api.sandbox_service import _prepend_csv_preamble
+                                _csv_code = _prepend_csv_preamble(_csv_code, _csv_preamble)
+
                                 try:
                                     _csv_bytes = _base64.b64decode(_csv_b64)
                                 except Exception:
