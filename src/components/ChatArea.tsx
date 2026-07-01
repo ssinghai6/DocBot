@@ -355,7 +355,7 @@ export default function ChatArea(props: ChatAreaProps) {
               {(isDemo
                 ? [
                   "Does the Q4 net income in the 10-K match the financials database?",
-                  "Compare the 10-K revenue figures against the database",
+                  "Where do the 10-K figures differ from the financials database?",
                   "Summarize TechCorp's FY2024 financial highlights",
                   "What is driving TechCorp's revenue growth?",
                 ]

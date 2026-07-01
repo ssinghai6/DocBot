@@ -36,6 +36,18 @@ logger = logging.getLogger(__name__)
 MAX_ITERATIONS = 5
 TOTAL_TIMEOUT_S = 90
 
+# Internal step-result prefixes that signal a failed/empty step. These are
+# scrubbed from user-facing output and replaced with a calm generic message —
+# visitors should never see raw tracebacks or internal failure strings.
+_FAILURE_CONTENT_PREFIXES = (
+    "Step failed",
+    "CSV analysis failed",
+    "CSV code generation failed",
+    "No SQL result",
+    "No prior data",
+    "No data source",
+)
+
 
 # ---------------------------------------------------------------------------
 # State schema
@@ -624,6 +636,27 @@ def make_executor_node(
                                 "df = pd.DataFrame(data)\n"
                             )
                             sandbox_result = await run_python(preamble + code)
+
+                            # One corrective retry: feed the runtime error back so
+                            # the generator can fix bad literals / API misuse
+                            # instead of surfacing a raw traceback.
+                            if sandbox_result.error:
+                                _retry_code = await generate_analysis_code(
+                                    result_dicts=prior_rows,
+                                    question=step,
+                                    persona_def=persona_def,
+                                    chart_type="auto",
+                                    error_context=(
+                                        "Your previous code failed with:\n"
+                                        f"{sandbox_result.error}\n\n"
+                                        "Return corrected code. Do not write unit-suffixed "
+                                        "or comma-separated numbers as literals; parse them "
+                                        "from the data instead."
+                                    ),
+                                )
+                                if _retry_code:
+                                    sandbox_result = await run_python(preamble + _retry_code)
+
                             if sandbox_result.error:
                                 result_entry["error"] = sandbox_result.error
                                 result_entry["result"] = (
@@ -865,17 +898,34 @@ async def run_autopilot(
                     completed = updates.get("steps_completed", [])
                     for step_result in completed:
                         step_num += 1
+
+                        # Never surface raw tracebacks / internal failure strings
+                        # to the user. Log the real error server-side and show a
+                        # calm, generic message so a failed step reads as "skipped
+                        # and continued" rather than a scary Python error.
+                        raw_error = step_result.get("error")
+                        content = step_result.get("result", "") or ""
+                        friendly_error = None
+                        if raw_error:
+                            logger.warning(
+                                "autopilot step %d (%s) failed: %s",
+                                step_num, step_result.get("tool", ""), raw_error,
+                            )
+                            friendly_error = "Couldn't complete this step — continued with the available data."
+                        if content.startswith(_FAILURE_CONTENT_PREFIXES) or (raw_error and not content.strip()):
+                            content = "This step didn't return usable data, so the investigation continued with the other findings."
+
                         yield _sse({
                             "type": "step",
                             "step_num": step_num,
                             "tool": step_result.get("tool", ""),
                             "step_label": step_result.get("step", ""),
-                            "content": step_result.get("result", ""),
+                            "content": content,
                             "artifact_id": step_result.get("artifact_id"),
                             "chart_b64": step_result.get("chart_b64"),
                             "sql": step_result.get("sql"),
                             "explanation": step_result.get("explanation"),
-                            "error": step_result.get("error"),
+                            "error": friendly_error,
                         })
                     # Accumulate citations from doc_search steps
                     new_cits = updates.get("citations", [])

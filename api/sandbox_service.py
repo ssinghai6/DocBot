@@ -463,6 +463,7 @@ async def generate_analysis_code(
     question: str,
     persona_def: str,
     chart_type: str = "auto",
+    error_context: Optional[str] = None,
 ) -> Optional[str]:
     """Generate Python analysis code for a SQL result set using Qwen 2.5 Coder via Groq.
 
@@ -512,15 +513,22 @@ async def generate_analysis_code(
         "- Do NOT call plt.savefig() — use plt.show() only\n"
         "- Do NOT write `import pandas as pd` or similar — they are already imported\n"
         "- Do NOT write `df = pd.DataFrame(...)` — `df` is already bound by a preamble\n"
+        "- NEVER write numbers with unit suffixes or separators as code literals "
+        "(e.g. `1180M`, `$5.2 billion`, `1,180`) — these are SyntaxErrors. If the "
+        "data is free text, extract numbers with regex/pd.to_numeric and strip "
+        "'$', ',', 'M'/'B' first.\n"
         "- Keep code under 80 lines"
     )
 
     import json as _json
     sample = result_dicts[:50]
-    user_message = (
-        f"Question: {question}\n\n"
-        f"Data ({len(sample)} rows):\n{_json.dumps(sample, default=str)}"
-    )
+    user_parts = [
+        f"Question: {question}",
+        f"Data ({len(sample)} rows):\n{_json.dumps(sample, default=str)}",
+    ]
+    if error_context:
+        user_parts.append(error_context)
+    user_message = "\n\n".join(user_parts)
 
     try:
         from api.utils.llm_provider import chat_completion, GROQ_CODE_MODEL
@@ -545,7 +553,17 @@ async def generate_analysis_code(
             lines = lines[1:]
         if lines and lines[-1].strip() == "```":
             lines = lines[:-1]
-        return "\n".join(lines).strip()
+        code = "\n".join(lines).strip()
+
+        # Syntax-check before returning so malformed literals (e.g. "1180M")
+        # don't reach the sandbox and fail there with no chance to recover.
+        try:
+            compile(code, "<generated>", "exec")
+        except SyntaxError as syn_err:
+            logger.warning("generate_analysis_code: syntax error (%s)", syn_err)
+            return None
+
+        return code
 
     except Exception as exc:
         logger.warning("generate_analysis_code failed: %s", exc)
