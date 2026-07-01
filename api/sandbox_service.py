@@ -849,24 +849,26 @@ async def generate_csv_analysis_code(
 
     user_message = "\n\n".join(user_parts)
 
-    try:
-        from api.utils.llm_provider import chat_completion, GROQ_CODE_MODEL
+    from api.utils.llm_provider import chat_completion, GROQ_CODE_MODEL, GROQ_MODEL
+
+    def _attempt(model: str, max_tokens: int) -> Optional[str]:
+        """One generation attempt with a given model. Returns clean code or None."""
+        import re as _re
 
         response_text = chat_completion(
             [
                 {"role": "system", "content": system_prompt},
                 {"role": "user", "content": user_message},
             ],
-            model=GROQ_CODE_MODEL,
+            model=model,
             temperature=0,
-            max_tokens=code_gen_max_tokens,
+            max_tokens=max_tokens,
         )
-        code = response_text
+        code = response_text or ""
 
         # Strip <think>…</think> reasoning blocks (Qwen3). Also handle
         # truncated responses where </think> was never emitted — take
         # everything before the opening tag in that case.
-        import re as _re
         code = _re.sub(r"<think>.*?</think>", "", code, flags=_re.DOTALL).strip()
         if "<think>" in code:
             code = code[: code.index("<think>")].strip()
@@ -879,23 +881,46 @@ async def generate_csv_analysis_code(
             lines = lines[:-1]
         code = "\n".join(lines).strip()
 
+        if not code:
+            logger.warning(
+                "generate_csv_analysis_code: model %s returned empty code", model
+            )
+            return None
+
         # Validate syntax before returning — a truncated response from the LLM
         # can produce unterminated string literals that crash E2B at runtime.
         try:
             compile(code, "<generated>", "exec")
         except SyntaxError as syn_err:
             logger.warning(
-                "generate_csv_analysis_code: generated code has syntax error (%s) — "
-                "returning None so caller uses safe fallback",
-                syn_err,
+                "generate_csv_analysis_code: %s produced syntax error (%s)",
+                model, syn_err,
             )
             return None
 
         return code
 
-    except Exception as exc:
-        logger.warning("generate_csv_analysis_code failed: %s", exc)
-        return None
+    # Primary: Qwen code model. Its long <think> blocks can truncate at the
+    # token cap on complex queries and yield invalid code. On failure, retry
+    # with llama-3.3-70b, which emits no reasoning blocks and so does not
+    # truncate the same way — the reliable safety net for autopilot CSV steps.
+    for _model, _tokens in ((GROQ_CODE_MODEL, code_gen_max_tokens), (GROQ_MODEL, 4000)):
+        try:
+            result = _attempt(_model, _tokens)
+        except Exception as exc:
+            logger.warning(
+                "generate_csv_analysis_code: %s attempt raised (%s)", _model, exc
+            )
+            result = None
+        if result:
+            if _model != GROQ_CODE_MODEL:
+                logger.info("generate_csv_analysis_code: recovered via fallback model %s", _model)
+            return result
+
+    logger.error(
+        "generate_csv_analysis_code: all models failed for question=%r", effective_question[:120]
+    )
+    return None
 
 
 def _run_csv_in_sandbox_sync(code: str, csv_path: str, csv_bytes: bytes) -> SandboxResult:
