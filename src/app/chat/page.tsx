@@ -558,6 +558,7 @@ export default function Home() {
         setAutoMode={setIsAutoMode}
         isDbConnected={isDbConnected}
         connectionId={connectionId}
+        dbFileName={dbFileName}
         chatMode={chatMode}
         setChatMode={setChatMode}
         messages={messages}

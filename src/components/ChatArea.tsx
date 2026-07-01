@@ -88,6 +88,7 @@ export interface ChatAreaProps {
   setAutoMode?: React.Dispatch<React.SetStateAction<boolean>>
   isDbConnected: boolean
   connectionId: string | null
+  dbFileName?: string | null
   chatMode: "docs" | "database" | "hybrid"
   setChatMode: React.Dispatch<React.SetStateAction<"docs" | "database" | "hybrid">>
   messages: Message[]
@@ -130,6 +131,7 @@ export default function ChatArea(props: ChatAreaProps) {
     setAutoMode,
     isDbConnected,
     connectionId,
+    dbFileName,
     chatMode,
     setChatMode,
     messages,
@@ -160,6 +162,11 @@ export default function ChatArea(props: ChatAreaProps) {
     navigator.clipboard.writeText(text);
     showToast("success", "Copied to clipboard");
   };
+
+  // The demo loads a fixed TechCorp 10-K + SQLite DB; detect it so the empty
+  // state can name both sources and suggest questions tailored to the planted
+  // data (and its intended discrepancies), instead of generic prompts.
+  const isDemo = dbFileName === "TechCorp-Financials.db";
 
   return (
     <main className="h-full flex flex-col min-w-0 bg-[var(--color-bg-base)] relative">
@@ -335,7 +342,9 @@ export default function ChatArea(props: ChatAreaProps) {
               {isDbConnected ? "Database connected" : "Ready to analyze"}
             </p>
             <p className="text-[12px] text-[var(--color-text-tertiary)]">
-              {isDbConnected
+              {isDemo
+                ? "Comparing the TechCorp 10-K against its financials database"
+                : isDbConnected
                 ? `Query financials, metrics, and trends in ${chatMode} mode`
                 : "Ask about revenue, margins, risk factors, or any financial metric"}
             </p>
@@ -343,7 +352,14 @@ export default function ChatArea(props: ChatAreaProps) {
             {/* Suggested questions */}
             <div className="mt-6 grid gap-1.5 max-w-lg w-full">
               <p className="text-[10px] text-[var(--color-text-quaternary)] uppercase tracking-wider text-center mb-1">Try asking</p>
-              {(isDbConnected
+              {(isDemo
+                ? [
+                  "Does the Q4 net income in the 10-K match the financials database?",
+                  "Compare the 10-K revenue figures against the database",
+                  "Summarize TechCorp's FY2024 financial highlights",
+                  "What is driving TechCorp's revenue growth?",
+                ]
+                : isDbConnected
                 ? [
                   "Do the figures in the document match the database?",
                   "Compare reported revenue against the database and flag any discrepancies",
