@@ -167,6 +167,17 @@ export function useChatHandlers(params: UseChatHandlersParams) {
     setAutopilotPlan([]);
   }, [setIsDbConnected, setConnectionId, setDbFileName, setDbUploadState, setChatMode, setSelectedPersona, setShowLiveDbForm, setLiveDbConnectState, setLiveDbError, setQueryHistory, setHistoryOpen, setAutopilotMode, setAutopilotSteps, setAutopilotPlan]);
 
+  // Sign-in gate: backend returns 401 on upload/DB-connect when the visitor is
+  // anonymous and GATE_UPLOADS is on. Pop the login modal instead of erroring.
+  const promptLoginIfGated = (status: number): boolean => {
+    if (status === 401) {
+      setAuthModalOpen(true);
+      showToast("info", "Sign in (free) to upload and test your own data");
+      return true;
+    }
+    return false;
+  };
+
   const handleDbUpload = async (file: File, type: "csv" | "sqlite") => {
     setDbUploadState("uploading");
     const formData = new FormData();
@@ -175,6 +186,10 @@ export function useChatHandlers(params: UseChatHandlersParams) {
     try {
       const endpoint = type === "csv" ? "/api/db/upload/csv" : "/api/db/upload";
       const response = await fetch(endpoint, { method: "POST", body: formData });
+      if (promptLoginIfGated(response.status)) {
+        setDbUploadState("idle");
+        return;
+      }
       if (!response.ok) {
         const err = await response.json();
         throw new Error(err.detail || "Upload failed");
@@ -224,6 +239,10 @@ export function useChatHandlers(params: UseChatHandlersParams) {
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify(body),
       });
+      if (promptLoginIfGated(response.status)) {
+        setLiveDbConnectState("idle");
+        return;
+      }
       if (!response.ok) {
         const err = await response.json();
         const detail = typeof err.detail === "string" ? err.detail : JSON.stringify(err.detail) || "Connection failed";
@@ -445,6 +464,12 @@ export function useChatHandlers(params: UseChatHandlersParams) {
       clearInterval(progressInterval);
       setUploadProgress(100);
 
+      if (promptLoginIfGated(response.status)) {
+        setFileUploadState("idle");
+        setUploadedFiles([]);
+        setUploadProgress(0);
+        return;
+      }
       if (!response.ok) {
         const errData = await response.json();
         throw new Error(errData.detail || "Failed to upload");

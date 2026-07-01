@@ -15,7 +15,6 @@ import {
   Upload,
   Zap,
   Wand2,
-  Github,
   ShoppingCart,
   XCircle,
   Play,
@@ -771,17 +770,6 @@ export default function LandingPage() {
           </div>
 
           <div className="flex items-center gap-4">
-            <a
-              href="https://github.com"
-              target="_blank"
-              rel="noopener noreferrer"
-              className="flex items-center gap-1.5 hover:text-gray-300 transition-colors duration-150"
-              aria-label="GitHub repository"
-            >
-              <Github className="w-4 h-4" />
-              GitHub
-            </a>
-            <span className="text-gray-700">|</span>
             <span>&copy; 2026 DocBot</span>
             <span className="text-gray-700">|</span>
             <span>Built by <a href="https://sanshrit-singhai.vercel.app/" target="_blank" rel="noopener noreferrer" className="text-gray-400 hover:text-white transition-colors duration-150">Sanshrit Singhai</a></span>

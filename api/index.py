@@ -42,6 +42,57 @@ app.add_middleware(
     allow_headers=["Content-Type"],
 )
 
+from api.utils import request_guard
+
+
+@app.middleware("http")
+async def abuse_guard(request: Request, call_next):
+    """Public-deployment guards: PUBLIC_DEMO_MODE path blocking + per-IP rate limit.
+
+    Both no-op unless the corresponding env var is set, so dev/open mode is
+    unaffected. Per-session budget is enforced inside the heavy handlers where
+    the session_id is available (see request_guard.enforce_session_budget).
+    """
+    path = request.url.path
+
+    # Owner presenting OWNER_KEY bypasses every guard.
+    owner = request_guard.is_owner(request)
+
+    if not owner:
+        if request_guard.is_demo_blocked(request.method, path):
+            return JSONResponse(
+                status_code=403,
+                content={"detail": "This action is disabled in the public demo. "
+                                   "Uploads and live-database connections are turned off."},
+            )
+
+        # Rate-limit only the cost-bearing API surface; leave health/static alone.
+        if request.method in ("POST", "DELETE") and path.startswith("/api/"):
+            try:
+                request_guard.check_ip_rate_limit(request)
+            except HTTPException as exc:
+                return JSONResponse(
+                    status_code=exc.status_code,
+                    content={"detail": exc.detail},
+                    headers=exc.headers or {},
+                )
+
+    response = await call_next(request)
+
+    # Persist owner status as an HttpOnly cookie so an initial ?owner_key=<key>
+    # link unlocks the whole browser session without re-passing the key.
+    if owner and request.cookies.get(request_guard.OWNER_COOKIE_NAME) != request_guard.OWNER_KEY:
+        response.set_cookie(
+            key=request_guard.OWNER_COOKIE_NAME,
+            value=request_guard.OWNER_KEY,
+            httponly=True,
+            secure=os.getenv("APP_BASE_URL", "").startswith("https"),
+            samesite="lax",
+            max_age=int(os.getenv("SESSION_TTL_HOURS", "8")) * 3600,
+        )
+
+    return response
+
 def safe_error_message(error: Exception) -> str:
     """Sanitize error messages for client responses"""
     return "An internal error occurred. Please try again later."
@@ -244,6 +295,43 @@ async def get_optional_user(request: Request) -> Optional[Any]:
         )
     except Exception:
         return None
+
+
+async def gate_uploads(request: Request) -> Optional[Any]:
+    """Sign-in gate for upload / live-DB routes (public-deployment control).
+
+    - Owner key present            → allowed (returns None).
+    - GATE_UPLOADS off             → allowed (returns resolved user or None).
+    - GATE_UPLOADS on + logged in  → allowed (returns user).
+    - GATE_UPLOADS on + anonymous  → HTTP 401 prompting free sign-in.
+    """
+    if request_guard.is_owner(request):
+        return None
+    user = await get_optional_user(request)
+    if request_guard.GATE_UPLOADS and user is None:
+        raise HTTPException(
+            status_code=401,
+            detail="Sign in (free) to upload and test your own data.",
+        )
+    return user
+
+
+async def charge_budget(request: Request, session_id: str, endpoint: str) -> None:
+    """Enforce the right cost budget for an expensive op.
+
+    Owner bypasses. Authenticated users are metered against their daily
+    per-user budget; anonymous callers against the smaller per-session budget.
+    """
+    if request_guard.is_owner(request):
+        return
+    user = await get_optional_user(request)
+    if user is not None:
+        request_guard.enforce_user_budget(str(user.id), endpoint)
+    else:
+        request_guard.enforce_session_budget(session_id or "", endpoint)
+
+
+_gate_uploads = Depends(gate_uploads)
 
 
 async def init_db() -> None:
@@ -540,6 +628,7 @@ async def init_demo():
 async def upload_documents(
     request: Request,
     files: List[UploadFile] = File(...),
+    _gate=_gate_uploads,
 ):
     session_id = str(uuid.uuid4())
     
@@ -745,6 +834,8 @@ async def chat(raw_request: Request, request: ChatRequest, _user=_rbac_viewer):
       {"type": "citations","citations": [...]}
       {"type": "error",    "detail": "<msg>"}
     """
+    await charge_budget(raw_request, request.session_id, "chat")
+
     if request.session_id not in VECTOR_STORES:
         # DOCBOT-1001: try to lazy-load from Chroma disk before giving up
         from api.utils.vector_store import load_store
@@ -1340,7 +1431,7 @@ class DisconnectRequest(BaseModel):
 
 
 @app.post("/api/db/connect")
-async def db_connect(raw_request: Request, request: DBConnectionRequest, _user=_rbac_analyst):
+async def db_connect(raw_request: Request, request: DBConnectionRequest, _user=_rbac_analyst, _gate=_gate_uploads):
     """
     DOCBOT-201 — Validate credentials, encrypt, store, and return connection_id.
     SSRF prevention and dialect validation are enforced by the Pydantic model.
@@ -1643,6 +1734,7 @@ async def db_upload_sqlite(
     file: UploadFile = File(...),
     session_id: str = Form(...),
     _user=_rbac_analyst,
+    _gate=_gate_uploads,
 ):
     """
     DOCBOT-206 — Upload a .sqlite/.db file as a credential-free data source.
@@ -1672,6 +1764,7 @@ async def db_upload_csv(
     file: UploadFile = File(...),
     session_id: str = Form(...),
     _user=_rbac_analyst,
+    _gate=_gate_uploads,
 ):
     """
     DOCBOT-207 — Upload a .csv file as a queryable data source.
@@ -1706,7 +1799,7 @@ class SandboxExecuteRequest(BaseModel):
 
 
 @app.post("/api/sandbox/execute", response_model=SandboxResult)
-async def execute_sandbox(request: SandboxExecuteRequest) -> SandboxResult:
+async def execute_sandbox(request: SandboxExecuteRequest, raw_request: Request) -> SandboxResult:
     """Execute Python code in an isolated E2B sandbox.
 
     The code runs in a fully isolated cloud container with no access to the
@@ -1726,6 +1819,8 @@ async def execute_sandbox(request: SandboxExecuteRequest) -> SandboxResult:
     error            : Human-readable error message, or null on success
     execution_time_ms: Wall-clock time for the sandbox run
     """
+    await charge_budget(raw_request, request.session_id or "", "sandbox")
+
     log_prefix = f"[session={request.session_id}]" if request.session_id else "[anonymous]"
     logger.info(
         "%s Sandbox execution requested. code_length=%d",
@@ -1807,6 +1902,8 @@ async def hybrid_chat_route(raw_request: Request, request: HybridChatRequest, _u
     """
     from api.hybrid_service import hybrid_chat
 
+    await charge_budget(raw_request, request.session_id, "hybrid")
+
     async def event_stream():
         # DOCBOT-602: audit hybrid query
         from api.audit_service import log_event, AuditEventType, get_client_ip
@@ -1882,6 +1979,8 @@ async def autopilot_run(raw_request: Request, request: AutopilotRequest, _user=_
       {type: "error",   content: "..."}   -- fatal abort
     """
     from api.autopilot_service import run_autopilot
+
+    await charge_budget(raw_request, request.session_id, "autopilot")
 
     async def event_stream():
         # DOCBOT-602: audit autopilot query
