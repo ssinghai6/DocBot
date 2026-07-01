@@ -498,6 +498,41 @@ def make_executor_node(
                                     csv_bytes=_csv_bytes,
                                     timeout_seconds=60,
                                 )
+
+                                # One corrective retry: feed the runtime error
+                                # back to the LLM so it can fix common generated-
+                                # code mistakes (bad pandas freq strings, wrong
+                                # statsmodels kwargs) instead of surfacing a raw
+                                # traceback. Mirrors run_csv_query_on_e2b.
+                                if sandbox_result.error:
+                                    _retry_code = await generate_csv_analysis_code(
+                                        csv_path_in_sandbox=_csv_path,
+                                        column_names=_column_names,
+                                        question=step,
+                                        persona_def=persona_def,
+                                        chart_type="auto",
+                                        section_manifest=_section_manifest,
+                                        is_multi_section=_is_multi_section,
+                                        data_profile=_data_profile_str,
+                                        chat_history=None,
+                                        error_context=(
+                                            "Your previous code failed at runtime with:\n"
+                                            f"{sandbox_result.error}\n\n"
+                                            "Return corrected code that fixes this error. "
+                                            "Common fixes: use fixed pandas offsets like "
+                                            "'MS'/'ME'/'D' (not '3M') for asfreq/resample; "
+                                            "for statsmodels ExponentialSmoothing use "
+                                            "seasonal_periods=, not period=."
+                                        ),
+                                    )
+                                    if _retry_code:
+                                        sandbox_result = await _run_csv_in_sandbox(
+                                            code=_retry_code,
+                                            csv_path=_csv_path,
+                                            csv_bytes=_csv_bytes,
+                                            timeout_seconds=60,
+                                        )
+
                                 if sandbox_result.error:
                                     result_entry["error"] = sandbox_result.error
                                     # Surface error in result so synthesizer + UI

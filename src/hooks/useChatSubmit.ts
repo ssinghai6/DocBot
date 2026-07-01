@@ -123,23 +123,49 @@ export function useChatSubmit(params: UseChatSubmitParams) {
       setAutopilotPlan([]);
       const localSteps: AutopilotStep[] = [];
       try {
-        const response = await fetch("/api/autopilot/run", {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({
-            connection_id: connectionId || "",
-            question: userMsg.content,
-            persona: personaToSend,
-            session_id: sessionId ?? "anonymous",
-            has_docs: !!sessionId,
-            has_db: !!connectionId,
-            has_csv: isCsvConnection,
-            history: recentHistory,
-          }),
+        const autopilotBody = JSON.stringify({
+          connection_id: connectionId || "",
+          question: userMsg.content,
+          persona: personaToSend,
+          session_id: sessionId ?? "anonymous",
+          has_docs: !!sessionId,
+          has_db: !!connectionId,
+          has_csv: isCsvConnection,
+          history: recentHistory,
         });
-        if (!response.ok || !response.body) {
-          throw new Error(`Autopilot HTTP ${response.status}`);
-        }
+
+        // Open the SSE connection with one retry. A cold Railway backend (or a
+        // redeploy dropping the socket) surfaces as a network reject
+        // ("Load failed") or a 502/503/504 before any bytes stream. Since no
+        // output has started yet, it's safe to reconnect once.
+        const openAutopilot = async (): Promise<Response> => {
+          let lastErr: unknown = null;
+          for (let attempt = 0; attempt < 2; attempt++) {
+            try {
+              const r = await fetch("/api/autopilot/run", {
+                method: "POST",
+                headers: { "Content-Type": "application/json" },
+                body: autopilotBody,
+              });
+              if (r.ok && r.body) return r;
+              // Retry transient gateway errors (backend waking up); fail fast otherwise.
+              if (attempt === 0 && [502, 503, 504].includes(r.status)) {
+                await new Promise(res => setTimeout(res, 1500));
+                continue;
+              }
+              throw new Error(`Autopilot HTTP ${r.status}`);
+            } catch (e) {
+              lastErr = e;
+              if (attempt === 0) {
+                await new Promise(res => setTimeout(res, 1500));
+                continue;
+              }
+            }
+          }
+          throw lastErr instanceof Error ? lastErr : new Error("Autopilot connection failed");
+        };
+
+        const response = await openAutopilot();
 
         const assistantMsg: Message = {
           role: "assistant",
@@ -150,6 +176,7 @@ export function useChatSubmit(params: UseChatSubmitParams) {
         };
         setMessages(prev => [...prev, assistantMsg]);
 
+        if (!response.body) throw new Error("Autopilot connection failed");
         const reader = response.body.getReader();
         const decoder = new TextDecoder();
         let buffer = "";
