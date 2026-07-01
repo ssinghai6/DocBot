@@ -174,7 +174,7 @@ export function useChatHandlers(params: UseChatHandlersParams) {
   const promptLoginIfGated = (status: number): boolean => {
     if (status === 401 || status === 403) {
       setAuthModalOpen(true);
-      showToast("info", "Sign in (free) to unlock uploads and full functionality");
+      showToast("info", "Sign in (free) to upload your own data");
       return true;
     }
     return false;
