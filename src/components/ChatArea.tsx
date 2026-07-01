@@ -345,10 +345,10 @@ export default function ChatArea(props: ChatAreaProps) {
               <p className="text-[10px] text-[var(--color-text-quaternary)] uppercase tracking-wider text-center mb-1">Try asking</p>
               {(isDbConnected
                 ? [
-                  "What are the total revenue figures by quarter?",
-                  "Show me a breakdown of expenses by category",
-                  "Which accounts have the highest growth rate?",
-                  "Are there any anomalies or outliers in the data?",
+                  "Do the figures in the document match the database?",
+                  "Compare reported revenue against the database and flag any discrepancies",
+                  "Summarize the key financial highlights",
+                  "What is driving revenue growth this year?",
                 ]
                 : [
                   "Summarize the key financial highlights",
