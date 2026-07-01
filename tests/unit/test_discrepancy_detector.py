@@ -136,16 +136,25 @@ class TestDetectDiscrepancies:
         return meta
 
     def test_real_discrepancy_detected(self):
+        # A realistic reporting discrepancy (8%) — within the plausible band.
+        # Deltas >25% are treated as unit/granularity mismatches and suppressed.
         doc = "Revenue: $1,000,000 for Q1 2024."
-        sql = self._make_sql_meta(rows=[{"revenue": 1_500_000}])
+        sql = self._make_sql_meta(rows=[{"revenue": 1_080_000}])
         report = detect_discrepancies(doc, sql)
         assert report.has_discrepancies
         item = report.discrepancies[0]
         assert abs(item.doc_value - 1_000_000) < 1
-        assert abs(item.db_value - 1_500_000) < 1
-        assert abs(item.delta - 500_000) < 1
+        assert abs(item.db_value - 1_080_000) < 1
+        assert abs(item.delta - 80_000) < 1
         assert item.pct is not None
-        assert abs(item.pct - 50.0) < 0.1
+        assert abs(item.pct - 8.0) < 0.1
+
+    def test_large_delta_suppressed_as_unit_mismatch(self):
+        """A 100%+ gap on the same label is a unit mismatch, not a discrepancy."""
+        doc = "Total revenue: $5,200,000,000"
+        sql = self._make_sql_meta(rows=[{"total_revenue": 1180}])  # DB in millions
+        report = detect_discrepancies(doc, sql)
+        assert not report.has_discrepancies
 
     def test_no_discrepancy_when_values_match(self):
         doc = "Total revenue: $2,000,000"
@@ -162,10 +171,10 @@ class TestDetectDiscrepancies:
 
     def test_csv_answer_source(self):
         doc = "Revenue: $500,000"
-        sql = self._make_sql_meta(csv_answer="revenue: 750,000")
+        sql = self._make_sql_meta(csv_answer="revenue: 540,000")
         report = detect_discrepancies(doc, sql)
         assert report.has_discrepancies
-        assert abs(report.discrepancies[0].delta - 250_000) < 1
+        assert abs(report.discrepancies[0].delta - 40_000) < 1
 
     def test_no_match_when_unrelated_labels(self):
         doc = "Employee count: 150"

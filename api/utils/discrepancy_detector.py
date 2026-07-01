@@ -11,6 +11,7 @@ discrepancies or miss real ones.
 
 from __future__ import annotations
 
+import math
 import re
 from dataclasses import dataclass, field
 from typing import Any
@@ -87,6 +88,7 @@ def detect_discrepancies(
     *,
     match_threshold: float = 0.55,
     delta_threshold: float = 0.01,
+    max_delta_threshold: float = 0.25,
 ) -> DiscrepancyReport:
     """
     Extract numeric values from both sources, match by label similarity, and
@@ -100,6 +102,14 @@ def detect_discrepancies(
                           as referring to the same metric (0–1).
         delta_threshold:  Minimum relative difference to flag as a discrepancy.
                           0.01 = 1 % difference.
+        max_delta_threshold: Upper bound on relative difference. Deltas larger
+                          than this are almost never true reporting
+                          discrepancies — they signal a unit mismatch (e.g. the
+                          DB stores revenue in millions while the doc quotes it
+                          in absolute dollars), a granularity mismatch (annual
+                          doc figure vs quarterly DB rows), or a parse error.
+                          Such pairs are skipped to avoid nonsensical output
+                          like "Delta: -100%" or "+19566%". 0.25 = 25 %.
     """
     doc_values = _extract_from_text(doc_context, source="doc")
 
@@ -115,26 +125,50 @@ def detect_discrepancies(
     pairs_checked = 0
 
     for dv in doc_values:
+        # Compare each doc value against only its SINGLE best-matching DB value,
+        # not every row above the similarity threshold. Without this, one doc
+        # figure (e.g. annual "total revenue") matches every quarterly
+        # total_revenue row and emits a fan-out of duplicate discrepancies.
+        best_sv: NumericValue | None = None
+        best_sim = match_threshold
         for sv in db_values:
             sim = _label_similarity(dv.label, sv.label)
-            if sim < match_threshold:
-                continue
-            pairs_checked += 1
-            delta = sv.value - dv.value
-            pct = (delta / dv.value * 100) if dv.value != 0 else None
-            rel_diff = abs(delta / dv.value) if dv.value != 0 else (abs(delta) if delta != 0 else 0)
-            if rel_diff >= delta_threshold:
-                report.discrepancies.append(
-                    DiscrepancyItem(
-                        label=_canonical_label(dv.label, sv.label),
-                        doc_value=dv.value,
-                        db_value=sv.value,
-                        delta=delta,
-                        pct=pct,
-                        doc_snippet=dv.raw_text[:80],
-                        db_snippet=sv.raw_text[:80],
-                    )
+            if sim >= best_sim:
+                best_sim = sim
+                best_sv = sv
+        if best_sv is None:
+            continue
+
+        pairs_checked += 1
+
+        # Align unit scale before comparing. Docs quote figures with explicit
+        # units ("$330M", "$5.2 billion") that parse to absolute dollars, while
+        # DB columns often store the same metric in millions (e.g. 325). Without
+        # alignment, $330M (330,000,000) vs 325 looks like a -100% gap. Snap the
+        # smaller value up by the nearest power of 1000 so genuine reporting
+        # discrepancies (330M vs 325M → 1.5%) surface while true mismatches
+        # (annual vs quarterly) stay large and get filtered by the ceiling.
+        doc_val, db_val = _align_scale(dv.value, best_sv.value)
+
+        delta = db_val - doc_val
+        pct = (delta / doc_val * 100) if doc_val != 0 else None
+        rel_diff = abs(delta / doc_val) if doc_val != 0 else (abs(delta) if delta != 0 else 0)
+
+        # Only flag genuine reporting discrepancies: above the noise floor but
+        # below the mismatch ceiling. Deltas beyond max_delta_threshold indicate
+        # a unit / granularity / parse mismatch, not a real conflict.
+        if delta_threshold <= rel_diff <= max_delta_threshold:
+            report.discrepancies.append(
+                DiscrepancyItem(
+                    label=_canonical_label(dv.label, best_sv.label),
+                    doc_value=doc_val,
+                    db_value=db_val,
+                    delta=delta,
+                    pct=pct,
+                    doc_snippet=dv.raw_text[:80],
+                    db_snippet=best_sv.raw_text[:80],
                 )
+            )
 
     report.checked_pairs = pairs_checked
     return report
@@ -167,12 +201,42 @@ _INLINE_VALUE_RE = re.compile(
     re.IGNORECASE,
 )
 
+# Match "Label $value" with no connector, e.g. "Net Income $330M",
+# "Professional Services: $890M" (comma/list-separated financial lines). Requires
+# a currency symbol so bare numbers ("Operating Margin 27") don't false-match.
+_LABEL_CURRENCY_RE = re.compile(
+    r"(?P<label>[A-Za-z][A-Za-z0-9 _/\-]{1,40}?)\s*[:\-]?\s+"
+    r"(?P<sign>[-–]?)\s*"
+    r"[\$£€¥]\s*"                                             # currency REQUIRED
+    r"(?P<number>[0-9][0-9,]*(?:\.[0-9]+)?)"
+    r"\s*(?P<suffix>[KkMmBbTt](?:illion|n|)?)?",
+    re.IGNORECASE,
+)
+
 _SUFFIX_MULTIPLIERS = {
     "k": 1_000, "K": 1_000,
     "m": 1_000_000, "M": 1_000_000,
     "b": 1_000_000_000, "B": 1_000_000_000,
     "t": 1_000_000_000_000, "T": 1_000_000_000_000,
 }
+
+
+def _align_scale(a: float, b: float) -> tuple[float, float]:
+    """Snap two values to the same order of magnitude when they differ by a
+    near-power-of-1000 factor (a unit mismatch, e.g. absolute dollars vs
+    millions). Returns the values with the smaller one scaled up.
+
+    Only aligns when the ratio is >~31x (rounds to at least 1000^1); genuine
+    reporting discrepancies (a few %) are left untouched.
+    """
+    if a <= 0 or b <= 0:
+        return a, b
+    hi, lo = (a, b) if a >= b else (b, a)
+    k = round(math.log(hi / lo) / math.log(1000))
+    if k < 1:
+        return a, b
+    lo_scaled = lo * (1000 ** k)
+    return (a, lo_scaled) if a >= b else (lo_scaled, b)
 
 
 def _parse_number(number_str: str, sign: str, suffix: str | None) -> float:
@@ -190,7 +254,7 @@ def _extract_from_text(text: str, source: str) -> list[NumericValue]:
     results: list[NumericValue] = []
     seen: set[tuple[str, float]] = set()
 
-    for pattern in (_LABEL_VALUE_RE, _INLINE_VALUE_RE):
+    for pattern in (_LABEL_VALUE_RE, _INLINE_VALUE_RE, _LABEL_CURRENCY_RE):
         for m in pattern.finditer(text):
             try:
                 value = _parse_number(m.group("number"), m.group("sign"), m.group("suffix"))
