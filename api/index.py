@@ -2174,6 +2174,20 @@ async def auth_config():
     }
 
 
+@app.get("/api/auth/owner-unlock")
+async def owner_unlock(raw_request: Request):
+    """Set the owner-bypass cookie if the request carries a valid OWNER_KEY.
+
+    The owner key is passed as ?owner_key= on the /chat page URL; the frontend
+    forwards it here on load. On match, the abuse-guard middleware sets the
+    docbot_owner cookie on this response (same-origin via the Vercel /api proxy),
+    unlocking all guards for the browser session. Returns 403 on mismatch.
+    """
+    if request_guard.is_owner(raw_request):
+        return JSONResponse({"owner": True})
+    return JSONResponse({"owner": False}, status_code=403)
+
+
 @app.get("/api/auth/github")
 async def github_login():
     """Return GitHub OAuth URL as JSON — frontend navigates directly to avoid proxy redirect issues."""
