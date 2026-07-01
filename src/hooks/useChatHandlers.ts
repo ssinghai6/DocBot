@@ -167,12 +167,14 @@ export function useChatHandlers(params: UseChatHandlersParams) {
     setAutopilotPlan([]);
   }, [setIsDbConnected, setConnectionId, setDbFileName, setDbUploadState, setChatMode, setSelectedPersona, setShowLiveDbForm, setLiveDbConnectState, setLiveDbError, setQueryHistory, setHistoryOpen, setAutopilotMode, setAutopilotSteps, setAutopilotPlan]);
 
-  // Sign-in gate: backend returns 401 on upload/DB-connect when the visitor is
-  // anonymous and GATE_UPLOADS is on. Pop the login modal instead of erroring.
+  // Sign-in gate: anonymous upload/DB-connect is refused by the backend — 401
+  // when GATE_UPLOADS is on, or 403 when PUBLIC_DEMO_MODE hard-blocks it. Either
+  // way, pop the login modal and prompt the visitor to sign in for full access
+  // instead of showing a raw error.
   const promptLoginIfGated = (status: number): boolean => {
-    if (status === 401) {
+    if (status === 401 || status === 403) {
       setAuthModalOpen(true);
-      showToast("info", "Sign in (free) to upload and test your own data");
+      showToast("info", "Sign in (free) to upload your own data");
       return true;
     }
     return false;

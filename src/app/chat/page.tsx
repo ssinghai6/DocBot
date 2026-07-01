@@ -207,6 +207,37 @@ export default function Home() {
     setToasts(prev => prev.filter(t => t.id !== id));
   }, []);
 
+  // Owner unlock: if the page is opened with ?owner_key=<key>, forward the key
+  // to the backend once so it can set the owner cookie (which bypasses all
+  // usage guards). The key lives in the page URL, not on /api requests, so we
+  // must call the backend explicitly. Strip it from the address bar afterwards.
+  useEffect(() => {
+    const params = new URLSearchParams(window.location.search);
+    const ownerKey = params.get("owner_key");
+    if (!ownerKey) return;
+    (async () => {
+      try {
+        const res = await fetch(
+          `/api/auth/owner-unlock?owner_key=${encodeURIComponent(ownerKey)}`
+        );
+        const data = await res.json().catch(() => ({ owner: false }));
+        if (res.ok && data.owner) {
+          showToast("success", "Owner mode unlocked — no usage limits");
+        } else {
+          showToast("error", "Invalid owner key");
+        }
+      } catch {
+        showToast("error", "Owner unlock failed");
+      } finally {
+        params.delete("owner_key");
+        const clean =
+          window.location.pathname + (params.toString() ? `?${params}` : "");
+        window.history.replaceState({}, "", clean);
+      }
+    })();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
   // ── Hooks ──────────────────────────────────────────────────────────────────
 
   const handlers = useChatHandlers({
