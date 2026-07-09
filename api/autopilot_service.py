@@ -669,13 +669,23 @@ def make_executor_node(
                     if not prior_rows:
                         result_entry["result"] = "No prior data available for analysis."
                     else:
-                        from api.sandbox_service import generate_analysis_code, run_python
+                        from api.sandbox_service import generate_analysis_code, run_python, _FORECAST_RE
 
                         persona_data = expert_personas.get(persona, expert_personas.get("Generalist", {}))
                         persona_def = persona_data.get("persona_def", "") if isinstance(persona_data, dict) else ""
+
+                        # The plan step may read "analyze trends" while the user's
+                        # actual goal is a forecast. Fold the original question in
+                        # so the forecast guidance (fit a model, PRINT the
+                        # predicted values) triggers and numbers are surfaced.
+                        _orig_q = state.get("question", "")
+                        analysis_question = step
+                        if _FORECAST_RE.search(_orig_q) and not _FORECAST_RE.search(step):
+                            analysis_question = f"{step}\n\nOverall goal: {_orig_q}"
+
                         code = await generate_analysis_code(
                             result_dicts=prior_rows,
-                            question=step,
+                            question=analysis_question,
                             persona_def=persona_def,
                             chart_type="auto",
                         )
@@ -699,7 +709,7 @@ def make_executor_node(
                             if sandbox_result.error:
                                 _retry_code = await generate_analysis_code(
                                     result_dicts=prior_rows,
-                                    question=step,
+                                    question=analysis_question,
                                     persona_def=persona_def,
                                     chart_type="auto",
                                     error_context=(
