@@ -364,12 +364,14 @@ built-in QuickBite demo corpus (a synthetic food-delivery 10-K + matching financ
 |-----------|--------|--------|
 | **Discrepancy detection** (Docs+DB) | Precision / Recall / F1 | **1.00 / 1.00 / 1.00**, 0 false positives (8-case gold set) |
 | **Retrieval** (RAG) | Recall@1 / @3 / @5 | **0.80 / 1.00 / 1.00** (10 questions) |
-| **Latency** — `/api/chat`, prod | TTFT p50 / p95 | **~0.6s / ~0.7s** |
-| **Latency** — `/api/chat`, prod | Total p50 / p95 | **~1.7s / ~2.0s** |
+| **Latency** — `/api/chat`, prod | TTFT p50 (median) | **~0.5s** |
+| **Latency** — `/api/chat`, prod | Total response p50 | **~1.6s** |
 
 - Discrepancy P/R/F1 is deterministic (pure code, no API keys) and runs in CI.
 - Retrieval Recall@k uses the production embedding model on the demo corpus.
 - Latency measured over Vercel → Railway; TTFT is time-to-first-token, the key streaming UX metric.
+  Steady-state TTFT is ~0.4–0.5s; the tail (p95) occasionally spikes to several seconds on a
+  cold container start (Railway Hobby tier).
 - Reproduce: `pytest tests/eval/test_discrepancy_eval.py -s`, `python -m tests.eval.test_retrieval_eval`, `python -m tests.eval.eval_latency`.
 
 > Note: the older `tests/external/test_llm_extraction_baseline.py` feeds ground-truth context to the
