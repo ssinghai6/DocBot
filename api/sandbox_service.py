@@ -31,6 +31,29 @@ _COMPLEX_QUERY_RE = _re_module.compile(
     _re_module.IGNORECASE,
 )
 
+# Narrower regex: the query asks for a forward-looking prediction, so the code
+# should fit a real model and emit a numeric forecast (not just describe a trend).
+_FORECAST_RE = _re_module.compile(
+    r'\b(forecast|predict|projection|project(?:ed|ing)?|extrapolat|'
+    r'next\s+(?:quarter|year|month|period)|future)\b',
+    _re_module.IGNORECASE,
+)
+
+# Guidance injected when a forecasting question is detected. Steers the model
+# toward a robust fit for short financial series (a few quarters) and forces an
+# explicit numeric prediction, so the E2B run produces a real forecast + chart.
+_FORECAST_GUIDANCE = (
+    "\nFORECASTING TASK — you MUST fit a real model in code and output a number:\n"
+    "- Fit a model on the historical series, then predict the requested future period(s).\n"
+    "- For a SHORT series (<= ~8 points, e.g. a few quarters): use numpy.polyfit "
+    "or sklearn.linear_model.LinearRegression (linear; quadratic only if clearly "
+    "curved). Do NOT use ARIMA / SARIMA / ExponentialSmoothing / Prophet — they need "
+    "long series and fail on a few points.\n"
+    "- PRINT the prediction explicitly, e.g. print(f'Forecast: ${pred:,.0f}M').\n"
+    "- Plot the historical points AND the forecast (extend the line and mark the "
+    "predicted point distinctly).\n"
+)
+
 _SANDBOX_EXTRA_PACKAGES = [
     "statsmodels",
     "scikit-learn",
@@ -520,6 +543,9 @@ async def generate_analysis_code(
         "- Keep code under 80 lines"
     )
 
+    if _FORECAST_RE.search(question):
+        system_prompt += _FORECAST_GUIDANCE
+
     import json as _json
     sample = result_dicts[:50]
     user_parts = [
@@ -530,23 +556,24 @@ async def generate_analysis_code(
         user_parts.append(error_context)
     user_message = "\n\n".join(user_parts)
 
-    try:
-        from api.utils.llm_provider import chat_completion, GROQ_CODE_MODEL
+    from api.utils.llm_provider import chat_completion, GROQ_CODE_MODEL, GROQ_MODEL
+    import re as _re
 
-        code = chat_completion(
+    def _attempt(model: str, max_tokens: int) -> Optional[str]:
+        raw = chat_completion(
             [
                 {"role": "system", "content": system_prompt},
                 {"role": "user", "content": user_message},
             ],
-            model=GROQ_CODE_MODEL,
+            model=model,
             temperature=0,
-            max_tokens=1500,
+            max_tokens=max_tokens,
         )
-
-        # Strip <think>...</think> reasoning blocks emitted by Qwen 3
-        import re as _re
+        code = raw or ""
+        # Strip <think>...</think> reasoning blocks emitted by Qwen 3 (incl. truncated).
         code = _re.sub(r"<think>.*?</think>", "", code, flags=_re.DOTALL).strip()
-
+        if "<think>" in code:
+            code = code[: code.index("<think>")].strip()
         # Strip markdown fences if the model adds them anyway
         lines = code.splitlines()
         if lines and lines[0].startswith("```"):
@@ -554,20 +581,34 @@ async def generate_analysis_code(
         if lines and lines[-1].strip() == "```":
             lines = lines[:-1]
         code = "\n".join(lines).strip()
-
+        if not code:
+            return None
         # Syntax-check before returning so malformed literals (e.g. "1180M")
         # don't reach the sandbox and fail there with no chance to recover.
         try:
             compile(code, "<generated>", "exec")
         except SyntaxError as syn_err:
-            logger.warning("generate_analysis_code: syntax error (%s)", syn_err)
+            logger.warning("generate_analysis_code: %s syntax error (%s)", model, syn_err)
             return None
-
         return code
 
-    except Exception as exc:
-        logger.warning("generate_analysis_code failed: %s", exc)
-        return None
+    # Primary: Qwen code model (needs headroom for its <think> blocks, more for
+    # forecasting). Fall back to llama-3.3-70b, which emits no reasoning blocks
+    # and so doesn't truncate into invalid code.
+    qwen_tokens = 8000 if _FORECAST_RE.search(question) else 4000
+    for _model, _tokens in ((GROQ_CODE_MODEL, qwen_tokens), (GROQ_MODEL, 4000)):
+        try:
+            result = _attempt(_model, _tokens)
+        except Exception as exc:
+            logger.warning("generate_analysis_code: %s raised (%s)", _model, exc)
+            result = None
+        if result:
+            if _model != GROQ_CODE_MODEL:
+                logger.info("generate_analysis_code: recovered via fallback %s", _model)
+            return result
+
+    logger.error("generate_analysis_code: all models failed for question=%r", question[:120])
+    return None
 
 
 # ---------------------------------------------------------------------------
@@ -839,6 +880,9 @@ async def generate_csv_analysis_code(
         "Do NOT print raw DataFrame output — if showing tabular data, use df.to_markdown(). "
         f"Keep code under {max_code_lines} lines."
     )
+
+    if _FORECAST_RE.search(question):
+        system_prompt += _FORECAST_GUIDANCE
 
     # Build user message with data profile, section manifest, and column list
     user_parts: list[str] = []
