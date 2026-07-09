@@ -355,6 +355,29 @@ Sensitive data detected and redacted before it reaches the LLM:
 
 ---
 
+## Evaluation & Metrics
+
+Reproducible evaluations live in [`tests/eval/`](tests/eval/README.md). Measured on the
+built-in QuickBite demo corpus (a synthetic food-delivery 10-K + matching financial database).
+
+| Capability | Metric | Result |
+|-----------|--------|--------|
+| **Discrepancy detection** (Docs+DB) | Precision / Recall / F1 | **1.00 / 1.00 / 1.00**, 0 false positives (8-case gold set) |
+| **Retrieval** (RAG) | Recall@1 / @3 / @5 | **0.80 / 1.00 / 1.00** (10 questions) |
+| **Latency** — `/api/chat`, prod | TTFT p50 / p95 | **~0.6s / ~0.7s** |
+| **Latency** — `/api/chat`, prod | Total p50 / p95 | **~1.7s / ~2.0s** |
+
+- Discrepancy P/R/F1 is deterministic (pure code, no API keys) and runs in CI.
+- Retrieval Recall@k uses the production embedding model on the demo corpus.
+- Latency measured over Vercel → Railway; TTFT is time-to-first-token, the key streaming UX metric.
+- Reproduce: `pytest tests/eval/test_discrepancy_eval.py -s`, `python -m tests.eval.test_retrieval_eval`, `python -m tests.eval.eval_latency`.
+
+> Note: the older `tests/external/test_llm_extraction_baseline.py` feeds ground-truth context to the
+> LLM and bypasses retrieval — it is an extraction smoke test, not a RAG benchmark. The evals above
+> are the retrieval-inclusive measurements.
+
+---
+
 ## Architecture
 
 ```
