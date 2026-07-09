@@ -1301,9 +1301,14 @@ async def _generate_sql(
 async def _execute_query(
     sql: str, sync_url: str, dialect: str,
     entra_connect_args: Optional[Dict[str, Any]] = None,
+    row_cap: int = 500,
 ):
     """
-    Execute *sql* with read-only enforcement, 15s timeout, 500-row cap.
+    Execute *sql* with read-only enforcement, 15s timeout, and a row cap.
+
+    ``row_cap`` defaults to 500 (the standard chat/answer path). The predictive
+    ML path (fetch_full_series) raises it so a time-series model can fit on the
+    full history instead of a truncated preview.
 
     Layer 3 of the 3-layer read-only enforcement:
       - PostgreSQL: SET TRANSACTION READ ONLY + statement_timeout = 15000ms
@@ -1333,7 +1338,7 @@ async def _execute_query(
                 conn.execute(text("SET TRANSACTION ISOLATION LEVEL SNAPSHOT"))
 
             result = conn.execute(text(sql))
-            rows = result.fetchmany(500)
+            rows = result.fetchmany(row_cap)
             column_names = list(result.keys())
             return rows, column_names
 
@@ -1348,6 +1353,82 @@ async def _execute_query(
         raise
     except Exception as exc:
         raise Exception(classify_db_error(exc, dialect)) from exc
+
+
+# ---------------------------------------------------------------------------
+# Predictive / ML path — full-history retrieval
+# ---------------------------------------------------------------------------
+
+
+def _raise_sql_limit(sql: str, dialect: str, row_cap: int) -> str:
+    """Return *sql* with any LIMIT replaced by ``row_cap`` (AST-level, no regex).
+
+    The normal pipeline injects LIMIT 500 for chat answers. For forecasting we
+    need the full series, so we strip the existing LIMIT and set a high cap.
+    Falls back to the original SQL if it can't be re-parsed (the read-only
+    guarantee is already enforced by validate_and_sanitize_sql upstream).
+    """
+    import sqlglot
+
+    dialect_norm = {"postgresql": "postgres"}.get(dialect, dialect)
+    try:
+        stmt = sqlglot.parse_one(sql, dialect=dialect_norm)
+    except Exception:  # noqa: BLE001 — best-effort; caller already validated read-only
+        return sql
+    if stmt is None:
+        return sql
+    stmt.set("limit", None)
+    stmt = stmt.limit(row_cap)
+    return stmt.sql(dialect=dialect_norm)
+
+
+async def fetch_full_series(
+    connection_id: str,
+    sql: str,
+    db_connections_table: Table,
+    async_session_factory,
+    row_cap: int = 100_000,
+) -> List[Dict[str, Any]]:
+    """Re-run a previously generated SELECT with a raised row cap for ML/forecasting.
+
+    The chat pipeline caps results at 500 rows (and the preview at 10), which is
+    fine for answers but starves a time-series model of history. This helper
+    re-executes the same validated SELECT with a high cap so a forecast can fit
+    on the FULL series (e.g. all 675 monthly crude-oil points).
+
+    Read-only is enforced exactly as in the main pipeline:
+      1. validate_and_sanitize_sql — sqlglot AST rejects any non-SELECT root.
+      2. _execute_query — read-only transaction (SET TRANSACTION READ ONLY, etc.).
+
+    Returns a list of row dicts (possibly empty). Never mutates the database.
+    """
+    async with async_session_factory() as session:
+        conn_result = await session.execute(
+            select(db_connections_table).where(db_connections_table.c.id == connection_id)
+        )
+        conn_row = conn_result.fetchone()
+
+    if not conn_row:
+        raise ConnectionNotFoundError(f"Connection '{connection_id}' not found.")
+
+    dialect = conn_row.dialect
+    if dialect == "csv":
+        # CSV sources never use the SQL pipeline — nothing to re-fetch here.
+        return []
+
+    # Layer 2: enforce SELECT-only, then raise the row cap for full-history read.
+    safe_sql = validate_and_sanitize_sql(sql, dialect=dialect)
+    ml_sql = _raise_sql_limit(safe_sql, dialect, row_cap)
+
+    creds = decrypt_credentials(conn_row.credentials_blob)
+    import asyncio as _asyncio
+    sync_url, entra_connect_args = await _asyncio.get_running_loop().run_in_executor(
+        None, _resolve_connection, creds
+    )
+    rows, column_names = await _execute_query(
+        ml_sql, sync_url, dialect, entra_connect_args, row_cap=row_cap
+    )
+    return [dict(zip(column_names, row)) for row in rows]
 
 
 # ---------------------------------------------------------------------------

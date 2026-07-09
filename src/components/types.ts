@@ -113,6 +113,7 @@ export type AutopilotStep = {
   chart_b64?: string | null
   sql?: string | null
   explanation?: string | null
+  code?: string | null        // generated Python/pandas code executed in E2B
   error?: string | null
 }
 

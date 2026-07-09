@@ -343,7 +343,11 @@ def make_executor_node(
                 )
                 if sql_meta:
                     row_count = sql_meta.get("row_count", 0)
-                    preview = sql_meta.get("preview", [])
+                    # run_sql_pipeline yields the preview under "result_preview";
+                    # tolerate "preview" too for any older callers. The prior
+                    # `sql_meta.get("preview")` always missed and left prior_rows
+                    # empty, so python_analysis reported "No prior data".
+                    preview = sql_meta.get("result_preview") or sql_meta.get("preview") or []
                     result_entry["result"] = (
                         f"{row_count} rows returned. "
                         f"Preview: {json.dumps(preview[:3], default=str)}"
@@ -499,6 +503,9 @@ def make_executor_node(
                                     )
                                 from api.sandbox_service import _prepend_csv_preamble
                                 _csv_code = _prepend_csv_preamble(_csv_code, _csv_preamble)
+                                # Expose the pandas/ML code for the UI (demo:
+                                # "DocBot writes and runs real code on demand").
+                                result_entry["code"] = _csv_code
 
                                 try:
                                     _csv_bytes = _base64.b64decode(_csv_b64)
@@ -538,6 +545,13 @@ def make_executor_node(
                                         ),
                                     )
                                     if _retry_code:
+                                        # Re-attach the df-binding preamble (the
+                                        # generator returns bare analysis code)
+                                        # and expose it for the UI.
+                                        _retry_code = _prepend_csv_preamble(
+                                            _retry_code, _csv_preamble
+                                        )
+                                        result_entry["code"] = _retry_code
                                         sandbox_result = await _run_csv_in_sandbox(
                                             code=_retry_code,
                                             csv_path=_csv_path,
@@ -587,21 +601,60 @@ def make_executor_node(
                 if handled_csv:
                     pass  # already populated result_entry above
                 else:
-                    # Load the most recent sql_result artifact as input data
                     prior_rows: list[dict] = []
-                    for prior in reversed(state.get("steps_completed", [])):
-                        if prior.get("tool") == "sql_query" and prior.get("artifact_id"):
-                            if session_artifacts_table is not None:
-                                from api.artifact_service import get_artifact
 
-                                art = await get_artifact(
-                                    prior["artifact_id"],
-                                    session_artifacts_table=session_artifacts_table,
-                                    async_session_factory=async_session_factory,
-                                )
-                                if art and art.data_json:
-                                    prior_rows = json.loads(art.data_json)
-                                    break
+                    # ── Predictive / ML path (fuel forecast fix) ──────────────
+                    # For forecast/predict/model steps on a SQL source, the
+                    # 10-row preview artifact is useless — a time-series model
+                    # needs the FULL history. Re-run the prior step's validated
+                    # SELECT with a raised row cap so the sandbox fits on all
+                    # rows (e.g. 675 monthly crude-oil points), not a truncation.
+                    from api.sandbox_service import _COMPLEX_QUERY_RE
+
+                    is_ml_step = bool(_COMPLEX_QUERY_RE.search(step))
+                    if is_ml_step and state.get("has_db") and connection_id:
+                        for prior in reversed(state.get("steps_completed", [])):
+                            if prior.get("tool") == "sql_query" and prior.get("sql"):
+                                try:
+                                    from api.db_service import fetch_full_series
+
+                                    full_rows = await fetch_full_series(
+                                        connection_id=connection_id,
+                                        sql=prior["sql"],
+                                        db_connections_table=db_connections_table,
+                                        async_session_factory=async_session_factory,
+                                    )
+                                    if full_rows:
+                                        prior_rows = full_rows
+                                        logger.info(
+                                            "executor_node: fetched %d full rows "
+                                            "for ML step (%s)",
+                                            len(full_rows), step[:60],
+                                        )
+                                except Exception as _ml_exc:
+                                    logger.warning(
+                                        "executor_node: fetch_full_series failed "
+                                        "(%s) — falling back to preview artifact",
+                                        _ml_exc,
+                                    )
+                                break
+
+                    # Load the most recent sql_result artifact as input data
+                    # (fallback for non-ML steps or if the full fetch failed).
+                    if not prior_rows:
+                        for prior in reversed(state.get("steps_completed", [])):
+                            if prior.get("tool") == "sql_query" and prior.get("artifact_id"):
+                                if session_artifacts_table is not None:
+                                    from api.artifact_service import get_artifact
+
+                                    art = await get_artifact(
+                                        prior["artifact_id"],
+                                        session_artifacts_table=session_artifacts_table,
+                                        async_session_factory=async_session_factory,
+                                    )
+                                    if art and art.data_json:
+                                        prior_rows = json.loads(art.data_json)
+                                        break
 
                     # Fallback: if no SQL artifact, try doc_search results as context
                     if not prior_rows:
@@ -627,6 +680,9 @@ def make_executor_node(
                             chart_type="auto",
                         )
                         if code:
+                            # Surface the exact code we run in E2B so the UI can
+                            # show "Generated Python" — a core demo selling point.
+                            result_entry["code"] = code
                             # Deterministic preamble — bind `df` from prior_rows so the
                             # LLM-generated code never hits NameError on `df`.
                             preamble = (
@@ -655,6 +711,7 @@ def make_executor_node(
                                     ),
                                 )
                                 if _retry_code:
+                                    result_entry["code"] = _retry_code
                                     sandbox_result = await run_python(preamble + _retry_code)
 
                             if sandbox_result.error:
@@ -915,6 +972,15 @@ async def run_autopilot(
                         if content.startswith(_FAILURE_CONTENT_PREFIXES) or (raw_error and not content.strip()):
                             content = "This step didn't return usable data, so the investigation continued with the other findings."
 
+                        # Expose the exact code executed in E2B (python_analysis
+                        # / forecast steps) so the UI shows real on-the-fly code,
+                        # not just results. Errors stay sanitized above; code is
+                        # not an error string, so it's safe to surface. Cap the
+                        # length to keep the SSE payload reasonable.
+                        step_code = step_result.get("code")
+                        if isinstance(step_code, str) and len(step_code) > 6000:
+                            step_code = step_code[:6000] + "\n# … (truncated)"
+
                         yield _sse({
                             "type": "step",
                             "step_num": step_num,
@@ -925,6 +991,7 @@ async def run_autopilot(
                             "chart_b64": step_result.get("chart_b64"),
                             "sql": step_result.get("sql"),
                             "explanation": step_result.get("explanation"),
+                            "code": step_code,
                             "error": friendly_error,
                         })
                     # Accumulate citations from doc_search steps

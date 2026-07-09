@@ -39,20 +39,69 @@ _FORECAST_RE = _re_module.compile(
     _re_module.IGNORECASE,
 )
 
-# Guidance injected when a forecasting question is detected. Steers the model
-# toward a robust fit for short financial series (a few quarters) and forces an
-# explicit numeric prediction, so the E2B run produces a real forecast + chart.
-_FORECAST_GUIDANCE = (
-    "\nFORECASTING TASK — you MUST fit a real model in code and output a number:\n"
-    "- Fit a model on the historical series, then predict the requested future period(s).\n"
-    "- For a SHORT series (<= ~8 points, e.g. a few quarters): use numpy.polyfit "
-    "or sklearn.linear_model.LinearRegression (linear; quadratic only if clearly "
-    "curved). Do NOT use ARIMA / SARIMA / ExponentialSmoothing / Prophet — they need "
-    "long series and fail on a few points.\n"
-    "- PRINT the prediction explicitly, e.g. print(f'Forecast: ${pred:,.0f}M').\n"
-    "- Plot the historical points AND the forecast (extend the line and mark the "
-    "predicted point distinctly).\n"
+# Threshold (in data points) above which a series is "long" enough to warrant a
+# real time-series model (ARIMA/SARIMAX). Below it, a linear/quadratic fit is the
+# robust choice — statistical models fail or overfit on a handful of points.
+_LONG_SERIES_THRESHOLD = 24
+
+# Shared preamble for every forecasting task — parse dates, fit on the FULL
+# history, print numeric forecasts, and plot history + forecast.
+_FORECAST_BASE = (
+    "\nFORECASTING TASK — you MUST fit a real model in code and output numbers:\n"
+    "- Parse any date/month column with pd.to_datetime, sort ascending, then use it "
+    "as the series index. Fit on the FULL history in `df` (use ALL rows — never a "
+    "truncated sample).\n"
+    "- Forecast the requested horizon (default 12 periods if the question does not "
+    "say). PRINT every forecasted value with its date, e.g. "
+    "print(f'{d:%Y-%m}: ${v:,.2f}').\n"
+    "- Plot the historical series AND the forecast on one axis; mark the forecast "
+    "segment distinctly (e.g. dashed line / different colour).\n"
 )
+
+# Guidance for a LONG series (e.g. hundreds of monthly points) — a real
+# time-series model is appropriate. Includes the exact pandas-frequency and
+# statsmodels gotchas that previously broke E2B runs.
+_FORECAST_LONG = (
+    "- This is a LONG series, so use a REAL time-series model: statsmodels "
+    "SARIMAX/ARIMA (e.g. SARIMAX(y, order=(1,1,1)); add seasonal_order=(1,1,1,12) "
+    "only if a clear yearly seasonality exists), or sklearn LinearRegression on "
+    "lag + trend features. Use Prophet ONLY if it imports cleanly.\n"
+    "- Set the monthly frequency explicitly with df = df.asfreq('MS') AFTER sorting "
+    "by date. NEVER pass a non-fixed offset like '3M'/'12M' to asfreq/date_range — "
+    "use fixed month offsets 'MS' (month start) or 'ME' (month end).\n"
+    "- Build future dates with pd.date_range(last_date, periods=13, freq='MS')[1:].\n"
+    "- For statsmodels ExponentialSmoothing pass seasonal_periods=12 (NOT period=).\n"
+)
+
+# Guidance for a SHORT series (a few quarters) — a simple regression is robust;
+# statistical models need long series and fail on a few points.
+_FORECAST_SHORT = (
+    "- This is a SHORT series (a handful of points): use numpy.polyfit or "
+    "sklearn.linear_model.LinearRegression (linear; quadratic only if clearly "
+    "curved). Do NOT use ARIMA/SARIMA/ExponentialSmoothing/Prophet — they need "
+    "long series and fail on a few points.\n"
+)
+
+
+def _forecast_guidance(n_points: Optional[int] = None) -> str:
+    """Build forecasting guidance tuned to the series length.
+
+    ``n_points`` is the number of historical observations available to the
+    sandbox. When known, we pick a single model family (real time-series model
+    for long series, linear fit for short ones). When unknown (e.g. the CSV
+    path, where the row count is not passed in), we emit both branches and let
+    the model choose by inspecting ``len(df)``.
+    """
+    if n_points is None:
+        return (
+            _FORECAST_BASE
+            + "- CHOOSE THE MODEL BY SERIES LENGTH (len(df)):\n"
+            + _FORECAST_LONG
+            + _FORECAST_SHORT
+        )
+    if n_points >= _LONG_SERIES_THRESHOLD:
+        return _FORECAST_BASE + _FORECAST_LONG
+    return _FORECAST_BASE + _FORECAST_SHORT
 
 _SANDBOX_EXTRA_PACKAGES = [
     "statsmodels",
@@ -543,14 +592,27 @@ async def generate_analysis_code(
         "- Keep code under 80 lines"
     )
 
+    total_rows = len(result_dicts)
     if _FORECAST_RE.search(question):
-        system_prompt += _FORECAST_GUIDANCE
+        # The sandbox binds the FULL result set to `df`; pick guidance by the
+        # true series length so a 675-point series gets a real time-series model
+        # while a few-quarter series stays on a robust linear fit.
+        system_prompt += _forecast_guidance(total_rows)
 
     import json as _json
     sample = result_dicts[:50]
+    # Tell the model the TRUE row count — the sandbox has all rows in `df` even
+    # though we only include a sample here to keep the prompt small. Without
+    # this the model assumes the series is only `len(sample)` long and picks the
+    # wrong model (e.g. linear fit on what is actually 675 monthly points).
+    data_header = (
+        f"Data: {total_rows} total rows in `df`"
+        + (f" (showing first {len(sample)})" if total_rows > len(sample) else "")
+        + f":\n{_json.dumps(sample, default=str)}"
+    )
     user_parts = [
         f"Question: {question}",
-        f"Data ({len(sample)} rows):\n{_json.dumps(sample, default=str)}",
+        data_header,
     ]
     if error_context:
         user_parts.append(error_context)
@@ -882,7 +944,9 @@ async def generate_csv_analysis_code(
     )
 
     if _FORECAST_RE.search(question):
-        system_prompt += _FORECAST_GUIDANCE
+        # CSV path: row count isn't passed here, so emit both branches and let
+        # the model choose by len(df). The data_profile already gives it shape.
+        system_prompt += _forecast_guidance(None)
 
     # Build user message with data profile, section manifest, and column list
     user_parts: list[str] = []

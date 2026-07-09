@@ -206,6 +206,7 @@ export function useChatSubmit(params: UseChatSubmitParams) {
                   chart_b64: data.chart_b64 ?? null,
                   sql: data.sql ?? null,
                   explanation: data.explanation ?? null,
+                  code: data.code ?? null,
                   error: data.error ?? null,
                 };
                 localSteps.push(stepEntry);
