@@ -24,7 +24,7 @@ BASE_URL = os.getenv("DOCBOT_BASE_URL", "http://127.0.0.1:8000")
 RUNS = int(os.getenv("EVAL_LATENCY_RUNS", "5"))
 
 QUESTIONS = [
-    "Summarize TechCorp's FY2024 financial highlights",
+    "Summarize QuickBite's 2025 financial highlights",
     "What was the total revenue and net income?",
     "Does the Q4 net income in the 10-K match the database?",
 ]

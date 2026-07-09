@@ -163,10 +163,10 @@ export default function ChatArea(props: ChatAreaProps) {
     showToast("success", "Copied to clipboard");
   };
 
-  // The demo loads a fixed TechCorp 10-K + SQLite DB; detect it so the empty
-  // state can name both sources and suggest questions tailored to the planted
+  // The demo loads a fixed QuickBite 10-K + SQLite DB; detect it so the empty
+  // state can explain both sources and suggest questions tailored to the planted
   // data (and its intended discrepancies), instead of generic prompts.
-  const isDemo = dbFileName === "TechCorp-Financials.db";
+  const isDemo = dbFileName === "QuickBite-Financials.db";
 
   return (
     <main className="h-full flex flex-col min-w-0 bg-[var(--color-bg-base)] relative">
@@ -328,7 +328,7 @@ export default function ChatArea(props: ChatAreaProps) {
               ) : (
                 <>
                   <Sparkles className="w-3.5 h-3.5" />
-                  Try Demo — TechCorp 10-K Analysis
+                  Try Demo — QuickBite 10-K Analysis
                 </>
               )}
             </button>
@@ -339,11 +339,11 @@ export default function ChatArea(props: ChatAreaProps) {
               <MessageSquare className="w-5 h-5 text-[var(--color-cyan-500)]" />
             </div>
             <p className="text-[16px] font-semibold text-[var(--color-text-primary)] mb-1">
-              {isDbConnected ? "Database connected" : "Ready to analyze"}
+              {isDemo ? "QuickBite — 2025 Annual Report + Database" : isDbConnected ? "Database connected" : "Ready to analyze"}
             </p>
-            <p className="text-[12px] text-[var(--color-text-tertiary)]">
+            <p className="text-[12px] text-[var(--color-text-tertiary)] max-w-lg text-center">
               {isDemo
-                ? "Comparing the TechCorp 10-K against its financials database"
+                ? "QuickBite is a made-up food-delivery company. Its “10-K” is an annual report (a document); it also has a financial database. DocBot reads both at once — ask it to compare them, explain a figure, spot mismatches, or forecast."
                 : isDbConnected
                 ? `Query financials, metrics, and trends in ${chatMode} mode`
                 : "Ask about revenue, margins, risk factors, or any financial metric"}
@@ -354,10 +354,10 @@ export default function ChatArea(props: ChatAreaProps) {
               <p className="text-[10px] text-[var(--color-text-quaternary)] uppercase tracking-wider text-center mb-1">Try asking</p>
               {(isDemo
                 ? [
-                  "Does the Q4 net income in the 10-K match the financials database?",
-                  "Where do the 10-K figures differ from the financials database?",
-                  "Summarize TechCorp's FY2024 financial highlights",
-                  "What is driving TechCorp's revenue growth?",
+                  "Does the Q4 net income in the 10-K match the database?",
+                  "Summarize QuickBite's 2025 performance in plain English",
+                  "Forecast Q1 2026 revenue based on the 2025 quarterly trend",
+                  "Where do the report and the database disagree?",
                 ]
                 : isDbConnected
                 ? [

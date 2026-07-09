@@ -22,14 +22,14 @@ class DiscrepancyCase:
     note: str = ""
 
 
-# The TechCorp demo data mirrors api/demo_service.py: the DB stores figures in
+# The QuickBite demo data mirrors api/demo_service.py: the DB stores figures in
 # millions while the 10-K text quotes them with units ("$330M", "$5.2 billion").
 GOLD_CASES: list[DiscrepancyCase] = [
     # --- TRUE POSITIVES: real reporting discrepancies the demo plants ---------
     DiscrepancyCase(
         name="q4_net_income_330_vs_325",
-        doc_context="Q4 2024: Revenue $1,440M, Net Income $330M, Operating Margin 27%",
-        sql_metadata={"result_preview": [{"quarter": "Q4 2024", "net_income": 325}]},
+        doc_context="Q4 2025: Revenue $1,440M, Net Income $330M, Operating Margin 27%",
+        sql_metadata={"result_preview": [{"quarter": "Q4 2025", "net_income": 325}]},
         expected={"net income"},
         note="Planted: doc $330M vs DB 325M (~1.5%).",
     ),
@@ -44,8 +44,8 @@ GOLD_CASES: list[DiscrepancyCase] = [
     # --- TRUE NEGATIVES: matching values, must NOT flag -----------------------
     DiscrepancyCase(
         name="q4_revenue_matches",
-        doc_context="Q4 2024: Revenue $1,440M",
-        sql_metadata={"result_preview": [{"quarter": "Q4 2024", "total_revenue": 1440}]},
+        doc_context="Q4 2025: Revenue $1,440M",
+        sql_metadata={"result_preview": [{"quarter": "Q4 2025", "total_revenue": 1440}]},
         expected=set(),
         note="Doc $1,440M == DB 1440M after scale alignment. No discrepancy.",
     ),

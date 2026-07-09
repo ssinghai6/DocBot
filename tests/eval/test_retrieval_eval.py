@@ -1,4 +1,4 @@
-"""Retrieval quality evaluation — Recall@k over the TechCorp demo 10-K.
+"""Retrieval quality evaluation — Recall@k over the QuickBite demo 10-K.
 
 Builds a real vector store from the demo document chunks, runs a gold set of
 questions, and measures how often the correct source page is retrieved in the
@@ -17,16 +17,16 @@ import pytest
 
 # (question, set of acceptable source pages) — pages mirror api/demo_service.py.
 GOLD_QA: list[tuple[str, set[int]]] = [
-    ("What was TechCorp's total revenue in FY2024?", {3}),
-    ("What is TechCorp's net income and net margin?", {3}),
-    ("How did each quarter perform in 2024?", {7}),
-    ("What was Q4 2024 net income?", {7}),
+    ("What was QuickBite's total revenue in FY2025?", {3}),
+    ("What is QuickBite's net income and net margin?", {3}),
+    ("How did each quarter perform in 2025?", {7}),
+    ("What was Q4 2025 net income?", {7}),
     ("Break down revenue by business segment", {5}),
-    ("How much revenue came from Professional Services?", {5}),
-    ("What are TechCorp's total assets and cash position?", {9}),
-    ("What acquisitions did TechCorp complete?", {12}),
-    ("What is the FY2025 financial guidance?", {14}),
-    ("What is driving TechCorp's revenue growth?", {3}),
+    ("How much revenue came from Restaurant Advertising?", {5}),
+    ("What are QuickBite's total assets and cash position?", {9}),
+    ("What acquisitions did QuickBite complete?", {9}),
+    ("What is the FY2026 financial guidance?", {14}),
+    ("What is driving QuickBite's revenue growth?", {3}),
 ]
 
 
@@ -62,7 +62,7 @@ def evaluate(k_values=(1, 3, 5)) -> dict[int, float]:
     n = len(GOLD_QA)
     recall = {k: hits[k] / n for k in k_values}
 
-    print("\n=== Retrieval Evaluation (TechCorp demo 10-K) ===")
+    print("\n=== Retrieval Evaluation (QuickBite demo 10-K) ===")
     print(f"questions={n}")
     for k in k_values:
         print(f"  Recall@{k}: {recall[k]:.2f}")

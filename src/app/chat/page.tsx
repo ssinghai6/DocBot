@@ -454,13 +454,13 @@ export default function Home() {
       setSessionId(data.session_id);
       setConnectionId(data.connection_id);
       setIsDbConnected(true);
-      setDbFileName("TechCorp-Financials.db");
+      setDbFileName("QuickBite-Financials.db");
       setChatMode("hybrid");
       setSelectedPersona("Finance Expert");
       setIsAutoMode(false);
-      setUploadedFiles([new File([], "TechCorp-10K-2024.pdf")]);
+      setUploadedFiles([new File([], "QuickBite-10K-2025.pdf")]);
       setMessages([]);
-      showToast("success", "Demo loaded — TechCorp 10-K + financial database ready");
+      showToast("success", "Demo loaded — QuickBite 10-K + financial database ready");
     } catch {
       showToast("error", "Failed to load demo. Please try again.");
     } finally {
