@@ -175,6 +175,16 @@ function AutopilotStepsList({ steps }: { steps: AutopilotStep[] }) {
           {step.content && (
             <p className="text-[var(--color-text-tertiary)] leading-relaxed">{step.content}</p>
           )}
+          {step.code && (
+            <details className="mt-2 group">
+              <summary className="cursor-pointer text-[9px] font-semibold uppercase tracking-wider text-[var(--color-success-500)] select-none">
+                Generated Python
+              </summary>
+              <pre className="mt-1 max-h-48 overflow-auto rounded-[3px] bg-[var(--color-bg-base)] p-2 text-[10px] leading-relaxed font-mono text-[var(--color-text-secondary)] whitespace-pre">
+                <code>{step.code}</code>
+              </pre>
+            </details>
+          )}
           {step.chart_b64 && (
             <img src={`data:image/png;base64,${step.chart_b64}`} alt="chart" className="mt-2 rounded-[3px] max-h-32 object-contain" />
           )}
