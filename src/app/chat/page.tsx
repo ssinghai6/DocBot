@@ -444,23 +444,29 @@ export default function Home() {
     return () => window.removeEventListener('keydown', handleKeyDown);
   }, [input, sessionId, isDbConnected, isLoading, inspectorOpen]); // eslint-disable-line react-hooks/exhaustive-deps
 
-  // Demo mode handler
-  const handleTryDemo = useCallback(async () => {
+  // Demo mode handler — dataset: "quickbite" (discrepancy) or "fuel" (forecasting)
+  const handleTryDemo = useCallback(async (dataset: "quickbite" | "fuel" = "quickbite") => {
     setDemoLoading(true);
     try {
-      const res = await fetch("/api/demo/init", { method: "POST" });
+      const res = await fetch(`/api/demo/init?dataset=${dataset}`, { method: "POST" });
       if (!res.ok) throw new Error("Demo initialization failed");
       const data = await res.json();
+      const isFuel = dataset === "fuel";
       setSessionId(data.session_id);
       setConnectionId(data.connection_id);
       setIsDbConnected(true);
-      setDbFileName("QuickBite-Financials.db");
+      setDbFileName(isFuel ? "FuelPrices-1970-2026.db" : "QuickBite-Financials.db");
       setChatMode("hybrid");
-      setSelectedPersona("Finance Expert");
+      setSelectedPersona(isFuel ? "Data Analyst" : "Finance Expert");
       setIsAutoMode(false);
-      setUploadedFiles([new File([], "QuickBite-10K-2025.pdf")]);
+      setUploadedFiles([new File([], isFuel ? "fuelprice.pdf" : "QuickBite-10K-2025.pdf")]);
       setMessages([]);
-      showToast("success", "Demo loaded — QuickBite 10-K + financial database ready");
+      showToast(
+        "success",
+        isFuel
+          ? "Demo loaded — fuel-price report + 1970–2026 crude oil data ready"
+          : "Demo loaded — QuickBite 10-K + financial database ready",
+      );
     } catch {
       showToast("error", "Failed to load demo. Please try again.");
     } finally {

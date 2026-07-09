@@ -211,6 +211,123 @@ DEMO_SUGGESTED_QUESTIONS = [
 
 
 # ---------------------------------------------------------------------------
+# Second dataset — Fuel Prices (real policy PDF + 1970–2026 crude oil series)
+# Showcases real forecasting (E2B model on 675 monthly points) + document RAG
+# with citations. Source: VTPI "Appropriate Response to Rising Fuel Prices".
+# ---------------------------------------------------------------------------
+
+_FUEL_CSV_PATH = Path(__file__).parent / "demo_data" / "fuel_prices_1970_2026.csv"
+
+FUEL_COMPANY = "Crude Oil Prices (1970–2026)"
+FUEL_FILING = "VTPI Report — Appropriate Response to Rising Fuel Prices"
+
+FUEL_DOCUMENT_CHUNKS = [
+    Document(
+        page_content=(
+            "Appropriate Response to Rising Fuel Prices — Victoria Transport Policy "
+            "Institute (Todd Litman, 19 April 2026).\n\n"
+            "SUMMARY\n"
+            "This paper evaluates policy options for responding to rising fuel prices. "
+            "There is popular support for policies that minimize fuel prices through "
+            "subsidies and tax reductions, but such policies harm consumers and the "
+            "economy overall because they increase total fuel consumption and vehicle "
+            "travel, and therefore associated costs such as congestion, infrastructure "
+            "costs, crashes, trade imbalances and pollution emissions."
+        ),
+        metadata={"source": "fuelprice.pdf", "page": 1},
+    ),
+    Document(
+        page_content=(
+            "INTRODUCTION\n"
+            "Motor vehicle fuel prices have increased significantly in recent years and "
+            "are likely to stay high in the future. Between 2003 and 2008 average U.S. "
+            "gasoline retail prices more than doubled, from $1.77 to $4.10 per gallon, and "
+            "high prices are expected to continue due to growing international demand and "
+            "rising production costs. Fuel prices are an emotional issue; motorists often "
+            "feel they pay more than is fair and demand price-minimization policies."
+        ),
+        metadata={"source": "fuelprice.pdf", "page": 2},
+    ),
+    Document(
+        page_content=(
+            "FUEL COST TRENDS\n"
+            "Current North American fuel prices are relatively low by most standards. U.S. "
+            "and Canada fuel prices are lower than most other high-income countries. Norway "
+            "and the UK are notable: during recent decades these countries were major "
+            "petroleum producers, yet retained high fuel prices as a strategic policy to "
+            "encourage energy efficiency. Inflation-adjusted fuel costs per vehicle-mile "
+            "declined over recent decades as manufacturers built more efficient vehicles."
+        ),
+        metadata={"source": "fuelprice.pdf", "page": 3},
+    ),
+    Document(
+        page_content=(
+            "FUEL PRICE IMPACTS ON ENERGY CONSUMPTION AND TRAVEL\n"
+            "Studies of the price elasticity of fuel indicate that over the long run a 10% "
+            "fuel price increase typically causes: a 4–6% reduction in total vehicle fuel "
+            "consumption; a 3–4% increase in fuel efficiency; and a 1–3% reduction in "
+            "vehicle mileage. High fuel prices are associated with lower per-capita "
+            "transportation energy consumption across countries."
+        ),
+        metadata={"source": "fuelprice.pdf", "page": 6},
+    ),
+    Document(
+        page_content=(
+            "PROBLEM DEFINITIONS AND POTENTIAL SOLUTIONS\n"
+            "The problems of rising fuel prices can be defined in several ways: fuel "
+            "unaffordability (fuel too expensive for lower-income motorists), transportation "
+            "unaffordability (total travel too expensive), energy dependence (economic risk "
+            "of importing petroleum), and vehicle fuel inefficiency. Each definition points "
+            "to different solutions — subsidies address affordability but worsen dependence "
+            "and inefficiency."
+        ),
+        metadata={"source": "fuelprice.pdf", "page": 9},
+    ),
+    Document(
+        page_content=(
+            "ECONOMIC IMPACTS\n"
+            "People often assume low fuel prices support economic development and that fuel "
+            "tax increases reduce economic activity, but this is not necessarily true. "
+            "Reducing fuel prices through subsidies tends to be economically harmful because "
+            "it imposes costs elsewhere and increases energy consumption. Many of the most "
+            "economically successful countries (Japan, Germany, Scandinavia) have high fuel "
+            "prices, while economies with low fuel prices are not especially productive."
+        ),
+        metadata={"source": "fuelprice.pdf", "page": 14},
+    ),
+    Document(
+        page_content=(
+            "EQUITY IMPACTS\n"
+            "Horizontal equity asks whether people with equal needs are treated equally; "
+            "subsidizing fuel violates it by benefiting high energy-consuming consumers at "
+            "the expense of efficient ones. Vertical equity holds that disadvantaged people "
+            "should receive extra support — better achieved through targeted assistance and "
+            "affordable transport options than through broad fuel subsidies."
+        ),
+        metadata={"source": "fuelprice.pdf", "page": 19},
+    ),
+    Document(
+        page_content=(
+            "CONCLUSIONS: RAISE MY FUEL PRICES, PLEASE!\n"
+            "Fuel prices are likely to increase in the future. Rather than trying to minimize "
+            "fuel prices — which requires subsidies and increases consumption, travel, "
+            "pollution, congestion and sprawl — it is better to allow prices to rise and help "
+            "consumers, businesses and communities reduce total fuel costs by increasing "
+            "vehicle and transport-system efficiency."
+        ),
+        metadata={"source": "fuelprice.pdf", "page": 23},
+    ),
+]
+
+FUEL_SUGGESTED_QUESTIONS = [
+    "Forecast crude oil prices for the next 12 months",
+    "What policies does the report recommend for responding to rising fuel prices?",
+    "How have crude oil prices changed since 1970, and what does the report say about the effects?",
+    "How do rising fuel prices affect consumer behavior and the environment?",
+]
+
+
+# ---------------------------------------------------------------------------
 # Demo initialization
 # ---------------------------------------------------------------------------
 
@@ -232,6 +349,57 @@ def _create_demo_sqlite() -> Path:
     return db_path
 
 
+def _create_fuel_sqlite() -> Path:
+    """Build a SQLite DB from the committed crude-oil price CSV (1970–2026)."""
+    import csv as _csv
+
+    tmp = tempfile.NamedTemporaryFile(
+        suffix=".sqlite", prefix="docbot_fuel_", delete=False
+    )
+    tmp.close()
+    db_path = Path(tmp.name)
+
+    conn = sqlite3.connect(str(db_path))
+    conn.execute(
+        "CREATE TABLE IF NOT EXISTS crude_prices ("
+        "month TEXT PRIMARY KEY, crude_oil_price REAL NOT NULL)"
+    )
+    with _FUEL_CSV_PATH.open(newline="") as fh:
+        reader = _csv.DictReader(fh)
+        rows = [(r["Date"], float(r["Crude_Oil_Price"])) for r in reader]
+    conn.executemany("INSERT OR REPLACE INTO crude_prices VALUES (?, ?)", rows)
+    conn.commit()
+    conn.close()
+
+    logger.info("demo: created fuel SQLite at %s (%d rows)", db_path, len(rows))
+    return db_path
+
+
+# Dataset registry — each entry fully describes a one-click demo.
+_DATASETS: Dict[str, Dict[str, Any]] = {
+    "quickbite": {
+        "chunks": DEMO_DOCUMENT_CHUNKS,
+        "sqlite_builder": _create_demo_sqlite,
+        "doc_filename": "QuickBite-10K-2025.pdf",
+        "db_filename": "QuickBite-Financials.db",
+        "persona": "Finance Expert",
+        "company": DEMO_COMPANY,
+        "filing": DEMO_FILING,
+        "suggested_questions": DEMO_SUGGESTED_QUESTIONS,
+    },
+    "fuel": {
+        "chunks": FUEL_DOCUMENT_CHUNKS,
+        "sqlite_builder": _create_fuel_sqlite,
+        "doc_filename": "fuelprice.pdf",
+        "db_filename": "FuelPrices-1970-2026.db",
+        "persona": "Data Analyst",
+        "company": FUEL_COMPANY,
+        "filing": FUEL_FILING,
+        "suggested_questions": FUEL_SUGGESTED_QUESTIONS,
+    },
+}
+
+
 async def init_demo_session(
     vector_stores: Dict[str, Any],
     get_embeddings_fn,
@@ -239,41 +407,51 @@ async def init_demo_session(
     db_connections_table: Table,
     schema_cache_table: Table,
     async_session_factory,
+    dataset: str = "quickbite",
 ) -> Dict[str, Any]:
     """
-    Initialize a fresh demo session with sample document + database.
+    Initialize a fresh demo session with a sample document + database.
+
+    `dataset` selects which one-click demo to load:
+      - "quickbite": synthetic food-delivery 10-K + DB with planted discrepancies
+      - "fuel": VTPI fuel-price policy PDF + real 1970–2026 crude oil series
 
     Returns dict with session_id, connection_id, and suggested questions.
     """
+    cfg = _DATASETS.get(dataset, _DATASETS["quickbite"])
+
     session_id = f"demo-{uuid.uuid4()}"
     connection_id = f"demo-{uuid.uuid4()}"
 
-    # 1. Create vector store from hardcoded document chunks
+    # 1. Create vector store from the dataset's document chunks
     embeddings = get_embeddings_fn()
-    store = create_store(session_id, DEMO_DOCUMENT_CHUNKS, embeddings)
+    store = create_store(session_id, cfg["chunks"], embeddings)
     vector_stores[session_id] = store
-    logger.info("demo: created vector store for session %s (%d chunks)", session_id, len(DEMO_DOCUMENT_CHUNKS))
+    logger.info(
+        "demo[%s]: created vector store for session %s (%d chunks)",
+        dataset, session_id, len(cfg["chunks"]),
+    )
 
     # 2. Insert session record
     files_info = json.dumps([{
-        "filename": "QuickBite-10K-2025.pdf",
-        "pages": 15,
-        "size": 2_048_000,
+        "filename": cfg["doc_filename"],
+        "pages": 27 if dataset == "fuel" else 15,
+        "size": 651_611 if dataset == "fuel" else 2_048_000,
     }])
     async with async_session_factory() as session:
         async with session.begin():
             await session.execute(
                 insert(sessions_table).values(
                     session_id=session_id,
-                    persona="Finance Expert",
+                    persona=cfg["persona"],
                     file_count=1,
                     files_info=files_info,
                     source="demo",
                 )
             )
 
-    # 3. Create SQLite database with matching financial data
-    db_path = _create_demo_sqlite()
+    # 3. Build the dataset's SQLite database
+    db_path = cfg["sqlite_builder"]()
 
     # 4. Register as db_connection (dbname must be the actual file path for SQLite)
     creds_blob = encrypt_credentials({
@@ -283,7 +461,7 @@ async def init_demo_session(
         "dbname": str(db_path),
         "user": "",
         "password": "",
-        "original_filename": "QuickBite-Financials.db",
+        "original_filename": cfg["db_filename"],
     })
 
     async with async_session_factory() as session:
@@ -307,18 +485,19 @@ async def init_demo_session(
     )
 
     logger.info(
-        "demo: initialized session=%s connection=%s tables=%d",
-        session_id, connection_id, len(schema),
+        "demo[%s]: initialized session=%s connection=%s tables=%d",
+        dataset, session_id, connection_id, len(schema),
     )
 
     return {
         "session_id": session_id,
         "connection_id": connection_id,
-        "company": DEMO_COMPANY,
-        "filing": DEMO_FILING,
+        "dataset": dataset,
+        "company": cfg["company"],
+        "filing": cfg["filing"],
         "schema_summary": {
             "table_count": len(schema),
             "tables": [t["name"] for t in schema],
         },
-        "suggested_questions": DEMO_SUGGESTED_QUESTIONS,
+        "suggested_questions": cfg["suggested_questions"],
     }

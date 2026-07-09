@@ -609,8 +609,12 @@ def get_personas():
     }
 
 @app.post("/api/demo/init")
-async def init_demo():
-    """Initialize a sandbox demo session with pre-loaded financial data."""
+async def init_demo(dataset: str = "quickbite"):
+    """Initialize a sandbox demo session with pre-loaded data.
+
+    Query param `dataset`: "quickbite" (Docs+DB discrepancy) or "fuel"
+    (real crude-oil series + policy PDF for forecasting).
+    """
     from api.demo_service import init_demo_session
 
     result = await init_demo_session(
@@ -620,6 +624,7 @@ async def init_demo():
         db_connections_table=db_connections_table,
         schema_cache_table=schema_cache_table,
         async_session_factory=async_session_factory,
+        dataset=dataset if dataset in ("quickbite", "fuel") else "quickbite",
     )
     return result
 

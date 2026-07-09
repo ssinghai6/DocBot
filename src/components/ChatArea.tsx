@@ -117,7 +117,7 @@ export interface ChatAreaProps {
   onUploadClick?: () => void
   onConnectDatabase?: () => void
   onBrowseEdgar?: () => void
-  onTryDemo?: () => void
+  onTryDemo?: (dataset?: "quickbite" | "fuel") => void
   demoLoading?: boolean
 }
 
@@ -163,10 +163,10 @@ export default function ChatArea(props: ChatAreaProps) {
     showToast("success", "Copied to clipboard");
   };
 
-  // The demo loads a fixed QuickBite 10-K + SQLite DB; detect it so the empty
-  // state can explain both sources and suggest questions tailored to the planted
-  // data (and its intended discrepancies), instead of generic prompts.
-  const isDemo = dbFileName === "QuickBite-Financials.db";
+  // Detect which one-click demo is active so the empty state can explain the
+  // two sources and suggest questions tailored to that dataset.
+  const isFuelDemo = dbFileName === "FuelPrices-1970-2026.db";
+  const isDemo = dbFileName === "QuickBite-Financials.db" || isFuelDemo;
 
   return (
     <main className="h-full flex flex-col min-w-0 bg-[var(--color-bg-base)] relative">
@@ -315,23 +315,30 @@ export default function ChatArea(props: ChatAreaProps) {
               <div className="flex-1 h-px bg-[var(--color-border-default)]" />
             </div>
 
-            <button
-              onClick={onTryDemo}
-              disabled={demoLoading}
-              className="flex items-center gap-2 h-9 px-4 rounded-[5px] bg-[var(--color-amber-500)]/15 border border-[var(--color-amber-500)]/40 text-[var(--color-amber-500)] text-[12px] font-medium hover:bg-[var(--color-amber-500)]/20 transition-colors disabled:opacity-60 disabled:cursor-not-allowed mb-8"
-            >
-              {demoLoading ? (
-                <>
-                  <Loader2 className="w-3.5 h-3.5 animate-spin" />
-                  Loading demo...
-                </>
-              ) : (
-                <>
-                  <Sparkles className="w-3.5 h-3.5" />
-                  Try Demo — QuickBite 10-K Analysis
-                </>
-              )}
-            </button>
+            <div className="flex flex-col sm:flex-row items-center gap-2 mb-8">
+              <button
+                onClick={() => onTryDemo?.("quickbite")}
+                disabled={demoLoading}
+                className="flex items-center gap-2 h-9 px-4 rounded-[5px] bg-[var(--color-amber-500)]/15 border border-[var(--color-amber-500)]/40 text-[var(--color-amber-500)] text-[12px] font-medium hover:bg-[var(--color-amber-500)]/20 transition-colors disabled:opacity-60 disabled:cursor-not-allowed"
+              >
+                {demoLoading ? (
+                  <><Loader2 className="w-3.5 h-3.5 animate-spin" /> Loading…</>
+                ) : (
+                  <><Sparkles className="w-3.5 h-3.5" /> QuickBite — spot discrepancies</>
+                )}
+              </button>
+              <button
+                onClick={() => onTryDemo?.("fuel")}
+                disabled={demoLoading}
+                className="flex items-center gap-2 h-9 px-4 rounded-[5px] bg-[var(--color-cyan-500)]/15 border border-[var(--color-cyan-500)]/40 text-[var(--color-cyan-500)] text-[12px] font-medium hover:bg-[var(--color-cyan-500)]/20 transition-colors disabled:opacity-60 disabled:cursor-not-allowed"
+              >
+                {demoLoading ? (
+                  <><Loader2 className="w-3.5 h-3.5 animate-spin" /> Loading…</>
+                ) : (
+                  <><Sparkles className="w-3.5 h-3.5" /> Fuel Prices — forecast trends</>
+                )}
+              </button>
+            </div>
           </div>
         ) : messages.length === 0 && (sessionId || isDbConnected) ? (
           <div className="flex flex-col items-center justify-center h-full">
@@ -339,10 +346,12 @@ export default function ChatArea(props: ChatAreaProps) {
               <MessageSquare className="w-5 h-5 text-[var(--color-cyan-500)]" />
             </div>
             <p className="text-[16px] font-semibold text-[var(--color-text-primary)] mb-1">
-              {isDemo ? "QuickBite — 2025 Annual Report + Database" : isDbConnected ? "Database connected" : "Ready to analyze"}
+              {isFuelDemo ? "Fuel Prices — Policy Report + 1970–2026 Data" : isDemo ? "QuickBite — 2025 Annual Report + Database" : isDbConnected ? "Database connected" : "Ready to analyze"}
             </p>
             <p className="text-[12px] text-[var(--color-text-tertiary)] max-w-lg text-center">
-              {isDemo
+              {isFuelDemo
+                ? "Two sources: a policy report on rising fuel prices (a document) and 56 years of monthly crude-oil prices (a database). DocBot reads both — ask it to forecast prices with a real model, explain the trend, or summarize what the report recommends."
+                : isDemo
                 ? "QuickBite is a made-up food-delivery company. Its “10-K” is an annual report (a document); it also has a financial database. DocBot reads both at once — ask it to compare them, explain a figure, spot mismatches, or forecast."
                 : isDbConnected
                 ? `Query financials, metrics, and trends in ${chatMode} mode`
@@ -352,7 +361,14 @@ export default function ChatArea(props: ChatAreaProps) {
             {/* Suggested questions */}
             <div className="mt-6 grid gap-1.5 max-w-lg w-full">
               <p className="text-[10px] text-[var(--color-text-quaternary)] uppercase tracking-wider text-center mb-1">Try asking</p>
-              {(isDemo
+              {(isFuelDemo
+                ? [
+                  "Forecast crude oil prices for the next 12 months",
+                  "What policies does the report recommend for responding to rising fuel prices?",
+                  "How have crude oil prices changed since 1970, and what does the report say about the effects?",
+                  "How do rising fuel prices affect consumer behavior and the environment?",
+                ]
+                : isDemo
                 ? [
                   "Does the Q4 net income in the 10-K match the database?",
                   "Summarize QuickBite's 2025 performance in plain English",
