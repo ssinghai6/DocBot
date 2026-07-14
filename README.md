@@ -189,7 +189,7 @@ All pipelines support multi-turn conversations with context-aware follow-up hand
 
 Automatic failover from Groq to Gemini 2.5 Flash across all production callsites:
 
-- Primary: Groq (Llama 3.3-70b for reasoning, Qwen/qwen3-32b for code generation)
+- Primary: Groq (Llama 3.3-70b for reasoning, openai/gpt-oss-120b for code generation)
 - Fallback: Gemini 2.5 Flash — activates automatically on Groq errors or rate limits
 - Wired to all 8 production callsites — SQL generation, hybrid synthesis, intent classification, answer generation, code generation, autopilot planning, autopilot synthesis, and deep research
 
@@ -434,7 +434,7 @@ built-in QuickBite demo corpus (a synthetic food-delivery 10-K + matching financ
               ┌────────────┼────────────┐
               ▼            ▼            ▼
          PostgreSQL      Groq         E2B
-         (Railway)   Llama/Qwen    Sandbox
+         (Railway)  Llama/GPT-OSS  Sandbox
               │        Gemini
               │       (fallback)
               ▼
@@ -450,7 +450,7 @@ built-in QuickBite demo corpus (a synthetic food-delivery 10-K + matching financ
 | Backend | FastAPI, Python 3.12, SQLAlchemy 2.x |
 | Agentic Orchestration | LangGraph (StateGraph — Planner -> Executor -> Synthesizer) |
 | LLM — SQL + Hybrid + Autopilot | Groq Llama 3.3-70b (primary), Gemini 2.5 Flash (fallback) |
-| LLM — Python codegen | Groq Qwen/qwen3-32b |
+| LLM — Python codegen | Groq openai/gpt-oss-120b |
 | LLM — Doc extraction | Gemini 2.5 Flash (via LangExtract) |
 | Embeddings | sentence-transformers/all-MiniLM-L6-v2 (HuggingFace API) |
 | Vector Store | Chroma (persistent) + PostgreSQL table_embeddings |
@@ -763,7 +763,7 @@ GET /admin/audit-log?format=csv
 
 | Variable | Required | Description |
 |---|---|---|
-| `groq_api_key` | Yes | Groq API key for Llama + Qwen inference |
+| `groq_api_key` | Yes | Groq API key for Llama + GPT-OSS inference |
 | `huggingface_api_key` | Yes | HuggingFace API for embeddings model |
 | `DATABASE_URL` | Yes | Railway PostgreSQL connection string |
 | `DB_ENCRYPTION_KEY` | Yes | Fernet key for credential encryption — generate with `cryptography.fernet.Fernet.generate_key()` |

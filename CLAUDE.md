@@ -24,7 +24,7 @@ DocBot is an AI-powered document + database analyst, fully deployed on Railway (
 |------|---------|
 | `api/index.py` | FastAPI backend (~1700 lines). App setup, EXPERT_PERSONAS, init_db(), all route handlers |
 | `api/db_service.py` | All DB connectivity, schema introspection (tables+views), 7-step SQL pipeline, LRU engine pool, error taxonomy, schema drift detection |
-| `api/sandbox_service.py` | E2B sandbox execution, Python/pandas code generation (Qwen via Groq), CSV→E2B pipeline, error retry with feedback, conversational rephrase |
+| `api/sandbox_service.py` | E2B sandbox execution, Python/pandas code generation (GPT-OSS via Groq), CSV→E2B pipeline, error retry with feedback, conversational rephrase |
 | `api/hybrid_service.py` | Intent classification, parallel RAG+SQL retrieval, discrepancy detection |
 | `api/autopilot_service.py` | Analytical Autopilot — LangGraph multi-step investigation state machine. Auto-triggers on analytical keywords. Uses `deep_retrieve()` for doc_search steps. |
 | `api/deep_research_service.py` | Deep Research retrieval pipeline + `deep_retrieve()` reusable function (sub-question decomposition, parallel retrieval, gap-fill loop). Legacy standalone route kept for backwards compat. |
@@ -76,7 +76,7 @@ Next.js 16 (Vercel) → FastAPI (Railway container) → Groq / Gemini
 
 - **Frontend**: Next.js 16, React 19, TailwindCSS 4, TypeScript, lucide-react, react-markdown
 - **Backend**: FastAPI, Python 3.12, Groq (Llama 3.3-70b), LangChain, PyMuPDF
-- **AI/ML**: Groq Qwen/qwen3-32b (code gen), Gemini 2.5 Flash via LangExtract (financial docs), LangGraph (agentic flows)
+- **AI/ML**: Groq openai/gpt-oss-120b (code gen), Gemini 2.5 Flash via LangExtract (financial docs), LangGraph (agentic flows)
 - **Embeddings**: sentence-transformers/all-MiniLM-L6-v2 via HuggingFace API
 - **Storage**: PostgreSQL on Railway (sessions, connections, audit log, schema cache)
 - **Sandbox**: E2B code-interpreter (Python/pandas execution, matplotlib charts)
@@ -269,7 +269,7 @@ Max 2–3 LLM calls. No loops. CSV dialect short-circuits before Step 1.
 ## LLM Routing
 
 - **Groq Llama 3.3-70b**: SQL generation, hybrid synthesis, intent classification, answer generation
-- **Groq Qwen/qwen3-32b**: Python/pandas code generation for E2B sandboxes (CSV queries + chart analysis)
+- **Groq openai/gpt-oss-120b**: Python/pandas code generation for E2B sandboxes (CSV queries + chart analysis)
 - **Gemini 2.5 Flash via LangExtract**: Financial document extraction (full-document chunked extraction with char_interval source grounding)
 
 ## Code Style

@@ -537,7 +537,7 @@ async def generate_analysis_code(
     chart_type: str = "auto",
     error_context: Optional[str] = None,
 ) -> Optional[str]:
-    """Generate Python analysis code for a SQL result set using Qwen 2.5 Coder via Groq.
+    """Generate Python analysis code for a SQL result set using the Groq code model.
 
     Returns a Python code string suitable for run_python(), or None when
     the result set is empty or on any error.
@@ -632,7 +632,8 @@ async def generate_analysis_code(
             max_tokens=max_tokens,
         )
         code = raw or ""
-        # Strip <think>...</think> reasoning blocks emitted by Qwen 3 (incl. truncated).
+        # Defensive strip of any <think>...</think> reasoning blocks (incl. truncated)
+        # in case a reasoning model surfaces them inline instead of in a separate field.
         code = _re.sub(r"<think>.*?</think>", "", code, flags=_re.DOTALL).strip()
         if "<think>" in code:
             code = code[: code.index("<think>")].strip()
@@ -654,11 +655,11 @@ async def generate_analysis_code(
             return None
         return code
 
-    # Primary: Qwen code model (needs headroom for its <think> blocks, more for
-    # forecasting). Fall back to llama-3.3-70b, which emits no reasoning blocks
+    # Primary: Groq code model (needs headroom for reasoning tokens, more for
+    # forecasting). Fall back to llama-3.3-70b, which emits no reasoning tokens
     # and so doesn't truncate into invalid code.
-    qwen_tokens = 8000 if _FORECAST_RE.search(question) else 4000
-    for _model, _tokens in ((GROQ_CODE_MODEL, qwen_tokens), (GROQ_MODEL, 4000)):
+    code_tokens = 8000 if _FORECAST_RE.search(question) else 4000
+    for _model, _tokens in ((GROQ_CODE_MODEL, code_tokens), (GROQ_MODEL, 4000)):
         try:
             result = _attempt(_model, _tokens)
         except Exception as exc:
@@ -837,7 +838,7 @@ def _rephrase_for_csv(
             max_tokens=200,
         ).strip()
 
-        # Strip <think>...</think> blocks from Qwen 3
+        # Defensive strip of any inline <think>...</think> reasoning blocks
         import re as _re
         rephrased = _re.sub(r"<think>.*?</think>", "", rephrased, flags=_re.DOTALL).strip()
 
@@ -886,9 +887,9 @@ async def generate_csv_analysis_code(
     # Detect complex queries for adaptive limits
     is_complex = bool(_COMPLEX_QUERY_RE.search(question))
     max_code_lines = 150 if is_complex else 70
-    # 8000 for complex: Qwen3-32b emits long <think> blocks that consume
-    # most of the budget; truncation mid-think leaves an unclosed tag →
-    # SyntaxError → None. 8000 gives enough room for thinking + code.
+    # 8000 for complex: reasoning models consume much of the budget on reasoning
+    # tokens; truncation mid-output can leave invalid code → SyntaxError → None.
+    # 8000 gives enough room for reasoning + code.
     code_gen_max_tokens = 8000 if is_complex else 2000
 
     # --- Conversational rephrase (Task 4) ---
@@ -992,8 +993,8 @@ async def generate_csv_analysis_code(
         )
         code = response_text or ""
 
-        # Strip <think>…</think> reasoning blocks (Qwen3). Also handle
-        # truncated responses where </think> was never emitted — take
+        # Defensive strip of any inline <think>…</think> reasoning blocks. Also
+        # handle truncated responses where </think> was never emitted — take
         # everything before the opening tag in that case.
         code = _re.sub(r"<think>.*?</think>", "", code, flags=_re.DOTALL).strip()
         if "<think>" in code:
@@ -1026,9 +1027,9 @@ async def generate_csv_analysis_code(
 
         return code
 
-    # Primary: Qwen code model. Its long <think> blocks can truncate at the
+    # Primary: Groq code model. Its reasoning tokens can truncate at the
     # token cap on complex queries and yield invalid code. On failure, retry
-    # with llama-3.3-70b, which emits no reasoning blocks and so does not
+    # with llama-3.3-70b, which emits no reasoning tokens and so does not
     # truncate the same way — the reliable safety net for autopilot CSV steps.
     for _model, _tokens in ((GROQ_CODE_MODEL, code_gen_max_tokens), (GROQ_MODEL, 4000)):
         try:

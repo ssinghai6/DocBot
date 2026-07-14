@@ -233,7 +233,11 @@ async def call_llm(
 # Raw SDK-style completions with Groq → Gemini fallback
 # ---------------------------------------------------------------------------
 
-GROQ_CODE_MODEL = "qwen/qwen3-32b"
+# Groq code-generation model. Migrated qwen/qwen3-32b → openai/gpt-oss-120b
+# (Qwen3 32B decommissioned on Groq 2026-07-17). gpt-oss-120b returns reasoning
+# in a separate field rather than inline <think> tags, so the <think>-stripping
+# in sandbox_service is a harmless no-op for this model.
+GROQ_CODE_MODEL = "openai/gpt-oss-120b"
 
 
 def _gemini_completion(
