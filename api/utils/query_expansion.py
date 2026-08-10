@@ -1,19 +1,17 @@
 """
-Query expansion utilities for RAG retrieval quality.
+Query expansion utilities for RAG retrieval quality — finance vertical.
 
-Addresses the short-query / semantic-mismatch problem where a 4-word natural
-language question like "His position or title?" fails to match structured form
-text like "Job Title: Data Science Engineer" because the embeddings are too
-dissimilar in the all-MiniLM-L6-v2 vector space.
+Addresses the short-query / semantic-mismatch problem where a natural language
+question like "How's the top line doing?" fails to match structured filing
+text like "Total Revenue: $42.1M" because the embeddings are too dissimilar in
+the all-MiniLM-L6-v2 vector space.
 
 Strategy: lightweight multi-query expansion — no LLM call, no extra deps.
-
-For each incoming question we generate 2-4 additional phrasings that cover:
-  - Synonym substitutions for common HR/legal/finance field names
-  - Declarative restatements that match how form data is written (not how
-    questions are asked)
-  - Specific term variants (e.g. "role" → "job title", "designation",
-    "position", "occupation")
+DOCBOT-1301: replaced the original H-1B/LCA immigration-vocabulary rules
+(dead weight on the finance vertical DocBot is positioned for) with financial
+statement / 10-K terminology. An optional LLM rewrite path (`expand_query_llm`)
+is available for callers that want it, with deterministic fallback so no
+network call is required in tests or when the LLM is unavailable.
 
 The caller retrieves top-k documents for each query, then deduplicates by
 document ID so the final candidate set is the union of all result sets.  This
@@ -23,124 +21,120 @@ returned chunks and must ground its answer in them.
 
 from __future__ import annotations
 
+import logging
 import re
+
+logger = logging.getLogger(__name__)
 
 # ---------------------------------------------------------------------------
 # Synonym map: maps a pattern (lowercased words) to expansion phrases.
 # Each entry is: (set_of_trigger_words, list_of_expansion_templates)
-#
-# Templates may contain "{subject}" which is replaced with any detected
-# subject noun phrase (e.g. "his", "her", "their", the person's name).
 # ---------------------------------------------------------------------------
 
 _SYNONYM_RULES: list[tuple[set[str], list[str]]] = [
-    # Job title / role / position
+    # Revenue / sales
     (
-        {"position", "title", "role", "job", "designation", "occupation", "work"},
+        {"revenue", "sales", "topline", "top-line", "turnover"},
         [
-            "job title",
-            "position title",
-            "job title occupation title",
-            "SOC occupation title",
-            "role designation",
-            "current job title",
+            "total revenue",
+            "net sales",
+            "total sales",
+            "revenue by segment",
         ],
     ),
-    # Name / identity
+    # Margin / profitability
     (
-        {"name", "full name", "who"},
+        {"margin", "profitability", "profitable"},
         [
-            "full legal name",
-            "applicant name",
-            "employee name",
-            "worker name",
+            "operating margin",
+            "net margin",
+            "gross margin",
+            "profit margin",
         ],
     ),
-    # Salary / wages / compensation
+    # Net income / earnings
     (
-        {"salary", "wage", "compensation", "pay", "income", "earning"},
+        {"income", "earnings", "profit", "bottomline", "bottom-line"},
         [
-            "wage rate",
-            "prevailing wage",
-            "offered wage",
-            "annual salary",
-            "hourly wage",
-            "compensation amount",
+            "net income",
+            "net earnings",
+            "bottom line profit",
         ],
     ),
-    # Location / address / workplace
+    # EBITDA
     (
-        {"location", "address", "workplace", "office", "site", "place", "where"},
+        {"ebitda"},
         [
-            "work location",
-            "place of employment",
-            "worksite address",
-            "employer address",
+            "EBITDA",
+            "adjusted EBITDA",
+            "earnings before interest taxes depreciation and amortization",
         ],
     ),
-    # Employer / company
+    # Segment / business unit
     (
-        {"employer", "company", "organization", "organisation", "firm"},
+        {"segment", "division", "unit", "vertical"},
         [
-            "employer name",
-            "company name",
-            "legal business name",
+            "business segment",
+            "reportable segment",
+            "segment revenue",
         ],
     ),
-    # Dates / period / duration
+    # Growth / trend / YoY
     (
-        {"date", "when", "period", "duration", "start", "end", "begin", "expire"},
+        {"growth", "yoy", "trend", "increase", "decline"},
         [
-            "employment period",
-            "validity period",
-            "begin date end date",
-            "start date",
+            "year-over-year growth",
+            "YoY growth",
+            "revenue growth trend",
         ],
     ),
-    # Visa / status / classification
+    # Guidance / outlook / forecast
     (
-        {"visa", "status", "classification", "h1b", "h-1b", "lca", "immigration"},
+        {"guidance", "outlook", "forecast", "projection", "projected"},
         [
-            "visa classification",
-            "nonimmigrant classification",
-            "H-1B classification",
-            "labor condition application",
+            "financial guidance",
+            "forward guidance",
+            "outlook forecast",
         ],
     ),
-    # SOC code
+    # Opex / capex / expenses
     (
-        {"soc", "code", "occupation code"},
+        {"opex", "capex", "expense", "expenditure", "spending", "cost"},
         [
-            "SOC code",
-            "SOC occupation code",
-            "occupational classification code",
+            "operating expenses",
+            "capital expenditures",
+            "operating costs",
         ],
     ),
-    # Hours / schedule
+    # Balance sheet / assets / cash
     (
-        {"hours", "schedule", "weekly", "part", "full", "time"},
+        {"assets", "liabilities", "balance", "cash", "equity"},
         [
-            "hours per week",
-            "work schedule",
-            "full-time part-time",
+            "total assets",
+            "cash and cash equivalents",
+            "balance sheet",
+            "stockholders equity",
+        ],
+    ),
+    # Acquisitions / M&A
+    (
+        {"acquisition", "acquisitions", "merger", "acquired", "m&a"},
+        [
+            "acquisitions completed",
+            "mergers and acquisitions",
+            "business combinations",
+        ],
+    ),
+    # Cash flow
+    (
+        {"cashflow", "fcf"},
+        [
+            "cash flow from operations",
+            "free cash flow",
+            "operating cash flow",
         ],
     ),
 ]
-
-
-def _extract_subject(question: str) -> str:
-    """Return a best-guess subject noun phrase from the question."""
-    lower = question.lower()
-    for pronoun in ("his", "her", "their", "its", "my", "your"):
-        if pronoun in lower:
-            return pronoun
-    # If a proper name is present (capitalised word not at sentence start), use it
-    words = question.split()
-    for i, w in enumerate(words):
-        cleaned = w.strip("?,.")
-        if i > 0 and cleaned and cleaned[0].isupper():
-            return cleaned
-    return ""
 
 
 def expand_query(question: str) -> list[str]:
@@ -148,11 +142,12 @@ def expand_query(question: str) -> list[str]:
 
     The original question is always the first element.  Additional expansions
     are appended based on synonym rules that match tokens in the question.
+    Deterministic and network-free.
 
     Parameters
     ----------
     question:
-        The user's natural-language question, e.g. "His position or title?"
+        The user's natural-language question, e.g. "How's the top line doing?"
 
     Returns
     -------
@@ -164,7 +159,7 @@ def expand_query(question: str) -> list[str]:
     seen: set[str] = {question.lower().strip()}
 
     lower_q = question.lower()
-    tokens = set(re.findall(r"\b\w+\b", lower_q))
+    tokens = set(re.findall(r"\b[\w&-]+\b", lower_q))
 
     for trigger_words, expansions in _SYNONYM_RULES:
         if tokens & trigger_words:  # any overlap
@@ -174,6 +169,49 @@ def expand_query(question: str) -> list[str]:
                     seen.add(norm)
                     queries.append(exp)
 
+    return queries
+
+
+def expand_query_llm(question: str, *, hf_api_key: str | None = None) -> list[str]:
+    """Like `expand_query`, but tries an LLM rewrite pass first for finance
+    terminology the static synonym map doesn't cover (e.g. non-GAAP framing,
+    "run rate", specific line-item names).
+
+    Falls back to the deterministic `expand_query` on any LLM failure (no
+    key, rate limit, timeout) so callers always get a usable result and
+    callers/tests never require network access to exercise the fallback path.
+    """
+    try:
+        from api.utils.llm_provider import chat_completion
+
+        response = chat_completion(
+            [
+                {
+                    "role": "system",
+                    "content": (
+                        "Rewrite the user's finance question as 2-3 alternate "
+                        "phrasings that would match how the answer is written in "
+                        "a 10-K or financial statement (e.g. line-item names, "
+                        "GAAP terminology). One phrasing per line, no numbering, "
+                        "no explanation."
+                    ),
+                },
+                {"role": "user", "content": question},
+            ],
+            max_tokens=150,
+        )
+        llm_expansions = [line.strip() for line in response.splitlines() if line.strip()]
+    except Exception as exc:
+        logger.warning("expand_query_llm: LLM rewrite failed (%s), using deterministic fallback", exc)
+        return expand_query(question)
+
+    queries: list[str] = [question]
+    seen: set[str] = {question.lower().strip()}
+    for exp in llm_expansions + expand_query(question)[1:]:
+        norm = exp.lower().strip()
+        if norm not in seen:
+            seen.add(norm)
+            queries.append(exp)
     return queries
 
 
