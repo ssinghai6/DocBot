@@ -40,6 +40,24 @@ GOLD_CASES: list[DiscrepancyCase] = [
         expected={"operating expenses"},
         note="~1.4% gap — a plausible reporting discrepancy.",
     ),
+    DiscrepancyCase(
+        name="q4_net_income_realistic_column_suffix",
+        doc_context="Q4 2025: Revenue $1,440M, Net Income $330M, Operating Margin 27%",
+        sql_metadata={
+            "result_preview": [
+                {"quarter": "Q4 2025", "revenue_m": 1440, "net_income_m": 325, "operating_margin_pct": 27.0}
+            ]
+        },
+        expected={"net income"},
+        note=(
+            "Regression case for the actual api/demo_service.py schema (unit-suffixed "
+            "column names, not the sanitized 'net_income' above). Before the "
+            "_STOP_WORDS unit-suffix fix, 'net_income_m' scored 0.5 Jaccard similarity "
+            "against doc label 'net income' — just under the 0.55 match_threshold — so "
+            "checked_pairs stayed 0 and this discrepancy silently never fired in the "
+            "actual demo."
+        ),
+    ),
 
     # --- TRUE NEGATIVES: matching values, must NOT flag -----------------------
     DiscrepancyCase(
