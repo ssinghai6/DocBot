@@ -339,6 +339,12 @@ _STOP_WORDS = frozenset({
     "the", "a", "an", "of", "in", "for", "and", "or", "to", "by",
     "with", "at", "from", "per", "as", "is", "are", "was", "were",
     "total", "net", "gross",  # kept but de-weighted by being stopwords
+    # Unit-suffix tokens that SQL column names carry (e.g. "revenue_m",
+    # "net_income_pct") but doc prose never uses as content words. Left in,
+    # these dilute Jaccard similarity enough to push a genuine match below
+    # match_threshold — e.g. "net_income_m" vs doc "Net Income" scored 0.5
+    # (just under the 0.55 default) until "m" was stripped here.
+    "m", "k", "b", "t", "pct", "percent", "amt", "amount", "usd", "value",
 })
 
 # Synonyms to normalize before comparison
@@ -380,8 +386,14 @@ def _label_similarity(a: str, b: str) -> float:
 
 
 def _canonical_label(doc_label: str, db_label: str) -> str:
-    """Pick the more descriptive of the two labels."""
-    return doc_label if len(doc_label) >= len(db_label) else db_label
+    """Pick the more descriptive of the two labels for display.
+
+    Prefer the doc label — it's author-written prose ("Net Income"), while
+    the db label is usually derived from a SQL column name and carries
+    unit-suffix noise ("net income m") even after that noise is stripped for
+    Jaccard matching. Fall back to db_label only if the doc label is empty.
+    """
+    return doc_label if doc_label.strip() else db_label
 
 
 # ---------------------------------------------------------------------------
