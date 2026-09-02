@@ -48,6 +48,98 @@ GEMINI_MODEL = "gemini-2.5-flash"
 # Groq error types that trigger fallback
 _FALLBACK_STATUS_CODES = {429, 500, 502, 503, 504}
 
+# ---------------------------------------------------------------------------
+# Thin LLM telemetry — DOCBOT-1401
+#
+# One structured log line per call, emitted from this module (the choke point
+# for chat_completion/chat_completion_stream/call_llm) rather than at each
+# external callsite. Deliberately not Langfuse/LangSmith/OTel — single
+# container, no fan-out to trace across; a grep-able JSON log line into
+# Railway's log viewer is enough signal for a solo-founder deploy.
+# ---------------------------------------------------------------------------
+
+# Approximate $ per 1K tokens (input, output). For cost visibility only, not
+# billing-grade. Unlisted models log a null estimated_cost_usd rather than
+# guessing.
+_COST_PER_1K_TOKENS: dict[str, tuple[float, float]] = {
+    GROQ_MODEL: (0.00059, 0.00079),
+    GEMINI_MODEL: (0.000075, 0.0003),
+}
+
+
+def _estimate_cost_usd(
+    model: str, input_tokens: Optional[int], output_tokens: Optional[int]
+) -> Optional[float]:
+    if input_tokens is None or output_tokens is None:
+        return None
+    rates = _COST_PER_1K_TOKENS.get(model)
+    if not rates:
+        return None
+    in_rate, out_rate = rates
+    return round((input_tokens / 1000) * in_rate + (output_tokens / 1000) * out_rate, 6)
+
+
+def _log_llm_call(
+    *,
+    provider: str,
+    model: str,
+    latency_ms: float,
+    success: bool,
+    fallback_triggered: bool,
+    caller: Optional[str],
+    input_tokens: Optional[int] = None,
+    output_tokens: Optional[int] = None,
+) -> None:
+    """Emit one structured log line for an LLM call. Grep for "llm_call" in
+    Railway logs, or filter on the llm_* extra fields if JSON-formatted."""
+    logger.info(
+        "llm_call",
+        extra={
+            "llm_provider": provider,
+            "llm_model": model,
+            "llm_latency_ms": round(latency_ms),
+            "llm_input_tokens": input_tokens,
+            "llm_output_tokens": output_tokens,
+            "llm_estimated_cost_usd": _estimate_cost_usd(model, input_tokens, output_tokens),
+            "llm_success": success,
+            "llm_fallback_triggered": fallback_triggered,
+            "llm_caller": caller,
+        },
+    )
+
+
+def log_external_llm_call(
+    *,
+    provider: str,
+    model: str,
+    latency_ms: float,
+    success: bool,
+    caller: str,
+    input_tokens: Optional[int] = None,
+    output_tokens: Optional[int] = None,
+    fallback_triggered: bool = False,
+) -> None:
+    """Public logging hook for call sites that build their own LLM client
+    instead of going through call_llm/chat_completion/chat_completion_stream
+    (e.g. hybrid_service.classify_intent, which takes an injected groq_client
+    for test-compat reasons and can't be routed through this module's own
+    fallback wrappers without a signature/behavior change).
+
+    Kept for observability parity with the wrapped functions above; adding
+    Groq→Gemini fallback at these call sites is a separate, riskier change
+    tracked outside this ticket.
+    """
+    _log_llm_call(
+        provider=provider,
+        model=model,
+        latency_ms=latency_ms,
+        success=success,
+        fallback_triggered=fallback_triggered,
+        caller=caller,
+        input_tokens=input_tokens,
+        output_tokens=output_tokens,
+    )
+
 
 def _get_groq_llm(
     api_key: Optional[str] = None,
@@ -164,12 +256,22 @@ def _is_retriable_error(exc: Exception) -> bool:
     return any(pattern in exc_str for pattern in retriable_patterns)
 
 
+def _token_usage_from_response(response) -> tuple[Optional[int], Optional[int]]:
+    """Best-effort extraction of (input_tokens, output_tokens) from a
+    LangChain ChatModel response. Returns (None, None) if unavailable —
+    providers/wrappers don't consistently populate response_metadata."""
+    metadata = getattr(response, "response_metadata", None) or {}
+    usage = metadata.get("token_usage") or metadata.get("usage_metadata") or {}
+    return usage.get("prompt_tokens"), usage.get("completion_tokens")
+
+
 async def call_llm(
     prompt: str,
     *,
     temperature: float = 0,
     groq_api_key: Optional[str] = None,
     gemini_api_key: Optional[str] = None,
+    caller: Optional[str] = None,
 ) -> str:
     """Call the LLM with automatic fallback from Groq to Gemini.
 
@@ -186,6 +288,10 @@ async def call_llm(
         Override Groq API key.
     gemini_api_key : str, optional
         Override Gemini API key.
+    caller : str, optional
+        Short tag identifying the calling code path (e.g. "sql_gen",
+        "autopilot_planner") — carried into the structured llm_call log line
+        for per-path cost/latency breakdown. Purely observational.
 
     Returns
     -------
@@ -201,6 +307,12 @@ async def call_llm(
         response = await groq_llm.ainvoke([HumanMessage(content=prompt)])
         elapsed = time.monotonic() - start
         logger.info("LLM call completed via Groq in %.2fs", elapsed)
+        in_tok, out_tok = _token_usage_from_response(response)
+        _log_llm_call(
+            provider="groq", model=GROQ_MODEL, latency_ms=elapsed * 1000,
+            success=True, fallback_triggered=False, caller=caller,
+            input_tokens=in_tok, output_tokens=out_tok,
+        )
         return response.content
     except ValueError:
         # Groq key not available — go straight to Gemini
@@ -226,6 +338,12 @@ async def call_llm(
     response = await gemini_llm.ainvoke([HumanMessage(content=prompt)])
     elapsed = time.monotonic() - start
     logger.info("LLM call completed via Gemini (fallback) in %.2fs", elapsed)
+    in_tok, out_tok = _token_usage_from_response(response)
+    _log_llm_call(
+        provider="gemini", model=GEMINI_MODEL, latency_ms=elapsed * 1000,
+        success=True, fallback_triggered=True, caller=caller,
+        input_tokens=in_tok, output_tokens=out_tok,
+    )
     return response.content
 
 
@@ -326,11 +444,16 @@ def chat_completion(
     model: str = GROQ_MODEL,
     temperature: float = 0,
     max_tokens: int = 800,
+    caller: Optional[str] = None,
 ) -> str:
     """Non-streaming chat completion with Groq → Gemini fallback.
 
     Drop-in replacement for `groq.Groq().chat.completions.create()`.
     Returns the response text string directly.
+
+    caller : str, optional
+        Short tag identifying the calling code path (e.g. "sql_gen",
+        "hybrid_synthesis") — carried into the structured llm_call log line.
     """
     # Try Groq first
     try:
@@ -348,6 +471,13 @@ def chat_completion(
         )
         elapsed = time.monotonic() - start
         logger.info("chat_completion via Groq (%s) in %.2fs", model, elapsed)
+        usage = getattr(response, "usage", None)
+        _log_llm_call(
+            provider="groq", model=model, latency_ms=elapsed * 1000,
+            success=True, fallback_triggered=False, caller=caller,
+            input_tokens=getattr(usage, "prompt_tokens", None),
+            output_tokens=getattr(usage, "completion_tokens", None),
+        )
         return response.choices[0].message.content.strip()
     except Exception as exc:
         if isinstance(exc, ValueError) or _is_retriable_error(exc):
@@ -360,6 +490,10 @@ def chat_completion(
     result = _gemini_completion(messages, temperature, max_tokens)
     elapsed = time.monotonic() - start
     logger.info("chat_completion via Gemini (fallback) in %.2fs", elapsed)
+    _log_llm_call(
+        provider="gemini", model=GEMINI_MODEL, latency_ms=elapsed * 1000,
+        success=True, fallback_triggered=True, caller=caller,
+    )
     return result
 
 
@@ -369,13 +503,21 @@ def chat_completion_stream(
     model: str = GROQ_MODEL,
     temperature: float = 0.2,
     max_tokens: int = 800,
+    caller: Optional[str] = None,
 ) -> Iterator[str]:
     """Streaming chat completion with Groq → Gemini fallback.
 
     Yields content tokens as strings. Drop-in replacement for the
     streaming pattern used in db_service and hybrid_service.
+
+    caller : str, optional
+        Short tag identifying the calling code path — carried into the
+        structured llm_call log line. Token counts aren't logged for
+        streaming calls (not consistently available per-chunk); latency,
+        provider, and fallback status still are.
     """
     # Try Groq first
+    start = time.monotonic()
     try:
         from groq import Groq
         api_key = os.getenv("groq_api_key", "")
@@ -393,6 +535,10 @@ def chat_completion_stream(
             delta = chunk.choices[0].delta
             if delta and delta.content:
                 yield delta.content
+        _log_llm_call(
+            provider="groq", model=model, latency_ms=(time.monotonic() - start) * 1000,
+            success=True, fallback_triggered=False, caller=caller,
+        )
         return  # success — don't fall through
     except Exception as exc:
         if isinstance(exc, ValueError) or _is_retriable_error(exc):
@@ -401,4 +547,16 @@ def chat_completion_stream(
             logger.error("Groq streaming error (%s), attempting Gemini", str(exc)[:200])
 
     # Fallback to Gemini streaming
-    yield from _gemini_completion_stream(messages, temperature, max_tokens)
+    start = time.monotonic()
+    try:
+        yield from _gemini_completion_stream(messages, temperature, max_tokens)
+        _log_llm_call(
+            provider="gemini", model=GEMINI_MODEL, latency_ms=(time.monotonic() - start) * 1000,
+            success=True, fallback_triggered=True, caller=caller,
+        )
+    except Exception:
+        _log_llm_call(
+            provider="gemini", model=GEMINI_MODEL, latency_ms=(time.monotonic() - start) * 1000,
+            success=False, fallback_triggered=True, caller=caller,
+        )
+        raise

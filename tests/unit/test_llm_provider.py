@@ -191,3 +191,148 @@ async def test_call_llm_falls_back_when_no_groq_key():
         result = await call_llm("test prompt")
 
     assert result == "gemini only"
+
+
+# ---------------------------------------------------------------------------
+# Thin LLM telemetry — DOCBOT-1401
+# ---------------------------------------------------------------------------
+
+
+class TestEstimateCostUsd:
+    def test_known_model_computes_cost(self):
+        from api.utils.llm_provider import GROQ_MODEL, _estimate_cost_usd
+        cost = _estimate_cost_usd(GROQ_MODEL, 1000, 1000)
+        assert cost is not None
+        assert cost > 0
+
+    def test_unknown_model_returns_none(self):
+        from api.utils.llm_provider import _estimate_cost_usd
+        assert _estimate_cost_usd("some-unlisted-model", 1000, 1000) is None
+
+    def test_missing_token_counts_returns_none(self):
+        from api.utils.llm_provider import GROQ_MODEL, _estimate_cost_usd
+        assert _estimate_cost_usd(GROQ_MODEL, None, 1000) is None
+        assert _estimate_cost_usd(GROQ_MODEL, 1000, None) is None
+
+
+class TestLogLlmCall:
+    def test_emits_structured_log_record(self, caplog):
+        import logging
+        from api.utils.llm_provider import _log_llm_call
+
+        with caplog.at_level(logging.INFO, logger="api.utils.llm_provider"):
+            _log_llm_call(
+                provider="groq", model="llama-3.3-70b-versatile", latency_ms=123.4,
+                success=True, fallback_triggered=False, caller="sql_gen",
+                input_tokens=50, output_tokens=20,
+            )
+
+        records = [r for r in caplog.records if r.message == "llm_call"]
+        assert len(records) == 1
+        record = records[0]
+        assert record.llm_provider == "groq"
+        assert record.llm_model == "llama-3.3-70b-versatile"
+        assert record.llm_latency_ms == 123
+        assert record.llm_success is True
+        assert record.llm_fallback_triggered is False
+        assert record.llm_caller == "sql_gen"
+        assert record.llm_input_tokens == 50
+        assert record.llm_output_tokens == 20
+
+    def test_log_external_llm_call_delegates(self, caplog):
+        import logging
+        from api.utils.llm_provider import log_external_llm_call
+
+        with caplog.at_level(logging.INFO, logger="api.utils.llm_provider"):
+            log_external_llm_call(
+                provider="groq", model="llama-3.3-70b-versatile", latency_ms=50.0,
+                success=True, caller="intent_classification",
+            )
+
+        records = [r for r in caplog.records if r.message == "llm_call"]
+        assert len(records) == 1
+        assert records[0].llm_caller == "intent_classification"
+        assert records[0].llm_fallback_triggered is False
+
+
+class TestChatCompletionTelemetry:
+    def test_success_logs_provider_groq(self, caplog):
+        import logging
+
+        mock_response = MagicMock()
+        mock_response.choices[0].message.content = "hello"
+        mock_response.usage.prompt_tokens = 10
+        mock_response.usage.completion_tokens = 5
+
+        mock_client = MagicMock()
+        mock_client.chat.completions.create.return_value = mock_response
+
+        with patch("groq.Groq", return_value=mock_client), \
+             caplog.at_level(logging.INFO, logger="api.utils.llm_provider"):
+            from api.utils.llm_provider import chat_completion
+            result = chat_completion([{"role": "user", "content": "hi"}], caller="sql_gen")
+
+        assert result == "hello"
+        records = [r for r in caplog.records if r.message == "llm_call"]
+        assert len(records) == 1
+        assert records[0].llm_provider == "groq"
+        assert records[0].llm_caller == "sql_gen"
+        assert records[0].llm_input_tokens == 10
+        assert records[0].llm_output_tokens == 5
+
+    def test_fallback_logs_provider_gemini(self, caplog):
+        import logging
+
+        with patch("groq.Groq", side_effect=Exception("503 Service Unavailable")), \
+             patch("api.utils.llm_provider._gemini_completion", return_value="gemini says hi"), \
+             caplog.at_level(logging.INFO, logger="api.utils.llm_provider"):
+            from api.utils.llm_provider import chat_completion
+            result = chat_completion([{"role": "user", "content": "hi"}], caller="hybrid_synthesis")
+
+        assert result == "gemini says hi"
+        records = [r for r in caplog.records if r.message == "llm_call"]
+        assert len(records) == 1
+        assert records[0].llm_provider == "gemini"
+        assert records[0].llm_fallback_triggered is True
+        assert records[0].llm_caller == "hybrid_synthesis"
+
+
+class TestChatCompletionStreamTelemetry:
+    def test_success_logs_provider_groq(self, caplog):
+        import logging
+
+        def _make_chunk(content):
+            chunk = MagicMock()
+            chunk.choices[0].delta.content = content
+            return chunk
+
+        mock_client = MagicMock()
+        mock_client.chat.completions.create.return_value = [_make_chunk("hel"), _make_chunk("lo")]
+
+        with patch("groq.Groq", return_value=mock_client), \
+             caplog.at_level(logging.INFO, logger="api.utils.llm_provider"):
+            from api.utils.llm_provider import chat_completion_stream
+            tokens = list(chat_completion_stream([{"role": "user", "content": "hi"}], caller="autopilot_synth"))
+
+        assert "".join(tokens) == "hello"
+        records = [r for r in caplog.records if r.message == "llm_call"]
+        assert len(records) == 1
+        assert records[0].llm_provider == "groq"
+        assert records[0].llm_fallback_triggered is False
+        assert records[0].llm_caller == "autopilot_synth"
+
+    def test_fallback_logs_provider_gemini(self, caplog):
+        import logging
+
+        with patch("groq.Groq", side_effect=Exception("timeout")), \
+             patch("api.utils.llm_provider._gemini_completion_stream", return_value=iter(["gem", "ini"])), \
+             caplog.at_level(logging.INFO, logger="api.utils.llm_provider"):
+            from api.utils.llm_provider import chat_completion_stream
+            tokens = list(chat_completion_stream([{"role": "user", "content": "hi"}], caller="autopilot_synth"))
+
+        assert "".join(tokens) == "gemini"
+        records = [r for r in caplog.records if r.message == "llm_call"]
+        assert len(records) == 1
+        assert records[0].llm_provider == "gemini"
+        assert records[0].llm_fallback_triggered is True
+        assert records[0].llm_success is True

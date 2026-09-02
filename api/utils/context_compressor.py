@@ -79,14 +79,20 @@ async def compress_session(
 ) -> str:
     """Summarise conversation history and persist the summary.
 
-    Fetches all but the last RECENT_WINDOW messages, calls Groq Llama to
-    produce a 3–5 bullet-point summary, and writes it back to `sessions`.
+    Fetches all but the last RECENT_WINDOW messages, calls the LLM (Groq
+    with Gemini fallback via api.utils.llm_provider) to produce a 3-5
+    bullet-point summary, and writes it back to `sessions`.
 
     Returns the new summary string, or empty string on failure.
     Never raises — compression failures are non-fatal.
+
+    groq_api_key: kept for call-site compatibility. DOCBOT-1401 routed the
+    actual LLM call through llm_provider.chat_completion(), which reads
+    the groq_api_key/GEMINI_API_KEY env vars directly (same source this
+    parameter was always populated from).
     """
     try:
-        from groq import Groq
+        from api.utils.llm_provider import chat_completion
 
         async with async_session_factory() as session:
             result = await session.execute(
@@ -108,10 +114,8 @@ async def compress_session(
             for row in messages_to_compress
         )
 
-        client = Groq(api_key=groq_api_key)
-        response = client.chat.completions.create(
-            model="llama-3.3-70b-versatile",
-            messages=[
+        summary = chat_completion(
+            [
                 {
                     "role": "system",
                     "content": (
@@ -128,8 +132,8 @@ async def compress_session(
             ],
             temperature=0.3,
             max_tokens=300,
+            caller="context_compression",
         )
-        summary = response.choices[0].message.content.strip()
 
         # Persist summary and update compression checkpoint
         async with async_session_factory() as session:

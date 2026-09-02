@@ -50,3 +50,5 @@ google-generativeai>=0.8.0
 # EDGAR connector: HTML parsing for SEC filing extraction
 beautifulsoup4>=4.12.0
 lxml>=5.0.0
+# DOCBOT-1401: thin observability — Sentry error tracking (no APM/tracing)
+sentry-sdk[fastapi]>=2.0.0
