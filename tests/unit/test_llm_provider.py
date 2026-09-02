@@ -215,6 +215,47 @@ class TestEstimateCostUsd:
         assert _estimate_cost_usd(GROQ_MODEL, 1000, None) is None
 
 
+class TestLogLlmCallSurvivesDefaultFormatter:
+    """DOCBOT-1402 regression: extra={...} fields are silently dropped by
+    Python's default logging formatter (logging.basicConfig() in api/index.py
+    sets no custom Formatter). caplog reads LogRecord attributes directly and
+    bypasses formatting entirely, so it could not have caught this — these
+    tests render through an actual logging.Formatter to prove the payload
+    survives the real Railway/stdout path, not just the test harness.
+    """
+
+    def test_message_is_valid_json_through_default_formatter(self, caplog):
+        import json
+        import logging
+        from api.utils.llm_provider import _log_llm_call
+
+        with caplog.at_level(logging.INFO, logger="api.utils.llm_provider"):
+            _log_llm_call(
+                provider="groq", model="llama-3.3-70b-versatile", latency_ms=123.4,
+                success=True, fallback_triggered=False, caller="sql_gen",
+                input_tokens=50, output_tokens=20,
+            )
+
+        records = [r for r in caplog.records if getattr(r, "event", None) == "llm_call"]
+        assert len(records) == 1
+
+        # Render through the SAME formatter shape logging.basicConfig() uses —
+        # no custom Formatter, no extra field access. If the payload only
+        # lived in `extra=`, this would render as the bare word "llm_call"
+        # with none of the fields, which is exactly what DOCBOT-1402 found.
+        formatted = logging.Formatter("%(message)s").format(records[0])
+        parsed = json.loads(formatted)  # raises if it's not real JSON in the message body
+        assert parsed["event"] == "llm_call"
+        assert parsed["llm_provider"] == "groq"
+        assert parsed["llm_model"] == "llama-3.3-70b-versatile"
+        assert parsed["llm_latency_ms"] == 123
+        assert parsed["llm_caller"] == "sql_gen"
+        assert parsed["llm_input_tokens"] == 50
+        assert parsed["llm_output_tokens"] == 20
+        assert parsed["llm_success"] is True
+        assert parsed["llm_fallback_triggered"] is False
+
+
 class TestLogLlmCall:
     def test_emits_structured_log_record(self, caplog):
         import logging
@@ -227,7 +268,7 @@ class TestLogLlmCall:
                 input_tokens=50, output_tokens=20,
             )
 
-        records = [r for r in caplog.records if r.message == "llm_call"]
+        records = [r for r in caplog.records if getattr(r, "event", None) == "llm_call"]
         assert len(records) == 1
         record = records[0]
         assert record.llm_provider == "groq"
@@ -249,7 +290,7 @@ class TestLogLlmCall:
                 success=True, caller="intent_classification",
             )
 
-        records = [r for r in caplog.records if r.message == "llm_call"]
+        records = [r for r in caplog.records if getattr(r, "event", None) == "llm_call"]
         assert len(records) == 1
         assert records[0].llm_caller == "intent_classification"
         assert records[0].llm_fallback_triggered is False
@@ -273,7 +314,7 @@ class TestChatCompletionTelemetry:
             result = chat_completion([{"role": "user", "content": "hi"}], caller="sql_gen")
 
         assert result == "hello"
-        records = [r for r in caplog.records if r.message == "llm_call"]
+        records = [r for r in caplog.records if getattr(r, "event", None) == "llm_call"]
         assert len(records) == 1
         assert records[0].llm_provider == "groq"
         assert records[0].llm_caller == "sql_gen"
@@ -290,7 +331,7 @@ class TestChatCompletionTelemetry:
             result = chat_completion([{"role": "user", "content": "hi"}], caller="hybrid_synthesis")
 
         assert result == "gemini says hi"
-        records = [r for r in caplog.records if r.message == "llm_call"]
+        records = [r for r in caplog.records if getattr(r, "event", None) == "llm_call"]
         assert len(records) == 1
         assert records[0].llm_provider == "gemini"
         assert records[0].llm_fallback_triggered is True
@@ -315,7 +356,7 @@ class TestChatCompletionStreamTelemetry:
             tokens = list(chat_completion_stream([{"role": "user", "content": "hi"}], caller="autopilot_synth"))
 
         assert "".join(tokens) == "hello"
-        records = [r for r in caplog.records if r.message == "llm_call"]
+        records = [r for r in caplog.records if getattr(r, "event", None) == "llm_call"]
         assert len(records) == 1
         assert records[0].llm_provider == "groq"
         assert records[0].llm_fallback_triggered is False
@@ -331,8 +372,54 @@ class TestChatCompletionStreamTelemetry:
             tokens = list(chat_completion_stream([{"role": "user", "content": "hi"}], caller="autopilot_synth"))
 
         assert "".join(tokens) == "gemini"
-        records = [r for r in caplog.records if r.message == "llm_call"]
+        records = [r for r in caplog.records if getattr(r, "event", None) == "llm_call"]
         assert len(records) == 1
         assert records[0].llm_provider == "gemini"
         assert records[0].llm_fallback_triggered is True
         assert records[0].llm_success is True
+
+
+# ---------------------------------------------------------------------------
+# Static coverage check — DOCBOT-1402
+#
+# DOCBOT-1401 added a `caller=` kwarg to chat_completion/chat_completion_stream/
+# call_llm for per-path telemetry attribution, but only wired it at 3 of 12
+# production call sites — the other 9 (SQL gen, autopilot, sandbox code-gen,
+# hybrid synthesis) silently logged `llm_caller: null`. No runtime test could
+# catch this (every individual call site's own unit tests mock the response
+# and never assert on the caller kwarg). This is a static AST check instead:
+# every call to these three functions anywhere under api/ must pass `caller=`.
+# ---------------------------------------------------------------------------
+
+
+class TestCallerKwargCoverage:
+    def test_every_llm_provider_call_passes_caller(self):
+        import ast
+        from pathlib import Path
+
+        api_dir = Path(__file__).resolve().parents[2] / "api"
+        target_functions = {"chat_completion", "chat_completion_stream", "call_llm"}
+        missing: list[str] = []
+
+        for py_file in api_dir.rglob("*.py"):
+            if py_file.name == "llm_provider.py":
+                continue  # the definitions themselves, not call sites
+            tree = ast.parse(py_file.read_text(), filename=str(py_file))
+            for node in ast.walk(tree):
+                if not isinstance(node, ast.Call):
+                    continue
+                func = node.func
+                name = func.id if isinstance(func, ast.Name) else (
+                    func.attr if isinstance(func, ast.Attribute) else None
+                )
+                if name not in target_functions:
+                    continue
+                has_caller = any(kw.arg == "caller" for kw in node.keywords)
+                if not has_caller:
+                    missing.append(f"{py_file.relative_to(api_dir.parent)}:{node.lineno} {name}()")
+
+        assert not missing, (
+            "These calls to chat_completion/chat_completion_stream/call_llm are "
+            "missing caller= — per-path cost/latency telemetry will show "
+            "llm_caller: null for them:\n" + "\n".join(missing)
+        )

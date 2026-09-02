@@ -199,6 +199,7 @@ def expand_query_llm(question: str, *, hf_api_key: str | None = None) -> list[st
                 {"role": "user", "content": question},
             ],
             max_tokens=150,
+            caller="query_expansion_llm_rewrite",
         )
         llm_expansions = [line.strip() for line in response.splitlines() if line.strip()]
     except Exception as exc:
