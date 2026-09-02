@@ -110,6 +110,7 @@ Next.js proxies `/api/*` to `localhost:8000` in development.
 | `ALLOWED_ORIGINS` | No | Comma-separated CORS origins, defaults to localhost:3000 |
 | `SESSION_TTL_HOURS` | No | Session cookie TTL in hours, default 8 |
 | `AUTH_REQUIRED` | No | Set to `true` to enforce RBAC login on all protected routes. Default off (open/demo mode) |
+| `SENTRY_DSN` | No | Enables Sentry error tracking (errors only, `traces_sample_rate=0.0` — no APM/tracing spend). No-op if unset |
 | `SAML_SP_ENTITY_ID` | SSO | SP entity ID for SAML 2.0 |
 | `SAML_SP_ACS_URL` | SSO | SP Assertion Consumer Service URL |
 | `SAML_IDP_ENTITY_ID` | SSO | IdP entity ID (from IdP metadata) |

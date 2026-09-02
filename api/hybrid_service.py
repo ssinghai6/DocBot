@@ -16,6 +16,7 @@ import hashlib
 import json
 import logging
 import os
+import time
 from datetime import datetime
 from typing import AsyncGenerator, Literal
 
@@ -151,14 +152,32 @@ async def classify_intent(
         return result
 
     # ── LLM classification (both sources present) ─────────────────────────
-    response = await groq_client.chat.completions.create(
-        model=_MODEL,
-        messages=[
-            {"role": "system", "content": _SYSTEM_PROMPT},
-            {"role": "user", "content": question},
-        ],
-        max_tokens=10,
-        temperature=0,
+    from api.utils.llm_provider import log_external_llm_call
+
+    _start = time.monotonic()
+    try:
+        response = await groq_client.chat.completions.create(
+            model=_MODEL,
+            messages=[
+                {"role": "system", "content": _SYSTEM_PROMPT},
+                {"role": "user", "content": question},
+            ],
+            max_tokens=10,
+            temperature=0,
+        )
+    except Exception:
+        log_external_llm_call(
+            provider="groq", model=_MODEL, latency_ms=(time.monotonic() - _start) * 1000,
+            success=False, caller="intent_classification",
+        )
+        raise
+
+    usage = getattr(response, "usage", None)
+    log_external_llm_call(
+        provider="groq", model=_MODEL, latency_ms=(time.monotonic() - _start) * 1000,
+        success=True, caller="intent_classification",
+        input_tokens=getattr(usage, "prompt_tokens", None),
+        output_tokens=getattr(usage, "completion_tokens", None),
     )
 
     raw = response.choices[0].message.content.strip().lower()

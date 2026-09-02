@@ -17,6 +17,7 @@ import json
 import logging
 import os
 import re
+import time
 from concurrent.futures import ThreadPoolExecutor
 from typing import Any
 
@@ -30,18 +31,6 @@ logger = logging.getLogger(__name__)
 
 MIN_CHUNKS_FOR_COVERAGE = 2
 MAX_ITERATIONS = 2
-
-
-def _get_llm(groq_api_key: str, streaming: bool = False):
-    """Return a ChatGroq LLM bound to the documented coordination model."""
-    from langchain_groq import ChatGroq
-
-    return ChatGroq(
-        model="llama-3.3-70b-versatile",
-        temperature=0,
-        api_key=groq_api_key,
-        streaming=streaming,
-    )
 
 
 def _parse_json_list(raw: str, fallback: list[str]) -> list[str]:
@@ -102,8 +91,13 @@ async def deep_retrieve(
     # ── Step 1: Decompose question into sub-questions ─────────────────────
     sub_questions: list[str] = [question]
     if groq_api_key:
+        from api.utils.llm_provider import get_llm, log_external_llm_call
+
+        _start = time.monotonic()
         try:
-            llm = _get_llm(groq_api_key)
+            # get_llm() falls back to Gemini on Groq instantiation failure
+            # (unlike the old bare ChatGroq(...) here, which just raised).
+            llm = get_llm(groq_api_key=groq_api_key)
             prompt = ChatPromptTemplate.from_messages([
                 ("system", (
                     "You are a research planning assistant. Given a user question, decompose it "
@@ -119,8 +113,18 @@ async def deep_retrieve(
                 chain.ainvoke({"question": question}),
                 timeout=15.0,
             )
+            log_external_llm_call(
+                provider="groq", model="llama-3.3-70b-versatile",
+                latency_ms=(time.monotonic() - _start) * 1000,
+                success=True, caller="deep_retrieve_planner",
+            )
             sub_questions = _parse_json_list(raw, fallback=[question])[:5]
         except Exception as exc:
+            log_external_llm_call(
+                provider="groq", model="llama-3.3-70b-versatile",
+                latency_ms=(time.monotonic() - _start) * 1000,
+                success=False, caller="deep_retrieve_planner",
+            )
             logger.warning("deep_retrieve planner failed, using original question: %s", exc)
             sub_questions = [question]
 

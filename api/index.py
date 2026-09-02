@@ -30,6 +30,18 @@ logger = logging.getLogger(__name__)
 
 load_dotenv()
 
+# Thin observability — DOCBOT-1401. Error tracking only, no APM/tracing spend
+# (traces_sample_rate=0.0): single Railway container, nothing to distributed-
+# trace across. No-op unless SENTRY_DSN is set, so local dev needs no DSN.
+if _sentry_dsn := os.getenv("SENTRY_DSN"):
+    import sentry_sdk
+    sentry_sdk.init(
+        dsn=_sentry_dsn,
+        traces_sample_rate=0.0,
+        environment=os.getenv("RAILWAY_ENVIRONMENT", "local"),
+    )
+    logger.info("Sentry error tracking enabled (environment=%s)", os.getenv("RAILWAY_ENVIRONMENT", "local"))
+
 app = FastAPI(title="DocBot API", version="2.0.0")
 
 ALLOWED_ORIGINS = os.getenv("ALLOWED_ORIGINS", "http://localhost:3000").split(",")
