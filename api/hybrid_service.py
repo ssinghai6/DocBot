@@ -152,7 +152,7 @@ async def classify_intent(
         return result
 
     # ── LLM classification (both sources present) ─────────────────────────
-    from api.utils.llm_provider import log_external_llm_call
+    from api.utils.llm_provider import log_external_llm_call, safe_int
 
     _start = time.monotonic()
     try:
@@ -176,8 +176,8 @@ async def classify_intent(
     log_external_llm_call(
         provider="groq", model=_MODEL, latency_ms=(time.monotonic() - _start) * 1000,
         success=True, caller="intent_classification",
-        input_tokens=getattr(usage, "prompt_tokens", None),
-        output_tokens=getattr(usage, "completion_tokens", None),
+        input_tokens=safe_int(getattr(usage, "prompt_tokens", None)),
+        output_tokens=safe_int(getattr(usage, "completion_tokens", None)),
     )
 
     raw = response.choices[0].message.content.strip().lower()
@@ -655,6 +655,7 @@ async def hybrid_chat(
             [{"role": "user", "content": prompt}],
             temperature=0.2,
             max_tokens=2000,
+            caller="hybrid_synthesis",
         ):
             yield f"data: {json.dumps({'type': 'token', 'content': mask_pii(token)})}\n\n"
     except Exception as exc:

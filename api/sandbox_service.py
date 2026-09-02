@@ -630,6 +630,7 @@ async def generate_analysis_code(
             model=model,
             temperature=0,
             max_tokens=max_tokens,
+            caller="sandbox_analysis_code_gen",
         )
         code = raw or ""
         # Defensive strip of any <think>...</think> reasoning blocks (incl. truncated)
@@ -836,6 +837,7 @@ def _rephrase_for_csv(
             model=GROQ_CODE_MODEL,
             temperature=0,
             max_tokens=200,
+            caller="sandbox_rephrase_question",
         ).strip()
 
         # Defensive strip of any inline <think>...</think> reasoning blocks
@@ -990,6 +992,7 @@ async def generate_csv_analysis_code(
             model=model,
             temperature=0,
             max_tokens=max_tokens,
+            caller="sandbox_csv_code_gen",
         )
         code = response_text or ""
 

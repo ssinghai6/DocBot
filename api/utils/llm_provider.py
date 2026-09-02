@@ -29,6 +29,7 @@ Usage:
 
 from __future__ import annotations
 
+import json
 import logging
 import os
 import time
@@ -90,22 +91,27 @@ def _log_llm_call(
     input_tokens: Optional[int] = None,
     output_tokens: Optional[int] = None,
 ) -> None:
-    """Emit one structured log line for an LLM call. Grep for "llm_call" in
-    Railway logs, or filter on the llm_* extra fields if JSON-formatted."""
-    logger.info(
-        "llm_call",
-        extra={
-            "llm_provider": provider,
-            "llm_model": model,
-            "llm_latency_ms": round(latency_ms),
-            "llm_input_tokens": input_tokens,
-            "llm_output_tokens": output_tokens,
-            "llm_estimated_cost_usd": _estimate_cost_usd(model, input_tokens, output_tokens),
-            "llm_success": success,
-            "llm_fallback_triggered": fallback_triggered,
-            "llm_caller": caller,
-        },
-    )
+    """Emit one structured log line for an LLM call as a JSON string in the
+    message body — not via logging's `extra=` mechanism, which silently
+    drops unrecognized fields under the default formatter (`logging.basicConfig()`
+    in api/index.py has no custom Formatter, so `extra=` fields never reached
+    stdout/Railway logs; only unit tests using `caplog`, which reads LogRecord
+    attributes directly and bypasses formatting, could see them). Grep for
+    '"event": "llm_call"' in Railway logs, or `jq` for a structured pull.
+    """
+    payload = {
+        "event": "llm_call",
+        "llm_provider": provider,
+        "llm_model": model,
+        "llm_latency_ms": round(latency_ms),
+        "llm_input_tokens": input_tokens,
+        "llm_output_tokens": output_tokens,
+        "llm_estimated_cost_usd": _estimate_cost_usd(model, input_tokens, output_tokens),
+        "llm_success": success,
+        "llm_fallback_triggered": fallback_triggered,
+        "llm_caller": caller,
+    }
+    logger.info(json.dumps(payload), extra=payload)
 
 
 def log_external_llm_call(
@@ -256,13 +262,25 @@ def _is_retriable_error(exc: Exception) -> bool:
     return any(pattern in exc_str for pattern in retriable_patterns)
 
 
+def safe_int(value) -> Optional[int]:
+    """Coerce to int or None — never leak a non-JSON-serializable object
+    (e.g. an unconfigured MagicMock attribute in tests) into a log payload."""
+    return value if isinstance(value, int) else None
+
+
 def _token_usage_from_response(response) -> tuple[Optional[int], Optional[int]]:
     """Best-effort extraction of (input_tokens, output_tokens) from a
     LangChain ChatModel response. Returns (None, None) if unavailable —
-    providers/wrappers don't consistently populate response_metadata."""
-    metadata = getattr(response, "response_metadata", None) or {}
+    providers/wrappers don't consistently populate response_metadata, and a
+    non-dict response_metadata (e.g. an unconfigured test mock) must not leak
+    a non-JSON-serializable value into the telemetry payload."""
+    metadata = getattr(response, "response_metadata", None)
+    if not isinstance(metadata, dict):
+        return None, None
     usage = metadata.get("token_usage") or metadata.get("usage_metadata") or {}
-    return usage.get("prompt_tokens"), usage.get("completion_tokens")
+    if not isinstance(usage, dict):
+        return None, None
+    return safe_int(usage.get("prompt_tokens")), safe_int(usage.get("completion_tokens"))
 
 
 async def call_llm(
@@ -475,8 +493,8 @@ def chat_completion(
         _log_llm_call(
             provider="groq", model=model, latency_ms=elapsed * 1000,
             success=True, fallback_triggered=False, caller=caller,
-            input_tokens=getattr(usage, "prompt_tokens", None),
-            output_tokens=getattr(usage, "completion_tokens", None),
+            input_tokens=safe_int(getattr(usage, "prompt_tokens", None)),
+            output_tokens=safe_int(getattr(usage, "completion_tokens", None)),
         )
         return response.choices[0].message.content.strip()
     except Exception as exc:

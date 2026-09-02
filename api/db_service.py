@@ -348,6 +348,7 @@ async def _rephrase_with_history(
                 [{"role": "user", "content": prompt}],
                 temperature=0,
                 max_tokens=200,
+                caller="sql_rephrase_question",
             ),
         )
         rephrased = rephrased.strip()
@@ -1185,6 +1186,7 @@ async def _select_relevant_tables(question: str, schema: List[Dict[str, Any]]) -
             [{"role": "user", "content": prompt}],
             temperature=0,
             max_tokens=200,
+            caller="sql_table_selector",
         )
         start = raw.find("[")
         end = raw.rfind("]") + 1
@@ -1283,6 +1285,7 @@ async def _generate_sql(
         [{"role": "user", "content": prompt}],
         temperature=0,
         max_tokens=500,
+        caller="sql_gen",
     )
     # Strip markdown code fences if present
     if sql.startswith("```"):
@@ -1464,6 +1467,7 @@ async def _stream_answer(
         [{"role": "user", "content": prompt}],
         temperature=0.2,
         max_tokens=800,
+        caller="sql_answer_gen",
     ):
         yield mask_pii(token)
 

@@ -154,6 +154,7 @@ async def _planner_node(state: AutopilotState) -> dict:
             ],
             temperature=0,
             max_tokens=400,
+            caller="autopilot_planner",
         )
         # Strip markdown fences if the model adds them
         lines = raw.splitlines()
@@ -822,6 +823,7 @@ async def _synthesizer_node(state: AutopilotState) -> dict:
             ],
             temperature=0.3,
             max_tokens=2000,
+            caller="autopilot_synthesizer",
         )
     except Exception as exc:
         logger.warning("synthesizer_node LLM call failed: %s", exc)
