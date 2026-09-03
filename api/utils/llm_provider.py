@@ -1,8 +1,19 @@
 """LLM Provider with automatic fallback — Investor Readiness Sprint.
 
-Provides a unified LLM interface with Groq (Llama 3.3-70b) as primary
+Provides a unified LLM interface with Groq (openai/gpt-oss-20b) as primary
 and Gemini 2.5 Flash as fallback. On Groq failure (rate limit, 5xx,
 timeout), automatically retries with Gemini.
+
+DOCBOT-1403: GROQ_MODEL was "llama-3.3-70b-versatile", which Groq removed
+from its catalog entirely (confirmed via /v1/models — not an access issue,
+the model no longer exists). Every call defaulting to GROQ_MODEL (SQL gen,
+autopilot, query expansion, hybrid synthesis, intent classification) was
+silently 404ing and falling back to Gemini, or failing outright if
+GEMINI_API_KEY wasn't set. Migrated to openai/gpt-oss-20b — same model
+family as GROQ_CODE_MODEL (openai/gpt-oss-120b, already proven working),
+confirmed free-tier, deliberately a distinct model from GROQ_CODE_MODEL so
+sandbox_service's two-model retry ladder (`if _model != GROQ_CODE_MODEL`)
+still means something.
 
 Usage:
     from api.utils.llm_provider import get_llm, call_llm
@@ -20,10 +31,10 @@ Usage:
     llm = get_llm()
 
     # Raw SDK style: non-streaming
-    text = chat_completion(messages, model="llama-3.3-70b-versatile")
+    text = chat_completion(messages, model="openai/gpt-oss-20b")
 
     # Raw SDK style: streaming
-    for token in chat_completion_stream(messages, model="llama-3.3-70b-versatile"):
+    for token in chat_completion_stream(messages, model="openai/gpt-oss-20b"):
         print(token, end="")
 """
 
@@ -43,7 +54,7 @@ logger = logging.getLogger(__name__)
 # Provider configuration
 # ---------------------------------------------------------------------------
 
-GROQ_MODEL = "llama-3.3-70b-versatile"
+GROQ_MODEL = "openai/gpt-oss-20b"
 GEMINI_MODEL = "gemini-2.5-flash"
 
 # Groq error types that trigger fallback
@@ -59,11 +70,12 @@ _FALLBACK_STATUS_CODES = {429, 500, 502, 503, 504}
 # Railway's log viewer is enough signal for a solo-founder deploy.
 # ---------------------------------------------------------------------------
 
-# Approximate $ per 1K tokens (input, output). For cost visibility only, not
-# billing-grade. Unlisted models log a null estimated_cost_usd rather than
-# guessing.
+# $ per 1K tokens (input, output). Verified against Groq's published rate
+# card 2026-09 (not billing-grade — rates can change without notice).
+# Unlisted models log a null estimated_cost_usd rather than guessing.
 _COST_PER_1K_TOKENS: dict[str, tuple[float, float]] = {
-    GROQ_MODEL: (0.00059, 0.00079),
+    GROQ_MODEL: (0.000075, 0.0003),       # openai/gpt-oss-20b: $0.075 / $0.30 per 1M
+    "openai/gpt-oss-120b": (0.00015, 0.0006),  # GROQ_CODE_MODEL: $0.15 / $0.60 per 1M
     GEMINI_MODEL: (0.000075, 0.0003),
 }
 

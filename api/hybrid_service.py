@@ -23,6 +23,8 @@ from typing import AsyncGenerator, Literal
 from pydantic import BaseModel
 from sqlalchemy import insert
 
+from api.utils.llm_provider import GROQ_MODEL as _MODEL
+
 logger = logging.getLogger(__name__)
 
 # ---------------------------------------------------------------------------
@@ -30,7 +32,11 @@ logger = logging.getLogger(__name__)
 # ---------------------------------------------------------------------------
 
 _VALID_INTENTS = {"sql", "doc", "hybrid"}
-_MODEL = "llama-3.3-70b-versatile"
+# _MODEL imported from llm_provider.GROQ_MODEL at top of file — DOCBOT-1403:
+# this used to be a hardcoded duplicate literal, and only one of the two
+# copies got updated when Groq decommissioned "llama-3.3-70b-versatile",
+# leaving classify_intent() silently 404ing while the rest of the app was
+# already fixed.
 _SYSTEM_PROMPT = (
     "You are a query routing assistant. "
     "Classify the user's question into exactly one of three categories:\n"

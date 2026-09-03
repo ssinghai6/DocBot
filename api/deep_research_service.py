@@ -91,7 +91,7 @@ async def deep_retrieve(
     # ── Step 1: Decompose question into sub-questions ─────────────────────
     sub_questions: list[str] = [question]
     if groq_api_key:
-        from api.utils.llm_provider import get_llm, log_external_llm_call
+        from api.utils.llm_provider import GROQ_MODEL, get_llm, log_external_llm_call
 
         _start = time.monotonic()
         try:
@@ -114,14 +114,14 @@ async def deep_retrieve(
                 timeout=15.0,
             )
             log_external_llm_call(
-                provider="groq", model="llama-3.3-70b-versatile",
+                provider="groq", model=GROQ_MODEL,
                 latency_ms=(time.monotonic() - _start) * 1000,
                 success=True, caller="deep_retrieve_planner",
             )
             sub_questions = _parse_json_list(raw, fallback=[question])[:5]
         except Exception as exc:
             log_external_llm_call(
-                provider="groq", model="llama-3.3-70b-versatile",
+                provider="groq", model=GROQ_MODEL,
                 latency_ms=(time.monotonic() - _start) * 1000,
                 success=False, caller="deep_retrieve_planner",
             )

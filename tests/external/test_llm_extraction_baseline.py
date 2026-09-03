@@ -444,8 +444,10 @@ def test_financebench_question(
     from langchain_groq import ChatGroq
     from langchain_core.prompts import ChatPromptTemplate
 
+    from api.utils.llm_provider import GROQ_MODEL
+
     llm = ChatGroq(
-        model="llama-3.3-70b-versatile",
+        model=GROQ_MODEL,
         api_key=groq_api_key,
         temperature=0,
         streaming=False,
