@@ -231,7 +231,7 @@ class TestLogLlmCallSurvivesDefaultFormatter:
 
         with caplog.at_level(logging.INFO, logger="api.utils.llm_provider"):
             _log_llm_call(
-                provider="groq", model="llama-3.3-70b-versatile", latency_ms=123.4,
+                provider="groq", model="openai/gpt-oss-20b", latency_ms=123.4,
                 success=True, fallback_triggered=False, caller="sql_gen",
                 input_tokens=50, output_tokens=20,
             )
@@ -247,7 +247,7 @@ class TestLogLlmCallSurvivesDefaultFormatter:
         parsed = json.loads(formatted)  # raises if it's not real JSON in the message body
         assert parsed["event"] == "llm_call"
         assert parsed["llm_provider"] == "groq"
-        assert parsed["llm_model"] == "llama-3.3-70b-versatile"
+        assert parsed["llm_model"] == "openai/gpt-oss-20b"
         assert parsed["llm_latency_ms"] == 123
         assert parsed["llm_caller"] == "sql_gen"
         assert parsed["llm_input_tokens"] == 50
@@ -263,7 +263,7 @@ class TestLogLlmCall:
 
         with caplog.at_level(logging.INFO, logger="api.utils.llm_provider"):
             _log_llm_call(
-                provider="groq", model="llama-3.3-70b-versatile", latency_ms=123.4,
+                provider="groq", model="openai/gpt-oss-20b", latency_ms=123.4,
                 success=True, fallback_triggered=False, caller="sql_gen",
                 input_tokens=50, output_tokens=20,
             )
@@ -272,7 +272,7 @@ class TestLogLlmCall:
         assert len(records) == 1
         record = records[0]
         assert record.llm_provider == "groq"
-        assert record.llm_model == "llama-3.3-70b-versatile"
+        assert record.llm_model == "openai/gpt-oss-20b"
         assert record.llm_latency_ms == 123
         assert record.llm_success is True
         assert record.llm_fallback_triggered is False
@@ -286,7 +286,7 @@ class TestLogLlmCall:
 
         with caplog.at_level(logging.INFO, logger="api.utils.llm_provider"):
             log_external_llm_call(
-                provider="groq", model="llama-3.3-70b-versatile", latency_ms=50.0,
+                provider="groq", model="openai/gpt-oss-20b", latency_ms=50.0,
                 success=True, caller="intent_classification",
             )
 
@@ -423,3 +423,35 @@ class TestCallerKwargCoverage:
             "missing caller= — per-path cost/latency telemetry will show "
             "llm_caller: null for them:\n" + "\n".join(missing)
         )
+
+
+class TestModelConstants:
+    """DOCBOT-1403: GROQ_MODEL was 'llama-3.3-70b-versatile', a model Groq
+    removed from its catalog entirely — every default-model call was
+    silently 404ing. Guard against picking a model that isn't in the cost
+    table (a maintenance foot-gun: _COST_PER_1K_TOKENS duplicates
+    GROQ_CODE_MODEL's value as a literal since GROQ_CODE_MODEL is defined
+    later in the module) and against accidentally reintroducing the dead
+    model string anywhere.
+    """
+
+    def test_groq_model_is_not_the_decommissioned_model(self):
+        from api.utils.llm_provider import GROQ_MODEL
+        assert GROQ_MODEL != "llama-3.3-70b-versatile"
+
+    def test_groq_model_distinct_from_code_model(self):
+        # sandbox_service's retry ladder branches on `_model != GROQ_CODE_MODEL`;
+        # if these collide, that branch silently stops meaning anything.
+        from api.utils.llm_provider import GROQ_CODE_MODEL, GROQ_MODEL
+        assert GROQ_MODEL != GROQ_CODE_MODEL
+
+    def test_code_model_cost_entry_matches_constant(self):
+        # _COST_PER_1K_TOKENS keys GROQ_CODE_MODEL's rate by a literal string
+        # (GROQ_CODE_MODEL is defined after this dict in the module). Catch
+        # drift if one changes without the other.
+        from api.utils.llm_provider import GROQ_CODE_MODEL, _COST_PER_1K_TOKENS
+        assert GROQ_CODE_MODEL in _COST_PER_1K_TOKENS
+
+    def test_groq_model_has_a_cost_entry(self):
+        from api.utils.llm_provider import GROQ_MODEL, _COST_PER_1K_TOKENS
+        assert GROQ_MODEL in _COST_PER_1K_TOKENS

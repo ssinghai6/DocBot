@@ -657,8 +657,17 @@ async def generate_analysis_code(
         return code
 
     # Primary: Groq code model (needs headroom for reasoning tokens, more for
-    # forecasting). Fall back to llama-3.3-70b, which emits no reasoning tokens
-    # and so doesn't truncate into invalid code.
+    # forecasting). Fallback: GROQ_MODEL.
+    # DOCBOT-1403: this fallback used to be llama-3.3-70b, a non-reasoning
+    # model chosen specifically because it never burned max_tokens on
+    # reasoning before emitting content. That model is gone from Groq's
+    # catalog. GROQ_MODEL is now openai/gpt-oss-20b, which — verified via a
+    # real call — IS a reasoning model: a trivial one-line-function prompt
+    # spent 98/100 max_tokens on reasoning and returned empty content with
+    # finish_reason="length". The safety property this fallback relied on
+    # (never truncates to empty) no longer holds at the current 4000-token
+    # budget for complex prompts. Not re-tuned here — flagged as a follow-up
+    # (DOCBOT-1404) since it's a reliability/budget decision, not a rename.
     code_tokens = 8000 if _FORECAST_RE.search(question) else 4000
     for _model, _tokens in ((GROQ_CODE_MODEL, code_tokens), (GROQ_MODEL, 4000)):
         try:
@@ -1032,8 +1041,15 @@ async def generate_csv_analysis_code(
 
     # Primary: Groq code model. Its reasoning tokens can truncate at the
     # token cap on complex queries and yield invalid code. On failure, retry
-    # with llama-3.3-70b, which emits no reasoning tokens and so does not
-    # truncate the same way — the reliable safety net for autopilot CSV steps.
+    # with GROQ_MODEL as a second attempt.
+    # DOCBOT-1403: this used to retry against llama-3.3-70b specifically
+    # because it emitted no reasoning tokens and so couldn't truncate the
+    # same way — a genuine safety net. That model is gone from Groq's
+    # catalog; GROQ_MODEL is now openai/gpt-oss-20b, which IS a reasoning
+    # model (verified via a real call: burns tokens on reasoning before
+    # content, can return empty on a tight budget). The retry still gives a
+    # second attempt with a different model/budget, but the "can't possibly
+    # truncate" guarantee this comment used to describe no longer holds.
     for _model, _tokens in ((GROQ_CODE_MODEL, code_gen_max_tokens), (GROQ_MODEL, 4000)):
         try:
             result = _attempt(_model, _tokens)
