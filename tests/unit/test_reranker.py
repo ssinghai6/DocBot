@@ -1,12 +1,13 @@
-"""Unit tests for api/utils/reranker.py — DOCBOT-1002.
+"""Unit tests for api/utils/reranker.py — DOCBOT-1002 / DOCBOT-1405.
 
-All tests are CI-safe: InferenceClient is mocked, no network calls.
+All tests are CI-safe: httpx.post is mocked, no network calls.
 """
 
 from __future__ import annotations
 
 from unittest.mock import MagicMock, patch
 
+import httpx
 import pytest
 
 from api.utils.reranker import rerank
@@ -27,14 +28,21 @@ def _make_docs(contents: list[str]) -> list:
     return docs
 
 
-def _patch_client(scores: list[float]):
-    """Patch InferenceClient to return given scores from sentence_similarity."""
-    mock_client = MagicMock()
-    mock_client.sentence_similarity.return_value = scores
-    return patch(
-        "api.utils.reranker.InferenceClient",
-        return_value=mock_client,
-    )
+def _hf_response(scores: list[float]) -> MagicMock:
+    """Build a mock httpx.Response matching the real HF cross-encoder shape:
+    a single-element outer list wrapping one score dict per input pair,
+    in input order.
+    """
+    resp = MagicMock()
+    resp.raise_for_status.return_value = None
+    resp.json.return_value = [
+        [{"label": "LABEL_0", "score": s} for s in scores]
+    ]
+    return resp
+
+
+def _patch_post(scores: list[float]):
+    return patch("api.utils.reranker.httpx.post", return_value=_hf_response(scores))
 
 
 # ---------------------------------------------------------------------------
@@ -47,7 +55,7 @@ class TestRerankSorting:
         docs = _make_docs(["doc A", "doc B", "doc C", "doc D", "doc E"])
         scores = [0.1, 0.9, 0.4, 0.7, 0.3]
 
-        with _patch_client(scores):
+        with _patch_post(scores):
             result = rerank("query", docs, hf_api_key="hf_test", top_k=3)
 
         assert len(result) == 3
@@ -59,23 +67,27 @@ class TestRerankSorting:
         docs = _make_docs(["a", "b"])
         scores = [0.5, 0.8]
 
-        with _patch_client(scores):
+        with _patch_post(scores):
             result = rerank("q", docs, hf_api_key="key", top_k=10)
 
         assert len(result) == 2
 
-    def test_client_called_with_correct_args(self):
+    def test_client_called_with_correct_pair_payload(self):
         docs = _make_docs(["passage one", "passage two"])
         scores = [0.3, 0.7]
 
-        with _patch_client(scores) as mock_cls:
+        with _patch_post(scores) as mock_post:
             rerank("my question", docs, hf_api_key="hf_abc", top_k=5)
 
-        mock_cls.assert_called_once()
-        mock_instance = mock_cls.return_value
-        call_args = mock_instance.sentence_similarity.call_args
-        assert call_args[0][0] == "my question"
-        assert call_args[1]["other_sentences"] == ["passage one", "passage two"]
+        mock_post.assert_called_once()
+        _, kwargs = mock_post.call_args
+        assert kwargs["headers"] == {"Authorization": "Bearer hf_abc"}
+        assert kwargs["json"] == {
+            "inputs": [
+                {"text": "my question", "text_pair": "passage one"},
+                {"text": "my question", "text_pair": "passage two"},
+            ]
+        }
 
 
 # ---------------------------------------------------------------------------
@@ -87,9 +99,9 @@ class TestRerankEmptyKey:
     def test_empty_key_skips_api(self):
         docs = _make_docs(["x", "y", "z"])
 
-        with _patch_client([]) as mock_cls:
+        with _patch_post([]) as mock_post:
             result = rerank("q", docs, hf_api_key="", top_k=5)
-            mock_cls.assert_not_called()
+            mock_post.assert_not_called()
 
         assert [d.page_content for d in result] == ["x", "y", "z"]
 
@@ -101,27 +113,30 @@ class TestRerankEmptyKey:
 
 
 # ---------------------------------------------------------------------------
-# Fallback: client raises an exception
+# Fallback: request raises / returns an error status
 # ---------------------------------------------------------------------------
 
 
 class TestRerankFallbackOnException:
-    def test_fallback_on_client_error(self):
+    def test_fallback_on_request_error(self):
         docs = _make_docs(["p", "q", "r"])
 
-        mock_client = MagicMock()
-        mock_client.sentence_similarity.side_effect = Exception("timeout")
-        with patch("api.utils.reranker.InferenceClient", return_value=mock_client):
+        with patch(
+            "api.utils.reranker.httpx.post",
+            side_effect=httpx.TimeoutException("timeout"),
+        ):
             result = rerank("query", docs, hf_api_key="hf_key", top_k=5)
 
         assert [d.page_content for d in result] == ["p", "q", "r"]
 
-    def test_fallback_on_auth_error(self):
+    def test_fallback_on_http_status_error(self):
         docs = _make_docs(["alpha", "beta"])
 
-        mock_client = MagicMock()
-        mock_client.sentence_similarity.side_effect = Exception("403 Forbidden")
-        with patch("api.utils.reranker.InferenceClient", return_value=mock_client):
+        mock_response = MagicMock()
+        mock_response.raise_for_status.side_effect = httpx.HTTPStatusError(
+            "403 Forbidden", request=MagicMock(), response=MagicMock()
+        )
+        with patch("api.utils.reranker.httpx.post", return_value=mock_response):
             result = rerank("q", docs, hf_api_key="bad_key", top_k=5)
 
         assert [d.page_content for d in result] == ["alpha", "beta"]
@@ -130,10 +145,20 @@ class TestRerankFallbackOnException:
         """If HF returns wrong number of scores, fall back gracefully."""
         docs = _make_docs(["one", "two", "three"])
         # Only 2 scores for 3 docs → shape mismatch
-        with _patch_client([0.5, 0.9]):
+        with _patch_post([0.5, 0.9]):
             result = rerank("q", docs, hf_api_key="hf_key", top_k=5)
 
         assert [d.page_content for d in result] == ["one", "two", "three"]
+
+    def test_fallback_on_missing_score_key(self):
+        docs = _make_docs(["one", "two"])
+        mock_response = MagicMock()
+        mock_response.raise_for_status.return_value = None
+        mock_response.json.return_value = [[{"label": "LABEL_0"}, {"label": "LABEL_0"}]]
+        with patch("api.utils.reranker.httpx.post", return_value=mock_response):
+            result = rerank("q", docs, hf_api_key="hf_key", top_k=5)
+
+        assert [d.page_content for d in result] == ["one", "two"]
 
 
 # ---------------------------------------------------------------------------
@@ -150,7 +175,7 @@ class TestRerankEdgeCases:
         docs = _make_docs(["only doc"])
         scores = [0.75]
 
-        with _patch_client(scores):
+        with _patch_post(scores):
             result = rerank("q", docs, hf_api_key="hf_key", top_k=5)
 
         assert len(result) == 1
