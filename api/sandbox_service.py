@@ -664,12 +664,24 @@ async def generate_analysis_code(
     # catalog. GROQ_MODEL is now openai/gpt-oss-20b, which — verified via a
     # real call — IS a reasoning model: a trivial one-line-function prompt
     # spent 98/100 max_tokens on reasoning and returned empty content with
-    # finish_reason="length". The safety property this fallback relied on
-    # (never truncates to empty) no longer holds at the current 4000-token
-    # budget for complex prompts. Not re-tuned here — flagged as a follow-up
-    # (DOCBOT-1404) since it's a reliability/budget decision, not a rename.
+    # finish_reason="length".
+    # DOCBOT-1404: re-measured against realistic code-gen prompts (this
+    # module's actual system prompt + forecast guidance) at the flat 4000
+    # fallback budget. Findings: a simple prompt uses ~175 reasoning tokens
+    # and ~430 completion tokens total; three deliberately hard forecast
+    # prompts (ARIMA grid search, SARIMAX + backtest, multi-model comparison
+    # with a 675-point series) used 606-837 reasoning tokens and 1094-1452
+    # completion tokens total — comfortably under 4000 with finish_reason
+    # "stop" and non-empty content every time. Truncation to empty content
+    # only reproduced at budgets <=250 tokens, far below what's configured
+    # here. So 4000 already has ~3x headroom on the worst case measured. Even
+    # so, the fallback's budget is now tied to the same forecast-scaling the
+    # primary attempt gets (never lower than 4000) rather than a flat number,
+    # since forecast-heavy questions are the ones that measured highest and
+    # real-world data/columns can be messier than this test data.
     code_tokens = 8000 if _FORECAST_RE.search(question) else 4000
-    for _model, _tokens in ((GROQ_CODE_MODEL, code_tokens), (GROQ_MODEL, 4000)):
+    fallback_tokens = max(code_tokens, 4000)
+    for _model, _tokens in ((GROQ_CODE_MODEL, code_tokens), (GROQ_MODEL, fallback_tokens)):
         try:
             result = _attempt(_model, _tokens)
         except Exception as exc:
@@ -1047,10 +1059,20 @@ async def generate_csv_analysis_code(
     # same way — a genuine safety net. That model is gone from Groq's
     # catalog; GROQ_MODEL is now openai/gpt-oss-20b, which IS a reasoning
     # model (verified via a real call: burns tokens on reasoning before
-    # content, can return empty on a tight budget). The retry still gives a
-    # second attempt with a different model/budget, but the "can't possibly
-    # truncate" guarantee this comment used to describe no longer holds.
-    for _model, _tokens in ((GROQ_CODE_MODEL, code_gen_max_tokens), (GROQ_MODEL, 4000)):
+    # content, can return empty on a tight budget).
+    # DOCBOT-1404: re-measured against this function's actual CSV system
+    # prompt (incl. forecast guidance) at the flat 4000 fallback budget with
+    # three deliberately hard forecast/stats prompts (ARIMA grid search,
+    # SARIMAX + backtest, multi-model comparison). All completed with
+    # finish_reason "stop" using 1273-1452 total completion tokens (606-645
+    # of it reasoning) — well under 4000. Truncation to empty content only
+    # reproduced at budgets <=250 tokens. So the flat 4000 already had
+    # headroom, but the fallback's budget is now tied to the same complexity
+    # scaling the primary attempt gets (never lower than 4000) rather than a
+    # flat number, since complex/forecast questions measured highest and
+    # real-world data can be messier than this test data.
+    fallback_tokens = max(code_gen_max_tokens, 4000)
+    for _model, _tokens in ((GROQ_CODE_MODEL, code_gen_max_tokens), (GROQ_MODEL, fallback_tokens)):
         try:
             result = _attempt(_model, _tokens)
         except Exception as exc:

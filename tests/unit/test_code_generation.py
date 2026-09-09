@@ -140,3 +140,120 @@ class TestGenerateAnalysisCode:
 
         assert result is not None
         mock_cc.assert_called_once()
+
+
+@pytest.mark.unit
+@pytest.mark.asyncio
+class TestRetryLadderTokenBudgets:
+    """DOCBOT-1404: the fallback model (GROQ_MODEL, a reasoning model since
+    DOCBOT-1403) must get at least as much max_tokens headroom as the primary
+    attempt gets for the same question, scaled the same way for forecast /
+    complex questions — not a flat 4000 regardless of question complexity.
+    """
+
+    async def test_analysis_code_fallback_matches_primary_for_forecast(self):
+        """Forecast questions give the primary attempt 8000 tokens; the
+        fallback attempt (triggered when the primary returns empty) must get
+        the same 8000, not the old flat 4000."""
+        from api.sandbox_service import generate_analysis_code
+
+        calls = []
+
+        def fake_chat_completion(messages, *, model, temperature, max_tokens, caller=None):
+            calls.append({"model": model, "max_tokens": max_tokens})
+            if len(calls) == 1:
+                return ""  # primary attempt returns empty -> triggers fallback
+            return "import pandas as pd\nresult = 'done'"
+
+        with patch("api.utils.llm_provider.chat_completion", side_effect=fake_chat_completion):
+            with patch.dict("os.environ", {"groq_api_key": "test-key"}):
+                result = await generate_analysis_code(
+                    result_dicts=[{"date": "2024-01-01", "revenue": 100}],
+                    question="forecast next 12 months of revenue",
+                    persona_def="Data Analyst",
+                )
+
+        assert result is not None
+        assert len(calls) == 2
+        assert calls[0]["max_tokens"] == 8000
+        assert calls[1]["max_tokens"] == 8000
+
+    async def test_analysis_code_fallback_floor_for_non_forecast(self):
+        """Non-forecast questions still get a 4000-token floor on the
+        fallback attempt (matches the primary's non-forecast budget)."""
+        from api.sandbox_service import generate_analysis_code
+
+        calls = []
+
+        def fake_chat_completion(messages, *, model, temperature, max_tokens, caller=None):
+            calls.append({"model": model, "max_tokens": max_tokens})
+            if len(calls) == 1:
+                return ""
+            return "import pandas as pd\nresult = 'done'"
+
+        with patch("api.utils.llm_provider.chat_completion", side_effect=fake_chat_completion):
+            with patch.dict("os.environ", {"groq_api_key": "test-key"}):
+                result = await generate_analysis_code(
+                    result_dicts=[{"col": i} for i in range(5)],
+                    question="show me the distribution",
+                    persona_def="Data Analyst",
+                )
+
+        assert result is not None
+        assert len(calls) == 2
+        assert calls[0]["max_tokens"] == 4000
+        assert calls[1]["max_tokens"] == 4000
+
+    async def test_csv_analysis_code_fallback_matches_primary_for_complex(self):
+        """Complex CSV questions give the primary attempt 8000 tokens; the
+        fallback attempt must get the same 8000, not the old flat 4000."""
+        from api.sandbox_service import generate_csv_analysis_code
+
+        calls = []
+
+        def fake_chat_completion(messages, *, model, temperature, max_tokens, caller=None):
+            calls.append({"model": model, "max_tokens": max_tokens})
+            if len(calls) == 1:
+                return ""
+            return "import pandas as pd\nresult = 'done'"
+
+        with patch("api.utils.llm_provider.chat_completion", side_effect=fake_chat_completion):
+            with patch.dict("os.environ", {"groq_api_key": "test-key"}):
+                result = await generate_csv_analysis_code(
+                    csv_path_in_sandbox="/tmp/data.csv",
+                    column_names=["date", "revenue"],
+                    question="build a forecasting model with hyperparameter tuning and cross-validation",
+                    persona_def="Data Analyst",
+                )
+
+        assert result is not None
+        assert len(calls) == 2
+        assert calls[0]["max_tokens"] == 8000
+        assert calls[1]["max_tokens"] == 8000
+
+    async def test_csv_analysis_code_fallback_floor_for_simple(self):
+        """Simple CSV questions give the primary attempt 2000 tokens, but the
+        fallback attempt still gets at least the 4000-token floor."""
+        from api.sandbox_service import generate_csv_analysis_code
+
+        calls = []
+
+        def fake_chat_completion(messages, *, model, temperature, max_tokens, caller=None):
+            calls.append({"model": model, "max_tokens": max_tokens})
+            if len(calls) == 1:
+                return ""
+            return "import pandas as pd\nresult = 'done'"
+
+        with patch("api.utils.llm_provider.chat_completion", side_effect=fake_chat_completion):
+            with patch.dict("os.environ", {"groq_api_key": "test-key"}):
+                result = await generate_csv_analysis_code(
+                    csv_path_in_sandbox="/tmp/data.csv",
+                    column_names=["date", "revenue"],
+                    question="what columns exist",
+                    persona_def="Data Analyst",
+                )
+
+        assert result is not None
+        assert len(calls) == 2
+        assert calls[0]["max_tokens"] == 2000
+        assert calls[1]["max_tokens"] == 4000
