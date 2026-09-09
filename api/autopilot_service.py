@@ -1,10 +1,20 @@
 """
 DOCBOT-405: Analytical Autopilot — LangGraph-based multi-step investigation agent.
+DOCBOT-1406: ExecutorNode now dispatches independent steps within a "wave"
+concurrently instead of one step per LangGraph iteration (see _next_wave_indices).
 
 Exposes a single async generator, run_autopilot(), that:
   - Plans an investigation into ≤5 steps via Groq Llama (PlannerNode)
   - Executes each step using the best tool: sql_query | doc_search | python_analysis
-    (ExecutorNode, loops up to MAX_ITERATIONS times, hard 90-second wall-clock guard)
+    (ExecutorNode, loops up to MAX_ITERATIONS *waves*, hard 90-second wall-clock guard).
+    Consecutive data-fetch steps (sql_query/doc_search) have no ordering dependency
+    on each other and run concurrently via asyncio.gather in a single wave.
+    python_analysis steps read results accumulated in state["steps_completed"] from
+    earlier steps (prior SQL rows / doc context), so they form a barrier: a
+    python_analysis step never runs in the same wave as an unexecuted fetch step
+    that precedes it in the plan, but consecutive python_analysis steps (which
+    don't depend on each other, only on already-completed prior waves) do run
+    concurrently with each other.
   - Synthesises all step findings into a final markdown answer (SynthesizerNode)
   - Yields SSE-formatted strings throughout for direct client streaming
 
@@ -33,7 +43,7 @@ from langgraph.graph import END, START, StateGraph
 
 logger = logging.getLogger(__name__)
 
-MAX_ITERATIONS = 5
+MAX_ITERATIONS = 5  # cap on executor *waves*, not individual steps — see module docstring
 TOTAL_TIMEOUT_S = 90
 
 # Internal step-result prefixes that signal a failed/empty step. These are
@@ -62,8 +72,12 @@ class AutopilotState(TypedDict):
     # steps from PlannerNode
     plan: list[str]
     # accumulated step results — operator.add reducer: each executor call appends
+    # the results of one *wave* (one or more concurrently-run steps), always in
+    # plan order regardless of which step finished first within the wave. Its
+    # length also doubles as the "how many plan steps are done" pointer.
     steps_completed: Annotated[list[dict], operator.add]
-    # which plan step we are about to execute (0-based)
+    # number of executor *waves* dispatched so far (0-based) — NOT the number of
+    # individual steps, since a wave may run several steps concurrently.
     iteration: int
     # final synthesised markdown answer
     final_answer: str
@@ -238,6 +252,59 @@ def _select_tool_heuristic(step: str, has_db: bool = True, has_docs: bool = Fals
 
 
 # ---------------------------------------------------------------------------
+# Wave grouping — decide which plan steps can run concurrently
+# ---------------------------------------------------------------------------
+
+# Tool categories that never read another step's output. sql_query and
+# doc_search each fetch from an external source (DB / vector store) using only
+# the step's own text — they have no data dependency on sibling steps.
+_FETCH_TOOLS = ("sql_query", "doc_search")
+
+
+def _wave_tool_hint(step: str, state: AutopilotState) -> str:
+    """Cheap, side-effect-free tool guess used only to group steps into waves.
+
+    This intentionally skips the runtime "demote python_analysis if no prior
+    data exists" logic in ``_run_single_step`` — that check depends on the
+    *results* of earlier steps, which aren't known until the barrier those
+    results imply has already been respected by wave grouping below. Wave
+    grouping only needs the fetch vs. non-fetch category, not the exact tool.
+    """
+    return _select_tool_heuristic(
+        step,
+        has_db=state.get("has_db", True),
+        has_docs=state.get("has_docs", False),
+        has_csv=state.get("has_csv", False),
+    )
+
+
+def _next_wave_indices(plan: list[str], start: int, state: AutopilotState) -> list[int]:
+    """Return the plan indices (from ``start``) that can be dispatched together.
+
+    A wave is a maximal run of consecutive steps that are all fetch-type
+    (sql_query/doc_search — no inter-step dependency) or all non-fetch
+    (python_analysis/unsupported — each may read every step completed in an
+    earlier wave, but not a sibling in the same wave). This keeps a
+    python_analysis step from ever running before a fetch step that precedes
+    it in the plan, while still letting independent fetches — or independent
+    analyses that both only read already-completed data — run concurrently.
+    """
+    if start >= len(plan):
+        return []
+
+    is_fetch = _wave_tool_hint(plan[start], state) in _FETCH_TOOLS
+    indices = [start]
+    i = start + 1
+    while i < len(plan):
+        step_is_fetch = _wave_tool_hint(plan[i], state) in _FETCH_TOOLS
+        if step_is_fetch != is_fetch:
+            break
+        indices.append(i)
+        i += 1
+    return indices
+
+
+# ---------------------------------------------------------------------------
 # ExecutorNode factory
 # ---------------------------------------------------------------------------
 
@@ -256,14 +323,15 @@ def make_executor_node(
 ):
     """Return an async executor node with all DB tables captured via closure."""
 
-    async def executor_node(state: AutopilotState) -> dict:
-        iteration = state["iteration"]
-        plan = state.get("plan", [])
+    async def _run_single_step(step_idx: int, step: str, state: AutopilotState) -> tuple[dict, list[dict]]:
+        """Execute one plan step and return (result_entry, new_citations).
 
-        if iteration >= len(plan):
-            return {"iteration": iteration}
-
-        step = plan[iteration]
+        Never raises — every branch below is wrapped in the try/except at the
+        bottom, which captures the error into ``result_entry["error"]`` instead
+        of propagating. This is what makes it safe to run several of these
+        concurrently via asyncio.gather: one step's failure cannot cancel or
+        corrupt its siblings' results.
+        """
         tool = _select_tool_heuristic(
             step,
             has_db=state.get("has_db", True),
@@ -361,7 +429,7 @@ def make_executor_node(
 
                         artifact_id = await save_artifact(
                             session_id=session_id,
-                            turn_id=iteration + 1,
+                            turn_id=step_idx + 1,
                             artifact_type="sql_result",
                             name=step[:80],
                             result_dicts=preview,
@@ -583,7 +651,7 @@ def make_executor_node(
 
                                     artifact_id = await save_artifact(
                                         session_id=session_id,
-                                        turn_id=iteration + 1,
+                                        turn_id=step_idx + 1,
                                         artifact_type="chart",
                                         name=f"Chart: {step[:60]}",
                                         chart_b64=sandbox_result.charts[0],
@@ -742,7 +810,7 @@ def make_executor_node(
 
                                 artifact_id = await save_artifact(
                                     session_id=session_id,
-                                    turn_id=iteration + 1,
+                                    turn_id=step_idx + 1,
                                     artifact_type="chart",
                                     name=f"Chart: {step[:60]}",
                                     chart_b64=sandbox_result.charts[0],
@@ -755,15 +823,70 @@ def make_executor_node(
                             result_entry["result"] = "Code generation failed or insufficient data."
 
         except Exception as exc:
-            logger.warning("executor_node step %d ('%s') failed: %s", iteration, tool, exc)
+            logger.warning("executor_node step %d ('%s') failed: %s", step_idx, tool, exc)
             result_entry["error"] = str(exc)
 
+        return result_entry, new_citations
+
+    async def executor_node(state: AutopilotState) -> dict:
+        """Dispatch the next wave of independent plan steps concurrently.
+
+        A "wave" is a run of steps returned by ``_next_wave_indices`` — either
+        several fetch steps (sql_query/doc_search) with no dependency on each
+        other, or several python_analysis steps that only depend on waves
+        already reflected in ``state["steps_completed"]``. Steps within a wave
+        are dispatched together via asyncio.gather(return_exceptions=True):
+        each step already contains its own try/except (see _run_single_step),
+        so return_exceptions is a defense-in-depth backstop, not the primary
+        error path — it exists so that if a step coroutine somehow raises
+        before reaching its own try/except (e.g. a bug in argument setup), one
+        broken step still can't cancel its siblings or abort the whole wave.
+        A raised sibling is converted into a normal error result_entry rather
+        than surfaced to the graph.
+        """
+        plan = state.get("plan", [])
+        pointer = len(state.get("steps_completed", []))
+
+        if pointer >= len(plan):
+            # Nothing left to run — keep the wave counter as-is so
+            # _should_continue routes straight to the synthesizer.
+            return {"iteration": state.get("iteration", 0)}
+
+        wave_indices = _next_wave_indices(plan, pointer, state)
+
+        results = await asyncio.gather(
+            *(_run_single_step(idx, plan[idx], state) for idx in wave_indices),
+            return_exceptions=True,
+        )
+
+        step_results: list[dict] = []
+        all_new_citations: list[dict] = []
+        for idx, outcome in zip(wave_indices, results):
+            if isinstance(outcome, BaseException):
+                logger.warning(
+                    "executor_node: step %d raised outside its own try/except: %s",
+                    idx, outcome,
+                )
+                step_results.append({
+                    "step": plan[idx],
+                    "tool": "unknown",
+                    "result": "",
+                    "artifact_id": None,
+                    "chart_b64": None,
+                    "error": str(outcome),
+                })
+                continue
+            entry, citations = outcome
+            step_results.append(entry)
+            if citations:
+                all_new_citations.extend(citations)
+
         update: dict = {
-            "iteration": iteration + 1,
-            "steps_completed": [result_entry],
+            "iteration": state.get("iteration", 0) + 1,
+            "steps_completed": step_results,
         }
-        if new_citations:
-            update["citations"] = new_citations
+        if all_new_citations:
+            update["citations"] = all_new_citations
         return update
 
     return executor_node
@@ -838,11 +961,20 @@ async def _synthesizer_node(state: AutopilotState) -> dict:
 
 
 def _should_continue(state: AutopilotState) -> str:
-    """Conditional edge: loop executor until plan is exhausted or limits hit."""
+    """Conditional edge: loop executor until plan is exhausted or limits hit.
+
+    Plan exhaustion is measured by ``len(steps_completed)`` — the number of
+    individual steps actually finished — since a wave can complete more than
+    one step per executor invocation. ``iteration`` (wave count) is still
+    capped separately against MAX_ITERATIONS as a hard ceiling on how many
+    executor invocations (LLM/tool round-trips worth of latency) an
+    investigation can take, independent of how many steps each wave resolved.
+    """
     iteration = state.get("iteration", 0)
     plan = state.get("plan", [])
+    steps_done = len(state.get("steps_completed", []))
     timed_out = state.get("timed_out", False)
-    if timed_out or iteration >= len(plan) or iteration >= MAX_ITERATIONS:
+    if timed_out or steps_done >= len(plan) or iteration >= MAX_ITERATIONS:
         return "synthesize"
     return "execute"
 
