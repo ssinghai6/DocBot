@@ -1316,6 +1316,12 @@ async def run_csv_query_on_e2b(
     data_profile_str : optional serialized DataProfile for LLM context enrichment
     chat_history : optional list of {role, content} dicts for conversational memory
     """
+    # DOCBOT-1501: bind one run_id for every LLM call in this CSV-pipeline
+    # request (codegen + any corrective retry). Reuses an already-active
+    # run_id when called from a larger investigation, else mints a fresh one.
+    from api.utils.llm_provider import current_run_id, new_run_id, run_trace
+    run_trace(current_run_id() or new_run_id()).__enter__()
+
     persona_def = (
         (expert_personas or {})
         .get(persona, (expert_personas or {}).get("Generalist", {}))

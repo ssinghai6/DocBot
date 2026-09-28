@@ -40,15 +40,84 @@ Usage:
 
 from __future__ import annotations
 
+import contextvars
 import json
 import logging
 import os
 import time
-from typing import Iterator, List, Optional
+import uuid
+from contextlib import contextmanager
+from typing import Callable, Iterator, List, Optional
 
 from langchain_core.language_models import BaseChatModel
 
 logger = logging.getLogger(__name__)
+
+# ---------------------------------------------------------------------------
+# Run/trace ID propagation — DOCBOT-1501
+#
+# A ``run_id`` groups every LLM call belonging to one multi-step investigation
+# (Autopilot, Deep Research, hybrid chat) so they can be reconstructed after
+# the fact from the persisted call log. Propagated via a ContextVar rather
+# than threading an explicit parameter through every nested function call:
+# asyncio.Task/create_task (including LangGraph's internal node dispatch)
+# copies the current context at task-creation time, so setting this once at
+# the top of a pipeline entrypoint automatically covers every LLM call made
+# anywhere in that call tree — including concurrently-dispatched steps.
+# ---------------------------------------------------------------------------
+
+_current_run_id: "contextvars.ContextVar[Optional[str]]" = contextvars.ContextVar(
+    "llm_run_id", default=None
+)
+
+
+def new_run_id() -> str:
+    """Generate a fresh run/trace id."""
+    return uuid.uuid4().hex
+
+
+def current_run_id() -> Optional[str]:
+    """Return the run_id active in the current context, if any."""
+    return _current_run_id.get()
+
+
+@contextmanager
+def run_trace(run_id: Optional[str] = None):
+    """Bind ``run_id`` as the active trace for every LLM call made within
+    this context (and in any asyncio task spawned from within it).
+
+    Usage at the top of a pipeline entrypoint::
+
+        run_id = current_run_id() or new_run_id()
+        with run_trace(run_id):
+            ...  # every LLM call in here shares run_id
+
+    Re-entrant/idempotent by convention: nested pipeline functions should
+    check ``current_run_id()`` first and reuse it rather than minting a new
+    one, so a nested call (e.g. Autopilot's doc_search step calling
+    ``deep_retrieve``) stays under the parent investigation's trace.
+    """
+    token = _current_run_id.set(run_id or new_run_id())
+    try:
+        yield _current_run_id.get()
+    finally:
+        _current_run_id.reset(token)
+
+
+# Optional persistence hook, injected by api/index.py at startup via
+# set_trace_sink(). None in unit tests / any context where the DB-backed
+# call log isn't wired — _log_llm_call still emits its stdout JSON line.
+_trace_sink: Optional[Callable[[dict], None]] = None
+
+
+def set_trace_sink(sink: Optional[Callable[[dict], None]]) -> None:
+    """Register a callback invoked with the llm_call payload after each call.
+
+    The callback must be synchronous and non-blocking (e.g. a queue.put_nowait
+    wrapper) — it runs inline on whatever thread/loop made the LLM call.
+    """
+    global _trace_sink
+    _trace_sink = sink
 
 # ---------------------------------------------------------------------------
 # Provider configuration
@@ -102,6 +171,8 @@ def _log_llm_call(
     caller: Optional[str],
     input_tokens: Optional[int] = None,
     output_tokens: Optional[int] = None,
+    run_id: Optional[str] = None,
+    error_message: Optional[str] = None,
 ) -> None:
     """Emit one structured log line for an LLM call as a JSON string in the
     message body — not via logging's `extra=` mechanism, which silently
@@ -110,9 +181,16 @@ def _log_llm_call(
     stdout/Railway logs; only unit tests using `caplog`, which reads LogRecord
     attributes directly and bypasses formatting, could see them). Grep for
     '"event": "llm_call"' in Railway logs, or `jq` for a structured pull.
+
+    DOCBOT-1501: also resolves a run_id (explicit override → active
+    ContextVar → freshly minted) and hands the payload to the optional
+    persistence sink (see set_trace_sink) so multi-step investigations are
+    queryable after the fact, not just grep-able from stdout.
     """
+    resolved_run_id = run_id or current_run_id() or new_run_id()
     payload = {
         "event": "llm_call",
+        "run_id": resolved_run_id,
         "llm_provider": provider,
         "llm_model": model,
         "llm_latency_ms": round(latency_ms),
@@ -122,8 +200,15 @@ def _log_llm_call(
         "llm_success": success,
         "llm_fallback_triggered": fallback_triggered,
         "llm_caller": caller,
+        "error_message": error_message,
     }
     logger.info(json.dumps(payload), extra=payload)
+
+    if _trace_sink is not None:
+        try:
+            _trace_sink(payload)
+        except Exception as exc:  # tracing must never break the LLM call path
+            logger.debug("llm_provider: trace sink failed (%s)", exc)
 
 
 def log_external_llm_call(
@@ -136,6 +221,8 @@ def log_external_llm_call(
     input_tokens: Optional[int] = None,
     output_tokens: Optional[int] = None,
     fallback_triggered: bool = False,
+    run_id: Optional[str] = None,
+    error_message: Optional[str] = None,
 ) -> None:
     """Public logging hook for call sites that build their own LLM client
     instead of going through call_llm/chat_completion/chat_completion_stream
@@ -156,6 +243,8 @@ def log_external_llm_call(
         caller=caller,
         input_tokens=input_tokens,
         output_tokens=output_tokens,
+        run_id=run_id,
+        error_message=error_message,
     )
 
 
@@ -302,6 +391,7 @@ async def call_llm(
     groq_api_key: Optional[str] = None,
     gemini_api_key: Optional[str] = None,
     caller: Optional[str] = None,
+    run_id: Optional[str] = None,
 ) -> str:
     """Call the LLM with automatic fallback from Groq to Gemini.
 
@@ -341,7 +431,7 @@ async def call_llm(
         _log_llm_call(
             provider="groq", model=GROQ_MODEL, latency_ms=elapsed * 1000,
             success=True, fallback_triggered=False, caller=caller,
-            input_tokens=in_tok, output_tokens=out_tok,
+            input_tokens=in_tok, output_tokens=out_tok, run_id=run_id,
         )
         return response.content
     except ValueError:
@@ -372,7 +462,7 @@ async def call_llm(
     _log_llm_call(
         provider="gemini", model=GEMINI_MODEL, latency_ms=elapsed * 1000,
         success=True, fallback_triggered=True, caller=caller,
-        input_tokens=in_tok, output_tokens=out_tok,
+        input_tokens=in_tok, output_tokens=out_tok, run_id=run_id,
     )
     return response.content
 
@@ -475,6 +565,7 @@ def chat_completion(
     temperature: float = 0,
     max_tokens: int = 800,
     caller: Optional[str] = None,
+    run_id: Optional[str] = None,
 ) -> str:
     """Non-streaming chat completion with Groq → Gemini fallback.
 
@@ -484,6 +575,9 @@ def chat_completion(
     caller : str, optional
         Short tag identifying the calling code path (e.g. "sql_gen",
         "hybrid_synthesis") — carried into the structured llm_call log line.
+    run_id : str, optional
+        Explicit trace id override. Usually left unset — resolved from the
+        active run_trace() ContextVar instead (see llm_provider module docs).
     """
     # Try Groq first
     try:
@@ -507,6 +601,7 @@ def chat_completion(
             success=True, fallback_triggered=False, caller=caller,
             input_tokens=safe_int(getattr(usage, "prompt_tokens", None)),
             output_tokens=safe_int(getattr(usage, "completion_tokens", None)),
+            run_id=run_id,
         )
         return response.choices[0].message.content.strip()
     except Exception as exc:
@@ -522,7 +617,7 @@ def chat_completion(
     logger.info("chat_completion via Gemini (fallback) in %.2fs", elapsed)
     _log_llm_call(
         provider="gemini", model=GEMINI_MODEL, latency_ms=elapsed * 1000,
-        success=True, fallback_triggered=True, caller=caller,
+        success=True, fallback_triggered=True, caller=caller, run_id=run_id,
     )
     return result
 
@@ -534,6 +629,7 @@ def chat_completion_stream(
     temperature: float = 0.2,
     max_tokens: int = 800,
     caller: Optional[str] = None,
+    run_id: Optional[str] = None,
 ) -> Iterator[str]:
     """Streaming chat completion with Groq → Gemini fallback.
 
@@ -567,7 +663,7 @@ def chat_completion_stream(
                 yield delta.content
         _log_llm_call(
             provider="groq", model=model, latency_ms=(time.monotonic() - start) * 1000,
-            success=True, fallback_triggered=False, caller=caller,
+            success=True, fallback_triggered=False, caller=caller, run_id=run_id,
         )
         return  # success — don't fall through
     except Exception as exc:
@@ -582,11 +678,12 @@ def chat_completion_stream(
         yield from _gemini_completion_stream(messages, temperature, max_tokens)
         _log_llm_call(
             provider="gemini", model=GEMINI_MODEL, latency_ms=(time.monotonic() - start) * 1000,
-            success=True, fallback_triggered=True, caller=caller,
+            success=True, fallback_triggered=True, caller=caller, run_id=run_id,
         )
-    except Exception:
+    except Exception as exc:
         _log_llm_call(
             provider="gemini", model=GEMINI_MODEL, latency_ms=(time.monotonic() - start) * 1000,
-            success=False, fallback_triggered=True, caller=caller,
+            success=False, fallback_triggered=True, caller=caller, run_id=run_id,
+            error_message=f"{type(exc).__name__}: {str(exc)[:200]}",
         )
         raise

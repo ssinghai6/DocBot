@@ -892,6 +892,14 @@ async def run_sql_pipeline(
     """
     start_ms = int(time.time() * 1000)
 
+    # DOCBOT-1501: bind one run_id for every LLM call in this SQL-pipeline
+    # request (table selection, SQL gen, answer gen). Reuses an already-
+    # active run_id (e.g. when called from hybrid_chat/Autopilot) instead of
+    # minting a new one, so it stays grouped under the parent investigation.
+    from api.utils.llm_provider import current_run_id, new_run_id, run_trace
+    run_id = current_run_id() or new_run_id()
+    run_trace(run_id).__enter__()
+
     # ── Step 0: Conversational rephrase — resolve follow-ups ─────────────
     # If chat_history is provided, rephrase the question into a standalone
     # query so table selection and SQL generation get full context.

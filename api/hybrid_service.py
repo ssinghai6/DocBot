@@ -465,6 +465,16 @@ async def hybrid_chat(
     """
     has_db = connection_id is not None
 
+    # DOCBOT-1501: bind one run_id for every LLM call made in this hybrid
+    # turn (intent classification, SQL pipeline, RAG synthesis). Entered
+    # without a matching __exit__ — this generator's lifetime is scoped to
+    # one request's asyncio task, which ends when the generator is
+    # exhausted, so there's nothing to leak into. See run_trace() docs in
+    # api/utils/llm_provider.py.
+    from api.utils.llm_provider import current_run_id, new_run_id, run_trace
+    run_id = current_run_id() or new_run_id()
+    run_trace(run_id).__enter__()
+
     # Rephrase follow-up questions using chat history
     if chat_history:
         from api.db_service import _rephrase_with_history
@@ -662,6 +672,7 @@ async def hybrid_chat(
             temperature=0.2,
             max_tokens=2000,
             caller="hybrid_synthesis",
+            run_id=run_id,
         ):
             yield f"data: {json.dumps({'type': 'token', 'content': mask_pii(token)})}\n\n"
     except Exception as exc:
@@ -669,4 +680,4 @@ async def hybrid_chat(
         yield f"data: {json.dumps({'type': 'error', 'detail': 'Synthesis failed. Please try again.'})}\n\n"
         return
 
-    yield f"data: {json.dumps({'type': 'done', 'citations': doc_citations})}\n\n"
+    yield f"data: {json.dumps({'type': 'done', 'citations': doc_citations, 'run_id': run_id})}\n\n"

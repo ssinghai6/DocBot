@@ -282,6 +282,10 @@ marketplace_connections_table = register_connector_tables(metadata)
 # ── EDGAR filing cache ────────────────────────────────────────────────────────
 edgar_filings_cache_table = register_edgar_cache_table(metadata)
 
+# ── DOCBOT-1501: LLM call log (tracing/observability) ────────────────────────
+from api.llm_trace_service import register_llm_calls_table
+llm_calls_table = register_llm_calls_table(metadata)
+
 # ── EPIC-06: RBAC dependencies (DOCBOT-603) ──────────────────────────────────
 # Imported here so Depends() objects can be declared at module level.
 # require_role() checks is_auth_enforcement_active() at request time — safe to import early.
@@ -403,6 +407,13 @@ async def lifespan(app: FastAPI):
     from api.connector_store import wire_connector_store, wire_edgar_cache, load_all_active_connectors
     wire_connector_store(marketplace_connections_table, async_session_factory)
     wire_edgar_cache(edgar_filings_cache_table)
+    # DOCBOT-1501: wire LLM call log persistence — background writer drains a
+    # thread-safe queue that llm_provider.py's trace sink feeds synchronously.
+    from api.llm_trace_service import wire_llm_trace_store, start_writer, enqueue_call
+    from api.utils.llm_provider import set_trace_sink
+    wire_llm_trace_store(llm_calls_table, async_session_factory)
+    set_trace_sink(enqueue_call)
+    start_writer()
     # Clean up any expired file uploads from previous runs
     try:
         from api.file_upload_service import cleanup_expired_uploads
@@ -469,6 +480,9 @@ async def lifespan(app: FastAPI):
     # DOCBOT-704: shut down background sync scheduler
     if scheduler.running:
         scheduler.shutdown(wait=False)
+    # DOCBOT-1501: drain and stop the LLM call log writer before closing the pool
+    from api.llm_trace_service import stop_writer
+    await stop_writer()
     await engine.dispose()
 
 app.router.lifespan_context = lifespan
@@ -2661,16 +2675,21 @@ async def update_user_role(
 # ---------------------------------------------------------------------------
 
 @app.get("/admin/metrics")
-async def get_admin_metrics(_user=_rbac_admin):
+async def get_admin_metrics(llm_days: int = 7, _user=_rbac_admin):
     """Return aggregate platform metrics. Requires admin role.
 
     Returns total sessions, query counts by type, document uploads,
-    active DB connections, average response time, and uptime.
+    active DB connections, average response time, uptime, and (DOCBOT-1502)
+    an `llm_metrics` block with per-day / per-caller LLM cost, token spend,
+    and P50/P95 latency sourced from DOCBOT-1501's persisted call log.
+
+    `llm_days` (query param, default 7): size of the LLM metrics window.
     """
     from api.metrics_service import get_platform_metrics
 
     metrics = await get_platform_metrics(
         async_session_factory=async_session_factory,
+        llm_days=llm_days,
     )
     return metrics
 
