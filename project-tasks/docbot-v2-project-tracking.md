@@ -1570,11 +1570,15 @@ As a developer, I want a time-boxed, code-free evaluation of whether Autopilot's
 **Ground truth**: `autopilot_service.py:982-995` — `_build_graph()` is a 3-node graph (`planner → executor → synthesizer`), `executor` dispatches tools via `_select_tool_heuristic` (line 197) against one shared `AutopilotState`. No agent-to-agent handoff, no specialized persistent sub-agents, no agent memory beyond conversation history. This is single-agent tool orchestration, not multi-agent — confirmed by direct read.
 
 **Acceptance Criteria**
-- [ ] Decision doc mirroring the PageIndex evaluate-and-reject precedent (EPIC-10, 2026-03-25)
-- [ ] Explicit recommendation: keep current architecture, OR adopt specialist sub-agent handoff pattern (e.g. separate SQL-agent / doc-agent contexts passing structured findings)
-- [ ] If "multi-agent" is used in marketing/landing copy, reconcile claim with actual architecture (reframe copy or scope real multi-agent work)
+- [x] Decision doc mirroring the PageIndex evaluate-and-reject precedent (EPIC-10, 2026-03-25)
+- [x] Explicit recommendation: keep current architecture, OR adopt specialist sub-agent handoff pattern (e.g. separate SQL-agent / doc-agent contexts passing structured findings)
+- [x] If "multi-agent" is used in marketing/landing copy, reconcile claim with actual architecture (reframe copy or scope real multi-agent work)
 
-**Status**: 🔲 Planned
+**Status**: ✅ Done (branch `feature/DOCBOT-1505-multi-agent-eval-spike`, not yet merged) — **no production code changed**, decision doc only, per this ticket's scope.
+
+> **Multi-Agent Architecture Decision (2026-09-29):** Full analysis in `project-tasks/docbot-multi-agent-architecture-decision.md`. Decision: **keep the current single-agent LangGraph tool-orchestration architecture** (planner → executor → synthesizer over one shared `AutopilotState`, with per-tool correction loops). Do not adopt agent-to-agent handoff. Key finding: every capability a hypothetical specialist sub-agent would add (SQL-specific retry, codegen-specific retry, doc-search refinement) **already exists** as a targeted per-tool correction loop (`db_service`'s schema-drift retry, `sandbox_service`'s corrective retry, `deep_research_service`'s gap-fill loop) — multi-agent handoff would mostly relabel existing behavior behind new indirection (agent identity, handoff protocol, coordination logic) without adding capability, while costing more LLM round-trips (cost + latency, both explicitly tracked elsewhere in this epic) and adding a new failure class (handoff loops/deadlocks) that's expensive for a solo developer to own. Marketing/landing copy checked — no "multi-agent" claims exist; current copy ("multi-step investigation agent," "Agentic Orchestration") is already accurate, no changes needed.
+>
+> **Revisit multi-agent when:** investigations regularly need >5–7 steps with genuinely *interdependent* (not just parallel-independent, which DOCBOT-1406 already handles) sub-goals; a connector needs autonomous multi-round fetch-and-evaluate behavior the heuristic tool router can't express; concrete evidence (not hypothetical) shows shared-state context bloat degrading synthesis quality; or cost/latency headroom exists — DOCBOT-1506 (response cache) and DOCBOT-1508 (per-session cost ceiling) should land first so a more expensive pattern doesn't blow up spend before there's a guardrail.
 
 ---
 
