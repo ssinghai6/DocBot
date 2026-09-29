@@ -455,3 +455,135 @@ class TestModelConstants:
     def test_groq_model_has_a_cost_entry(self):
         from api.utils.llm_provider import GROQ_MODEL, _COST_PER_1K_TOKENS
         assert GROQ_MODEL in _COST_PER_1K_TOKENS
+
+
+# ---------------------------------------------------------------------------
+# Run/trace ID propagation — DOCBOT-1501
+# ---------------------------------------------------------------------------
+
+
+class TestRunTrace:
+    def test_new_run_id_generates_distinct_ids(self):
+        from api.utils.llm_provider import new_run_id
+        a, b = new_run_id(), new_run_id()
+        assert a != b
+        assert isinstance(a, str) and len(a) > 0
+
+    def test_current_run_id_none_outside_context(self):
+        from api.utils.llm_provider import current_run_id
+        assert current_run_id() is None
+
+    def test_run_trace_sets_and_resets(self):
+        from api.utils.llm_provider import current_run_id, run_trace
+
+        assert current_run_id() is None
+        with run_trace("abc123") as bound:
+            assert bound == "abc123"
+            assert current_run_id() == "abc123"
+        assert current_run_id() is None
+
+    def test_run_trace_generates_id_when_none_given(self):
+        from api.utils.llm_provider import current_run_id, run_trace
+
+        with run_trace() as bound:
+            assert bound is not None
+            assert current_run_id() == bound
+
+    def test_run_trace_nesting_restores_outer_id(self):
+        from api.utils.llm_provider import current_run_id, run_trace
+
+        with run_trace("outer"):
+            assert current_run_id() == "outer"
+            with run_trace("inner"):
+                assert current_run_id() == "inner"
+            assert current_run_id() == "outer"
+        assert current_run_id() is None
+
+    def test_log_llm_call_resolves_run_id_from_context(self, caplog):
+        import logging
+        from api.utils.llm_provider import _log_llm_call, run_trace
+
+        with caplog.at_level(logging.INFO, logger="api.utils.llm_provider"):
+            with run_trace("ctx-run-id"):
+                _log_llm_call(
+                    provider="groq", model="openai/gpt-oss-20b", latency_ms=1.0,
+                    success=True, fallback_triggered=False, caller="test_caller",
+                )
+
+        records = [r for r in caplog.records if getattr(r, "event", None) == "llm_call"]
+        assert len(records) == 1
+        assert records[0].run_id == "ctx-run-id"
+
+    def test_log_llm_call_explicit_run_id_overrides_context(self, caplog):
+        import logging
+        from api.utils.llm_provider import _log_llm_call, run_trace
+
+        with caplog.at_level(logging.INFO, logger="api.utils.llm_provider"):
+            with run_trace("ctx-run-id"):
+                _log_llm_call(
+                    provider="groq", model="openai/gpt-oss-20b", latency_ms=1.0,
+                    success=True, fallback_triggered=False, caller="test_caller",
+                    run_id="explicit-override",
+                )
+
+        records = [r for r in caplog.records if getattr(r, "event", None) == "llm_call"]
+        assert records[0].run_id == "explicit-override"
+
+    def test_log_llm_call_mints_run_id_with_no_context(self, caplog):
+        import logging
+        from api.utils.llm_provider import _log_llm_call
+
+        with caplog.at_level(logging.INFO, logger="api.utils.llm_provider"):
+            _log_llm_call(
+                provider="groq", model="openai/gpt-oss-20b", latency_ms=1.0,
+                success=True, fallback_triggered=False, caller="test_caller",
+            )
+
+        records = [r for r in caplog.records if getattr(r, "event", None) == "llm_call"]
+        assert records[0].run_id  # non-empty, auto-generated
+
+
+class TestTraceSink:
+    def test_sink_invoked_with_payload(self):
+        from api.utils.llm_provider import _log_llm_call, set_trace_sink
+
+        received = []
+        set_trace_sink(lambda payload: received.append(payload))
+        try:
+            _log_llm_call(
+                provider="groq", model="openai/gpt-oss-20b", latency_ms=1.0,
+                success=True, fallback_triggered=False, caller="test_caller",
+                run_id="sink-test-run",
+            )
+        finally:
+            set_trace_sink(None)
+
+        assert len(received) == 1
+        assert received[0]["run_id"] == "sink-test-run"
+        assert received[0]["llm_caller"] == "test_caller"
+
+    def test_sink_exception_does_not_propagate(self):
+        from api.utils.llm_provider import _log_llm_call, set_trace_sink
+
+        def _boom(_payload):
+            raise RuntimeError("sink is broken")
+
+        set_trace_sink(_boom)
+        try:
+            # Must not raise even though the sink always fails.
+            _log_llm_call(
+                provider="groq", model="openai/gpt-oss-20b", latency_ms=1.0,
+                success=True, fallback_triggered=False, caller="test_caller",
+            )
+        finally:
+            set_trace_sink(None)
+
+    def test_no_sink_is_a_noop(self):
+        from api.utils.llm_provider import _log_llm_call, set_trace_sink
+
+        set_trace_sink(None)
+        # Must not raise with no sink registered.
+        _log_llm_call(
+            provider="groq", model="openai/gpt-oss-20b", latency_ms=1.0,
+            success=True, fallback_triggered=False, caller="test_caller",
+        )

@@ -892,267 +892,278 @@ async def run_sql_pipeline(
     """
     start_ms = int(time.time() * 1000)
 
-    # ── Step 0: Conversational rephrase — resolve follow-ups ─────────────
-    # If chat_history is provided, rephrase the question into a standalone
-    # query so table selection and SQL generation get full context.
-    if chat_history:
-        question = await _rephrase_with_history(question, chat_history)
-
-    # ── CSV fast-path: bypass SQL pipeline, run pandas on E2B ────────────
-    async with async_session_factory() as _sess:
-        _conn_result = await _sess.execute(
-            select(db_connections_table).where(db_connections_table.c.id == connection_id)
-        )
-        _conn_row = _conn_result.fetchone()
-
-    if not _conn_row:
-        raise ConnectionNotFoundError(f"Connection '{connection_id}' not found.")
-
-    if _conn_row.dialect == "csv":
-        _creds = decrypt_credentials(_conn_row.credentials_blob)
-        # Build data profile string from credentials blob (stored during upload)
-        _data_profile = _creds.get("data_profile")
-        _data_profile_str: Optional[str] = None
-        if _data_profile and isinstance(_data_profile, dict):
-            _data_profile_str = json.dumps(_data_profile, indent=2, default=str)
-
-        from api.sandbox_service import run_csv_query_on_e2b
-        async for _chunk in run_csv_query_on_e2b(
-            csv_content_b64=_creds.get("csv_content", ""),
-            question=question,
-            persona=persona,
-            table_name=_creds.get("table_name", "data"),
-            column_names=_creds.get("columns", []),
-            chart_type=chart_type,
-            expert_personas=expert_personas,
-            sections=_creds.get("sections"),
-            section_manifest=_creds.get("section_manifest"),
-            chat_history=chat_history,
-            data_profile_str=_data_profile_str,
-        ):
-            yield _chunk
-        return
-
-    # ── Step 1: Schema retrieval ──────────────────────────────────────────
-    schema = await get_schema(
-        connection_id, db_connections_table, schema_cache_table, async_session_factory
-    )
-
-    # DOCBOT-503: Background upsert of table embeddings (non-blocking)
-    if table_embeddings_table is not None:
-        import asyncio as _asyncio
-        embeddings_model_for_tables = _get_embeddings_model()
-        try:
-            from api.utils.table_selector import upsert_table_embeddings
-            _asyncio.ensure_future(upsert_table_embeddings(
-                connection_id=connection_id,
-                schema=schema,
-                embeddings_model=embeddings_model_for_tables,
-                table_embeddings_table=table_embeddings_table,
-                async_session_factory=async_session_factory,
-            ))
-        except Exception:
-            pass  # never block the pipeline
-
-    # ── Step 2: Table selector — semantic first, LLM fallback ────────────
-    selected_tables: List[str] = []
-
-    # DOCBOT-503: Try semantic similarity against stored table embeddings first
-    if table_embeddings_table is not None:
-        try:
-            from api.utils.table_selector import select_relevant_tables
-            embeddings_model_for_q = _get_embeddings_model()
-            selected_tables = await select_relevant_tables(
-                question=question,
-                connection_id=connection_id,
-                embeddings_model=embeddings_model_for_q,
-                table_embeddings_table=table_embeddings_table,
-                async_session_factory=async_session_factory,
-                top_k=5,
-            )
-        except Exception as _exc:
-            logger.warning("Semantic table selection failed, using LLM: %s", _exc)
-
-    # Fall back to LLM table selector when semantic path returns nothing
-    if not selected_tables:
-        selected_tables = await _select_relevant_tables(question, schema)
-
-    schema_subset = [t for t in schema if t["name"] in set(selected_tables)]
-    if not schema_subset:
-        schema_subset = schema[:10]
-
-    # ── Step 3: Few-shot retrieval ────────────────────────────────────────
-    embeddings_model = _get_embeddings_model()
-    q_embedding: List[float] = await _get_embedding(question, embeddings_model)
-    few_shot_examples = await _retrieve_few_shot(
-        connection_id, q_embedding,
-        query_history_table, query_embeddings_table, async_session_factory
-    )
-
-    # ── Step 4: SQL generation (LLM call #2) ─────────────────────────────
-    raw_sql = await _generate_sql(question, schema_subset, few_shot_examples)
-
-    # ── Step 5: SQL validation (deterministic, no LLM) ───────────────────
-    async with async_session_factory() as session:
-        conn_result = await session.execute(
-            select(db_connections_table).where(db_connections_table.c.id == connection_id)
-        )
-        conn_row = conn_result.fetchone()
-
-    if not conn_row:
-        raise ConnectionNotFoundError(f"Connection '{connection_id}' not found.")
-
-    dialect = conn_row.dialect
-    validated_sql = validate_and_sanitize_sql(raw_sql, dialect=dialect)
-
-    # ── Step 6: Execute (with schema drift retry) ──────────────────────
-    creds = decrypt_credentials(conn_row.credentials_blob)
-    import asyncio as _asyncio
-    sync_url, entra_connect_args = await _asyncio.get_running_loop().run_in_executor(
-        None, _resolve_connection, creds
-    )
+    # DOCBOT-1501: bind one run_id for every LLM call in this SQL-pipeline
+    # request (table selection, SQL gen, answer gen). Reuses an already-
+    # active run_id (e.g. when called from hybrid_chat/Autopilot) instead of
+    # minting a new one, so it stays grouped under the parent investigation.
+    from api.utils.llm_provider import current_run_id, new_run_id, run_trace
+    run_id = current_run_id() or new_run_id()
+    _trace_cm = run_trace(run_id)
+    _trace_cm.__enter__()
     try:
-        rows, column_names = await _execute_query(validated_sql, sync_url, dialect, entra_connect_args)
-    except Exception as exec_err:
-        err_msg = str(exec_err).lower()
-        is_drift = any(k in err_msg for k in (
-            "does not exist", "no such table", "no such column",
-            "unknown table", "unknown column", "relation",
-        ))
-        if not is_drift:
-            raise
+        # ── Step 0: Conversational rephrase — resolve follow-ups ─────────────
+        # If chat_history is provided, rephrase the question into a standalone
+        # query so table selection and SQL generation get full context.
+        if chat_history:
+            question = await _rephrase_with_history(question, chat_history)
 
-        # Schema drift detected — invalidate cache, re-introspect, regenerate SQL, retry once
-        logger.warning("Schema drift detected, refreshing schema and retrying: %s", exec_err)
-        async with async_session_factory() as session:
-            async with session.begin():
-                await session.execute(
-                    delete(schema_cache_table).where(
-                        schema_cache_table.c.connection_id == connection_id
-                    )
-                )
+        # ── CSV fast-path: bypass SQL pipeline, run pandas on E2B ────────────
+        async with async_session_factory() as _sess:
+            _conn_result = await _sess.execute(
+                select(db_connections_table).where(db_connections_table.c.id == connection_id)
+            )
+            _conn_row = _conn_result.fetchone()
+
+        if not _conn_row:
+            raise ConnectionNotFoundError(f"Connection '{connection_id}' not found.")
+
+        if _conn_row.dialect == "csv":
+            _creds = decrypt_credentials(_conn_row.credentials_blob)
+            # Build data profile string from credentials blob (stored during upload)
+            _data_profile = _creds.get("data_profile")
+            _data_profile_str: Optional[str] = None
+            if _data_profile and isinstance(_data_profile, dict):
+                _data_profile_str = json.dumps(_data_profile, indent=2, default=str)
+
+            from api.sandbox_service import run_csv_query_on_e2b
+            async for _chunk in run_csv_query_on_e2b(
+                csv_content_b64=_creds.get("csv_content", ""),
+                question=question,
+                persona=persona,
+                table_name=_creds.get("table_name", "data"),
+                column_names=_creds.get("columns", []),
+                chart_type=chart_type,
+                expert_personas=expert_personas,
+                sections=_creds.get("sections"),
+                section_manifest=_creds.get("section_manifest"),
+                chat_history=chat_history,
+                data_profile_str=_data_profile_str,
+            ):
+                yield _chunk
+            return
+
+        # ── Step 1: Schema retrieval ──────────────────────────────────────────
         schema = await get_schema(
             connection_id, db_connections_table, schema_cache_table, async_session_factory
         )
+
+        # DOCBOT-503: Background upsert of table embeddings (non-blocking)
+        if table_embeddings_table is not None:
+            import asyncio as _asyncio
+            embeddings_model_for_tables = _get_embeddings_model()
+            try:
+                from api.utils.table_selector import upsert_table_embeddings
+                _asyncio.ensure_future(upsert_table_embeddings(
+                    connection_id=connection_id,
+                    schema=schema,
+                    embeddings_model=embeddings_model_for_tables,
+                    table_embeddings_table=table_embeddings_table,
+                    async_session_factory=async_session_factory,
+                ))
+            except Exception:
+                pass  # never block the pipeline
+
+        # ── Step 2: Table selector — semantic first, LLM fallback ────────────
+        selected_tables: List[str] = []
+
+        # DOCBOT-503: Try semantic similarity against stored table embeddings first
+        if table_embeddings_table is not None:
+            try:
+                from api.utils.table_selector import select_relevant_tables
+                embeddings_model_for_q = _get_embeddings_model()
+                selected_tables = await select_relevant_tables(
+                    question=question,
+                    connection_id=connection_id,
+                    embeddings_model=embeddings_model_for_q,
+                    table_embeddings_table=table_embeddings_table,
+                    async_session_factory=async_session_factory,
+                    top_k=5,
+                )
+            except Exception as _exc:
+                logger.warning("Semantic table selection failed, using LLM: %s", _exc)
+
+        # Fall back to LLM table selector when semantic path returns nothing
+        if not selected_tables:
+            selected_tables = await _select_relevant_tables(question, schema)
+
         schema_subset = [t for t in schema if t["name"] in set(selected_tables)]
         if not schema_subset:
             schema_subset = schema[:10]
+
+        # ── Step 3: Few-shot retrieval ────────────────────────────────────────
+        embeddings_model = _get_embeddings_model()
+        q_embedding: List[float] = await _get_embedding(question, embeddings_model)
+        few_shot_examples = await _retrieve_few_shot(
+            connection_id, q_embedding,
+            query_history_table, query_embeddings_table, async_session_factory
+        )
+
+        # ── Step 4: SQL generation (LLM call #2) ─────────────────────────────
         raw_sql = await _generate_sql(question, schema_subset, few_shot_examples)
+
+        # ── Step 5: SQL validation (deterministic, no LLM) ───────────────────
+        async with async_session_factory() as session:
+            conn_result = await session.execute(
+                select(db_connections_table).where(db_connections_table.c.id == connection_id)
+            )
+            conn_row = conn_result.fetchone()
+
+        if not conn_row:
+            raise ConnectionNotFoundError(f"Connection '{connection_id}' not found.")
+
+        dialect = conn_row.dialect
         validated_sql = validate_and_sanitize_sql(raw_sql, dialect=dialect)
-        rows, column_names = await _execute_query(validated_sql, sync_url, dialect, entra_connect_args)
 
-    execution_time_ms = int(time.time() * 1000) - start_ms
-
-    result_dicts = [dict(zip(column_names, row)) for row in rows]
-
-    # ── Step 6.1: PII masking (DOCBOT-604) ───────────────────────────────
-    if conn_row.pii_masking_enabled:
-        from api.utils.pii_masking import mask_rows, detect_pii_summary
-        pii_found = detect_pii_summary(result_dicts)
-        if any(pii_found.values()):
-            logger.info("PII detected and masked — %s", pii_found)
-        result_dicts = mask_rows(result_dicts)
-
-    # ── Step 6.5: Python code generation + E2B sandbox (DOCBOT-301/302) ──
-    # Runs for any non-empty result set; failure never blocks the main pipeline.
-    # Small result sets (1–4 rows) are valid for bar/pie charts — the previous
-    # >= 5 gate killed legitimate small-result visualisations.
-    if len(rows) >= 1:
+        # ── Step 6: Execute (with schema drift retry) ──────────────────────
+        creds = decrypt_credentials(conn_row.credentials_blob)
+        import asyncio as _asyncio
+        sync_url, entra_connect_args = await _asyncio.get_running_loop().run_in_executor(
+            None, _resolve_connection, creds
+        )
         try:
-            from api.sandbox_service import generate_analysis_code, run_python as run_sandbox
+            rows, column_names = await _execute_query(validated_sql, sync_url, dialect, entra_connect_args)
+        except Exception as exec_err:
+            err_msg = str(exec_err).lower()
+            is_drift = any(k in err_msg for k in (
+                "does not exist", "no such table", "no such column",
+                "unknown table", "unknown column", "relation",
+            ))
+            if not is_drift:
+                raise
 
-            analysis_persona = (
-                expert_personas.get(persona, expert_personas.get("Generalist", {}))
-                .get("persona_def", "You are a helpful data analyst.")
-            )
-            analysis_code = await generate_analysis_code(
-                result_dicts=result_dicts[:50],
-                question=question,
-                persona_def=analysis_persona,
-                chart_type=chart_type,
-            )
-            if analysis_code:
-                yield f"data: {_json_dumps({'type': 'analysis_code', 'code': analysis_code})}\n\n"
-                sandbox_result = await run_sandbox(analysis_code)
-                for idx, chart_b64 in enumerate(sandbox_result.charts):
-                    meta = (
-                        sandbox_result.chart_metadata[idx]
-                        if idx < len(sandbox_result.chart_metadata)
-                        else None
+            # Schema drift detected — invalidate cache, re-introspect, regenerate SQL, retry once
+            logger.warning("Schema drift detected, refreshing schema and retrying: %s", exec_err)
+            async with async_session_factory() as session:
+                async with session.begin():
+                    await session.execute(
+                        delete(schema_cache_table).where(
+                            schema_cache_table.c.connection_id == connection_id
+                        )
                     )
-                    yield f"data: {_json_dumps({'type': 'chart', 'base64': chart_b64, 'index': idx, 'metadata': meta.model_dump() if meta else None})}\n\n"
+            schema = await get_schema(
+                connection_id, db_connections_table, schema_cache_table, async_session_factory
+            )
+            schema_subset = [t for t in schema if t["name"] in set(selected_tables)]
+            if not schema_subset:
+                schema_subset = schema[:10]
+            raw_sql = await _generate_sql(question, schema_subset, few_shot_examples)
+            validated_sql = validate_and_sanitize_sql(raw_sql, dialect=dialect)
+            rows, column_names = await _execute_query(validated_sql, sync_url, dialect, entra_connect_args)
 
-                # DOCBOT-501: Persist artifact (DataFrame + first chart) for session memory
-                if session_id and session_artifacts_table is not None:
-                    from api.artifact_service import save_artifact
-                    # Determine turn_id from row count in query_history for this connection
-                    turn_id = 1
-                    try:
-                        async with async_session_factory() as _s:
-                            _r = await _s.execute(
-                                select(query_history_table)
-                                .where(query_history_table.c.connection_id == connection_id)
-                                .order_by(query_history_table.c.created_at.desc())
-                                .limit(1)
-                            )
-                            latest = _r.fetchone()
-                            if latest:
-                                # Use rowid-based count proxy: just count rows for this connection
-                                cnt_r = await _s.execute(
-                                    select(query_history_table.c.id)
+        execution_time_ms = int(time.time() * 1000) - start_ms
+
+        result_dicts = [dict(zip(column_names, row)) for row in rows]
+
+        # ── Step 6.1: PII masking (DOCBOT-604) ───────────────────────────────
+        if conn_row.pii_masking_enabled:
+            from api.utils.pii_masking import mask_rows, detect_pii_summary
+            pii_found = detect_pii_summary(result_dicts)
+            if any(pii_found.values()):
+                logger.info("PII detected and masked — %s", pii_found)
+            result_dicts = mask_rows(result_dicts)
+
+        # ── Step 6.5: Python code generation + E2B sandbox (DOCBOT-301/302) ──
+        # Runs for any non-empty result set; failure never blocks the main pipeline.
+        # Small result sets (1–4 rows) are valid for bar/pie charts — the previous
+        # >= 5 gate killed legitimate small-result visualisations.
+        if len(rows) >= 1:
+            try:
+                from api.sandbox_service import generate_analysis_code, run_python as run_sandbox
+
+                analysis_persona = (
+                    expert_personas.get(persona, expert_personas.get("Generalist", {}))
+                    .get("persona_def", "You are a helpful data analyst.")
+                )
+                analysis_code = await generate_analysis_code(
+                    result_dicts=result_dicts[:50],
+                    question=question,
+                    persona_def=analysis_persona,
+                    chart_type=chart_type,
+                )
+                if analysis_code:
+                    yield f"data: {_json_dumps({'type': 'analysis_code', 'code': analysis_code})}\n\n"
+                    sandbox_result = await run_sandbox(analysis_code)
+                    for idx, chart_b64 in enumerate(sandbox_result.charts):
+                        meta = (
+                            sandbox_result.chart_metadata[idx]
+                            if idx < len(sandbox_result.chart_metadata)
+                            else None
+                        )
+                        yield f"data: {_json_dumps({'type': 'chart', 'base64': chart_b64, 'index': idx, 'metadata': meta.model_dump() if meta else None})}\n\n"
+
+                    # DOCBOT-501: Persist artifact (DataFrame + first chart) for session memory
+                    if session_id and session_artifacts_table is not None:
+                        from api.artifact_service import save_artifact
+                        # Determine turn_id from row count in query_history for this connection
+                        turn_id = 1
+                        try:
+                            async with async_session_factory() as _s:
+                                _r = await _s.execute(
+                                    select(query_history_table)
                                     .where(query_history_table.c.connection_id == connection_id)
+                                    .order_by(query_history_table.c.created_at.desc())
+                                    .limit(1)
                                 )
-                                turn_id = len(cnt_r.fetchall())
-                    except Exception:
-                        pass
+                                latest = _r.fetchone()
+                                if latest:
+                                    # Use rowid-based count proxy: just count rows for this connection
+                                    cnt_r = await _s.execute(
+                                        select(query_history_table.c.id)
+                                        .where(query_history_table.c.connection_id == connection_id)
+                                    )
+                                    turn_id = len(cnt_r.fetchall())
+                        except Exception:
+                            pass
 
-                    first_chart = sandbox_result.charts[0] if sandbox_result.charts else None
-                    await save_artifact(
-                        session_id=session_id,
-                        turn_id=turn_id,
-                        artifact_type="sql_result",
-                        name=question[:100],
-                        result_dicts=result_dicts,
-                        chart_b64=first_chart,
-                        session_artifacts_table=session_artifacts_table,
-                        async_session_factory=async_session_factory,
-                    )
-        except Exception as exc:
-            logger.warning("Code gen/sandbox step skipped: %s", exc)
+                        first_chart = sandbox_result.charts[0] if sandbox_result.charts else None
+                        await save_artifact(
+                            session_id=session_id,
+                            turn_id=turn_id,
+                            artifact_type="sql_result",
+                            name=question[:100],
+                            result_dicts=result_dicts,
+                            chart_b64=first_chart,
+                            session_artifacts_table=session_artifacts_table,
+                            async_session_factory=async_session_factory,
+                        )
+            except Exception as exc:
+                logger.warning("Code gen/sandbox step skipped: %s", exc)
 
-    # ── Step 7: Answer generation (LLM call #3, streaming) ───────────────
-    persona_def = (
-        expert_personas.get(persona, expert_personas.get("Generalist", {}))
-        .get("persona_def", "You are a helpful data analyst.")
-    )
-    explanation = _build_explanation(validated_sql, schema_subset)
+        # ── Step 7: Answer generation (LLM call #3, streaming) ───────────────
+        persona_def = (
+            expert_personas.get(persona, expert_personas.get("Generalist", {}))
+            .get("persona_def", "You are a helpful data analyst.")
+        )
+        explanation = _build_explanation(validated_sql, schema_subset)
 
-    # First chunk: metadata — mask PII in result preview
-    from api.utils.pii_masking import mask_rows
-    meta_chunk = {
-        "type": "metadata",
-        "sql_query": validated_sql,
-        "explanation": explanation,
-        "result_preview": mask_rows(result_dicts[:10]),
-        "row_count": len(rows),
-        "execution_time_ms": execution_time_ms,
-        "sources": [t["name"] for t in schema_subset],
-    }
-    yield f"data: {_json_dumps(meta_chunk)}\n\n"
+        # First chunk: metadata — mask PII in result preview
+        from api.utils.pii_masking import mask_rows
+        meta_chunk = {
+            "type": "metadata",
+            "sql_query": validated_sql,
+            "explanation": explanation,
+            "result_preview": mask_rows(result_dicts[:10]),
+            "row_count": len(rows),
+            "execution_time_ms": execution_time_ms,
+            "sources": [t["name"] for t in schema_subset],
+        }
+        yield f"data: {_json_dumps(meta_chunk)}\n\n"
 
-    # Persist query + embedding (non-blocking; failure is only a warning)
-    query_id = str(uuid.uuid4())
-    await _store_query_history(
-        query_id, connection_id, question, validated_sql,
-        f"{len(rows)} rows", q_embedding,
-        query_history_table, query_embeddings_table, async_session_factory
-    )
+        # Persist query + embedding (non-blocking; failure is only a warning)
+        query_id = str(uuid.uuid4())
+        await _store_query_history(
+            query_id, connection_id, question, validated_sql,
+            f"{len(rows)} rows", q_embedding,
+            query_history_table, query_embeddings_table, async_session_factory
+        )
 
-    # Stream answer tokens
-    async for token in _stream_answer(question, validated_sql, result_dicts, persona_def):
-        yield f"data: {_json_dumps({'type': 'token', 'content': token})}\n\n"
+        # Stream answer tokens
+        async for token in _stream_answer(question, validated_sql, result_dicts, persona_def):
+            yield f"data: {_json_dumps({'type': 'token', 'content': token})}\n\n"
 
-    yield f"data: {_json_dumps({'type': 'done'})}\n\n"
+        yield f"data: {_json_dumps({'type': 'done'})}\n\n"
+    finally:
+        _trace_cm.__exit__(None, None, None)
 
 
 # ---------------------------------------------------------------------------

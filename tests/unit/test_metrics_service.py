@@ -196,3 +196,152 @@ async def test_get_platform_metrics_elapsed_ms_key():
     metrics = await get_platform_metrics(async_session_factory=factory)
 
     assert metrics["avg_response_time_ms"] == 200.0
+
+
+@pytest.mark.asyncio
+async def test_get_platform_metrics_includes_llm_metrics_block():
+    """Metrics response always carries an llm_metrics key (DOCBOT-1502),
+    even when the trace store has no data — degrades gracefully instead
+    of omitting the field."""
+    from api.metrics_service import get_platform_metrics
+
+    results = [
+        MockResult(scalar_value=0),
+        MockResult(scalar_value=0),
+        MockResult(rows=[]),
+        MockResult(scalar_value=0),
+        MockResult(scalar_value=0),
+        MockResult(rows=[]),
+    ]
+    factory = _make_session_factory(results)
+
+    metrics = await get_platform_metrics(async_session_factory=factory)
+
+    assert "llm_metrics" in metrics
+    assert metrics["llm_metrics"]["total_calls"] == 0
+    assert metrics["llm_metrics"]["total_cost_usd"] == 0.0
+
+
+@pytest.mark.asyncio
+async def test_get_platform_metrics_llm_failure_degrades_gracefully(monkeypatch):
+    """If get_llm_cost_metrics blows up, the whole /admin/metrics response
+    must not fail — llm_metrics degrades to None instead."""
+    import api.metrics_service as metrics_module
+
+    async def _boom(days=7):
+        raise RuntimeError("trace store unavailable")
+
+    monkeypatch.setattr(metrics_module, "get_llm_cost_metrics", _boom)
+
+    results = [
+        MockResult(scalar_value=1),
+        MockResult(scalar_value=0),
+        MockResult(rows=[]),
+        MockResult(scalar_value=0),
+        MockResult(scalar_value=0),
+        MockResult(rows=[]),
+    ]
+    factory = _make_session_factory(results)
+
+    metrics = await metrics_module.get_platform_metrics(async_session_factory=factory)
+
+    assert metrics["total_sessions"] == 1
+    assert metrics["llm_metrics"] is None
+
+
+# ---------------------------------------------------------------------------
+# DOCBOT-1502: get_llm_cost_metrics
+# ---------------------------------------------------------------------------
+
+
+class TestGetLlmCostMetrics:
+    @pytest.mark.asyncio
+    async def test_empty_call_log(self, monkeypatch):
+        from api import metrics_service
+
+        async def _empty_stats(since=None):
+            return []
+
+        monkeypatch.setattr("api.llm_trace_service.get_call_stats", _empty_stats)
+
+        result = await metrics_service.get_llm_cost_metrics(days=7)
+
+        assert result.total_calls == 0
+        assert result.total_cost_usd == 0.0
+        assert result.by_day == []
+        assert result.by_caller == []
+        assert result.p50_latency_ms is None
+
+    @pytest.mark.asyncio
+    async def test_aggregates_cost_tokens_and_latency(self, monkeypatch):
+        from api import metrics_service
+
+        rows = [
+            {
+                "run_id": "r1", "provider": "groq", "model": "openai/gpt-oss-20b",
+                "caller": "sql_gen", "latency_ms": 100.0, "input_tokens": 50,
+                "output_tokens": 20, "estimated_cost_usd": 0.001,
+                "success": True, "fallback_triggered": False,
+                "created_at": "2026-09-20T10:00:00+00:00",
+            },
+            {
+                "run_id": "r1", "provider": "groq", "model": "openai/gpt-oss-20b",
+                "caller": "sql_gen", "latency_ms": 200.0, "input_tokens": 30,
+                "output_tokens": 10, "estimated_cost_usd": 0.0005,
+                "success": True, "fallback_triggered": False,
+                "created_at": "2026-09-20T11:00:00+00:00",
+            },
+            {
+                "run_id": "r2", "provider": "gemini", "model": "gemini-2.5-flash",
+                "caller": "hybrid_synthesis", "latency_ms": 500.0, "input_tokens": 100,
+                "output_tokens": 200, "estimated_cost_usd": 0.002,
+                "success": False, "fallback_triggered": True,
+                "created_at": "2026-09-21T09:00:00+00:00",
+            },
+        ]
+
+        async def _mock_stats(since=None):
+            return rows
+
+        monkeypatch.setattr("api.llm_trace_service.get_call_stats", _mock_stats)
+
+        result = await metrics_service.get_llm_cost_metrics(days=7)
+
+        assert result.total_calls == 3
+        assert result.total_input_tokens == 180
+        assert result.total_output_tokens == 230
+        assert round(result.total_cost_usd, 4) == round(0.001 + 0.0005 + 0.002, 4)
+        assert result.success_rate == round(2 / 3, 4)
+        assert result.fallback_rate == round(1 / 3, 4)
+        assert result.p50_latency_ms is not None
+        assert result.p95_latency_ms is not None
+
+        by_day = {d.date: d for d in result.by_day}
+        assert by_day["2026-09-20"].calls == 2
+        assert by_day["2026-09-21"].calls == 1
+
+        by_caller = {c.caller: c for c in result.by_caller}
+        assert by_caller["sql_gen"].calls == 2
+        assert by_caller["hybrid_synthesis"].calls == 1
+        assert by_caller["hybrid_synthesis"].p50_latency_ms == 500.0
+
+    @pytest.mark.asyncio
+    async def test_missing_optional_fields_do_not_crash(self, monkeypatch):
+        from api import metrics_service
+
+        rows = [
+            {"run_id": "r1", "provider": "groq", "model": "m", "caller": None,
+             "latency_ms": None, "input_tokens": None, "output_tokens": None,
+             "estimated_cost_usd": None, "success": True, "fallback_triggered": False,
+             "created_at": None},
+        ]
+
+        async def _mock_stats(since=None):
+            return rows
+
+        monkeypatch.setattr("api.llm_trace_service.get_call_stats", _mock_stats)
+
+        result = await metrics_service.get_llm_cost_metrics(days=7)
+        assert result.total_calls == 1
+        assert result.total_cost_usd == 0.0
+        assert result.by_caller[0].caller == "unknown"

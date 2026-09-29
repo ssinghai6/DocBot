@@ -19,7 +19,7 @@ import os
 import re
 import time
 from concurrent.futures import ThreadPoolExecutor
-from typing import Any
+from typing import Any, Optional
 
 from langchain_core.documents import Document
 from langchain_core.output_parsers import StrOutputParser
@@ -66,6 +66,7 @@ async def deep_retrieve(
     question: str,
     vector_store: Any,
     max_iterations: int = 2,
+    run_id: Optional[str] = None,
 ) -> tuple[list[Document], list[str]]:
     """Run the deep retrieval pipeline without LangGraph overhead.
 
@@ -80,12 +81,22 @@ async def deep_retrieve(
         A LangChain-compatible vector store (must support ``.as_retriever()``).
     max_iterations:
         Maximum number of retrieval passes (initial + gap-fill loops).
+    run_id:
+        DOCBOT-1501 trace id. When called as part of a larger investigation
+        (Autopilot's doc_search step), the caller passes its own run_id so
+        this function's LLM call is grouped under that investigation's trace
+        rather than minting its own. Falls back to the active run_trace()
+        ContextVar, then to a fresh id, when not called from Autopilot.
 
     Returns
     -------
     tuple[list[Document], list[str]]
         (deduplicated_documents, sub_questions_used)
     """
+    from api.utils.llm_provider import current_run_id, new_run_id, run_trace
+
+    resolved_run_id = run_id or current_run_id() or new_run_id()
+
     groq_api_key = os.getenv("groq_api_key", "")
 
     # ── Step 1: Decompose question into sub-questions ─────────────────────
@@ -109,21 +120,23 @@ async def deep_retrieve(
                 ("human", "{question}"),
             ])
             chain = prompt | llm | StrOutputParser()
-            raw = await asyncio.wait_for(
-                chain.ainvoke({"question": question}),
-                timeout=15.0,
-            )
+            with run_trace(resolved_run_id):
+                raw = await asyncio.wait_for(
+                    chain.ainvoke({"question": question}),
+                    timeout=15.0,
+                )
             log_external_llm_call(
                 provider="groq", model=GROQ_MODEL,
                 latency_ms=(time.monotonic() - _start) * 1000,
-                success=True, caller="deep_retrieve_planner",
+                success=True, caller="deep_retrieve_planner", run_id=resolved_run_id,
             )
             sub_questions = _parse_json_list(raw, fallback=[question])[:5]
         except Exception as exc:
             log_external_llm_call(
                 provider="groq", model=GROQ_MODEL,
                 latency_ms=(time.monotonic() - _start) * 1000,
-                success=False, caller="deep_retrieve_planner",
+                success=False, caller="deep_retrieve_planner", run_id=resolved_run_id,
+                error_message=f"{type(exc).__name__}: {str(exc)[:200]}",
             )
             logger.warning("deep_retrieve planner failed, using original question: %s", exc)
             sub_questions = [question]

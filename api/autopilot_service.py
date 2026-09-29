@@ -69,6 +69,8 @@ class AutopilotState(TypedDict):
     session_id: str
     connection_id: str
     persona: str
+    # DOCBOT-1501: shared trace id for every LLM call made in this investigation
+    run_id: str
     # steps from PlannerNode
     plan: list[str]
     # accumulated step results — operator.add reducer: each executor call appends
@@ -169,6 +171,7 @@ async def _planner_node(state: AutopilotState) -> dict:
             temperature=0,
             max_tokens=400,
             caller="autopilot_planner",
+            run_id=state.get("run_id"),
         )
         # Strip markdown fences if the model adds them
         lines = raw.splitlines()
@@ -450,6 +453,7 @@ def make_executor_node(
                     docs, sub_questions = await deep_retrieve(
                         question=step,
                         vector_store=vector_stores[session_id],
+                        run_id=state.get("run_id"),
                     )
 
                     if docs:
@@ -947,6 +951,7 @@ async def _synthesizer_node(state: AutopilotState) -> dict:
             temperature=0.3,
             max_tokens=2000,
             caller="autopilot_synthesizer",
+            run_id=state.get("run_id"),
         )
     except Exception as exc:
         logger.warning("synthesizer_node LLM call failed: %s", exc)
@@ -1032,6 +1037,13 @@ async def run_autopilot(
     """
     start_time = time.monotonic()
 
+    # DOCBOT-1501: one run_id groups every LLM call made anywhere in this
+    # investigation (planner, each executor wave, synthesizer, and any
+    # nested deep_retrieve / SQL-pipeline / codegen calls) in the persisted
+    # call log — see api/utils/llm_provider.py's run_trace().
+    from api.utils.llm_provider import current_run_id, new_run_id, run_trace
+    run_id = current_run_id() or new_run_id()
+
     # Rephrase follow-up questions into standalone queries using chat history
     if chat_history:
         from api.db_service import _rephrase_with_history
@@ -1059,6 +1071,7 @@ async def run_autopilot(
         "session_id": session_id,
         "connection_id": connection_id,
         "persona": persona,
+        "run_id": run_id,
         "plan": [],
         "steps_completed": [],
         "iteration": 0,
@@ -1073,6 +1086,12 @@ async def run_autopilot(
     step_num = 0
     all_citations: list[dict] = []
 
+    # DOCBOT-1501: bind run_id for the duration of the investigation. Entered
+    # manually (not `with`) so the existing try/except body below doesn't
+    # need re-indenting; asyncio.Task copies the current context at creation
+    # time, so this also covers concurrently-dispatched executor waves.
+    _trace_cm = run_trace(run_id)
+    _trace_cm.__enter__()
     try:
         async for state_update in app.astream(initial_state, stream_mode="updates"):
             # Wall-clock guard — emit warning but continue to synthesizer
@@ -1147,8 +1166,10 @@ async def run_autopilot(
                     from api.utils.pii_masking import mask_pii
                     final_answer = mask_pii(updates.get("final_answer", ""))
                     yield _sse({"type": "answer", "content": final_answer})
-                    yield _sse({"type": "done", "citations": all_citations})
+                    yield _sse({"type": "done", "citations": all_citations, "run_id": run_id})
 
     except Exception as exc:
         logger.error("run_autopilot failed: %s", exc)
         yield _sse({"type": "error", "content": f"Autopilot error: {exc}"})
+    finally:
+        _trace_cm.__exit__(None, None, None)
