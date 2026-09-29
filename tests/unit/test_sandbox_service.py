@@ -180,6 +180,35 @@ class TestExtractCharts:
         assert metadata == []
         assert clean == ["normal line"]
 
+    def test_chart_meta_malformed_json_is_logged(self, caplog):
+        """DOCBOT-1504: malformed CHART_META must be logged (not silently
+        dropped with a bare `pass`) so the malformed-output rate is visible."""
+        import logging
+
+        with caplog.at_level(logging.WARNING, logger="api.utils.llm_provider"):
+            _extract_charts(["CHART_META:not_valid_json"])
+
+        records = [
+            r for r in caplog.records if getattr(r, "event", None) == "malformed_llm_output"
+        ]
+        assert len(records) == 1
+        assert records[0].caller == "sandbox_chart_metadata"
+
+    def test_chart_meta_schema_violation_is_logged(self, caplog):
+        """Valid JSON that fails ChartMetadata's schema (e.g. wrong type for
+        series_count) must also be logged, not just outright-invalid JSON."""
+        import logging
+
+        bad_meta = json.dumps({"type": "bar", "series_count": "not-an-int"})
+        with caplog.at_level(logging.WARNING, logger="api.utils.llm_provider"):
+            clean, charts, metadata = _extract_charts([f"CHART_META:{bad_meta}"])
+
+        assert metadata == []
+        records = [
+            r for r in caplog.records if getattr(r, "event", None) == "malformed_llm_output"
+        ]
+        assert len(records) == 1
+
     def test_mixed_lines(self):
         meta_dict = {"type": "line", "title": "T", "x_label": "X", "y_label": "Y", "series_count": 2}
         lines = [

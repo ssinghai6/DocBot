@@ -1544,11 +1544,19 @@ As a developer, I want LLM JSON outputs on the SQL-gen and E2B codegen paths val
 **Ground truth**: `hybrid_service.py:55` (`IntentClassification`) and `sandbox_service.py:307,317` (`SandboxResult`/`ChartMetadata`) already use real Pydantic validation. `db_service.py:434,1194` and `sandbox_service.py:408` use bare `json.loads()` with no schema check — malformed LLM JSON likely raises uncaught `JSONDecodeError`.
 
 **Acceptance Criteria**
-- [ ] Wrap SQL-gen and codegen JSON parsing in Pydantic model validation
-- [ ] One retry with the validation error fed back to the LLM, consistent with existing sandbox error-retry pattern
-- [ ] Malformed-output rate logged (feeds DOCBOT-1501/1502)
+- [x] Wrap SQL-gen and codegen JSON parsing in Pydantic model validation
+- [x] One retry with the validation error fed back to the LLM, consistent with existing sandbox error-retry pattern
+- [x] Malformed-output rate logged (feeds DOCBOT-1501/1502)
 
-**Status**: 🔲 Planned
+**Status**: ✅ Done (branch `feature/DOCBOT-1504-structured-output-validation`, not yet merged)
+
+Implementation notes:
+- **Ground-truth correction**: `db_service.py:434` (at the time the ticket was written) is `_parse_token_expiry`'s `json.loads(raw)` on a decoded Azure Entra JWT payload — not LLM output at all. Left untouched; not in scope. The real "SQL-gen path" bare-json.loads site is `_select_relevant_tables` (Step 2 table selector, LLM call #1 of the 7-step SQL pipeline) — line ~1194 in the pre-ticket file, `json.loads(raw[start:end])` on the LLM's returned table-name array with no schema check.
+- `api/db_service.py`: added `_TableSelectionResult` (`pydantic.RootModel[List[str]]`) and `_parse_table_selection()`, which extracts the JSON array from raw LLM text and validates it's actually `list[str]` (a bare `json.loads` would silently accept e.g. `[1, 2, 3]` or a nested object, which then corrupts the downstream `t["name"] in set(selected_tables)` comparison). `_select_relevant_tables` now: tries once, and on `ValueError`/`json.JSONDecodeError`/`pydantic.ValidationError` specifically (not a raised `chat_completion` call failure, e.g. both providers down — no retry makes sense there) retries once with the original prompt + the model's bad response + an explicit error-feedback message, mirroring the corrective-retry pattern already used in `sandbox_service.generate_analysis_code`'s `error_context` parameter. Falls back to `schema[:10]` (pre-existing behavior) if the retry also fails.
+- `api/sandbox_service.py::_extract_charts`'s `CHART_META:` parsing (the literal `sandbox_service.py:408` ticket reference) already validated via the `ChartMetadata` Pydantic model — but this is runtime output from LLM-*generated code* executing in the sandbox, not a direct completion this function can retry (there's no "re-ask the LLM for this one print statement"). Fix here is visibility, not a retry loop: malformed lines are now logged instead of a silent `pass`.
+- New `api/utils/llm_provider.py::log_malformed_llm_output(caller, error)`: emits a structured `{"event": "malformed_llm_output", "caller": ..., "error": ...}` log line (grep-able the same way `_log_llm_call`'s `"event": "llm_call"` lines are) wired into both call sites above. Deliberately not a new `llm_calls` table column for this ticket's size — DOCBOT-1501's persisted call log already carries a correlated `caller`-tagged row for the retry call itself (e.g. `sql_table_selector_retry`), which is enough signal to compute malformed-output rate later; a first-class column is a natural follow-up once there's a concrete query need.
+- Not in scope (same failure class, flagged for a future ticket rather than scope-creeping this one): `autopilot_service.py::_planner_node`'s `json.loads(raw)` on the LLM's step-plan JSON array has the identical bare-parse pattern, but isn't named in this ticket's ground truth (which cites only `db_service.py` and `sandbox_service.py`).
+- Tests: `TestParseTableSelection` + `TestSelectRelevantTables` (12 cases) in `tests/unit/test_db_service_helpers.py` covering valid/malformed/retry-success/both-attempts-fail/logging/call-failure-no-retry; 2 new cases in `tests/unit/test_sandbox_service.py` for CHART_META malformed-JSON and schema-violation logging. Full suite: 764 passed (this branch's `main`-based baseline + 14 new tests), no regressions.
 
 ---
 
