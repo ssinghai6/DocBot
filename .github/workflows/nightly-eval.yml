@@ -1,0 +1,80 @@
+name: Nightly Eval
+
+# DOCBOT-1503: wires tests/eval/ (the real Recall@k / discrepancy eval suite)
+# into a scheduled job so prompt/retrieval changes can't silently regress
+# quality between manual runs. Deliberately NOT part of ci.yml's per-push/PR
+# job: test_retrieval_eval.py needs a live HuggingFace embeddings call
+# (huggingface_api_key), which is slow and costs external API quota on every
+# push — a nightly cadence is the right tradeoff for an eval, not a unit test.
+#
+# tests/eval/test_discrepancy_eval.py (precision/recall/F1 on the discrepancy
+# detector) is pure code with no external dependency and already runs in
+# ci.yml's normal `pytest tests/ -m "not external and not postgres"` job on
+# every push — it is intentionally NOT re-run here to avoid duplicating that
+# signal. This workflow only targets the external-marked evals that ci.yml
+# skips (see tests/eval/README.md for the full eval → CI-status matrix).
+#
+# tests/eval/eval_latency.py is a standalone script against a *running*
+# backend (local or prod), not a pytest test — it has no `test_*` functions
+# for pytest to collect, and this workflow does not spin up the backend to
+# run it. It stays manual per tests/eval/README.md ("Runs in CI? ❌ manual").
+#
+# Regression gate: tests/eval/test_retrieval_eval.py::test_retrieval_recall
+# already hard-asserts `recall[5] >= 0.7` (the documented Recall@5 baseline)
+# — a nightly run failing that assertion fails this job and should be treated
+# as a real retrieval regression, not flaked away.
+#
+# Requires the HUGGINGFACE_API_KEY repository secret to be set (Settings →
+# Secrets and variables → Actions). Without it, the external-marked tests
+# self-skip via `pytest.skip("huggingface_api_key not set")` rather than
+# failing — this job still reports green, so a missing secret is a silent
+# gap, not a red X. Check the job's "Run nightly retrieval eval" step output
+# for a SKIPPED result if this ever needs debugging.
+
+on:
+  schedule:
+    # 07:00 UTC daily — outside US/EU working hours, doesn't compete with
+    # per-push CI for GitHub Actions minutes during active dev.
+    - cron: "0 7 * * *"
+  workflow_dispatch: {}
+
+jobs:
+  eval:
+    name: Retrieval Eval (Recall@k gate)
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+          cache-dependency-path: requirements-dev.txt
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements-dev.txt
+
+      - name: Run nightly retrieval eval (external — needs HuggingFace key)
+        env:
+          huggingface_api_key: ${{ secrets.HUGGINGFACE_API_KEY }}
+          # Fernet key generated fresh for CI — never a real production key
+          DB_ENCRYPTION_KEY: ${{ secrets.CI_FERNET_KEY || '' }}
+          # DATABASE_URL is faked — nothing in tests/eval touches a real DB
+          DATABASE_URL: postgresql://fake:fake@localhost:5432/testdb
+        run: |
+          pytest tests/eval -v -m external \
+            --tb=short \
+            --color=yes
+
+      - name: Upload eval output on failure
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: nightly-eval-results
+          path: .pytest_cache/
+          retention-days: 14

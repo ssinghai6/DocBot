@@ -1517,11 +1517,20 @@ As a developer, I want `tests/eval/` (Recall@k, discrepancy eval) to run automat
 **Ground truth**: `tests/eval/test_retrieval_eval.py`, `test_discrepancy_eval.py`, `eval_latency.py` exist and are real — all `@pytest.mark.external`, confirmed absent from `.github/workflows/*.yml`.
 
 **Acceptance Criteria**
-- [ ] Scheduled (nightly, not per-PR — needs external API keys) CI job runs `pytest tests/eval -m external`
-- [ ] Job fails on Recall@k regression below documented baseline
-- [ ] Do not re-cite `tests/external/test_llm_extraction_baseline.py` as a retrieval benchmark (per EPIC-10 caveat) — this ticket is the real retrieval eval
+- [x] Scheduled (nightly, not per-PR — needs external API keys) CI job runs `pytest tests/eval -m external`
+- [x] Job fails on Recall@k regression below documented baseline
+- [x] Do not re-cite `tests/external/test_llm_extraction_baseline.py` as a retrieval benchmark (per EPIC-10 caveat) — this ticket is the real retrieval eval
 
-**Status**: 🔲 Planned
+**Status**: ✅ Done (branch `feature/DOCBOT-1503-nightly-eval-ci-gate`, not yet merged)
+
+Implementation notes:
+- New `.github/workflows/nightly-eval.yml`: scheduled `cron: "0 7 * * *"` (daily 07:00 UTC) plus `workflow_dispatch` for manual runs. Runs `pytest tests/eval -v -m external` — this targets exactly `test_retrieval_eval.py`'s two `@pytest.mark.external` tests.
+- `test_discrepancy_eval.py::test_discrepancy_precision_recall` has **no** `external`/`postgres` mark — it's pure code (no API keys) and was already running in `ci.yml`'s per-push `pytest tests/ -m "not external and not postgres"` job before this ticket. Deliberately not duplicated into the nightly job.
+- The regression gate itself already existed in code: `test_retrieval_recall` hard-asserts `recall[5] >= 0.7` (the documented Recall@5 baseline) — a nightly run below that threshold fails the job. No new assertion needed; this ticket's job is wiring the schedule, not writing the gate.
+- `eval_latency.py` intentionally NOT wired into any CI job — it's a standalone script against a *running* backend (local or prod), has no `test_*` functions for pytest to collect, and spinning up the backend in CI to exercise it was out of scope. Stays manual per `tests/eval/README.md`, which is now updated to reflect current CI status.
+- Requires a `HUGGINGFACE_API_KEY` repository secret (Settings → Secrets and variables → Actions) — without it, the external-marked tests self-skip (`pytest.skip(...)`) rather than fail, so the job reports green even with the secret missing. Flagged in the workflow file's comments as something to verify post-merge, since I can't set repo secrets myself.
+- Updated `tests/eval/README.md`'s eval → CI-status table to reflect the new nightly wiring.
+- No production code touched — CI config + docs only. Full unit/integration suite: 750 passed (this branch's baseline off `main`, no regressions — DOCBOT-1501/1502's additional tests live on their own branch).
 
 ---
 
