@@ -5,9 +5,11 @@ what they need to run.
 
 | Eval | Measures | Needs API keys? | Runs in CI? |
 |------|----------|-----------------|-------------|
-| `test_discrepancy_eval.py` | Discrepancy precision / recall / F1 | No (pure code) | ✅ Yes |
-| `test_retrieval_eval.py` | Retrieval Recall@k on the demo 10-K | HuggingFace embeddings | ❌ external |
+| `test_discrepancy_eval.py` | Discrepancy precision / recall / F1 | No (pure code) | ✅ Yes — every push/PR (`.github/workflows/ci.yml`) |
+| `test_retrieval_eval.py` | Retrieval Recall@k on the demo 10-K | HuggingFace embeddings | ✅ Nightly (`.github/workflows/nightly-eval.yml`, DOCBOT-1503) — needs `HUGGINGFACE_API_KEY` repo secret |
 | `eval_latency.py` | TTFT + p50/p95 latency | Running backend | ❌ manual |
+
+**Nightly gate (DOCBOT-1503)**: `test_retrieval_recall` hard-asserts `recall[5] >= 0.7` — a nightly run below that baseline fails the job. Runs `pytest tests/eval -m external` on a schedule (not per-push) since it needs a live embeddings call. `eval_latency.py` stays manual — it's a script against a *running* backend, not a pytest test, and nightly CI doesn't spin the backend up.
 
 ## 1. Discrepancy detection (the differentiator)
 

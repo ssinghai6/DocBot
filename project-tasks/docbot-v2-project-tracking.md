@@ -68,6 +68,7 @@ Every story is only "done" when ALL of the following are true. No exceptions.
 | EPIC-10 | RAG Quality Enhancement | 4+ | ✅ Done | Chroma persistent store, cross-encoder reranker, SemanticChunker, FinanceBench accuracy baseline (**100% — 20/20**). PageIndex evaluated and rejected (2026-03-25). |
 | EPIC-12 | UI Redesign & Finance Vertical | 5 | ✅ Done | Progressive disclosure UI (tabbed sidebar, collapsible sections, Cmd+K command palette), unified file upload, 3-color palette, finance-focused copy, guided onboarding empty state. |
 | EPIC-13 | Sandbox Demo Mode | 5 | ✅ Done | Pre-loaded TechCorp 10-K + SQLite financial database via `/api/demo/init`. One-click hybrid analysis demo with deliberate discrepancies for showcase. |
+| EPIC-15 | AI Engineering Maturity | 6 | 🔲 Planned | LLM tracing/observability, cost+latency metrics, eval-suite CI gating, structured-output validation, multi-agent architecture spike, prompt versioning, response caching, cost ceiling. Gap analysis 2026-09-27 (ai-engineer + senior-project-manager agents). |
 
 ---
 
@@ -1447,6 +1448,177 @@ As a first-time visitor, I want to click "Try Demo" and immediately experience h
 - [x] Demo works on production (Railway) without additional env vars or file dependencies
 
 **Status**: ✅ Done — shipped 2026-03-31. Production-verified.
+
+---
+
+### EPIC-15: AI Engineering Maturity
+
+**Origin**: Gap analysis 2026-09-27, dual agent run (`ai-engineer` code audit + `senior-project-manager` ticket planning). User-flagged concerns: no LLM tracing (LangSmith/equivalent), no true multi-agent architecture.
+
+---
+
+#### DOCBOT-1501: LLM Tracing/Observability — trace_id + persisted call log
+
+**Story**
+As a developer, I want every LLM call (Groq/Gemini, all callsites) linked by a shared trace/run ID and persisted (not just stdout-logged), so I can debug multi-step Autopilot/Deep Research runs and see what actually went out in prod.
+
+**Priority**: P0 | **Size**: M
+
+**Ground truth (code-verified)**: `api/utils/llm_provider.py:95-157` (`_log_llm_call`) emits one JSON line per call via plain `print`/stdout — not `logging` `extra=` — no persistence, no trace_id, no aggregation. Each call logs independently with a `caller` string (e.g. `"intent_classification"`) but nothing ties calls in one Autopilot run together.
+
+**Acceptance Criteria**
+- [x] Generate/propagate a `run_id` through `AutopilotState`, hybrid pipeline, and Deep Research state
+- [x] Persist `llm_call` events (provider, model, run_id, caller, tokens, latency_ms, cost, success) to Postgres, or wire to Langfuse/Helicone
+- [x] No credentials or PII ever land in traced payloads
+
+**Status**: ✅ Done (branch `feature/DOCBOT-1501-llm-tracing-observability`, not yet merged)
+
+Implementation notes:
+- `run_id` propagation uses a `contextvars.ContextVar` (`api/utils/llm_provider.py::run_trace`/`current_run_id`/`new_run_id`) rather than threading an explicit parameter through every nested call — `asyncio.Task`/`create_task` (including LangGraph's internal node dispatch) copies the active context at task-creation time, so binding once at the top of `run_autopilot`, `hybrid_chat`, `run_sql_pipeline`, and `run_csv_query_on_e2b` covers every LLM call made anywhere in that call tree, including concurrently-dispatched Autopilot waves. `AutopilotState` also carries an explicit `run_id` field (passed to `chat_completion`/`deep_retrieve` calls) for defense-in-depth/testability.
+- New `api/llm_trace_service.py`: `llm_calls` table (id, run_id, provider, model, caller, latency_ms, input/output tokens, estimated_cost_usd, success, fallback_triggered, error_message, created_at), a thread-safe `queue.Queue`-backed `enqueue_call()` (non-blocking, safe from worker threads and the event loop), and a background `writer_loop()` asyncio task (started/stopped from the FastAPI lifespan) that drains the queue and persists rows. `_log_llm_call` in `llm_provider.py` hands its existing structured payload to this sink via `set_trace_sink()` — stdout logging is unchanged, persistence is additive.
+- No prompt/response text or credentials are ever enqueued — only the metadata fields already in the stdout log line.
+- Known gap: `db_service._rephrase_with_history` invokes `chat_completion` via `loop.run_in_executor(None, lambda: ...)` (not `asyncio.to_thread`), which does not copy the calling context into the worker thread — that one rephrase call gets its own ad-hoc run_id rather than joining the parent investigation's trace. Cosmetic only (a single early rephrase call, not part of the multi-step investigation being grouped); fixing it would mean switching that callsite to `asyncio.to_thread`, out of scope for this ticket's size.
+- Tests: `tests/unit/test_llm_trace_service.py` (table schema, enqueue/writer/persist-failure-doesn't-crash-loop, `get_call_stats` read path) and new coverage in `tests/unit/test_llm_provider.py` (`TestRunTrace`, `TestTraceSink`).
+- **Post-review fix (2026-09-29)**: code review caught a real bug in `run_sql_pipeline`, `run_csv_query_on_e2b`, and `hybrid_chat` — each called `run_trace(run_id).__enter__()` as a bare expression with no held reference. CPython garbage-collects that temporary immediately; a generator-based context manager GC'd while suspended at its `yield` has `close()` implicitly called, throwing `GeneratorExit` into `run_trace()` and firing its `finally` (resetting the ContextVar) before the next line runs. Net effect: those 3 of 5 wired pipelines were minting a fresh orphan run_id per LLM call, defeating the ticket's core acceptance criterion. Fixed by holding the CM in a local variable and wrapping each function's remaining body in `try/finally` with an explicit `__exit__`, matching the pattern already used in `autopilot_service.py`. Added `tests/unit/test_run_id_propagation.py` — regression tests asserting multiple LLM calls within one pipeline invocation share `current_run_id()` (manually verified: fails against the reintroduced bug, passes against the fix), plus a direct repro of the GC mechanism itself. Also verified: writer startup/shutdown ordering doesn't drop events, missing-table failures degrade gracefully, no prompt/credential leakage, and `/admin/metrics` remains RBAC-gated. 783 tests passing.
+
+---
+
+#### DOCBOT-1502: Cost & Latency Dashboard
+
+**Story**
+As an admin, I want aggregated LLM cost/latency/token metrics in `/admin/metrics`, so I have production cost visibility.
+
+**Priority**: P0 | **Size**: S–M
+**Dependencies**: DOCBOT-1501
+
+**Ground truth**: `api/metrics_service.py` currently has zero LLM cost/latency/token metrics — confirmed no reads of the call log.
+
+**Acceptance Criteria**
+- [x] `/admin/metrics` surfaces per-day/per-persona token spend and P50/P95 latency
+- [x] Sourced from DOCBOT-1501's persisted call log
+
+**Status**: ✅ Done (branch `feature/DOCBOT-1501-llm-tracing-observability`, not yet merged — bundled with 1501 since 1502 is a thin read-layer on top of it)
+
+Implementation notes:
+- `api/metrics_service.py::get_llm_cost_metrics(days=7)` reads raw rows via `llm_trace_service.get_call_stats()` and aggregates in Python (total cost/tokens, success/fallback rate, overall P50/P95 latency via nearest-rank percentile, `by_day` and `by_caller` breakdowns).
+- Deviation from the literal AC wording: broken down **per-`caller`**, not per-persona. The persisted call-log schema (DOCBOT-1501) tags each call with the `caller` string already passed to `chat_completion`/`chat_completion_stream`/`call_llm` (e.g. `sql_gen`, `autopilot_planner`, `hybrid_synthesis`) — persona isn't part of that schema, and threading persona through every LLM call site was out of scope for this ticket's size. `caller` is the closest available dimension and maps 1:1 to a code path, which is arguably more actionable for cost/latency debugging than persona. Documented in `CallerLlmSpend`'s docstring.
+- `GET /admin/metrics` (admin-only) now returns an `llm_metrics` block alongside the existing fields; accepts an optional `llm_days` query param (default 7) for the aggregation window. Degrades to `llm_metrics: null` (never fails the whole endpoint) if the trace store read throws.
+- Tests: `TestGetLlmCostMetrics` + 2 new cases in `tests/unit/test_metrics_service.py`.
+
+---
+
+#### DOCBOT-1503: Wire Retrieval Eval Suite into Nightly CI
+
+**Story**
+As a developer, I want `tests/eval/` (Recall@k, discrepancy eval) to run automatically and gate on regression, so prompt/retrieval changes can't silently degrade quality.
+
+**Priority**: P1 | **Size**: S
+
+**Ground truth**: `tests/eval/test_retrieval_eval.py`, `test_discrepancy_eval.py`, `eval_latency.py` exist and are real — all `@pytest.mark.external`, confirmed absent from `.github/workflows/*.yml`.
+
+**Acceptance Criteria**
+- [x] Scheduled (nightly, not per-PR — needs external API keys) CI job runs `pytest tests/eval -m external`
+- [x] Job fails on Recall@k regression below documented baseline
+- [x] Do not re-cite `tests/external/test_llm_extraction_baseline.py` as a retrieval benchmark (per EPIC-10 caveat) — this ticket is the real retrieval eval
+
+**Status**: ✅ Done (branch `feature/DOCBOT-1503-nightly-eval-ci-gate`, not yet merged)
+
+Implementation notes:
+- New `.github/workflows/nightly-eval.yml`: scheduled `cron: "0 7 * * *"` (daily 07:00 UTC) plus `workflow_dispatch` for manual runs. Runs `pytest tests/eval -v -m external` — this targets exactly `test_retrieval_eval.py`'s two `@pytest.mark.external` tests.
+- `test_discrepancy_eval.py::test_discrepancy_precision_recall` has **no** `external`/`postgres` mark — it's pure code (no API keys) and was already running in `ci.yml`'s per-push `pytest tests/ -m "not external and not postgres"` job before this ticket. Deliberately not duplicated into the nightly job.
+- The regression gate itself already existed in code: `test_retrieval_recall` hard-asserts `recall[5] >= 0.7` (the documented Recall@5 baseline) — a nightly run below that threshold fails the job. No new assertion needed; this ticket's job is wiring the schedule, not writing the gate.
+- `eval_latency.py` intentionally NOT wired into any CI job — it's a standalone script against a *running* backend (local or prod), has no `test_*` functions for pytest to collect, and spinning up the backend in CI to exercise it was out of scope. Stays manual per `tests/eval/README.md`, which is now updated to reflect current CI status.
+- Requires a `HUGGINGFACE_API_KEY` repository secret (Settings → Secrets and variables → Actions) — without it, the external-marked tests self-skip (`pytest.skip(...)`) rather than fail, so the job reports green even with the secret missing. Flagged in the workflow file's comments as something to verify post-merge, since I can't set repo secrets myself.
+- Updated `tests/eval/README.md`'s eval → CI-status table to reflect the new nightly wiring.
+- No production code touched — CI config + docs only. Full unit/integration suite: 750 passed (this branch's baseline off `main`, no regressions — DOCBOT-1501/1502's additional tests live on their own branch).
+
+---
+
+#### DOCBOT-1504: Structured Output Validation on SQL-Gen / Codegen Paths
+
+**Story**
+As a developer, I want LLM JSON outputs on the SQL-gen and E2B codegen paths validated against Pydantic schemas with one retry-with-error-feedback on malformed output, matching the pattern already used for sandbox execution errors.
+
+**Priority**: P1 | **Size**: S
+
+**Ground truth**: `hybrid_service.py:55` (`IntentClassification`) and `sandbox_service.py:307,317` (`SandboxResult`/`ChartMetadata`) already use real Pydantic validation. `db_service.py:434,1194` and `sandbox_service.py:408` use bare `json.loads()` with no schema check — malformed LLM JSON likely raises uncaught `JSONDecodeError`.
+
+**Acceptance Criteria**
+- [ ] Wrap SQL-gen and codegen JSON parsing in Pydantic model validation
+- [ ] One retry with the validation error fed back to the LLM, consistent with existing sandbox error-retry pattern
+- [ ] Malformed-output rate logged (feeds DOCBOT-1501/1502)
+
+**Status**: 🔲 Planned
+
+---
+
+#### DOCBOT-1505: Multi-Agent Architecture Evaluation Spike
+
+**Story**
+As a developer, I want a time-boxed, code-free evaluation of whether Autopilot's current single-agent LangGraph tool-orchestration should evolve into true multi-agent collaboration (specialized sub-agents with handoff), so architecture investment is evidence-based, not speculative.
+
+**Priority**: P1 | **Size**: M (spike — decision doc, no production code)
+
+**Ground truth**: `autopilot_service.py:982-995` — `_build_graph()` is a 3-node graph (`planner → executor → synthesizer`), `executor` dispatches tools via `_select_tool_heuristic` (line 197) against one shared `AutopilotState`. No agent-to-agent handoff, no specialized persistent sub-agents, no agent memory beyond conversation history. This is single-agent tool orchestration, not multi-agent — confirmed by direct read.
+
+**Acceptance Criteria**
+- [ ] Decision doc mirroring the PageIndex evaluate-and-reject precedent (EPIC-10, 2026-03-25)
+- [ ] Explicit recommendation: keep current architecture, OR adopt specialist sub-agent handoff pattern (e.g. separate SQL-agent / doc-agent contexts passing structured findings)
+- [ ] If "multi-agent" is used in marketing/landing copy, reconcile claim with actual architecture (reframe copy or scope real multi-agent work)
+
+**Status**: 🔲 Planned
+
+---
+
+#### DOCBOT-1506: Exact-Match LLM Response Cache
+
+**Story**
+As a developer, I want deterministic-ish LLM calls (SQL gen, intent classification at temp=0) cached by prompt hash, so repeated/identical questions don't re-pay full LLM cost.
+
+**Priority**: P2 | **Size**: S
+
+**Ground truth**: Confirmed zero `lru_cache`/Redis/semantic-cache usage in `llm_provider.py`, `hybrid_service.py`, `autopilot_service.py`, `sandbox_service.py`. Schema cache and query-history dedup exist in `db_service.py`, but nothing caches LLM completions themselves.
+
+**Acceptance Criteria**
+- [ ] Exact-match cache keyed on `(prompt_hash, model)` for intent classification and SQL gen
+- [ ] TTL'd (Postgres or Redis — reuse existing DB infra, avoid new dependency if possible)
+- [ ] Cache hit/miss counted in metrics (DOCBOT-1502)
+
+**Status**: 🔲 Planned
+
+---
+
+#### DOCBOT-1507: Prompt Versioning Registry
+
+**Story**
+As a developer, I want each prompt tagged with a version constant included in the LLM call log, so a prompt edit can be correlated with an eval score delta or a prod regression after the fact.
+
+**Priority**: P2 | **Size**: S
+
+**Ground truth**: Prompts are inline Python string constants (e.g. `hybrid_service.py:40` `_SYSTEM_PROMPT`) with no version tag — only traceable via git blame. Prior incident: autopilot trigger regex bug (fixed 2026-03-27) was a silent prompt/logic regression.
+
+**Acceptance Criteria**
+- [ ] `PROMPT_VERSION` constant per prompt, included in DOCBOT-1501's call log payload
+- [ ] No full registry/A-B system required — versioning + logging only, scoped small
+
+**Status**: 🔲 Planned
+
+---
+
+#### DOCBOT-1508: Per-Session LLM Cost Ceiling
+
+**Story**
+As an admin, I want a soft per-session token/cost budget check before Autopilot or Deep Research kicks off a multi-call investigation, so a single runaway session can't blow up spend.
+
+**Priority**: P3 | **Size**: S
+
+**Ground truth**: `api/index.py:332` "cost budget" comment refers to API rate-limiting, not LLM spend — no max-tokens-per-session or max-LLM-calls-per-request-type ceiling exists beyond fixed per-call `max_tokens`.
+
+**Acceptance Criteria**
+- [ ] Soft budget check gates Autopilot/Deep Research multi-call loops
+- [ ] Graceful degradation message if ceiling hit mid-investigation
+
+**Status**: 🔲 Planned
 
 ---
 
