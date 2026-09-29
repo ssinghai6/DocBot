@@ -17,7 +17,7 @@ import time
 from typing import AsyncGenerator, List, Optional
 
 import groq as groq_module
-from pydantic import BaseModel
+from pydantic import BaseModel, ValidationError
 
 logger = logging.getLogger(__name__)
 
@@ -392,9 +392,19 @@ def _extract_charts(
     to stdout prefixed with 'CHART_B64:'. DOCBOT-305 generated code also writes
     'CHART_META:{...json...}' lines so callers receive structured chart info.
 
+    DOCBOT-1504: the JSON is validated against the ChartMetadata Pydantic
+    model (already the case) but malformed output is now logged instead of
+    silently swallowed — this is runtime output from LLM-*generated code*
+    executing in the sandbox, not a direct LLM completion this function can
+    retry (there's no "re-ask the LLM for this one print statement"), so
+    the fix here is visibility rather than a retry loop: a rising rate of
+    malformed CHART_META lines signals the codegen prompt needs work.
+
     Returns (clean_stdout_lines, chart_b64_strings, chart_metadata_list).
     """
     import json as _json
+
+    from api.utils.llm_provider import log_malformed_llm_output
 
     charts: list[str] = []
     metadata: list[ChartMetadata] = []
@@ -407,8 +417,9 @@ def _extract_charts(
             try:
                 raw = _json.loads(line[len("CHART_META:"):].strip())
                 metadata.append(ChartMetadata(**raw))
-            except Exception:
-                pass  # malformed metadata — silently skip
+            except (_json.JSONDecodeError, ValidationError, TypeError) as exc:
+                logger.warning("Malformed CHART_META line skipped: %s", exc)
+                log_malformed_llm_output(caller="sandbox_chart_metadata", error=str(exc))
         else:
             clean.append(line)
 

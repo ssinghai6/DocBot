@@ -159,6 +159,26 @@ def log_external_llm_call(
     )
 
 
+def log_malformed_llm_output(*, caller: str, error: str) -> None:
+    """DOCBOT-1504: structured, grep-able signal for "the LLM API call
+    succeeded but the response didn't parse/validate as the structured
+    output we asked for" — a distinct failure mode from the API-level
+    success/failure already tracked by _log_llm_call (that call still
+    counts as success=True; this is a content-shape failure on top of it).
+
+    Emitted once per malformed-output event (i.e. once per failed parse
+    attempt, including the final failure after a retry) so the event rate
+    is countable — the initial/only intended consumer is grepping Railway
+    logs for '"event": "malformed_llm_output"', with DOCBOT-1501/1502's
+    persisted call log providing correlated latency/cost via the matching
+    `caller` tag in the same time window. A first-class column in the
+    llm_calls table is a natural follow-up once there's a concrete need to
+    query malformed-output rate rather than grep it.
+    """
+    payload = {"event": "malformed_llm_output", "caller": caller, "error": str(error)[:200]}
+    logger.warning(json.dumps(payload), extra=payload)
+
+
 def _get_groq_llm(
     api_key: Optional[str] = None,
     temperature: float = 0,

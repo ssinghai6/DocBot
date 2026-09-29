@@ -1,11 +1,15 @@
 """Unit tests for db_service helper functions — DOCBOT-201 through 205, 208, 504."""
 
+from unittest.mock import patch
+
 import pytest
 from api.db_service import (
     DBConnectionRequest,
     DBChatRequest,
     _build_connection_url,
     _build_explanation,
+    _parse_table_selection,
+    _select_relevant_tables,
     SUPPORTED_DIALECTS,
 )
 from pydantic import ValidationError
@@ -346,3 +350,120 @@ class TestQueryHistoryResponseShape:
         user_limit = 0
         effective = max(1, min(user_limit, 100))
         assert effective == 1
+
+
+# ---------------------------------------------------------------------------
+# DOCBOT-1504: Pydantic-validated table-selector JSON parsing + retry
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.unit
+class TestParseTableSelection:
+    def test_valid_array_parses(self):
+        assert _parse_table_selection('["orders", "products"]') == ["orders", "products"]
+
+    def test_valid_array_with_surrounding_prose(self):
+        """LLMs sometimes wrap the array in explanation text despite
+        instructions not to — the array must still be extracted."""
+        raw = 'Here are the tables:\n["orders", "products"]\nThat should work.'
+        assert _parse_table_selection(raw) == ["orders", "products"]
+
+    def test_no_array_raises_value_error(self):
+        with pytest.raises(ValueError):
+            _parse_table_selection("I cannot determine the tables.")
+
+    def test_non_string_elements_raise_validation_error(self):
+        """A JSON array of non-strings (e.g. numbers) must fail validation
+        rather than silently flowing into `t["name"] in set(selected_tables)`
+        downstream as garbage."""
+        with pytest.raises(ValidationError):
+            _parse_table_selection("[1, 2, 3]")
+
+    def test_object_with_nested_array_extracts_the_array(self):
+        """The bracket-scan (find first '[', rfind last ']') intentionally
+        extracts an array embedded in surrounding object/prose text — this
+        is deliberate leniency for LLM output that wraps the array in a
+        key, not something to guard against."""
+        assert _parse_table_selection('{"tables": ["orders"]}') == ["orders"]
+
+    def test_object_with_no_array_raises_value_error(self):
+        """No '[' at all (e.g. the model returns a bare JSON object) — no
+        array to extract, so this must fail rather than parse the whole
+        object as a table list."""
+        with pytest.raises(ValueError):
+            _parse_table_selection('{"orders": 1, "products": 2}')
+
+    def test_malformed_json_raises(self):
+        with pytest.raises(ValueError):
+            _parse_table_selection('["orders", "products"')  # missing closing bracket
+
+
+@pytest.mark.unit
+@pytest.mark.asyncio
+class TestSelectRelevantTables:
+    _SCHEMA = [
+        {"name": "orders", "columns": [{"name": "id", "type": "INTEGER"}], "is_view": False},
+        {"name": "products", "columns": [{"name": "id", "type": "INTEGER"}], "is_view": False},
+    ]
+
+    async def test_valid_response_returns_parsed_tables(self):
+        with patch(
+            "api.utils.llm_provider.chat_completion", return_value='["orders"]'
+        ):
+            result = await _select_relevant_tables("How many orders?", self._SCHEMA)
+        assert result == ["orders"]
+
+    async def test_malformed_response_retries_and_succeeds(self):
+        """First call returns garbage; retry call (fed the validation error)
+        returns a valid array — the retry result must be used."""
+        responses = iter(["not json at all", '["products"]'])
+
+        def _side_effect(*args, **kwargs):
+            return next(responses)
+
+        with patch("api.utils.llm_provider.chat_completion", side_effect=_side_effect) as mock_cc:
+            result = await _select_relevant_tables("Which products?", self._SCHEMA)
+
+        assert result == ["products"]
+        assert mock_cc.call_count == 2
+        # The retry call must carry the original prompt + feedback about the error.
+        retry_call_kwargs = mock_cc.call_args_list[1]
+        retry_messages = retry_call_kwargs.args[0] if retry_call_kwargs.args else retry_call_kwargs.kwargs["messages"]
+        assert any("invalid" in m["content"].lower() for m in retry_messages)
+
+    async def test_both_attempts_malformed_falls_back_to_first_ten(self):
+        with patch("api.utils.llm_provider.chat_completion", return_value="garbage output"):
+            schema = [
+                {"name": f"table_{i}", "columns": [], "is_view": False} for i in range(15)
+            ]
+            result = await _select_relevant_tables("Anything?", schema)
+
+        assert result == [f"table_{i}" for i in range(10)]
+
+    async def test_malformed_output_is_logged(self, caplog):
+        import logging
+
+        with (
+            patch("api.utils.llm_provider.chat_completion", return_value="not valid json"),
+            caplog.at_level(logging.WARNING, logger="api.utils.llm_provider"),
+        ):
+            await _select_relevant_tables("Anything?", self._SCHEMA)
+
+        records = [
+            r for r in caplog.records if getattr(r, "event", None) == "malformed_llm_output"
+        ]
+        # One for the initial failure, one for the retry's failure.
+        assert len(records) == 2
+        assert {r.caller for r in records} == {"sql_table_selector", "sql_table_selector_retry"}
+
+    async def test_call_failure_does_not_retry(self):
+        """A raised exception from chat_completion itself (both providers
+        down) is a different failure mode than malformed JSON — no retry,
+        straight to the schema[:10] fallback."""
+        with patch(
+            "api.utils.llm_provider.chat_completion", side_effect=RuntimeError("both providers down")
+        ) as mock_cc:
+            result = await _select_relevant_tables("Anything?", self._SCHEMA)
+
+        assert mock_cc.call_count == 1  # no retry attempted
+        assert result == [t["name"] for t in self._SCHEMA[:10]]

@@ -21,7 +21,7 @@ from datetime import datetime, timedelta, timezone
 from decimal import Decimal
 from typing import Any, AsyncGenerator, Dict, List, Optional
 
-from pydantic import BaseModel, field_validator, model_validator
+from pydantic import BaseModel, RootModel, ValidationError, field_validator, model_validator
 from sqlalchemy import (
     Column, DateTime, Integer, MetaData, String, Table, Text,
     func, insert, select, text, update, delete,
@@ -1160,11 +1160,45 @@ async def run_sql_pipeline(
 # ---------------------------------------------------------------------------
 
 
+class _TableSelectionResult(RootModel[List[str]]):
+    """DOCBOT-1504: validated shape for the table-selector LLM's response —
+    a JSON array of table name strings. A bare `json.loads()` on raw LLM
+    text accepts any valid JSON (a dict, a list of numbers, a nested
+    structure) and silently produces garbage downstream (e.g.
+    `schema_subset = [t for t in schema if t["name"] in set(selected_tables)]`
+    comparing against ints); this makes "list[str]" an enforced contract,
+    not an assumption.
+    """
+
+
+def _parse_table_selection(raw: str) -> List[str]:
+    """Extract the JSON array from raw LLM text and validate it against
+    _TableSelectionResult. Raises ValueError/pydantic.ValidationError on
+    malformed output — callers handle the retry-with-feedback / fallback.
+    """
+    start = raw.find("[")
+    end = raw.rfind("]") + 1
+    if start == -1 or end <= start:
+        raise ValueError("No JSON array found in LLM response")
+    parsed = json.loads(raw[start:end])
+    return _TableSelectionResult.model_validate(parsed).root
+
+
 async def _select_relevant_tables(question: str, schema: List[Dict[str, Any]]) -> List[str]:
     """LLM call #1: pick the relevant tables for this question.
 
     Shows up to 20 columns per table and tags views so the LLM knows
     they're queryable but may not support JOINs the same way.
+
+    DOCBOT-1504: the LLM's JSON array response is validated against
+    _TableSelectionResult (list[str]) rather than trusted as-is. On
+    malformed/invalid output, one retry is attempted with the validation
+    error fed back to the LLM as feedback — mirroring the corrective-retry
+    pattern already used for sandbox runtime errors (see
+    sandbox_service.generate_analysis_code's error_context parameter). If
+    the retry also fails, falls back to the first 10 schema tables (the
+    pre-existing behavior) and logs the malformed-output event for
+    DOCBOT-1501/1502 visibility.
     """
     table_list = "\n".join(
         f"- {t['name']}{' (VIEW)' if t.get('is_view') else ''}: "
@@ -1180,19 +1214,53 @@ async def _select_relevant_tables(question: str, schema: List[Dict[str, Any]]) -
         f"Question: {question}\n\n"
         "Response (JSON array only):"
     )
+
+    from api.utils.llm_provider import chat_completion, log_malformed_llm_output
+
+    raw: Optional[str] = None
+    _parse_errors = (ValueError, json.JSONDecodeError, ValidationError)
     try:
-        from api.utils.llm_provider import chat_completion
         raw = chat_completion(
             [{"role": "user", "content": prompt}],
             temperature=0,
             max_tokens=200,
             caller="sql_table_selector",
         )
-        start = raw.find("[")
-        end = raw.rfind("]") + 1
-        if start != -1 and end > start:
-            return json.loads(raw[start:end])
+        return _parse_table_selection(raw)
+    except _parse_errors as exc:
+        logger.warning("Table selector LLM call failed validation (%s) — retrying once", exc)
+        log_malformed_llm_output(caller="sql_table_selector", error=str(exc))
+
+        try:
+            retry_raw = chat_completion(
+                [
+                    {"role": "user", "content": prompt},
+                    {"role": "assistant", "content": raw or ""},
+                    {
+                        "role": "user",
+                        "content": (
+                            f"Your previous response was invalid: {exc}. "
+                            "Return ONLY a valid JSON array of table name strings, "
+                            'e.g. ["orders", "products"]. No explanation, no markdown fences.'
+                        ),
+                    },
+                ],
+                temperature=0,
+                max_tokens=200,
+                caller="sql_table_selector_retry",
+            )
+            return _parse_table_selection(retry_raw)
+        except _parse_errors as retry_exc:
+            logger.warning(
+                "Table selector retry also failed validation (%s) — falling back to first 10 tables",
+                retry_exc,
+            )
+            log_malformed_llm_output(caller="sql_table_selector_retry", error=str(retry_exc))
+        except Exception as retry_call_exc:
+            logger.warning("Table selector retry LLM call failed: %s", retry_call_exc)
     except Exception as exc:
+        # Non-validation failure (e.g. the chat_completion call itself raised,
+        # both Groq and Gemini unavailable) — no retry makes sense here.
         logger.warning("Table selector LLM call failed: %s", exc)
 
     return [t["name"] for t in schema[:10]]
