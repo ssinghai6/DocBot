@@ -466,76 +466,60 @@ async def hybrid_chat(
     has_db = connection_id is not None
 
     # DOCBOT-1501: bind one run_id for every LLM call made in this hybrid
-    # turn (intent classification, SQL pipeline, RAG synthesis). Entered
-    # without a matching __exit__ — this generator's lifetime is scoped to
-    # one request's asyncio task, which ends when the generator is
-    # exhausted, so there's nothing to leak into. See run_trace() docs in
-    # api/utils/llm_provider.py.
+    # turn (intent classification, SQL pipeline, RAG synthesis). The CM
+    # instance is held in _trace_cm (not a bare `run_trace(...).__enter__()`
+    # temporary) — a temporary with no held reference gets garbage
+    # collected immediately, which triggers the generator's implicit
+    # close()/GeneratorExit and resets the ContextVar before the next line
+    # runs. See run_trace() docs in api/utils/llm_provider.py.
     from api.utils.llm_provider import current_run_id, new_run_id, run_trace
     run_id = current_run_id() or new_run_id()
-    run_trace(run_id).__enter__()
-
-    # Rephrase follow-up questions using chat history
-    if chat_history:
-        from api.db_service import _rephrase_with_history
-        try:
-            question = await _rephrase_with_history(question, chat_history)
-        except Exception as _exc:
-            logger.warning("Hybrid rephrase failed, using original: %s", _exc)
-
-    # ── Step 1: classify intent ───────────────────────────────────────────
-    groq_api_key = os.getenv("groq_api_key", "")
-
-    # Build a groq_client for classify_intent (signature unchanged for test compat).
-    # If Groq key is missing, classify_intent_safe will catch the error and default
-    # to "hybrid", then synthesis uses chat_completion_stream with Gemini fallback.
+    _trace_cm = run_trace(run_id)
+    _trace_cm.__enter__()
     try:
-        import groq as groq_module
-        groq_client = groq_module.Groq(api_key=groq_api_key) if groq_api_key else None
-    except Exception:
-        groq_client = None
+        # Rephrase follow-up questions using chat history
+        if chat_history:
+            from api.db_service import _rephrase_with_history
+            try:
+                question = await _rephrase_with_history(question, chat_history)
+            except Exception as _exc:
+                logger.warning("Hybrid rephrase failed, using original: %s", _exc)
 
-    classification = await classify_intent_safe(
-        question=question,
-        has_db=has_db,
-        has_docs=has_docs,
-        session_id=session_id,
-        groq_client=groq_client,
-        async_session_factory=async_session_factory,
-        query_history_table=query_history_table,
-    )
-    intent = classification.intent
+        # ── Step 1: classify intent ───────────────────────────────────────────
+        groq_api_key = os.getenv("groq_api_key", "")
 
-    yield f"data: {json.dumps({'type': 'metadata', 'intent': intent, 'has_sql': has_db, 'has_docs': has_docs})}\n\n"
+        # Build a groq_client for classify_intent (signature unchanged for test compat).
+        # If Groq key is missing, classify_intent_safe will catch the error and default
+        # to "hybrid", then synthesis uses chat_completion_stream with Gemini fallback.
+        try:
+            import groq as groq_module
+            groq_client = groq_module.Groq(api_key=groq_api_key) if groq_api_key else None
+        except Exception:
+            groq_client = None
 
-    # ── Step 2: gather context based on intent ────────────────────────────
-    doc_context = ""
-    doc_citations: list[dict] = []
-    sql_metadata: dict | None = None
-
-    if intent == "doc":
-        doc_context, doc_citations = await rag_retrieve(question, session_id, vector_stores)
-
-    elif intent == "sql" and has_db and connection_id:
-        sql_metadata = await _collect_sql_result(
-            connection_id=connection_id,
+        classification = await classify_intent_safe(
             question=question,
-            persona=persona,
-            db_connections_table=db_connections_table,
-            schema_cache_table=schema_cache_table,
-            query_history_table=query_history_table,
-            query_embeddings_table=query_embeddings_table,
+            has_db=has_db,
+            has_docs=has_docs,
+            session_id=session_id,
+            groq_client=groq_client,
             async_session_factory=async_session_factory,
-            expert_personas=expert_personas,
-            chart_type=chart_type,
+            query_history_table=query_history_table,
         )
+        intent = classification.intent
 
-    else:  # hybrid — parallel gather
-        rag_task = asyncio.create_task(
-            rag_retrieve(question, session_id, vector_stores)
-        )
-        sql_task = asyncio.create_task(
-            _collect_sql_result(
+        yield f"data: {json.dumps({'type': 'metadata', 'intent': intent, 'has_sql': has_db, 'has_docs': has_docs})}\n\n"
+
+        # ── Step 2: gather context based on intent ────────────────────────────
+        doc_context = ""
+        doc_citations: list[dict] = []
+        sql_metadata: dict | None = None
+
+        if intent == "doc":
+            doc_context, doc_citations = await rag_retrieve(question, session_id, vector_stores)
+
+        elif intent == "sql" and has_db and connection_id:
+            sql_metadata = await _collect_sql_result(
                 connection_id=connection_id,
                 question=question,
                 persona=persona,
@@ -547,137 +531,157 @@ async def hybrid_chat(
                 expert_personas=expert_personas,
                 chart_type=chart_type,
             )
-        ) if has_db and connection_id else None
 
-        doc_context, doc_citations = await rag_task
-
-        if sql_task is not None:
-            sql_metadata = await sql_task
-
-    # BUG #3 FIX: forward any chart/analysis_code events captured by
-    # _collect_sql_result so the frontend hybrid chart handler receives them.
-    # Without this, plotting requests via hybrid_chat() silently drop all charts.
-    if sql_metadata:
-        analysis_code_event = sql_metadata.get("analysis_code_event")
-        if analysis_code_event:
-            yield f"data: {json.dumps(analysis_code_event)}\n\n"
-        for chart_evt in sql_metadata.get("chart_events", []) or []:
-            yield f"data: {json.dumps(chart_evt)}\n\n"
-
-    # ── Step 3: build synthesis prompt ───────────────────────────────────
-    persona_def = (
-        expert_personas.get(persona, expert_personas.get("Generalist", {}))
-        .get("persona_def", "You are a helpful data analyst.")
-    )
-
-    doc_note = ""
-    sql_note = ""
-
-    if intent == "hybrid":
-        if not doc_context:
-            doc_note = "\n*(No document context available — answering from database only)*"
-        if sql_metadata is None:
-            sql_note = "\n*(SQL query failed — supplementing with document context only)*"
-
-    sql_section = ""
-    if sql_metadata:
-        # CSV connections provide answer text in csv_answer; SQL connections
-        # provide structured result_preview rows.
-        csv_answer = sql_metadata.get("csv_answer")
-        if csv_answer:
-            sources = sql_metadata.get("sources", [])
-            source_str = ", ".join(sources) if sources else "CSV file"
-            sql_section = (
-                f"\n\nData analysis results from [{source_str}]:\n{csv_answer}\n"
-                "Cite data results as [DB: csv_file]."
+        else:  # hybrid — parallel gather
+            rag_task = asyncio.create_task(
+                rag_retrieve(question, session_id, vector_stores)
             )
-        else:
-            preview = json.dumps(sql_metadata.get("result_preview", [])[:20], default=str, indent=2)
-            row_count = sql_metadata.get("row_count", 0)
-            sources = sql_metadata.get("sources", [])
-            source_str = ", ".join(sources) if sources else "database"
-            sql_section = (
-                f"\n\nDatabase results ({row_count} rows) from [{source_str}]:\n{preview}\n"
-                "Cite database results as [DB: table_name]."
-            )
+            sql_task = asyncio.create_task(
+                _collect_sql_result(
+                    connection_id=connection_id,
+                    question=question,
+                    persona=persona,
+                    db_connections_table=db_connections_table,
+                    schema_cache_table=schema_cache_table,
+                    query_history_table=query_history_table,
+                    query_embeddings_table=query_embeddings_table,
+                    async_session_factory=async_session_factory,
+                    expert_personas=expert_personas,
+                    chart_type=chart_type,
+                )
+            ) if has_db and connection_id else None
 
-    doc_section = ""
-    if doc_context:
-        doc_section = (
-            f"\n\nDocument context:\n{doc_context}\n"
-            "Cite document sources as [Source: filename, Page X]."
+            doc_context, doc_citations = await rag_task
+
+            if sql_task is not None:
+                sql_metadata = await sql_task
+
+        # BUG #3 FIX: forward any chart/analysis_code events captured by
+        # _collect_sql_result so the frontend hybrid chart handler receives them.
+        # Without this, plotting requests via hybrid_chat() silently drop all charts.
+        if sql_metadata:
+            analysis_code_event = sql_metadata.get("analysis_code_event")
+            if analysis_code_event:
+                yield f"data: {json.dumps(analysis_code_event)}\n\n"
+            for chart_evt in sql_metadata.get("chart_events", []) or []:
+                yield f"data: {json.dumps(chart_evt)}\n\n"
+
+        # ── Step 3: build synthesis prompt ───────────────────────────────────
+        persona_def = (
+            expert_personas.get(persona, expert_personas.get("Generalist", {}))
+            .get("persona_def", "You are a helpful data analyst.")
         )
 
-    # DOCBOT-406: include span-verified financial values when available
-    extracted_section = ""
-    if extracted_fields:
-        from api.document_extractor import format_extracted_fields_for_prompt
-        formatted = format_extracted_fields_for_prompt(extracted_fields)
-        if formatted:
-            extracted_section = f"\n\n{formatted}"
+        doc_note = ""
+        sql_note = ""
 
-    # DOCBOT-403: real discrepancy detection — extract numeric values from both
-    # sources, compute deltas in code, inject pre-computed facts into the prompt.
-    # The LLM receives confirmed discrepancies with exact numbers; it does NOT
-    # compute deltas itself (which caused hallucination in the prompt-only stub).
-    discrepancy_instruction = ""
-    if intent == "hybrid" and doc_context and sql_metadata:
-        from api.utils.discrepancy_detector import detect_discrepancies
-        report = detect_discrepancies(doc_context, sql_metadata)
-        discrepancy_instruction = report.to_prompt_block()
-        if not discrepancy_instruction:
-            # No numeric discrepancies found by code — tell LLM to flag only
-            # non-numeric inconsistencies it observes (time periods, categories, etc.)
-            discrepancy_instruction = (
-                "\n\nDISCREPANCY CHECK: No numeric value conflicts were detected between "
-                "the document and database results. If you observe non-numeric "
-                "inconsistencies (e.g. different time periods, mismatched categories), "
-                "flag them with [DISCREPANCY]. Otherwise synthesize normally."
+        if intent == "hybrid":
+            if not doc_context:
+                doc_note = "\n*(No document context available — answering from database only)*"
+            if sql_metadata is None:
+                sql_note = "\n*(SQL query failed — supplementing with document context only)*"
+
+        sql_section = ""
+        if sql_metadata:
+            # CSV connections provide answer text in csv_answer; SQL connections
+            # provide structured result_preview rows.
+            csv_answer = sql_metadata.get("csv_answer")
+            if csv_answer:
+                sources = sql_metadata.get("sources", [])
+                source_str = ", ".join(sources) if sources else "CSV file"
+                sql_section = (
+                    f"\n\nData analysis results from [{source_str}]:\n{csv_answer}\n"
+                    "Cite data results as [DB: csv_file]."
+                )
+            else:
+                preview = json.dumps(sql_metadata.get("result_preview", [])[:20], default=str, indent=2)
+                row_count = sql_metadata.get("row_count", 0)
+                sources = sql_metadata.get("sources", [])
+                source_str = ", ".join(sources) if sources else "database"
+                sql_section = (
+                    f"\n\nDatabase results ({row_count} rows) from [{source_str}]:\n{preview}\n"
+                    "Cite database results as [DB: table_name]."
+                )
+
+        doc_section = ""
+        if doc_context:
+            doc_section = (
+                f"\n\nDocument context:\n{doc_context}\n"
+                "Cite document sources as [Source: filename, Page X]."
             )
 
-    prompt = (
-        f"{persona_def}\n\n"
-        f"Answer the following question using the context below. "
-        f"Be accurate and thorough.{doc_note}{sql_note}\n\n"
-        "COMPUTATION RULE: When the user provides explicit numerical parameters, "
-        "assumptions, or scenarios, you MUST perform the requested calculations step by "
-        "step. Show your arithmetic. Never say data is insufficient when the user or "
-        "context provides the inputs needed."
-        f"{discrepancy_instruction}\n\n"
-        "RETRIEVAL ACCURACY RULES:\n"
-        "- Read EVERY chunk in the document context carefully before concluding any "
-        "field is absent.\n"
-        "- Structured forms (government forms, legal filings) store fields as labelled "
-        "rows such as 'Job Title: X' or 'SOC Code: Y'. If ANY chunk contains a relevant "
-        "field value you MUST report it — do not say the value is missing.\n"
-        "- If the question asks about a person's role, title, position, or occupation, "
-        "look for any of: Job Title, Position, Role, Designation, SOC Occupation Title, "
-        "Occupation Title.\n"
-        "- Only say information is absent when you have examined all chunks and confirmed "
-        "it does not appear anywhere.\n\n"
-        f"Question: {question}"
-        f"{extracted_section}"
-        f"\n\n[DOCUMENT CONTEXT]\n{doc_section}"
-        f"\n\n[DATABASE RESULTS]\n{sql_section}\n\n"
-        "Answer:"
-    )
+        # DOCBOT-406: include span-verified financial values when available
+        extracted_section = ""
+        if extracted_fields:
+            from api.document_extractor import format_extracted_fields_for_prompt
+            formatted = format_extracted_fields_for_prompt(extracted_fields)
+            if formatted:
+                extracted_section = f"\n\n{formatted}"
 
-    # ── Step 4: stream synthesis (Groq → Gemini fallback) ───────────────
-    try:
-        from api.utils.llm_provider import chat_completion_stream
-        from api.utils.pii_masking import mask_pii
+        # DOCBOT-403: real discrepancy detection — extract numeric values from both
+        # sources, compute deltas in code, inject pre-computed facts into the prompt.
+        # The LLM receives confirmed discrepancies with exact numbers; it does NOT
+        # compute deltas itself (which caused hallucination in the prompt-only stub).
+        discrepancy_instruction = ""
+        if intent == "hybrid" and doc_context and sql_metadata:
+            from api.utils.discrepancy_detector import detect_discrepancies
+            report = detect_discrepancies(doc_context, sql_metadata)
+            discrepancy_instruction = report.to_prompt_block()
+            if not discrepancy_instruction:
+                # No numeric discrepancies found by code — tell LLM to flag only
+                # non-numeric inconsistencies it observes (time periods, categories, etc.)
+                discrepancy_instruction = (
+                    "\n\nDISCREPANCY CHECK: No numeric value conflicts were detected between "
+                    "the document and database results. If you observe non-numeric "
+                    "inconsistencies (e.g. different time periods, mismatched categories), "
+                    "flag them with [DISCREPANCY]. Otherwise synthesize normally."
+                )
 
-        for token in chat_completion_stream(
-            [{"role": "user", "content": prompt}],
-            temperature=0.2,
-            max_tokens=2000,
-            caller="hybrid_synthesis",
-            run_id=run_id,
-        ):
-            yield f"data: {json.dumps({'type': 'token', 'content': mask_pii(token)})}\n\n"
-    except Exception as exc:
-        logger.error("hybrid_chat synthesis failed: %s", exc)
-        yield f"data: {json.dumps({'type': 'error', 'detail': 'Synthesis failed. Please try again.'})}\n\n"
-        return
+        prompt = (
+            f"{persona_def}\n\n"
+            f"Answer the following question using the context below. "
+            f"Be accurate and thorough.{doc_note}{sql_note}\n\n"
+            "COMPUTATION RULE: When the user provides explicit numerical parameters, "
+            "assumptions, or scenarios, you MUST perform the requested calculations step by "
+            "step. Show your arithmetic. Never say data is insufficient when the user or "
+            "context provides the inputs needed."
+            f"{discrepancy_instruction}\n\n"
+            "RETRIEVAL ACCURACY RULES:\n"
+            "- Read EVERY chunk in the document context carefully before concluding any "
+            "field is absent.\n"
+            "- Structured forms (government forms, legal filings) store fields as labelled "
+            "rows such as 'Job Title: X' or 'SOC Code: Y'. If ANY chunk contains a relevant "
+            "field value you MUST report it — do not say the value is missing.\n"
+            "- If the question asks about a person's role, title, position, or occupation, "
+            "look for any of: Job Title, Position, Role, Designation, SOC Occupation Title, "
+            "Occupation Title.\n"
+            "- Only say information is absent when you have examined all chunks and confirmed "
+            "it does not appear anywhere.\n\n"
+            f"Question: {question}"
+            f"{extracted_section}"
+            f"\n\n[DOCUMENT CONTEXT]\n{doc_section}"
+            f"\n\n[DATABASE RESULTS]\n{sql_section}\n\n"
+            "Answer:"
+        )
 
-    yield f"data: {json.dumps({'type': 'done', 'citations': doc_citations, 'run_id': run_id})}\n\n"
+        # ── Step 4: stream synthesis (Groq → Gemini fallback) ───────────────
+        try:
+            from api.utils.llm_provider import chat_completion_stream
+            from api.utils.pii_masking import mask_pii
+
+            for token in chat_completion_stream(
+                [{"role": "user", "content": prompt}],
+                temperature=0.2,
+                max_tokens=2000,
+                caller="hybrid_synthesis",
+                run_id=run_id,
+            ):
+                yield f"data: {json.dumps({'type': 'token', 'content': mask_pii(token)})}\n\n"
+        except Exception as exc:
+            logger.error("hybrid_chat synthesis failed: %s", exc)
+            yield f"data: {json.dumps({'type': 'error', 'detail': 'Synthesis failed. Please try again.'})}\n\n"
+            return
+
+        yield f"data: {json.dumps({'type': 'done', 'citations': doc_citations, 'run_id': run_id})}\n\n"
+    finally:
+        _trace_cm.__exit__(None, None, None)

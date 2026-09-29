@@ -1320,146 +1320,53 @@ async def run_csv_query_on_e2b(
     # request (codegen + any corrective retry). Reuses an already-active
     # run_id when called from a larger investigation, else mints a fresh one.
     from api.utils.llm_provider import current_run_id, new_run_id, run_trace
-    run_trace(current_run_id() or new_run_id()).__enter__()
-
-    persona_def = (
-        (expert_personas or {})
-        .get(persona, (expert_personas or {}).get("Generalist", {}))
-        .get("persona_def", "You are a helpful data analyst.")
-    )
-
-    csv_path_in_sandbox = f"/tmp/{table_name}.csv"
-
-    # Detect complex queries for adaptive timeout
-    is_complex = bool(_COMPLEX_QUERY_RE.search(question))
-    sandbox_timeout = 60 if is_complex else 30
-
-    # Build section-aware preamble if section metadata is available
-    is_multi_section = sections is not None and len(sections) > 1
-    if sections:
-        from api.utils.csv_preprocessor import dicts_to_sections, generate_section_preamble
-        csv_sections = dicts_to_sections(sections)
-        preamble = generate_section_preamble(csv_sections, csv_path_in_sandbox)
-    else:
-        # Fallback: inspect CSV on-the-fly (for connections created before this update)
-        try:
-            csv_bytes_for_profile = base64.b64decode(csv_content_b64)
-        except Exception:
-            csv_bytes_for_profile = b""
-        dtypes_info, sample_rows = await asyncio.get_running_loop().run_in_executor(
-            None, _inspect_csv_profile, csv_bytes_for_profile,
-        )
-        preamble = (
-            "import pandas as pd\n"
-            "import re as _re\n"
-            "import numpy as np\n"
-            "\n"
-            f"df = pd.read_csv('{csv_path_in_sandbox}')\n"
-            "df.columns = [_re.sub(r'[^a-z0-9_]', '_', str(c).strip().lower().replace(' ', '_')) for c in df.columns]\n"
-            "df = df.dropna(how='all').dropna(axis=1, how='all')\n"
-            "for _c in df.columns:\n"
-            "    _v = pd.to_numeric(df[_c], errors='coerce')\n"
-            "    if _v.notna().sum() / max(df[_c].notna().sum(), 1) > 0.5:\n"
-            "        df[_c] = _v\n"
-            "# --- end preamble ---\n\n"
-        )
-
-    # Generate pandas code via LLM
-    code = await generate_csv_analysis_code(
-        csv_path_in_sandbox=csv_path_in_sandbox,
-        column_names=column_names,
-        question=question,
-        persona_def=persona_def,
-        chart_type=chart_type,
-        section_manifest=section_manifest,
-        is_multi_section=is_multi_section,
-        data_profile=data_profile_str,
-        chat_history=chat_history,
-    )
-
-    # Fallback code if LLM is unavailable or generation produced invalid syntax.
-    if not code:
-        code = (
-            preamble
-            + "import matplotlib\n"
-            "matplotlib.use('Agg')\n"
-            "import matplotlib.pyplot as plt\n"
-            "\n"
-            "print('**Dataset Overview**')\n"
-            "print(f'Shape: {df.shape[0]} rows x {df.shape[1]} columns')\n"
-            "print(f'Columns: {\", \".join(df.columns.tolist())}')\n"
-            "print()\n"
-            "numeric_cols = df.select_dtypes(include='number').columns.tolist()\n"
-            "date_cols = [c for c in df.columns if 'date' in c.lower() or 'time' in c.lower()]\n"
-            "print(f'Numeric columns: {\", \".join(numeric_cols) if numeric_cols else \"None\"}')\n"
-            "print(f'Date columns: {\", \".join(date_cols) if date_cols else \"None\"}')\n"
-            "print()\n"
-            "if numeric_cols:\n"
-            "    print('**Summary Statistics**')\n"
-            "    try:\n"
-            "        print(df[numeric_cols].describe().to_markdown())\n"
-            "    except Exception:\n"
-            "        print(df[numeric_cols].describe().to_string())\n"
-            "    print()\n"
-            "print('**Sample Data (first 5 rows)**')\n"
-            "try:\n"
-            "    print(df.head(5).to_markdown(index=False))\n"
-            "except Exception:\n"
-            "    print(df.head(5).to_string(index=False))\n"
-            "\n"
-            "# Auto-chart: line plot for time series, histogram otherwise\n"
-            "if numeric_cols:\n"
-            "    col = numeric_cols[0]\n"
-            "    fig, ax = plt.subplots(figsize=(10, 6))\n"
-            "    if date_cols:\n"
-            "        _dates = pd.to_datetime(df[date_cols[0]], errors='coerce')\n"
-            "        ax.plot(_dates, df[col], color='#667eea', linewidth=1.5)\n"
-            "        ax.set_title(f'{col} over time', fontsize=14)\n"
-            "        ax.set_xlabel(date_cols[0])\n"
-            "        fig.autofmt_xdate()\n"
-            "    else:\n"
-            "        df[col].dropna().hist(bins=30, ax=ax, color='#667eea', edgecolor='white')\n"
-            "        ax.set_title(f'Distribution of {col}', fontsize=14)\n"
-            "        ax.set_xlabel(col)\n"
-            "    ax.set_ylabel(col)\n"
-            "    plt.tight_layout()\n"
-            "    plt.show()\n"
-            "    _chart_type = 'line' if date_cols else 'histogram'\n"
-            "    _chart_title = f'{col} over time' if date_cols else f'Distribution of {col}'\n"
-            "    print('CHART_META:' + json.dumps({'type': _chart_type, 'title': _chart_title, "
-            "'x_label': date_cols[0] if date_cols else col, 'y_label': col, 'series_count': 1}))\n"
-        )
-    else:
-        # Prepend preamble to LLM-generated code, stripping any duplicate
-        # pd.read_csv() / import pandas the LLM may have included
-        code = _prepend_csv_preamble(code, preamble)
-
-    # Decode CSV and run on E2B
+    _trace_cm = run_trace(current_run_id() or new_run_id())
+    _trace_cm.__enter__()
     try:
-        csv_bytes = base64.b64decode(csv_content_b64)
-    except Exception as exc:
-        error_chunk = _stdlib_json.dumps({"type": "error", "error_type": "InternalError", "detail": f"Failed to decode CSV content: {exc}"})
-        yield f"data: {error_chunk}\n\n"
-        return
-
-    result = await _run_csv_in_sandbox(code, csv_path_in_sandbox, csv_bytes, timeout_seconds=sandbox_timeout)
-
-    # --- Task 3: Error retry with feedback ---
-    _is_timeout = result.error and "timed out" in result.error.lower()
-    if result.error and not _is_timeout:
-        logger.info("CSV sandbox failed, attempting one retry with error feedback")
-        yield f"data: {_stdlib_json.dumps({'type': 'status', 'content': 'Retrying with corrected code...'})}\n\n"
-
-        error_feedback = (
-            f"PREVIOUS ATTEMPT FAILED with error:\n"
-            f"{result.error}\n"
-            f"{result.stderr[:500] if result.stderr else ''}\n\n"
-            "Fix the code and try again. Common fixes:\n"
-            "- Wrong column name -> check the column list above\n"
-            "- Date parsing -> try pd.to_datetime(col, format='mixed', errors='coerce')\n"
-            "- Type error -> ensure numeric conversion before math operations"
+        persona_def = (
+            (expert_personas or {})
+            .get(persona, (expert_personas or {}).get("Generalist", {}))
+            .get("persona_def", "You are a helpful data analyst.")
         )
-        retry_code = await generate_csv_analysis_code(
+
+        csv_path_in_sandbox = f"/tmp/{table_name}.csv"
+
+        # Detect complex queries for adaptive timeout
+        is_complex = bool(_COMPLEX_QUERY_RE.search(question))
+        sandbox_timeout = 60 if is_complex else 30
+
+        # Build section-aware preamble if section metadata is available
+        is_multi_section = sections is not None and len(sections) > 1
+        if sections:
+            from api.utils.csv_preprocessor import dicts_to_sections, generate_section_preamble
+            csv_sections = dicts_to_sections(sections)
+            preamble = generate_section_preamble(csv_sections, csv_path_in_sandbox)
+        else:
+            # Fallback: inspect CSV on-the-fly (for connections created before this update)
+            try:
+                csv_bytes_for_profile = base64.b64decode(csv_content_b64)
+            except Exception:
+                csv_bytes_for_profile = b""
+            dtypes_info, sample_rows = await asyncio.get_running_loop().run_in_executor(
+                None, _inspect_csv_profile, csv_bytes_for_profile,
+            )
+            preamble = (
+                "import pandas as pd\n"
+                "import re as _re\n"
+                "import numpy as np\n"
+                "\n"
+                f"df = pd.read_csv('{csv_path_in_sandbox}')\n"
+                "df.columns = [_re.sub(r'[^a-z0-9_]', '_', str(c).strip().lower().replace(' ', '_')) for c in df.columns]\n"
+                "df = df.dropna(how='all').dropna(axis=1, how='all')\n"
+                "for _c in df.columns:\n"
+                "    _v = pd.to_numeric(df[_c], errors='coerce')\n"
+                "    if _v.notna().sum() / max(df[_c].notna().sum(), 1) > 0.5:\n"
+                "        df[_c] = _v\n"
+                "# --- end preamble ---\n\n"
+            )
+
+        # Generate pandas code via LLM
+        code = await generate_csv_analysis_code(
             csv_path_in_sandbox=csv_path_in_sandbox,
             column_names=column_names,
             question=question,
@@ -1469,58 +1376,154 @@ async def run_csv_query_on_e2b(
             is_multi_section=is_multi_section,
             data_profile=data_profile_str,
             chat_history=chat_history,
-            error_context=error_feedback,
         )
-        if retry_code:
-            # Prepend preamble to retry code same as original
-            retry_code = _prepend_csv_preamble(retry_code, preamble)
 
-            # Bug #9: skip retry if LLM returned effectively identical code —
-            # rerunning broken code just wastes 30-60 seconds.
-            if _normalise_for_diff(retry_code) == _normalise_for_diff(code):
-                logger.info("CSV retry produced identical code — skipping")
-            else:
-                retry_result = await _run_csv_in_sandbox(
-                    retry_code, csv_path_in_sandbox, csv_bytes, timeout_seconds=sandbox_timeout
-                )
-                if retry_result.error is None:
-                    logger.info("CSV retry succeeded")
-                    result = retry_result
-                    code = retry_code
+        # Fallback code if LLM is unavailable or generation produced invalid syntax.
+        if not code:
+            code = (
+                preamble
+                + "import matplotlib\n"
+                "matplotlib.use('Agg')\n"
+                "import matplotlib.pyplot as plt\n"
+                "\n"
+                "print('**Dataset Overview**')\n"
+                "print(f'Shape: {df.shape[0]} rows x {df.shape[1]} columns')\n"
+                "print(f'Columns: {\", \".join(df.columns.tolist())}')\n"
+                "print()\n"
+                "numeric_cols = df.select_dtypes(include='number').columns.tolist()\n"
+                "date_cols = [c for c in df.columns if 'date' in c.lower() or 'time' in c.lower()]\n"
+                "print(f'Numeric columns: {\", \".join(numeric_cols) if numeric_cols else \"None\"}')\n"
+                "print(f'Date columns: {\", \".join(date_cols) if date_cols else \"None\"}')\n"
+                "print()\n"
+                "if numeric_cols:\n"
+                "    print('**Summary Statistics**')\n"
+                "    try:\n"
+                "        print(df[numeric_cols].describe().to_markdown())\n"
+                "    except Exception:\n"
+                "        print(df[numeric_cols].describe().to_string())\n"
+                "    print()\n"
+                "print('**Sample Data (first 5 rows)**')\n"
+                "try:\n"
+                "    print(df.head(5).to_markdown(index=False))\n"
+                "except Exception:\n"
+                "    print(df.head(5).to_string(index=False))\n"
+                "\n"
+                "# Auto-chart: line plot for time series, histogram otherwise\n"
+                "if numeric_cols:\n"
+                "    col = numeric_cols[0]\n"
+                "    fig, ax = plt.subplots(figsize=(10, 6))\n"
+                "    if date_cols:\n"
+                "        _dates = pd.to_datetime(df[date_cols[0]], errors='coerce')\n"
+                "        ax.plot(_dates, df[col], color='#667eea', linewidth=1.5)\n"
+                "        ax.set_title(f'{col} over time', fontsize=14)\n"
+                "        ax.set_xlabel(date_cols[0])\n"
+                "        fig.autofmt_xdate()\n"
+                "    else:\n"
+                "        df[col].dropna().hist(bins=30, ax=ax, color='#667eea', edgecolor='white')\n"
+                "        ax.set_title(f'Distribution of {col}', fontsize=14)\n"
+                "        ax.set_xlabel(col)\n"
+                "    ax.set_ylabel(col)\n"
+                "    plt.tight_layout()\n"
+                "    plt.show()\n"
+                "    _chart_type = 'line' if date_cols else 'histogram'\n"
+                "    _chart_title = f'{col} over time' if date_cols else f'Distribution of {col}'\n"
+                "    print('CHART_META:' + json.dumps({'type': _chart_type, 'title': _chart_title, "
+                "'x_label': date_cols[0] if date_cols else col, 'y_label': col, 'series_count': 1}))\n"
+            )
+        else:
+            # Prepend preamble to LLM-generated code, stripping any duplicate
+            # pd.read_csv() / import pandas the LLM may have included
+            code = _prepend_csv_preamble(code, preamble)
+
+        # Decode CSV and run on E2B
+        try:
+            csv_bytes = base64.b64decode(csv_content_b64)
+        except Exception as exc:
+            error_chunk = _stdlib_json.dumps({"type": "error", "error_type": "InternalError", "detail": f"Failed to decode CSV content: {exc}"})
+            yield f"data: {error_chunk}\n\n"
+            return
+
+        result = await _run_csv_in_sandbox(code, csv_path_in_sandbox, csv_bytes, timeout_seconds=sandbox_timeout)
+
+        # --- Task 3: Error retry with feedback ---
+        _is_timeout = result.error and "timed out" in result.error.lower()
+        if result.error and not _is_timeout:
+            logger.info("CSV sandbox failed, attempting one retry with error feedback")
+            yield f"data: {_stdlib_json.dumps({'type': 'status', 'content': 'Retrying with corrected code...'})}\n\n"
+
+            error_feedback = (
+                f"PREVIOUS ATTEMPT FAILED with error:\n"
+                f"{result.error}\n"
+                f"{result.stderr[:500] if result.stderr else ''}\n\n"
+                "Fix the code and try again. Common fixes:\n"
+                "- Wrong column name -> check the column list above\n"
+                "- Date parsing -> try pd.to_datetime(col, format='mixed', errors='coerce')\n"
+                "- Type error -> ensure numeric conversion before math operations"
+            )
+            retry_code = await generate_csv_analysis_code(
+                csv_path_in_sandbox=csv_path_in_sandbox,
+                column_names=column_names,
+                question=question,
+                persona_def=persona_def,
+                chart_type=chart_type,
+                section_manifest=section_manifest,
+                is_multi_section=is_multi_section,
+                data_profile=data_profile_str,
+                chat_history=chat_history,
+                error_context=error_feedback,
+            )
+            if retry_code:
+                # Prepend preamble to retry code same as original
+                retry_code = _prepend_csv_preamble(retry_code, preamble)
+
+                # Bug #9: skip retry if LLM returned effectively identical code —
+                # rerunning broken code just wastes 30-60 seconds.
+                if _normalise_for_diff(retry_code) == _normalise_for_diff(code):
+                    logger.info("CSV retry produced identical code — skipping")
                 else:
-                    logger.warning("CSV retry also failed: %s, using original error", retry_result.error[:200])
-                    # Keep original result (don't show retry error)
+                    retry_result = await _run_csv_in_sandbox(
+                        retry_code, csv_path_in_sandbox, csv_bytes, timeout_seconds=sandbox_timeout
+                    )
+                    if retry_result.error is None:
+                        logger.info("CSV retry succeeded")
+                        result = retry_result
+                        code = retry_code
+                    else:
+                        logger.warning("CSV retry also failed: %s, using original error", retry_result.error[:200])
+                        # Keep original result (don't show retry error)
 
-    # --- SSE: metadata chunk ---
-    cols_summary = ", ".join(column_names[:6])
-    if len(column_names) > 6:
-        cols_summary += f" (+{len(column_names) - 6} more)"
-    meta_chunk = {
-        "type": "metadata",
-        "sql_query": None,
-        "explanation": f"Analyzed {table_name} ({len(csv_bytes) // 1024 or 1} KB) using pandas — columns: {cols_summary}",
-        "result_preview": [],
-        "row_count": 0,
-        "execution_time_ms": result.execution_time_ms,
-        "sources": [table_name],
-    }
-    yield f"data: {_stdlib_json.dumps(meta_chunk)}\n\n"
+        # --- SSE: metadata chunk ---
+        cols_summary = ", ".join(column_names[:6])
+        if len(column_names) > 6:
+            cols_summary += f" (+{len(column_names) - 6} more)"
+        meta_chunk = {
+            "type": "metadata",
+            "sql_query": None,
+            "explanation": f"Analyzed {table_name} ({len(csv_bytes) // 1024 or 1} KB) using pandas — columns: {cols_summary}",
+            "result_preview": [],
+            "row_count": 0,
+            "execution_time_ms": result.execution_time_ms,
+            "sources": [table_name],
+        }
+        yield f"data: {_stdlib_json.dumps(meta_chunk)}\n\n"
 
-    # --- SSE: charts ---
-    if result.charts:
-        yield f"data: {_stdlib_json.dumps({'type': 'analysis_code', 'code': code})}\n\n"
-        for idx, chart_b64 in enumerate(result.charts):
-            meta = result.chart_metadata[idx] if idx < len(result.chart_metadata) else None
-            yield f"data: {_stdlib_json.dumps({'type': 'chart', 'base64': chart_b64, 'index': idx, 'metadata': meta.model_dump() if meta else None})}\n\n"
+        # --- SSE: charts ---
+        if result.charts:
+            yield f"data: {_stdlib_json.dumps({'type': 'analysis_code', 'code': code})}\n\n"
+            for idx, chart_b64 in enumerate(result.charts):
+                meta = result.chart_metadata[idx] if idx < len(result.chart_metadata) else None
+                yield f"data: {_stdlib_json.dumps({'type': 'chart', 'base64': chart_b64, 'index': idx, 'metadata': meta.model_dump() if meta else None})}\n\n"
 
-    # --- SSE: answer tokens (stdout is the pandas output) ---
-    answer = _format_stdout_as_markdown(result.stdout.strip())
-    if result.error and not answer:
-        answer = f"Execution error: {result.error}"
-    elif result.error:
-        answer = f"{answer}\n\n⚠️ {result.error}"
+        # --- SSE: answer tokens (stdout is the pandas output) ---
+        answer = _format_stdout_as_markdown(result.stdout.strip())
+        if result.error and not answer:
+            answer = f"Execution error: {result.error}"
+        elif result.error:
+            answer = f"{answer}\n\n⚠️ {result.error}"
 
-    if answer:
-        yield f"data: {_stdlib_json.dumps({'type': 'token', 'content': answer})}\n\n"
+        if answer:
+            yield f"data: {_stdlib_json.dumps({'type': 'token', 'content': answer})}\n\n"
 
-    yield f"data: {_stdlib_json.dumps({'type': 'done'})}\n\n"
+        yield f"data: {_stdlib_json.dumps({'type': 'done'})}\n\n"
+    finally:
+        _trace_cm.__exit__(None, None, None)

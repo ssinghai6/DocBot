@@ -181,6 +181,95 @@ class TestWriterLoop:
         await asyncio.sleep(0.02)
         await llm_trace_service.stop_writer()  # must return cleanly
 
+    @pytest.mark.asyncio
+    async def test_events_enqueued_before_writer_starts_are_not_dropped(self, wired_store):
+        """Startup ordering: index.py's lifespan calls wire_llm_trace_store()
+        then start_writer() — but nothing prevents an LLM call (and its
+        enqueue_call) from happening in between, or even before either. The
+        queue must hold those events rather than drop them, and the writer
+        must drain everything once started."""
+        table, session_factory = wired_store
+
+        # Simulate calls arriving before the writer task exists.
+        for i in range(5):
+            llm_trace_service.enqueue_call({"run_id": f"pre-start-{i}", "llm_provider": "groq"})
+
+        assert llm_trace_service._writer_task is None
+
+        llm_trace_service.start_writer()
+        await asyncio.sleep(0.05)
+        await llm_trace_service.stop_writer()
+
+        async with session_factory() as session:
+            result = await session.execute(select(table))
+            rows = result.fetchall()
+
+        run_ids = {r.run_id for r in rows}
+        assert run_ids == {f"pre-start-{i}" for i in range(5)}
+
+    @pytest.mark.asyncio
+    async def test_stop_writer_drains_pending_queue_before_returning(self, wired_store):
+        """stop_writer() enqueues a shutdown sentinel at the back of the
+        FIFO queue — every real event enqueued before shutdown was requested
+        must be persisted before the writer loop exits, not dropped."""
+        table, session_factory = wired_store
+
+        llm_trace_service.start_writer()
+        for i in range(20):
+            llm_trace_service.enqueue_call({"run_id": f"drain-{i}", "llm_provider": "groq"})
+        # No sleep here — stop_writer() is called immediately, while the
+        # queue may still hold unprocessed items.
+        await llm_trace_service.stop_writer()
+
+        async with session_factory() as session:
+            result = await session.execute(select(table))
+            rows = result.fetchall()
+
+        run_ids = {r.run_id for r in rows}
+        assert run_ids == {f"drain-{i}" for i in range(20)}
+
+    @pytest.mark.asyncio
+    async def test_missing_table_degrades_gracefully_does_not_crash_loop(self, wired_store, monkeypatch):
+        """DOCBOT-1502 review item: if the llm_calls table doesn't exist yet
+        against a given DB connection (e.g. an old pooled connection during a
+        Railway mid-deploy window), the insert raises a DB error — the
+        writer must log and drop it, not crash, and must keep processing
+        subsequent events. Simulated by pointing the module's table
+        reference at a table object with a name the DB doesn't recognize."""
+        table, session_factory = wired_store
+
+        from sqlalchemy import Column, MetaData, String, Table as SATable
+
+        bogus_metadata = MetaData()
+        bogus_table = SATable(
+            "llm_calls_does_not_exist", bogus_metadata,
+            Column("id", String, primary_key=True),
+            Column("run_id", String),
+        )
+        monkeypatch.setattr(llm_trace_service, "_llm_calls_table", bogus_table)
+
+        llm_trace_service.enqueue_call({"run_id": "against-missing-table", "llm_provider": "groq"})
+        llm_trace_service.start_writer()
+        await asyncio.sleep(0.05)
+        # Must return cleanly — a missing table must not hang or crash the loop.
+        await llm_trace_service.stop_writer()
+
+        # Restore the real table and confirm the loop (a fresh one, started
+        # again) still works normally afterwards — proves the failure didn't
+        # corrupt any shared state.
+        monkeypatch.setattr(llm_trace_service, "_llm_calls_table", table)
+        llm_trace_service.enqueue_call({"run_id": "after-recovery", "llm_provider": "groq"})
+        llm_trace_service.start_writer()
+        await asyncio.sleep(0.05)
+        await llm_trace_service.stop_writer()
+
+        async with session_factory() as session:
+            result = await session.execute(select(table))
+            rows = result.fetchall()
+        run_ids = {r.run_id for r in rows}
+        assert "after-recovery" in run_ids
+        assert "against-missing-table" not in run_ids
+
 
 # ---------------------------------------------------------------------------
 # get_call_stats — read path for DOCBOT-1502

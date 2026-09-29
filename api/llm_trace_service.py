@@ -218,7 +218,7 @@ async def stop_writer(timeout: float = 5.0) -> None:
         pass
     try:
         await asyncio.wait_for(_writer_task, timeout=timeout)
-    except (asyncio.TimeoutError, Exception) as exc:
+    except Exception as exc:
         logger.warning("llm_trace_service: writer did not stop cleanly (%s)", exc)
     _writer_task = None
 
