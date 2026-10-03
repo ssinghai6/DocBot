@@ -68,7 +68,7 @@ Every story is only "done" when ALL of the following are true. No exceptions.
 | EPIC-10 | RAG Quality Enhancement | 4+ | ✅ Done | Chroma persistent store, cross-encoder reranker, SemanticChunker, FinanceBench accuracy baseline (**100% — 20/20**). PageIndex evaluated and rejected (2026-03-25). |
 | EPIC-12 | UI Redesign & Finance Vertical | 5 | ✅ Done | Progressive disclosure UI (tabbed sidebar, collapsible sections, Cmd+K command palette), unified file upload, 3-color palette, finance-focused copy, guided onboarding empty state. |
 | EPIC-13 | Sandbox Demo Mode | 5 | ✅ Done | Pre-loaded TechCorp 10-K + SQLite financial database via `/api/demo/init`. One-click hybrid analysis demo with deliberate discrepancies for showcase. |
-| EPIC-15 | AI Engineering Maturity | 6 | 🔲 Planned | LLM tracing/observability, cost+latency metrics, eval-suite CI gating, structured-output validation, multi-agent architecture spike, prompt versioning, response caching, cost ceiling. Gap analysis 2026-09-27 (ai-engineer + senior-project-manager agents). |
+| EPIC-15 | AI Engineering Maturity | 6 | 🟡 In Progress (4/8) | DOCBOT-1501/1502 (tracing+dashboard), 1503 (eval CI gate), 1504 (structured-output validation), 1505 (multi-agent spike) — done, reviewed, merged 2026-10-03. DOCBOT-1506 (response cache), 1507 (prompt versioning), 1508 (cost ceiling) — not started. Gap analysis 2026-09-27 (ai-engineer + senior-project-manager agents). |
 
 ---
 
@@ -1471,7 +1471,7 @@ As a developer, I want every LLM call (Groq/Gemini, all callsites) linked by a s
 - [x] Persist `llm_call` events (provider, model, run_id, caller, tokens, latency_ms, cost, success) to Postgres, or wire to Langfuse/Helicone
 - [x] No credentials or PII ever land in traced payloads
 
-**Status**: ✅ Done (branch `feature/DOCBOT-1501-llm-tracing-observability`, not yet merged)
+**Status**: ✅ Done (branch `feature/DOCBOT-1501-llm-tracing-observability`, merged to main 2026-10-03)
 
 Implementation notes:
 - `run_id` propagation uses a `contextvars.ContextVar` (`api/utils/llm_provider.py::run_trace`/`current_run_id`/`new_run_id`) rather than threading an explicit parameter through every nested call — `asyncio.Task`/`create_task` (including LangGraph's internal node dispatch) copies the active context at task-creation time, so binding once at the top of `run_autopilot`, `hybrid_chat`, `run_sql_pipeline`, and `run_csv_query_on_e2b` covers every LLM call made anywhere in that call tree, including concurrently-dispatched Autopilot waves. `AutopilotState` also carries an explicit `run_id` field (passed to `chat_completion`/`deep_retrieve` calls) for defense-in-depth/testability.
@@ -1497,7 +1497,7 @@ As an admin, I want aggregated LLM cost/latency/token metrics in `/admin/metrics
 - [x] `/admin/metrics` surfaces per-day/per-persona token spend and P50/P95 latency
 - [x] Sourced from DOCBOT-1501's persisted call log
 
-**Status**: ✅ Done (branch `feature/DOCBOT-1501-llm-tracing-observability`, not yet merged — bundled with 1501 since 1502 is a thin read-layer on top of it)
+**Status**: ✅ Done (branch `feature/DOCBOT-1501-llm-tracing-observability`, merged to main 2026-10-03 — bundled with 1501 since 1502 is a thin read-layer on top of it)
 
 Implementation notes:
 - `api/metrics_service.py::get_llm_cost_metrics(days=7)` reads raw rows via `llm_trace_service.get_call_stats()` and aggregates in Python (total cost/tokens, success/fallback rate, overall P50/P95 latency via nearest-rank percentile, `by_day` and `by_caller` breakdowns).
@@ -1521,7 +1521,7 @@ As a developer, I want `tests/eval/` (Recall@k, discrepancy eval) to run automat
 - [x] Job fails on Recall@k regression below documented baseline
 - [x] Do not re-cite `tests/external/test_llm_extraction_baseline.py` as a retrieval benchmark (per EPIC-10 caveat) — this ticket is the real retrieval eval
 
-**Status**: ✅ Done (branch `feature/DOCBOT-1503-nightly-eval-ci-gate`, not yet merged)
+**Status**: ✅ Done (branch `feature/DOCBOT-1503-nightly-eval-ci-gate`, merged to main 2026-10-03)
 
 Implementation notes:
 - New `.github/workflows/nightly-eval.yml`: scheduled `cron: "0 7 * * *"` (daily 07:00 UTC) plus `workflow_dispatch` for manual runs. Runs `pytest tests/eval -v -m external` — this targets exactly `test_retrieval_eval.py`'s two `@pytest.mark.external` tests.
@@ -1548,7 +1548,7 @@ As a developer, I want LLM JSON outputs on the SQL-gen and E2B codegen paths val
 - [x] One retry with the validation error fed back to the LLM, consistent with existing sandbox error-retry pattern
 - [x] Malformed-output rate logged (feeds DOCBOT-1501/1502)
 
-**Status**: ✅ Done (branch `feature/DOCBOT-1504-structured-output-validation`, not yet merged)
+**Status**: ✅ Done (branch `feature/DOCBOT-1504-structured-output-validation`, merged to main 2026-10-03)
 
 Implementation notes:
 - **Ground-truth correction**: `db_service.py:434` (at the time the ticket was written) is `_parse_token_expiry`'s `json.loads(raw)` on a decoded Azure Entra JWT payload — not LLM output at all. Left untouched; not in scope. The real "SQL-gen path" bare-json.loads site is `_select_relevant_tables` (Step 2 table selector, LLM call #1 of the 7-step SQL pipeline) — line ~1194 in the pre-ticket file, `json.loads(raw[start:end])` on the LLM's returned table-name array with no schema check.
@@ -1574,7 +1574,7 @@ As a developer, I want a time-boxed, code-free evaluation of whether Autopilot's
 - [x] Explicit recommendation: keep current architecture, OR adopt specialist sub-agent handoff pattern (e.g. separate SQL-agent / doc-agent contexts passing structured findings)
 - [x] If "multi-agent" is used in marketing/landing copy, reconcile claim with actual architecture (reframe copy or scope real multi-agent work)
 
-**Status**: ✅ Done (branch `feature/DOCBOT-1505-multi-agent-eval-spike`, not yet merged) — **no production code changed**, decision doc only, per this ticket's scope.
+**Status**: ✅ Done (branch `feature/DOCBOT-1505-multi-agent-eval-spike`, merged to main 2026-10-03) — **no production code changed**, decision doc only, per this ticket's scope.
 
 > **Multi-Agent Architecture Decision (2026-09-29):** Full analysis in `project-tasks/docbot-multi-agent-architecture-decision.md`. Decision: **keep the current single-agent LangGraph tool-orchestration architecture** (planner → executor → synthesizer over one shared `AutopilotState`, with per-tool correction loops). Do not adopt agent-to-agent handoff. Key finding: every capability a hypothetical specialist sub-agent would add (SQL-specific retry, codegen-specific retry, doc-search refinement) **already exists** as a targeted per-tool correction loop (`db_service`'s schema-drift retry, `sandbox_service`'s corrective retry, `deep_research_service`'s gap-fill loop) — multi-agent handoff would mostly relabel existing behavior behind new indirection (agent identity, handoff protocol, coordination logic) without adding capability, while costing more LLM round-trips (cost + latency, both explicitly tracked elsewhere in this epic) and adding a new failure class (handoff loops/deadlocks) that's expensive for a solo developer to own. Marketing/landing copy checked — no "multi-agent" claims exist; current copy ("multi-step investigation agent," "Agentic Orchestration") is already accurate, no changes needed.
 >
