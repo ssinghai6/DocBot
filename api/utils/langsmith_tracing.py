@@ -21,8 +21,10 @@ Design notes
   inside that scope is created as a child of the current run tree, so there
   is a single run_id scheme, not two.
 * LangChain/LangGraph *automatic* tracing is deliberately disabled.
-  ``api.utils.langsmith_pin.pin_langsmith_env`` pins LANGSMITH_TRACING and
-  LANGCHAIN_TRACING_V2 to "false" and clears langsmith's env cache. It runs
+  ``api.utils.langsmith_pin.pin_langsmith_env`` pins LANGSMITH_TRACING,
+  LANGSMITH_TRACING_V2 and LANGCHAIN_TRACING_V2 to "false", pops the v1 flags
+  (LANGCHAIN_TRACING, LANGCHAIN_HANDLER), and clears langsmith's env cache. If
+  langsmith still reports tracing on, DocBot's sending is forced off. It runs
   first in ``api/index.py`` and again at import here as a backstop. The
   investigation root is entered with ``tracing_context(enabled=False)``. Automatic tracing ships full node
   inputs/outputs, i.e. prompt and response text, which violates the
@@ -43,7 +45,7 @@ from dataclasses import dataclass
 from datetime import datetime, timezone
 from typing import Any, Iterator, Mapping, Optional
 
-from api.utils.langsmith_pin import docbot_env, pin_langsmith_env
+from api.utils.langsmith_pin import docbot_env, pin_langsmith_env, sending_forced_off
 
 logger = logging.getLogger(__name__)
 
@@ -75,6 +77,9 @@ def load_config(env: Optional[Mapping[str, Optional[str]]] = None) -> TracingCon
     """Resolve tracing config from an env mapping. Enabled only if both the
     LANGSMITH_TRACING flag is truthy AND LANGSMITH_API_KEY is non-empty.
     Defaults to the user's pre-pin settings (see langsmith_pin.docbot_env)."""
+    if sending_forced_off():
+        # The fail-closed check found auto-tracing still on after the pin.
+        return TracingConfig(enabled=False, api_key=None)
     source = docbot_env() if env is None else env
     key = (source.get("LANGSMITH_API_KEY") or "").strip()
     flag = (source.get("LANGSMITH_TRACING") or "").strip().lower() in _TRUTHY
