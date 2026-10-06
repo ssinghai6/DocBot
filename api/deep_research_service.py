@@ -68,6 +68,25 @@ async def deep_retrieve(
     max_iterations: int = 2,
     run_id: Optional[str] = None,
 ) -> tuple[list[Document], list[str]]:
+    """Run the deep retrieval pipeline. DOCBOT-1509: opens one LangSmith root
+    run ("deep_retrieve") for this retrieval; nested calls from Autopilot reuse
+    the Autopilot root. See _deep_retrieve_impl for the pipeline itself.
+    """
+    from api.utils.llm_provider import current_run_id, new_run_id, run_trace
+
+    resolved_run_id = run_id or current_run_id() or new_run_id()
+    with run_trace(resolved_run_id, name="deep_retrieve"):
+        return await _deep_retrieve_impl(
+            question, vector_store, max_iterations, resolved_run_id
+        )
+
+
+async def _deep_retrieve_impl(
+    question: str,
+    vector_store: Any,
+    max_iterations: int,
+    run_id: Optional[str],
+) -> tuple[list[Document], list[str]]:
     """Run the deep retrieval pipeline without LangGraph overhead.
 
     Performs sub-question decomposition, parallel retrieval with query
@@ -137,6 +156,7 @@ async def deep_retrieve(
                 latency_ms=(time.monotonic() - _start) * 1000,
                 success=False, caller="deep_retrieve_planner", run_id=resolved_run_id,
                 error_message=f"{type(exc).__name__}: {str(exc)[:200]}",
+                error_class=type(exc).__name__,
             )
             logger.warning("deep_retrieve planner failed, using original question: %s", exc)
             sub_questions = [question]

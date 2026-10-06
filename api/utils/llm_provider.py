@@ -82,7 +82,7 @@ def current_run_id() -> Optional[str]:
 
 
 @contextmanager
-def run_trace(run_id: Optional[str] = None):
+def run_trace(run_id: Optional[str] = None, *, name: Optional[str] = None):
     """Bind ``run_id`` as the active trace for every LLM call made within
     this context (and in any asyncio task spawned from within it).
 
@@ -96,10 +96,23 @@ def run_trace(run_id: Optional[str] = None):
     check ``current_run_id()`` first and reuse it rather than minting a new
     one, so a nested call (e.g. Autopilot's doc_search step calling
     ``deep_retrieve``) stays under the parent investigation's trace.
+
+    DOCBOT-1509: passing ``name`` also opens a LangSmith root run for this
+    investigation (see langsmith_tracing.investigation_scope). Its LangSmith id
+    is the same run_id, and every LLM call inside becomes a child of it. A
+    nested ``run_trace(..., name=...)`` reuses the outer root. No-op when
+    LangSmith tracing is off.
     """
-    token = _current_run_id.set(run_id or new_run_id())
+    from api.utils import langsmith_tracing
+
+    resolved = run_id or new_run_id()
+    token = _current_run_id.set(resolved)
     try:
-        yield _current_run_id.get()
+        if name is None:
+            yield _current_run_id.get()
+        else:
+            with langsmith_tracing.investigation_scope(resolved, name):
+                yield _current_run_id.get()
     finally:
         _current_run_id.reset(token)
 
@@ -173,6 +186,7 @@ def _log_llm_call(
     output_tokens: Optional[int] = None,
     run_id: Optional[str] = None,
     error_message: Optional[str] = None,
+    error_class: Optional[str] = None,
 ) -> None:
     """Emit one structured log line for an LLM call as a JSON string in the
     message body — not via logging's `extra=` mechanism, which silently
@@ -201,6 +215,9 @@ def _log_llm_call(
         "llm_fallback_triggered": fallback_triggered,
         "llm_caller": caller,
         "error_message": error_message,
+        # DOCBOT-1509: exception class name only. Sent to LangSmith; error_message
+        # (which may contain request content) is not.
+        "error_class": error_class,
     }
     logger.info(json.dumps(payload), extra=payload)
 
@@ -209,6 +226,11 @@ def _log_llm_call(
             _trace_sink(payload)
         except Exception as exc:  # tracing must never break the LLM call path
             logger.debug("llm_provider: trace sink failed (%s)", exc)
+
+    # DOCBOT-1509: metadata-only LangSmith run. Non-blocking, never raises.
+    from api.utils.langsmith_tracing import emit_llm_run
+
+    emit_llm_run(payload)
 
 
 def log_external_llm_call(
@@ -223,6 +245,7 @@ def log_external_llm_call(
     fallback_triggered: bool = False,
     run_id: Optional[str] = None,
     error_message: Optional[str] = None,
+    error_class: Optional[str] = None,
 ) -> None:
     """Public logging hook for call sites that build their own LLM client
     instead of going through call_llm/chat_completion/chat_completion_stream
@@ -245,6 +268,7 @@ def log_external_llm_call(
         output_tokens=output_tokens,
         run_id=run_id,
         error_message=error_message,
+        error_class=error_class,
     )
 
 
@@ -705,5 +729,6 @@ def chat_completion_stream(
             provider="gemini", model=GEMINI_MODEL, latency_ms=(time.monotonic() - start) * 1000,
             success=False, fallback_triggered=True, caller=caller, run_id=run_id,
             error_message=f"{type(exc).__name__}: {str(exc)[:200]}",
+            error_class=type(exc).__name__,
         )
         raise

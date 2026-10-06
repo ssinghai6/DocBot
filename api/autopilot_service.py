@@ -1090,7 +1090,8 @@ async def run_autopilot(
     # manually (not `with`) so the existing try/except body below doesn't
     # need re-indenting; asyncio.Task copies the current context at creation
     # time, so this also covers concurrently-dispatched executor waves.
-    _trace_cm = run_trace(run_id)
+    # DOCBOT-1509: name opens the LangSmith root for this investigation.
+    _trace_cm = run_trace(run_id, name="autopilot")
     _trace_cm.__enter__()
     try:
         async for state_update in app.astream(initial_state, stream_mode="updates"):

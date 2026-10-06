@@ -68,7 +68,7 @@ Every story is only "done" when ALL of the following are true. No exceptions.
 | EPIC-10 | RAG Quality Enhancement | 4+ | ✅ Done | Chroma persistent store, cross-encoder reranker, SemanticChunker, FinanceBench accuracy baseline (**100% — 20/20**). PageIndex evaluated and rejected (2026-03-25). |
 | EPIC-12 | UI Redesign & Finance Vertical | 5 | ✅ Done | Progressive disclosure UI (tabbed sidebar, collapsible sections, Cmd+K command palette), unified file upload, 3-color palette, finance-focused copy, guided onboarding empty state. |
 | EPIC-13 | Sandbox Demo Mode | 5 | ✅ Done | Pre-loaded TechCorp 10-K + SQLite financial database via `/api/demo/init`. One-click hybrid analysis demo with deliberate discrepancies for showcase. |
-| EPIC-15 | AI Engineering Maturity | 6 | 🟡 In Progress (4/8) | DOCBOT-1501/1502 (tracing+dashboard), 1503 (eval CI gate), 1504 (structured-output validation), 1505 (multi-agent spike) — done, reviewed, merged 2026-10-03. DOCBOT-1506 (response cache), 1507 (prompt versioning), 1508 (cost ceiling) — not started. Gap analysis 2026-09-27 (ai-engineer + senior-project-manager agents). |
+| EPIC-15 | AI Engineering Maturity | 6 | 🟡 In Progress (4/8, +1 in review) | DOCBOT-1501/1502 (tracing+dashboard), 1503 (eval CI gate), 1504 (structured-output validation), 1505 (multi-agent spike) — done, reviewed, merged 2026-10-03. DOCBOT-1509 (LangSmith tracing UI, metadata only) — implemented on `feature/DOCBOT-1509-langsmith-tracing`, pending merge. DOCBOT-1506 (response cache), 1507 (prompt versioning), 1508 (cost ceiling) — not started. Gap analysis 2026-09-27 (ai-engineer + senior-project-manager agents). |
 
 ---
 
@@ -1455,6 +1455,8 @@ As a first-time visitor, I want to click "Try Demo" and immediately experience h
 
 **Origin**: Gap analysis 2026-09-27, dual agent run (`ai-engineer` code audit + `senior-project-manager` ticket planning). User-flagged concerns: no LLM tracing (LangSmith/equivalent), no true multi-agent architecture.
 
+**Tracing UI**: LangSmith (DOCBOT-1509). The Postgres `llm_calls` log and `/admin/metrics` remain the in-app source of truth. LangSmith receives metadata only (no prompt, response, document, DB row, or connection-string content) and is OFF unless `LANGSMITH_TRACING=true` and `LANGSMITH_API_KEY` are both set.
+
 ---
 
 #### DOCBOT-1501: LLM Tracing/Observability — trace_id + persisted call log
@@ -1579,6 +1581,30 @@ As a developer, I want a time-boxed, code-free evaluation of whether Autopilot's
 > **Multi-Agent Architecture Decision (2026-09-29):** Full analysis in `project-tasks/docbot-multi-agent-architecture-decision.md`. Decision: **keep the current single-agent LangGraph tool-orchestration architecture** (planner → executor → synthesizer over one shared `AutopilotState`, with per-tool correction loops). Do not adopt agent-to-agent handoff. Key finding: every capability a hypothetical specialist sub-agent would add (SQL-specific retry, codegen-specific retry, doc-search refinement) **already exists** as a targeted per-tool correction loop (`db_service`'s schema-drift retry, `sandbox_service`'s corrective retry, `deep_research_service`'s gap-fill loop) — multi-agent handoff would mostly relabel existing behavior behind new indirection (agent identity, handoff protocol, coordination logic) without adding capability, while costing more LLM round-trips (cost + latency, both explicitly tracked elsewhere in this epic) and adding a new failure class (handoff loops/deadlocks) that's expensive for a solo developer to own. Marketing/landing copy checked — no "multi-agent" claims exist; current copy ("multi-step investigation agent," "Agentic Orchestration") is already accurate, no changes needed.
 >
 > **Revisit multi-agent when:** investigations regularly need >5–7 steps with genuinely *interdependent* (not just parallel-independent, which DOCBOT-1406 already handles) sub-goals; a connector needs autonomous multi-round fetch-and-evaluate behavior the heuristic tool router can't express; concrete evidence (not hypothetical) shows shared-state context bloat degrading synthesis quality; or cost/latency headroom exists — DOCBOT-1506 (response cache) and DOCBOT-1508 (per-session cost ceiling) should land first so a more expensive pattern doesn't blow up spend before there's a guardrail.
+
+---
+
+#### DOCBOT-1509: LangSmith Tracing (metadata only)
+**Story**: As an engineer debugging multi-step investigations, I want each LLM call and each Autopilot / deep-research investigation visible as a LangSmith trace tree, so that I can inspect latency, tokens, and failures without grepping logs. Content must never leave the process.
+
+**Acceptance Criteria**:
+- [x] Every call through `chat_completion`, `chat_completion_stream`, `call_llm` (and `log_external_llm_call`) emits one LangSmith `llm` run
+- [x] Payload is metadata only: `inputs` empty; `outputs` carries token usage only; `extra.metadata` built from an allowlist (`run_id`, `provider`, `model`, `caller`, `latency_ms`, `estimated_cost_usd`, `success`, `fallback_triggered`, `ls_provider`, `ls_model_name`). Errors send the exception class name only
+- [x] Autopilot and deep research open one root run per investigation. LLM runs nest under it. The DOCBOT-1501 `run_id` is reused as the LangSmith trace id (single id scheme)
+- [x] LangChain/LangGraph automatic tracing is pinned off (it ships full node inputs/outputs)
+- [x] Tracing fully OFF without `LANGSMITH_API_KEY`: no client construction, no network
+- [x] LangSmith outage, 4xx, or raised exception never fails or slows a user request (background sends, errors reduced to a WARNING line)
+- [x] `langsmith==0.7.17` pinned in `requirements.txt`; `LANGSMITH_TRACING` and `LANGSMITH_API_KEY` documented in `.env.example`
+- [x] Unit tests with the client mocked (15 tests, no network)
+- [ ] End-to-end verified against a real LangSmith project (requires API key; see notes)
+
+**Implementation notes**:
+- New module `api/utils/langsmith_tracing.py`. The choke point is `_log_llm_call` in `llm_provider.py`, which all three wrapped entrypoints already call. This avoids a second instrumentation path.
+- `run_trace(run_id, name=...)` opens the investigation root. Nested scopes reuse the outer root, so `deep_retrieve` inside Autopilot does not create a second root.
+- Sends are queued to a 2-worker background pool with a 500-item cap. Overflow drops the run rather than blocking.
+- Verified without network: LangGraph node dispatch carries the parent into LLM runs created inside nodes (test `test_child_llm_runs_group_under_langgraph_node_dispatch`). Real LangSmith UI rendering is not verified.
+
+**Status**: 🟡 Implemented (branch `feature/DOCBOT-1509-langsmith-tracing`, pending review and merge to main)
 
 ---
 
