@@ -20,10 +20,11 @@ Design notes
   opens one root run whose LangSmith id is ``UUID(run_id)``. Each LLM call
   inside that scope is created as a child of the current run tree, so there
   is a single run_id scheme, not two.
-* LangChain/LangGraph *automatic* tracing is deliberately disabled
-  (LANGSMITH_TRACING and LANGCHAIN_TRACING_V2 are pinned to "false" in the
-  process env after config is read; the investigation root is entered with
-  ``tracing_context(enabled=False)``). Automatic tracing ships full node
+* LangChain/LangGraph *automatic* tracing is deliberately disabled.
+  ``api.utils.langsmith_pin.pin_langsmith_env`` pins LANGSMITH_TRACING and
+  LANGCHAIN_TRACING_V2 to "false" and clears langsmith's env cache. It runs
+  first in ``api/index.py`` and again at import here as a backstop. The
+  investigation root is entered with ``tracing_context(enabled=False)``. Automatic tracing ships full node
   inputs/outputs, i.e. prompt and response text, which violates the
   metadata-only rule. Grouping is done explicitly by this module instead.
 * Sending happens on a small background thread pool. A LangSmith outage,
@@ -35,14 +36,14 @@ from __future__ import annotations
 
 import concurrent.futures
 import logging
-import os
 import threading
-import time
 import uuid
 from contextlib import contextmanager
 from dataclasses import dataclass
 from datetime import datetime, timezone
-from typing import Any, Iterator, Optional
+from typing import Any, Iterator, Mapping, Optional
+
+from api.utils.langsmith_pin import docbot_env, pin_langsmith_env
 
 logger = logging.getLogger(__name__)
 
@@ -70,23 +71,21 @@ class TracingConfig:
     api_key: Optional[str]
 
 
-def load_config(env: Any = None) -> TracingConfig:
+def load_config(env: Optional[Mapping[str, Optional[str]]] = None) -> TracingConfig:
     """Resolve tracing config from an env mapping. Enabled only if both the
-    LANGSMITH_TRACING flag is truthy AND LANGSMITH_API_KEY is non-empty."""
-    source = os.environ if env is None else env
+    LANGSMITH_TRACING flag is truthy AND LANGSMITH_API_KEY is non-empty.
+    Defaults to the user's pre-pin settings (see langsmith_pin.docbot_env)."""
+    source = docbot_env() if env is None else env
     key = (source.get("LANGSMITH_API_KEY") or "").strip()
     flag = (source.get("LANGSMITH_TRACING") or "").strip().lower() in _TRUTHY
     return TracingConfig(enabled=bool(flag and key), api_key=key or None)
 
 
+# Backstop: pin before the config read, so the SDK's flags are off even when
+# this module is imported before api/index.py. The pin snapshots the user's
+# LANGSMITH_TRACING first, so load_config() below still sees it.
+pin_langsmith_env()
 _config: TracingConfig = load_config()
-
-# Stop LangChain/LangSmith automatic tracing from shipping content. Our own
-# explicit tracing above does not depend on these flags. Must run after
-# load_config() reads the user's values. langsmith caches env lookups, so this
-# only takes effect if nothing read these vars earlier in the process.
-os.environ["LANGSMITH_TRACING"] = "false"
-os.environ["LANGCHAIN_TRACING_V2"] = "false"
 
 _client: Any = None
 _client_lock = threading.Lock()
@@ -123,7 +122,9 @@ def _submit(fn: Any, *args: Any) -> bool:
     global _executor
     with _pending_lock:
         if len(_pending) >= _MAX_PENDING:
-            logger.debug("langsmith trace queue full, dropping run")
+            logger.warning(
+                "langsmith trace queue full (%d pending), dropping run", _MAX_PENDING
+            )
             return False
         if _executor is None:
             _executor = concurrent.futures.ThreadPoolExecutor(
@@ -146,6 +147,21 @@ def flush(timeout: float = 5.0) -> None:
         futures = list(_pending)
     if futures:
         concurrent.futures.wait(futures, timeout=timeout)
+
+
+def shutdown(timeout: float = 3.0) -> None:
+    """Flush queued runs for at most ``timeout`` seconds, then stop the pool.
+
+    Called from the FastAPI lifespan on SIGTERM. Never joins the executor, so
+    a slow LangSmith endpoint cannot hang shutdown. Queued-but-unstarted sends
+    are cancelled. Runs already in flight are abandoned at the timeout.
+    """
+    global _executor
+    flush(timeout)
+    with _pending_lock:
+        executor, _executor = _executor, None
+    if executor is not None:
+        executor.shutdown(wait=False, cancel_futures=True)
 
 
 def build_llm_run_spec(payload: dict) -> dict:
@@ -193,6 +209,9 @@ def _send_llm_run(spec: dict, parent: Any) -> None:
     name = f"llm:{spec.get('caller') or 'unknown'}"
     error = spec.get("error_class")
     if parent is not None:
+        # The root was built client-less on the request thread. Attach our
+        # client here, in the worker, before the child inherits it.
+        parent.ls_client = _get_client()
         run = parent.create_child(
             name,
             run_type="llm",
@@ -232,6 +251,7 @@ def emit_llm_run(payload: dict) -> None:
 
 
 def _post_root(root: Any) -> None:
+    root.ls_client = _get_client()
     root.end(outputs={})
     root.post()
 
@@ -244,6 +264,9 @@ def investigation_scope(run_id: str, name: str) -> Iterator[Optional[Any]]:
     same identifier. Nested scopes (e.g. deep_retrieve inside Autopilot) reuse
     the existing parent and open no new root. The root is sent when the scope
     exits. When tracing is off this is a no-op that yields None.
+
+    The request thread builds no client. The root is created client-less and
+    the client is attached in the worker (see ``_post_root``).
     """
     if not _config.enabled:
         yield None
@@ -264,7 +287,7 @@ def investigation_scope(run_id: str, name: str) -> Iterator[Optional[Any]]:
             run_type="chain",
             inputs={},
             extra={"metadata": {"run_id": run_id}},
-            client=_get_client(),
+            client=None,
         )
     except Exception as exc:
         logger.warning("langsmith root run skipped (%s)", type(exc).__name__)

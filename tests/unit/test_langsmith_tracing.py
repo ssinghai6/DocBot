@@ -6,6 +6,8 @@ its kwargs are the exact payload that would be sent.
 from __future__ import annotations
 
 import json
+import logging
+import os
 import subprocess
 import sys
 import threading
@@ -324,3 +326,161 @@ def test_root_scope_disables_langchain_auto_tracing(client):
 
     with run_trace(uuid.uuid4().hex, name="autopilot"):
         assert not tracing_is_enabled()
+
+
+# ---------------------------------------------------------------------------
+# DOCBOT-1509 review fixes
+# ---------------------------------------------------------------------------
+
+_ORDERING_CODE = (
+    "import json\n"
+    "from langsmith.utils import tracing_is_enabled\n"
+    # Read FIRST, before any DocBot import. This caches langsmith's env lookup
+    # with LANGSMITH_TRACING=true, which is the bug scenario.
+    "before = bool(tracing_is_enabled())\n"
+    "import api.index\n"
+    "after = bool(tracing_is_enabled())\n"
+    "print(json.dumps({'before': before, 'after': after}))\n"
+)
+
+
+def test_auto_tracing_disabled_when_langsmith_read_before_docbot_import():
+    """Regression for the lru_cache ordering bug. langsmith caches get_env_var,
+    so a read that happens before the pin must not leave auto-tracing on.
+    The fresh interpreter makes the read-first ordering real."""
+    import json
+    from pathlib import Path
+
+    env = {
+        "PATH": "/usr/bin:/bin",
+        "LANGSMITH_TRACING": "true",
+        "LANGSMITH_API_KEY": "dummy-not-real",
+        # api.index requires DATABASE_URL at import. No connection is opened.
+        "DATABASE_URL": "postgresql+asyncpg://u:p@localhost:5432/d",
+        "PYTHONPATH": ".",
+    }
+    repo = Path(__file__).resolve().parents[2]
+    out = subprocess.run(
+        [sys.executable, "-c", _ORDERING_CODE], capture_output=True, text=True,
+        timeout=170, env=env, cwd=str(repo),
+    )
+    assert out.returncode == 0, out.stderr[-2000:]
+    result = json.loads(out.stdout.strip().splitlines()[-1])
+    assert result["before"] is True, "precondition: the early read must see tracing on"
+    assert result["after"] is False, "auto-tracing must be off after importing api.index"
+
+
+def test_pin_preserves_docbot_tracing_flag_for_own_config(monkeypatch):
+    """The pin overwrites LANGSMITH_TRACING. DocBot's own config must still
+    see the user's value, from the pre-pin snapshot."""
+    import api.utils.langsmith_pin as pin
+
+    monkeypatch.setattr(pin, "_user_values", None)
+    monkeypatch.setenv("LANGSMITH_TRACING", "true")
+    monkeypatch.setenv("LANGSMITH_API_KEY", "k")
+    monkeypatch.delenv("LANGCHAIN_TRACING_V2", raising=False)
+    pin.pin_langsmith_env()
+    assert pin.docbot_env()["LANGSMITH_TRACING"] == "true"
+    assert lst.load_config(pin.docbot_env()).enabled is True
+    assert os.environ["LANGSMITH_TRACING"] == "false"
+    assert os.environ["LANGCHAIN_TRACING_V2"] == "false"
+
+
+def test_pin_overrides_truthy_langchain_v2_and_warns(monkeypatch, caplog):
+    import api.utils.langsmith_pin as pin
+
+    monkeypatch.setattr(pin, "_user_values", None)
+    monkeypatch.setenv("LANGCHAIN_TRACING_V2", "true")
+    with caplog.at_level(logging.WARNING, logger="api.utils.langsmith_pin"):
+        pin.pin_langsmith_env()
+    assert os.environ["LANGCHAIN_TRACING_V2"] == "false"
+    assert any("LANGCHAIN_TRACING_V2" in r.getMessage() for r in caplog.records)
+
+
+def test_pin_is_idempotent(monkeypatch):
+    import api.utils.langsmith_pin as pin
+
+    monkeypatch.setattr(pin, "_user_values", None)
+    monkeypatch.setenv("LANGSMITH_TRACING", "true")
+    pin.pin_langsmith_env()
+    os.environ["LANGSMITH_TRACING"] = "true"  # simulate a later reload of the env
+    pin.pin_langsmith_env()  # second call must not re-snapshot the pinned value
+    assert pin.docbot_env()["LANGSMITH_TRACING"] == "true"
+
+
+def test_run_trace_exit_from_other_context_does_not_raise(client):
+    """Async generators can be closed from another Context. The ContextVar
+    token is then foreign and reset() raises ValueError. Teardown must not."""
+    import contextvars
+
+    cm = run_trace(uuid.uuid4().hex, name="autopilot")
+    # Enter in a throwaway Context so the test's own Context never sees the
+    # bound run_id or the LangSmith parent. A failed reset leaves stale values
+    # in the Context that entered, and they would leak into later tests.
+    contextvars.copy_context().run(cm.__enter__)
+    # Must not raise.
+    contextvars.copy_context().run(cm.__exit__, None, None, None)
+
+
+def test_run_trace_plain_exit_from_other_context_does_not_raise():
+    import contextvars
+
+    cm = run_trace(uuid.uuid4().hex)
+    contextvars.copy_context().run(cm.__enter__)
+    contextvars.copy_context().run(cm.__exit__, None, None, None)
+
+
+def test_context_reset_error_logged_without_content(caplog):
+    import contextvars
+
+    cm = run_trace(uuid.uuid4().hex)
+    contextvars.copy_context().run(cm.__enter__)
+    with caplog.at_level(logging.WARNING, logger="api.utils.llm_provider"):
+        contextvars.copy_context().run(cm.__exit__, None, None, None)
+    msgs = [r.getMessage() for r in caplog.records if "run_trace" in r.getMessage()]
+    assert msgs, "expected a warning when reset is skipped"
+    assert all("SECRET" not in m for m in msgs)
+
+
+def test_investigation_scope_builds_no_client_on_request_thread(client):
+    """The root is created client-less on the request thread. The client is
+    attached in the worker, so _get_client runs only after the scope exits."""
+    client_factory = MagicMock(name="_get_client_factory", return_value=client)
+    with patch.object(lst, "_get_client", client_factory):
+        with run_trace(uuid.uuid4().hex, name="autopilot"):
+            assert client_factory.call_count == 0
+        lst.flush()
+    assert client_factory.call_count >= 1
+
+
+def test_overflow_drop_logs_warning_without_content(monkeypatch, caplog):
+    """500-cap overflow: the run is dropped, logged at WARNING, no content."""
+    import concurrent.futures as cf
+
+    full = {cf.Future() for _ in range(lst._MAX_PENDING)}
+    monkeypatch.setattr(lst, "_pending", full)
+    ran = MagicMock(name="send")
+    with caplog.at_level(logging.WARNING, logger="api.utils.langsmith_tracing"):
+        accepted = lst._submit(ran, SECRET_PROMPT)
+    assert accepted is False
+    ran.assert_not_called()
+    warnings = [r for r in caplog.records if r.levelno == logging.WARNING]
+    assert warnings, "overflow must log at WARNING"
+    assert all(SECRET_PROMPT not in r.getMessage() for r in caplog.records)
+
+
+def test_shutdown_flushes_bounded_and_does_not_join(monkeypatch):
+    """shutdown() waits at most `timeout`, then stops the pool without join.
+    A send that never finishes must not hang shutdown."""
+    import threading as th
+
+    release = th.Event()
+    monkeypatch.setattr(lst, "_config", lst.TracingConfig(enabled=True, api_key="k"))
+    monkeypatch.setattr(lst, "_get_client", lambda: MagicMock())
+    lst._submit(lambda: release.wait(30))
+    start = time.monotonic()
+    lst.shutdown(timeout=0.2)
+    elapsed = time.monotonic() - start
+    release.set()
+    assert elapsed < 2.0
+    assert lst._executor is None

@@ -114,7 +114,14 @@ def run_trace(run_id: Optional[str] = None, *, name: Optional[str] = None):
             with langsmith_tracing.investigation_scope(resolved, name):
                 yield _current_run_id.get()
     finally:
-        _current_run_id.reset(token)
+        # An async generator can be closed from another Context (for example
+        # by GC or a different task). The token is then foreign and reset()
+        # raises ValueError. Teardown must not raise, so log and move on.
+        # The log names the exception class only, never run content.
+        try:
+            _current_run_id.reset(token)
+        except ValueError:
+            logger.warning("run_trace: context reset skipped (closed in a different Context)")
 
 
 # Optional persistence hook, injected by api/index.py at startup via

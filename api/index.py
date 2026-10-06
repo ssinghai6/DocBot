@@ -1,3 +1,13 @@
+# DOCBOT-1509: load .env, then pin LangChain/LangSmith automatic tracing OFF.
+# These two lines must stay ABOVE every other import: langsmith caches env
+# reads, so an earlier read would leave auto-tracing (which ships prompts and
+# responses) enabled. The pin also snapshots DocBot's own LANGSMITH_TRACING
+# before overwriting it. Pure stdlib + dotenv, so nothing here reads flags.
+from dotenv import load_dotenv
+load_dotenv()
+from api.utils.langsmith_pin import pin_langsmith_env
+pin_langsmith_env()
+
 from contextlib import asynccontextmanager
 from fastapi import FastAPI, File, UploadFile, Form, HTTPException, Depends, Request
 from fastapi.middleware.cors import CORSMiddleware
@@ -18,7 +28,6 @@ import uuid
 import json
 import time
 from datetime import datetime
-from dotenv import load_dotenv
 from io import BytesIO
 from functools import lru_cache
 
@@ -27,8 +36,6 @@ from api.sandbox_service import SandboxResult
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
-
-load_dotenv()
 
 # Thin observability — DOCBOT-1401. Error tracking only, no APM/tracing spend
 # (traces_sample_rate=0.0): single Railway container, nothing to distributed-
@@ -483,6 +490,10 @@ async def lifespan(app: FastAPI):
     # DOCBOT-1501: drain and stop the LLM call log writer before closing the pool
     from api.llm_trace_service import stop_writer
     await stop_writer()
+    # DOCBOT-1509: flush queued LangSmith runs on SIGTERM, bounded to 3s.
+    # Off the event loop, and never joins the executor, so shutdown cannot hang.
+    from api.utils.langsmith_tracing import shutdown as shutdown_langsmith
+    await asyncio.to_thread(shutdown_langsmith, 3.0)
     await engine.dispose()
 
 app.router.lifespan_context = lifespan
