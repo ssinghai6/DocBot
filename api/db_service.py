@@ -1359,13 +1359,22 @@ async def _generate_sql(
         "SQL:"
     )
 
-    from api.utils.llm_provider import chat_completion
-    sql = chat_completion(
-        [{"role": "user", "content": prompt}],
-        temperature=0,
-        max_tokens=500,
-        caller="sql_gen",
-    )
+    from api.utils.llm_provider import chat_completion, GROQ_MODEL
+    from api.utils import llm_cache
+
+    # DOCBOT-1506: exact-match cache — SQL gen runs at temperature=0 and the
+    # prompt already fully encodes schema + few-shot examples + question, so
+    # a byte-identical prompt is a legitimate re-ask, not a stale hit.
+    prompt_hash = llm_cache.hash_prompt(prompt)
+    sql = await llm_cache.get_cached_response(prompt_hash, GROQ_MODEL)
+    if sql is None:
+        sql = chat_completion(
+            [{"role": "user", "content": prompt}],
+            temperature=0,
+            max_tokens=500,
+            caller="sql_gen",
+        )
+        await llm_cache.set_cached_response(prompt_hash, GROQ_MODEL, sql)
     # Strip markdown code fences if present
     if sql.startswith("```"):
         lines = sql.split("\n")

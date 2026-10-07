@@ -293,6 +293,10 @@ edgar_filings_cache_table = register_edgar_cache_table(metadata)
 from api.llm_trace_service import register_llm_calls_table
 llm_calls_table = register_llm_calls_table(metadata)
 
+# ── DOCBOT-1506: exact-match LLM response cache ───────────────────────────────
+from api.utils.llm_cache import register_llm_cache_table
+llm_response_cache_table = register_llm_cache_table(metadata)
+
 # ── EPIC-06: RBAC dependencies (DOCBOT-603) ──────────────────────────────────
 # Imported here so Depends() objects can be declared at module level.
 # require_role() checks is_auth_enforcement_active() at request time — safe to import early.
@@ -421,6 +425,10 @@ async def lifespan(app: FastAPI):
     wire_llm_trace_store(llm_calls_table, async_session_factory)
     set_trace_sink(enqueue_call)
     start_writer()
+    # DOCBOT-1506: wire the exact-match LLM response cache (SQL gen + intent
+    # classification call sites read/write through this once wired).
+    from api.utils.llm_cache import wire_llm_cache
+    wire_llm_cache(llm_response_cache_table, async_session_factory)
     # Clean up any expired file uploads from previous runs
     try:
         from api.file_upload_service import cleanup_expired_uploads

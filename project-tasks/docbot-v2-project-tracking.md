@@ -68,7 +68,7 @@ Every story is only "done" when ALL of the following are true. No exceptions.
 | EPIC-10 | RAG Quality Enhancement | 4+ | ✅ Done | Chroma persistent store, cross-encoder reranker, SemanticChunker, FinanceBench accuracy baseline (**100% — 20/20**). PageIndex evaluated and rejected (2026-03-25). |
 | EPIC-12 | UI Redesign & Finance Vertical | 5 | ✅ Done | Progressive disclosure UI (tabbed sidebar, collapsible sections, Cmd+K command palette), unified file upload, 3-color palette, finance-focused copy, guided onboarding empty state. |
 | EPIC-13 | Sandbox Demo Mode | 5 | ✅ Done | Pre-loaded TechCorp 10-K + SQLite financial database via `/api/demo/init`. One-click hybrid analysis demo with deliberate discrepancies for showcase. |
-| EPIC-15 | AI Engineering Maturity | 6 | 🟡 In Progress (4/8, +1 in review) | DOCBOT-1501/1502 (tracing+dashboard), 1503 (eval CI gate), 1504 (structured-output validation), 1505 (multi-agent spike) — done, reviewed, merged 2026-10-03. DOCBOT-1509 (LangSmith tracing UI, metadata only) — implemented on `feature/DOCBOT-1509-langsmith-tracing`, pending merge. DOCBOT-1506 (response cache), 1507 (prompt versioning), 1508 (cost ceiling) — not started. Gap analysis 2026-09-27 (ai-engineer + senior-project-manager agents). |
+| EPIC-15 | AI Engineering Maturity | 6 | 🟡 In Progress (5/8, +1 in review) | DOCBOT-1501/1502 (tracing+dashboard), 1503 (eval CI gate), 1504 (structured-output validation), 1505 (multi-agent spike) — done, reviewed, merged 2026-10-03. DOCBOT-1506 (exact-match response cache) — implemented on `feature/DOCBOT-1506-llm-response-cache`, pending merge. DOCBOT-1509 (LangSmith tracing UI, metadata only) — implemented on `feature/DOCBOT-1509-langsmith-tracing`, pending merge. DOCBOT-1507 (prompt versioning), 1508 (cost ceiling) — not started. Gap analysis 2026-09-27 (ai-engineer + senior-project-manager agents). |
 
 ---
 
@@ -1618,11 +1618,13 @@ As a developer, I want deterministic-ish LLM calls (SQL gen, intent classificati
 **Ground truth**: Confirmed zero `lru_cache`/Redis/semantic-cache usage in `llm_provider.py`, `hybrid_service.py`, `autopilot_service.py`, `sandbox_service.py`. Schema cache and query-history dedup exist in `db_service.py`, but nothing caches LLM completions themselves.
 
 **Acceptance Criteria**
-- [ ] Exact-match cache keyed on `(prompt_hash, model)` for intent classification and SQL gen
-- [ ] TTL'd (Postgres or Redis — reuse existing DB infra, avoid new dependency if possible)
-- [ ] Cache hit/miss counted in metrics (DOCBOT-1502)
+- [x] Exact-match cache keyed on `(prompt_hash, model)` for intent classification and SQL gen
+- [x] TTL'd (Postgres or Redis — reuse existing DB infra, avoid new dependency if possible)
+- [x] Cache hit/miss counted in metrics (DOCBOT-1502)
 
-**Status**: 🔲 Planned
+**Implementation notes**: New module `api/utils/llm_cache.py` (table-registration/wiring pattern mirrors `llm_trace_service.py`) — `llm_response_cache` Postgres table keyed on `(prompt_hash, model)` with a 6h TTL (`expires_at` column), wired into `db_service._generate_sql` (SQL gen) and `hybrid_service.classify_intent` (intent classification), both temperature=0 call sites; in-process hit/miss/set/error counters exposed via `llm_cache.get_cache_metrics()` and surfaced in `/admin/metrics` as `llm_cache_metrics`. 19 new unit tests in `tests/unit/test_llm_cache.py` (in-memory SQLite, mirrors `test_llm_trace_service.py`).
+
+**Status**: ✅ Done (branch `feature/DOCBOT-1506-llm-response-cache`, pending review and merge to main)
 
 ---
 
