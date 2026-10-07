@@ -239,6 +239,16 @@ async def get_platform_metrics(
         logger.warning("get_llm_cost_metrics failed (non-fatal): %s", exc)
         llm_metrics = None
 
+    # DOCBOT-1506: exact-match LLM response cache hit/miss counters.
+    # In-process counters (see api/utils/llm_cache.py) — never let a
+    # hiccup there break the whole metrics endpoint.
+    try:
+        from api.utils.llm_cache import get_cache_metrics
+        llm_cache_metrics = get_cache_metrics()
+    except Exception as exc:
+        logger.warning("get_cache_metrics failed (non-fatal): %s", exc)
+        llm_cache_metrics = None
+
     return {
         "total_sessions": total_sessions,
         "total_queries": total_queries,
@@ -249,6 +259,7 @@ async def get_platform_metrics(
         "uptime_seconds": uptime_seconds,
         "uptime_since": _START_DATETIME.isoformat(),
         "llm_metrics": llm_metrics,
+        "llm_cache_metrics": llm_cache_metrics,
     }
 
 

@@ -159,34 +159,46 @@ async def classify_intent(
 
     # ── LLM classification (both sources present) ─────────────────────────
     from api.utils.llm_provider import log_external_llm_call, safe_int
+    from api.utils import llm_cache
 
-    _start = time.monotonic()
-    try:
-        response = await groq_client.chat.completions.create(
-            model=_MODEL,
-            messages=[
-                {"role": "system", "content": _SYSTEM_PROMPT},
-                {"role": "user", "content": question},
-            ],
-            max_tokens=10,
-            temperature=0,
-        )
-    except Exception:
+    # DOCBOT-1506: exact-match cache — this call runs at temperature=0 with
+    # a fixed system prompt, so (system prompt + question) fully determines
+    # the response; a byte-identical prompt is a legitimate re-ask.
+    cache_prompt_hash = llm_cache.hash_prompt(f"{_SYSTEM_PROMPT}\n{question}")
+    raw = await llm_cache.get_cached_response(cache_prompt_hash, _MODEL)
+
+    if raw is None:
+        _start = time.monotonic()
+        try:
+            response = await groq_client.chat.completions.create(
+                model=_MODEL,
+                messages=[
+                    {"role": "system", "content": _SYSTEM_PROMPT},
+                    {"role": "user", "content": question},
+                ],
+                max_tokens=10,
+                temperature=0,
+            )
+        except Exception:
+            log_external_llm_call(
+                provider="groq", model=_MODEL, latency_ms=(time.monotonic() - _start) * 1000,
+                success=False, caller="intent_classification",
+            )
+            raise
+
+        usage = getattr(response, "usage", None)
         log_external_llm_call(
             provider="groq", model=_MODEL, latency_ms=(time.monotonic() - _start) * 1000,
-            success=False, caller="intent_classification",
+            success=True, caller="intent_classification",
+            input_tokens=safe_int(getattr(usage, "prompt_tokens", None)),
+            output_tokens=safe_int(getattr(usage, "completion_tokens", None)),
         )
-        raise
 
-    usage = getattr(response, "usage", None)
-    log_external_llm_call(
-        provider="groq", model=_MODEL, latency_ms=(time.monotonic() - _start) * 1000,
-        success=True, caller="intent_classification",
-        input_tokens=safe_int(getattr(usage, "prompt_tokens", None)),
-        output_tokens=safe_int(getattr(usage, "completion_tokens", None)),
-    )
+        raw = response.choices[0].message.content.strip().lower()
+        await llm_cache.set_cached_response(cache_prompt_hash, _MODEL, raw)
+    else:
+        raw = raw.strip().lower()
 
-    raw = response.choices[0].message.content.strip().lower()
     result = raw if raw in _VALID_INTENTS else "hybrid"
 
     if result != raw:
