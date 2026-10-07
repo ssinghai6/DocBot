@@ -29,6 +29,10 @@ from api.utils.query_expansion import deduplicate_docs, expand_query
 
 logger = logging.getLogger(__name__)
 
+# DOCBOT-1507: bump manually ("v1" -> "v2") when the sub-question decomposition
+# prompt's wording changes — see convention note in api/utils/llm_provider.py.
+PROMPT_VERSION_DEEP_RETRIEVE_PLANNER = "v1"
+
 MIN_CHUNKS_FOR_COVERAGE = 2
 MAX_ITERATIONS = 2
 
@@ -148,6 +152,7 @@ async def _deep_retrieve_impl(
                 provider="groq", model=GROQ_MODEL,
                 latency_ms=(time.monotonic() - _start) * 1000,
                 success=True, caller="deep_retrieve_planner", run_id=resolved_run_id,
+                prompt_version=PROMPT_VERSION_DEEP_RETRIEVE_PLANNER,
             )
             sub_questions = _parse_json_list(raw, fallback=[question])[:5]
         except Exception as exc:
@@ -157,6 +162,7 @@ async def _deep_retrieve_impl(
                 success=False, caller="deep_retrieve_planner", run_id=resolved_run_id,
                 error_message=f"{type(exc).__name__}: {str(exc)[:200]}",
                 error_class=type(exc).__name__,
+                prompt_version=PROMPT_VERSION_DEEP_RETRIEVE_PLANNER,
             )
             logger.warning("deep_retrieve planner failed, using original question: %s", exc)
             sub_questions = [question]

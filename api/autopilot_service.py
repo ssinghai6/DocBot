@@ -46,6 +46,14 @@ logger = logging.getLogger(__name__)
 MAX_ITERATIONS = 5  # cap on executor *waves*, not individual steps — see module docstring
 TOTAL_TIMEOUT_S = 90
 
+# DOCBOT-1507: both prompts below are built dynamically per-request (tools
+# list, data-fetch guidance), so each gets a version tag covering its
+# prompt-assembly logic rather than a single static string constant. Bump
+# manually when the wording/instructions change — see PROMPT_VERSION
+# convention in api/utils/llm_provider.py.
+PROMPT_VERSION_AUTOPILOT_PLANNER = "v1"
+PROMPT_VERSION_AUTOPILOT_SYNTHESIZER = "v1"
+
 # Internal step-result prefixes that signal a failed/empty step. These are
 # scrubbed from user-facing output and replaced with a calm generic message —
 # visitors should never see raw tracebacks or internal failure strings.
@@ -172,6 +180,7 @@ async def _planner_node(state: AutopilotState) -> dict:
             max_tokens=400,
             caller="autopilot_planner",
             run_id=state.get("run_id"),
+            prompt_version=PROMPT_VERSION_AUTOPILOT_PLANNER,
         )
         # Strip markdown fences if the model adds them
         lines = raw.splitlines()
@@ -952,6 +961,7 @@ async def _synthesizer_node(state: AutopilotState) -> dict:
             max_tokens=2000,
             caller="autopilot_synthesizer",
             run_id=state.get("run_id"),
+            prompt_version=PROMPT_VERSION_AUTOPILOT_SYNTHESIZER,
         )
     except Exception as exc:
         logger.warning("synthesizer_node LLM call failed: %s", exc)

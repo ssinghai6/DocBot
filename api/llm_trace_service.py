@@ -80,6 +80,10 @@ def register_llm_calls_table(metadata) -> Table:
         Column("provider", String, nullable=False),           # groq | gemini
         Column("model", String, nullable=False),
         Column("caller", String, index=True),                 # e.g. "autopilot_planner", "sql_gen"
+        # DOCBOT-1507: the PROMPT_VERSION_* constant active at the call site
+        # (e.g. "v1") — lets a prompt edit be correlated with an eval score
+        # delta or prod regression after the fact. Null for untagged callers.
+        Column("prompt_version", String, index=True),
         Column("latency_ms", Float),
         Column("input_tokens", Integer),
         Column("output_tokens", Integer),
@@ -151,6 +155,7 @@ async def _persist_one(payload: dict) -> None:
         "provider": payload.get("llm_provider") or payload.get("provider") or "unknown",
         "model": payload.get("llm_model") or payload.get("model") or "unknown",
         "caller": payload.get("llm_caller") or payload.get("caller"),
+        "prompt_version": payload.get("prompt_version"),
         "latency_ms": payload.get("llm_latency_ms") or payload.get("latency_ms"),
         "input_tokens": payload.get("llm_input_tokens") or payload.get("input_tokens"),
         "output_tokens": payload.get("llm_output_tokens") or payload.get("output_tokens"),
@@ -255,6 +260,7 @@ async def get_call_stats(since: Optional[datetime] = None) -> list[dict[str, Any
             "provider": r.provider,
             "model": r.model,
             "caller": r.caller,
+            "prompt_version": r.prompt_version,
             "latency_ms": r.latency_ms,
             "input_tokens": r.input_tokens,
             "output_tokens": r.output_tokens,

@@ -159,7 +159,7 @@ class TestRetryLadderTokenBudgets:
 
         calls = []
 
-        def fake_chat_completion(messages, *, model, temperature, max_tokens, caller=None):
+        def fake_chat_completion(messages, *, model, temperature, max_tokens, caller=None, prompt_version=None):
             calls.append({"model": model, "max_tokens": max_tokens})
             if len(calls) == 1:
                 return ""  # primary attempt returns empty -> triggers fallback
@@ -185,7 +185,7 @@ class TestRetryLadderTokenBudgets:
 
         calls = []
 
-        def fake_chat_completion(messages, *, model, temperature, max_tokens, caller=None):
+        def fake_chat_completion(messages, *, model, temperature, max_tokens, caller=None, prompt_version=None):
             calls.append({"model": model, "max_tokens": max_tokens})
             if len(calls) == 1:
                 return ""
@@ -211,7 +211,7 @@ class TestRetryLadderTokenBudgets:
 
         calls = []
 
-        def fake_chat_completion(messages, *, model, temperature, max_tokens, caller=None):
+        def fake_chat_completion(messages, *, model, temperature, max_tokens, caller=None, prompt_version=None):
             calls.append({"model": model, "max_tokens": max_tokens})
             if len(calls) == 1:
                 return ""
@@ -238,7 +238,7 @@ class TestRetryLadderTokenBudgets:
 
         calls = []
 
-        def fake_chat_completion(messages, *, model, temperature, max_tokens, caller=None):
+        def fake_chat_completion(messages, *, model, temperature, max_tokens, caller=None, prompt_version=None):
             calls.append({"model": model, "max_tokens": max_tokens})
             if len(calls) == 1:
                 return ""

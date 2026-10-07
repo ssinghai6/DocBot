@@ -26,6 +26,10 @@ import re
 
 logger = logging.getLogger(__name__)
 
+# DOCBOT-1507: bump manually ("v1" -> "v2") when expand_query_llm's system
+# prompt wording changes — see convention note in api/utils/llm_provider.py.
+PROMPT_VERSION_QUERY_EXPANSION = "v1"
+
 # ---------------------------------------------------------------------------
 # Synonym map: maps a pattern (lowercased words) to expansion phrases.
 # Each entry is: (set_of_trigger_words, list_of_expansion_templates)
@@ -200,6 +204,7 @@ def expand_query_llm(question: str, *, hf_api_key: str | None = None) -> list[st
             ],
             max_tokens=150,
             caller="query_expansion_llm_rewrite",
+            prompt_version=PROMPT_VERSION_QUERY_EXPANSION,
         )
         llm_expansions = [line.strip() for line in response.splitlines() if line.strip()]
     except Exception as exc:

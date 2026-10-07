@@ -425,6 +425,168 @@ class TestCallerKwargCoverage:
         )
 
 
+class TestPromptVersionCoverage:
+    """DOCBOT-1507: every prompt-constructing call site threads its
+    PROMPT_VERSION_* constant through to the persisted llm_calls row via
+    `prompt_version=`. Mirrors TestCallerKwargCoverage's static-AST approach
+    above — a runtime mock-based test per call site can't catch a forgotten
+    kwarg (the mock just no-ops the missing argument)."""
+
+    def test_every_llm_provider_call_passes_prompt_version(self):
+        import ast
+        from pathlib import Path
+
+        api_dir = Path(__file__).resolve().parents[2] / "api"
+        target_functions = {"chat_completion", "chat_completion_stream", "call_llm"}
+        missing: list[str] = []
+
+        for py_file in api_dir.rglob("*.py"):
+            if py_file.name == "llm_provider.py":
+                continue  # the definitions themselves, not call sites
+            tree = ast.parse(py_file.read_text(), filename=str(py_file))
+            for node in ast.walk(tree):
+                if not isinstance(node, ast.Call):
+                    continue
+                func = node.func
+                name = func.id if isinstance(func, ast.Name) else (
+                    func.attr if isinstance(func, ast.Attribute) else None
+                )
+                if name not in target_functions:
+                    continue
+                has_pv = any(kw.arg == "prompt_version" for kw in node.keywords)
+                if not has_pv:
+                    missing.append(f"{py_file.relative_to(api_dir.parent)}:{node.lineno} {name}()")
+
+        assert not missing, (
+            "These calls to chat_completion/chat_completion_stream/call_llm are "
+            "missing prompt_version= — a prompt edit at these sites can't be "
+            "correlated with an eval score delta or prod regression after the "
+            "fact:\n" + "\n".join(missing)
+        )
+
+
+class TestPromptVersionThreading:
+    """Functional (non-AST) checks that prompt_version actually reaches the
+    structured llm_call log line for each wrapped function."""
+
+    def test_log_llm_call_includes_prompt_version(self, caplog):
+        import logging
+        from api.utils.llm_provider import _log_llm_call
+
+        with caplog.at_level(logging.INFO, logger="api.utils.llm_provider"):
+            _log_llm_call(
+                provider="groq", model="openai/gpt-oss-20b", latency_ms=1.0,
+                success=True, fallback_triggered=False, caller="sql_gen",
+                prompt_version="v3",
+            )
+
+        records = [r for r in caplog.records if getattr(r, "event", None) == "llm_call"]
+        assert records[0].prompt_version == "v3"
+
+    def test_log_llm_call_prompt_version_defaults_to_none(self, caplog):
+        import logging
+        from api.utils.llm_provider import _log_llm_call
+
+        with caplog.at_level(logging.INFO, logger="api.utils.llm_provider"):
+            _log_llm_call(
+                provider="groq", model="openai/gpt-oss-20b", latency_ms=1.0,
+                success=True, fallback_triggered=False, caller="sql_gen",
+            )
+
+        records = [r for r in caplog.records if getattr(r, "event", None) == "llm_call"]
+        assert records[0].prompt_version is None
+
+    def test_log_external_llm_call_passes_prompt_version_through(self, caplog):
+        import logging
+        from api.utils.llm_provider import log_external_llm_call
+
+        with caplog.at_level(logging.INFO, logger="api.utils.llm_provider"):
+            log_external_llm_call(
+                provider="groq", model="openai/gpt-oss-20b", latency_ms=50.0,
+                success=True, caller="intent_classification",
+                prompt_version="v1",
+            )
+
+        records = [r for r in caplog.records if getattr(r, "event", None) == "llm_call"]
+        assert records[0].prompt_version == "v1"
+
+    @pytest.mark.asyncio
+    async def test_call_llm_passes_prompt_version(self, caplog):
+        import logging
+
+        mock_response = MagicMock()
+        mock_response.content = "test response"
+        mock_llm = AsyncMock()
+        mock_llm.ainvoke = AsyncMock(return_value=mock_response)
+
+        with patch("api.utils.llm_provider._get_groq_llm", return_value=mock_llm), \
+             caplog.at_level(logging.INFO, logger="api.utils.llm_provider"):
+            from api.utils.llm_provider import call_llm
+            await call_llm("test prompt", caller="autopilot_planner", prompt_version="v2")
+
+        records = [r for r in caplog.records if getattr(r, "event", None) == "llm_call"]
+        assert records[0].prompt_version == "v2"
+
+    def test_chat_completion_passes_prompt_version_on_groq_success(self, caplog):
+        import logging
+
+        mock_response = MagicMock()
+        mock_response.choices[0].message.content = "hello"
+        mock_response.usage.prompt_tokens = 10
+        mock_response.usage.completion_tokens = 5
+
+        mock_client = MagicMock()
+        mock_client.chat.completions.create.return_value = mock_response
+
+        with patch("groq.Groq", return_value=mock_client), \
+             caplog.at_level(logging.INFO, logger="api.utils.llm_provider"):
+            from api.utils.llm_provider import chat_completion
+            chat_completion(
+                [{"role": "user", "content": "hi"}],
+                caller="sql_gen", prompt_version="v1",
+            )
+
+        records = [r for r in caplog.records if getattr(r, "event", None) == "llm_call"]
+        assert records[0].prompt_version == "v1"
+
+    def test_chat_completion_passes_prompt_version_on_gemini_fallback(self, caplog):
+        import logging
+
+        with patch("groq.Groq", side_effect=Exception("503 Service Unavailable")), \
+             patch("api.utils.llm_provider._gemini_completion", return_value="gemini says hi"), \
+             caplog.at_level(logging.INFO, logger="api.utils.llm_provider"):
+            from api.utils.llm_provider import chat_completion
+            chat_completion(
+                [{"role": "user", "content": "hi"}],
+                caller="hybrid_synthesis", prompt_version="v1",
+            )
+
+        records = [r for r in caplog.records if getattr(r, "event", None) == "llm_call"]
+        assert records[0].prompt_version == "v1"
+
+    def test_chat_completion_stream_passes_prompt_version(self, caplog):
+        import logging
+
+        def _make_chunk(content):
+            chunk = MagicMock()
+            chunk.choices[0].delta.content = content
+            return chunk
+
+        mock_client = MagicMock()
+        mock_client.chat.completions.create.return_value = [_make_chunk("hel"), _make_chunk("lo")]
+
+        with patch("groq.Groq", return_value=mock_client), \
+             caplog.at_level(logging.INFO, logger="api.utils.llm_provider"):
+            from api.utils.llm_provider import chat_completion_stream
+            list(chat_completion_stream(
+                [{"role": "user", "content": "hi"}],
+                caller="autopilot_synth", prompt_version="v1",
+            ))
+
+        records = [r for r in caplog.records if getattr(r, "event", None) == "llm_call"]
+        assert records[0].prompt_version == "v1"
+
+
 class TestModelConstants:
     """DOCBOT-1403: GROQ_MODEL was 'llama-3.3-70b-versatile', a model Groq
     removed from its catalog entirely — every default-model call was

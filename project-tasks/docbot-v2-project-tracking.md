@@ -1636,10 +1636,12 @@ As a developer, I want each prompt tagged with a version constant included in th
 **Ground truth**: Prompts are inline Python string constants (e.g. `hybrid_service.py:40` `_SYSTEM_PROMPT`) with no version tag — only traceable via git blame. Prior incident: autopilot trigger regex bug (fixed 2026-03-27) was a silent prompt/logic regression.
 
 **Acceptance Criteria**
-- [ ] `PROMPT_VERSION` constant per prompt, included in DOCBOT-1501's call log payload
-- [ ] No full registry/A-B system required — versioning + logging only, scoped small
+- [x] `PROMPT_VERSION` constant per prompt, included in DOCBOT-1501's call log payload
+- [x] No full registry/A-B system required — versioning + logging only, scoped small
 
-**Status**: 🔲 Planned
+**Implementation note**: added a `PROMPT_VERSION_*` string constant beside every prompt-constructing call site in `hybrid_service.py`, `autopilot_service.py`, `db_service.py`, `sandbox_service.py`, `deep_research_service.py`, `document_extractor.py` (`_PROMPT_VERSIONS` dict), `query_expansion.py`, and `context_compressor.py`; threaded a new `prompt_version` kwarg through `call_llm`/`chat_completion`/`chat_completion_stream`/`log_external_llm_call` in `llm_provider.py` into `_log_llm_call`'s payload and the persisted `llm_calls.prompt_version` column (`llm_trace_service.py`); a static AST test enforces every call site passes it (mirrors DOCBOT-1402's `caller=` coverage check).
+
+**Status**: ✅ Done
 
 ---
 

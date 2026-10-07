@@ -38,6 +38,20 @@ logger = logging.getLogger(__name__)
 
 
 # ---------------------------------------------------------------------------
+# Prompt versions — DOCBOT-1507
+#
+# One PROMPT_VERSION_* constant per prompt-constructing function in this
+# module. Bump manually ("v1" -> "v2") when a prompt's wording/instructions
+# change — see the convention note in api/utils/llm_provider.py.
+# ---------------------------------------------------------------------------
+
+PROMPT_VERSION_SQL_REPHRASE = "v1"          # _rephrase_with_history
+PROMPT_VERSION_SQL_TABLE_SELECTOR = "v1"    # _select_relevant_tables (incl. retry)
+PROMPT_VERSION_SQL_GEN = "v1"               # _generate_sql
+PROMPT_VERSION_SQL_ANSWER_GEN = "v1"        # _stream_answer
+
+
+# ---------------------------------------------------------------------------
 # Connection engine pool — LRU cache avoids create/dispose per query
 # ---------------------------------------------------------------------------
 
@@ -349,6 +363,7 @@ async def _rephrase_with_history(
                 temperature=0,
                 max_tokens=200,
                 caller="sql_rephrase_question",
+                prompt_version=PROMPT_VERSION_SQL_REPHRASE,
             ),
         )
         rephrased = rephrased.strip()
@@ -1236,6 +1251,7 @@ async def _select_relevant_tables(question: str, schema: List[Dict[str, Any]]) -
             temperature=0,
             max_tokens=200,
             caller="sql_table_selector",
+            prompt_version=PROMPT_VERSION_SQL_TABLE_SELECTOR,
         )
         return _parse_table_selection(raw)
     except _parse_errors as exc:
@@ -1259,6 +1275,7 @@ async def _select_relevant_tables(question: str, schema: List[Dict[str, Any]]) -
                 temperature=0,
                 max_tokens=200,
                 caller="sql_table_selector_retry",
+                prompt_version=PROMPT_VERSION_SQL_TABLE_SELECTOR,
             )
             return _parse_table_selection(retry_raw)
         except _parse_errors as retry_exc:
@@ -1365,6 +1382,7 @@ async def _generate_sql(
         temperature=0,
         max_tokens=500,
         caller="sql_gen",
+        prompt_version=PROMPT_VERSION_SQL_GEN,
     )
     # Strip markdown code fences if present
     if sql.startswith("```"):
@@ -1547,6 +1565,7 @@ async def _stream_answer(
         temperature=0.2,
         max_tokens=800,
         caller="sql_answer_gen",
+        prompt_version=PROMPT_VERSION_SQL_ANSWER_GEN,
     ):
         yield mask_pii(token)
 

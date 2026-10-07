@@ -36,6 +36,10 @@ logger = logging.getLogger(__name__)
 COMPRESSION_THRESHOLD = 20   # compress after this many new messages
 RECENT_WINDOW = 10           # keep this many raw messages after compression
 
+# DOCBOT-1507: bump manually ("v1" -> "v2") when the summarisation system
+# prompt wording changes — see convention note in api/utils/llm_provider.py.
+PROMPT_VERSION_CONTEXT_COMPRESSION = "v1"
+
 
 async def should_compress(
     session_id: str,
@@ -133,6 +137,7 @@ async def compress_session(
             temperature=0.3,
             max_tokens=300,
             caller="context_compression",
+            prompt_version=PROMPT_VERSION_CONTEXT_COMPRESSION,
         )
 
         # Persist summary and update compression checkpoint
