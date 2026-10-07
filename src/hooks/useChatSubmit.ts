@@ -1,12 +1,33 @@
 "use client"
 
 import { EXPERT_PERSONAS, routeQuestion } from "@/components/personas"
+import { LineageSchema } from "@/components/types"
 import type {
   Message,
   AutopilotStep,
   ChartMeta,
+  Citation,
   Toast,
 } from "@/components/types"
+import { useUIStore } from "@/store/uiStore"
+
+/**
+ * DOCBOT-1510: validate a `lineage` SSE event, attach it to the in-flight
+ * assistant message, and point the Inspector at it so the panel is never
+ * empty after an answer. Invalid payloads are ignored (lineage is best-effort).
+ */
+function applyLineageEvent(
+  raw: unknown,
+  setMessages: React.Dispatch<React.SetStateAction<Message[]>>,
+): void {
+  const parsed = LineageSchema.safeParse(raw)
+  if (!parsed.success) return
+  const lineage = parsed.data
+  setMessages(prev => prev.map((m, i) =>
+    i === prev.length - 1 && m.role === "assistant" ? { ...m, lineage } : m
+  ))
+  useUIStore.getState().selectLineage(lineage)
+}
 
 interface UseChatSubmitParams {
   input: string
@@ -212,6 +233,9 @@ export function useChatSubmit(params: UseChatSubmitParams) {
                 localSteps.push(stepEntry);
                 setAutopilotSteps(prev => [...prev, stepEntry]);
 
+              } else if (data.type === "lineage") {
+                applyLineageEvent(data, setMessages);
+
               } else if (data.type === "answer") {
                 setMessages(prev => {
                   const updated = [...prev];
@@ -344,6 +368,8 @@ export function useChatSubmit(params: UseChatSubmitParams) {
               setMessages(prev => prev.map((m, i) =>
                 i === prev.length - 1 ? { ...m, content: m.content + (chunk.content as string) } : m
               ));
+            } else if (chunk.type === "lineage") {
+              applyLineageEvent(chunk, setMessages);
             } else if (chunk.type === "metadata") {
               setMessages(prev => prev.map((m, i) =>
                 i === prev.length - 1
@@ -431,17 +457,38 @@ export function useChatSubmit(params: UseChatSubmitParams) {
                 setMessages(prev => prev.map((m, i) =>
                   i === prev.length - 1 ? { ...m, content: m.content + chunk.content } : m
                 ));
+              } else if (chunk.type === "lineage") {
+                applyLineageEvent(chunk, setMessages);
               } else if (chunk.type === "metadata") {
-                setMessages(prev => prev.map((m, i) =>
-                  i === prev.length - 1 ? { ...m, sql: chunk.sql_query, explanation: chunk.explanation } : m
-                ));
+                // The first metadata event carries only intent flags; the SQL
+                // summary arrives in a later one. Never overwrite with undefined.
+                if (chunk.sql_query) {
+                  setMessages(prev => prev.map((m, i) =>
+                    i === prev.length - 1 ? { ...m, sql: chunk.sql_query, explanation: chunk.explanation } : m
+                  ));
+                }
+              } else if (chunk.type === "done") {
+                const doneCitations: Citation[] = Array.isArray(chunk.citations) ? chunk.citations : [];
+                if (doneCitations.length > 0) {
+                  setMessages(prev => prev.map((m, i) =>
+                    i === prev.length - 1 ? { ...m, citations: doneCitations } : m
+                  ));
+                }
               } else if (chunk.type === "analysis_code") {
                 setMessages(prev => prev.map((m, i) =>
                   i === prev.length - 1 ? { ...m, analysisCode: chunk.code } : m
                 ));
               } else if (chunk.type === "chart") {
                 setMessages(prev => prev.map((m, i) =>
-                  i === prev.length - 1 ? { ...m, charts: [...(m.charts ?? []), chunk.base64] } : m
+                  i === prev.length - 1
+                    ? {
+                        ...m,
+                        charts: [...(m.charts ?? []), chunk.base64],
+                        chartMetas: chunk.metadata
+                          ? [...(m.chartMetas ?? []), chunk.metadata as ChartMeta]
+                          : (m.chartMetas ?? []),
+                      }
+                    : m
                 ));
               } else if (chunk.type === "error") {
                 throw new Error(chunk.detail || "Hybrid query failed");
@@ -516,6 +563,8 @@ export function useChatSubmit(params: UseChatSubmitParams) {
               setMessages(prev => prev.map((m, i) =>
                 i === prev.length - 1 ? { ...m, citations: chunk.citations } : m
               ));
+            } else if (chunk.type === "lineage") {
+              applyLineageEvent(chunk, setMessages);
             } else if (chunk.type === "error") {
               throw new Error(chunk.detail || "Chat failed");
             }
