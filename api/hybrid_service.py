@@ -318,8 +318,12 @@ async def rag_retrieve(
     question: str,
     session_id: str,
     vector_stores: dict,
+    lineage=None,
 ) -> tuple[str, list[dict]]:
     """Retrieve document context for a question via vector similarity search.
+
+    ``lineage`` (optional ``LineageCollector``, DOCBOT-1510) records the
+    expanded queries and each returned chunk with its rerank score.
 
     Uses multi-query expansion to improve recall for short or ambiguous
     questions (e.g. "His position or title?" will also search for
@@ -344,14 +348,28 @@ async def rag_retrieve(
         # Expand the question into synonym variants and retrieve for each;
         # merge results so each unique chunk appears at most once.
         expanded_queries = expand_query(question)
+        if lineage is not None:
+            lineage.set_expanded_queries(list(expanded_queries))
         all_result_lists = [retriever.invoke(q) for q in expanded_queries]
         docs = deduplicate_docs(all_result_lists)
 
         # DOCBOT-1002: re-rank with cross-encoder when HF key is available
-        from api.utils.reranker import rerank
+        from api.utils.reranker import rerank_scored
         hf_key = os.getenv("huggingface_api_key", "")
+        rerank_scores: dict[int, float | None] = {}
         if hf_key and docs:
-            docs = rerank(question, docs, hf_key, top_k=5)
+            scored = rerank_scored(question, docs, hf_key, top_k=5)
+            docs = [d for d, _ in scored]
+            rerank_scores = {id(d): sc for d, sc in scored}
+        if lineage is not None:
+            for doc in docs:
+                lineage.add_source(
+                    kind="pdf",
+                    label=str(doc.metadata.get("source", "Unknown")),
+                    page=doc.metadata.get("page", 0),
+                    snippet=doc.page_content,
+                    rerank_score=rerank_scores.get(id(doc)),
+                )
 
         context = "\n\n".join(
             f"Source: {doc.metadata.get('source', 'Unknown')}, "
@@ -359,6 +377,7 @@ async def rag_retrieve(
             for doc in docs
         )
 
+        from api.utils.lineage import safe_snippet
         seen: set[str] = set()
         citations: list[dict] = []
         for doc in docs:
@@ -368,6 +387,7 @@ async def rag_retrieve(
                 citations.append({
                     "source": doc.metadata.get("source", "Unknown"),
                     "page": doc.metadata.get("page", 0),
+                    "text": safe_snippet(doc.page_content),
                 })
 
         return (context, citations)
@@ -498,12 +518,18 @@ async def hybrid_chat(
     run_id = current_run_id() or new_run_id()
     _trace_cm = run_trace(run_id)
     _trace_cm.__enter__()
+
+    # DOCBOT-1510: per-answer lineage collector
+    from api.utils.lineage import LineageCollector
+    lineage = LineageCollector(run_id, "hybrid", question=question)
+    lineage.set_persona(persona)
     try:
         # Rephrase follow-up questions using chat history
         if chat_history:
             from api.db_service import _rephrase_with_history
             try:
                 question = await _rephrase_with_history(question, chat_history)
+                lineage.set_standalone_query(question)
             except Exception as _exc:
                 logger.warning("Hybrid rephrase failed, using original: %s", _exc)
 
@@ -529,6 +555,13 @@ async def hybrid_chat(
             query_history_table=query_history_table,
         )
         intent = classification.intent
+        lineage.set_intent(intent)
+        lineage.add_step(
+            "classify_intent",
+            tool="intent_classifier",
+            status="retried" if classification.fallback_applied else "ok",
+            detail="fallback to default route" if classification.fallback_applied else intent,
+        )
 
         yield f"data: {json.dumps({'type': 'metadata', 'intent': intent, 'has_sql': has_db, 'has_docs': has_docs})}\n\n"
 
@@ -538,28 +571,14 @@ async def hybrid_chat(
         sql_metadata: dict | None = None
 
         if intent == "doc":
-            doc_context, doc_citations = await rag_retrieve(question, session_id, vector_stores)
+            with lineage.step("retrieve_docs", tool="vector_search+rerank", lane="docs"):
+                doc_context, doc_citations = await rag_retrieve(
+                    question, session_id, vector_stores, lineage=lineage
+                )
 
         elif intent == "sql" and has_db and connection_id:
-            sql_metadata = await _collect_sql_result(
-                connection_id=connection_id,
-                question=question,
-                persona=persona,
-                db_connections_table=db_connections_table,
-                schema_cache_table=schema_cache_table,
-                query_history_table=query_history_table,
-                query_embeddings_table=query_embeddings_table,
-                async_session_factory=async_session_factory,
-                expert_personas=expert_personas,
-                chart_type=chart_type,
-            )
-
-        else:  # hybrid — parallel gather
-            rag_task = asyncio.create_task(
-                rag_retrieve(question, session_id, vector_stores)
-            )
-            sql_task = asyncio.create_task(
-                _collect_sql_result(
+            with lineage.step("run_sql_pipeline", tool="sql_pipeline", lane="db"):
+                sql_metadata = await _collect_sql_result(
                     connection_id=connection_id,
                     question=question,
                     persona=persona,
@@ -571,7 +590,33 @@ async def hybrid_chat(
                     expert_personas=expert_personas,
                     chart_type=chart_type,
                 )
-            ) if has_db and connection_id else None
+
+        else:  # hybrid — parallel gather
+            async def _timed_rag():
+                with lineage.step("retrieve_docs", tool="vector_search+rerank", lane="docs"):
+                    return await rag_retrieve(
+                        question, session_id, vector_stores, lineage=lineage
+                    )
+
+            async def _timed_sql():
+                with lineage.step("run_sql_pipeline", tool="sql_pipeline", lane="db"):
+                    return await _collect_sql_result(
+                        connection_id=connection_id,
+                        question=question,
+                        persona=persona,
+                        db_connections_table=db_connections_table,
+                        schema_cache_table=schema_cache_table,
+                        query_history_table=query_history_table,
+                        query_embeddings_table=query_embeddings_table,
+                        async_session_factory=async_session_factory,
+                        expert_personas=expert_personas,
+                        chart_type=chart_type,
+                    )
+
+            rag_task = asyncio.create_task(_timed_rag())
+            sql_task = (
+                asyncio.create_task(_timed_sql()) if has_db and connection_id else None
+            )
 
             doc_context, doc_citations = await rag_task
 
@@ -582,6 +627,26 @@ async def hybrid_chat(
         # _collect_sql_result so the frontend hybrid chart handler receives them.
         # Without this, plotting requests via hybrid_chat() silently drop all charts.
         if sql_metadata:
+            # DOCBOT-1510: forward the SQL result summary (previously swallowed)
+            # so the Inspector Query tab works for hybrid answers. Result rows
+            # are already PII-masked by the SQL pipeline.
+            if sql_metadata.get("sql_query"):
+                fwd = {
+                    "type": "metadata",
+                    "sql_query": sql_metadata.get("sql_query"),
+                    "explanation": sql_metadata.get("explanation"),
+                    "row_count": sql_metadata.get("row_count"),
+                    "execution_time_ms": sql_metadata.get("execution_time_ms"),
+                    "sources": sql_metadata.get("sources", []),
+                }
+                yield f"data: {json.dumps(fwd, default=str)}\n\n"
+            lineage.set_sql(
+                sql=sql_metadata.get("sql_query"),
+                tables_selected=list(sql_metadata.get("sources") or []),
+                row_count=sql_metadata.get("row_count"),
+                execution_time_ms=sql_metadata.get("execution_time_ms"),
+                result_preview=sql_metadata.get("result_preview") or [],
+            )
             analysis_code_event = sql_metadata.get("analysis_code_event")
             if analysis_code_event:
                 yield f"data: {json.dumps(analysis_code_event)}\n\n"
@@ -648,6 +713,10 @@ async def hybrid_chat(
         if intent == "hybrid" and doc_context and sql_metadata:
             from api.utils.discrepancy_detector import detect_discrepancies
             report = detect_discrepancies(doc_context, sql_metadata)
+            for item in report.discrepancies:
+                lineage.add_discrepancy(
+                    item.label, item.doc_value, item.db_value, item.delta, item.pct
+                )
             discrepancy_instruction = report.to_prompt_block()
             if not discrepancy_instruction:
                 # No numeric discrepancies found by code — tell LLM to flag only
@@ -691,6 +760,8 @@ async def hybrid_chat(
             from api.utils.llm_provider import chat_completion_stream
             from api.utils.pii_masking import mask_pii
 
+            lineage.set_pii(True)
+            _synth_start = time.perf_counter()
             for token in chat_completion_stream(
                 [{"role": "user", "content": prompt}],
                 temperature=0.2,
@@ -704,6 +775,16 @@ async def hybrid_chat(
             logger.error("hybrid_chat synthesis failed: %s", exc)
             yield f"data: {json.dumps({'type': 'error', 'detail': 'Synthesis failed. Please try again.'})}\n\n"
             return
+
+        lineage.add_step(
+            "synthesize",
+            tool="llm_stream",
+            latency_ms=(time.perf_counter() - _synth_start) * 1000,
+        )
+        from api.lineage_service import emit_lineage
+        lineage_event = emit_lineage(lineage, session_id)
+        if lineage_event:
+            yield lineage_event
 
         yield f"data: {json.dumps({'type': 'done', 'citations': doc_citations, 'run_id': run_id})}\n\n"
     finally:

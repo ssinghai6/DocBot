@@ -293,6 +293,10 @@ edgar_filings_cache_table = register_edgar_cache_table(metadata)
 from api.llm_trace_service import register_llm_calls_table
 llm_calls_table = register_llm_calls_table(metadata)
 
+# ── DOCBOT-1510: per-answer lineage (Inspector lineage trace) ────────────────
+from api.lineage_service import register_lineage_table
+answer_lineage_table = register_lineage_table(metadata)
+
 # ── DOCBOT-1506: exact-match LLM response cache ───────────────────────────────
 from api.utils.llm_cache import register_llm_cache_table
 llm_response_cache_table = register_llm_cache_table(metadata)
@@ -425,6 +429,8 @@ async def lifespan(app: FastAPI):
     wire_llm_trace_store(llm_calls_table, async_session_factory)
     set_trace_sink(enqueue_call)
     start_writer()
+    from api.lineage_service import wire_lineage_store
+    wire_lineage_store(answer_lineage_table, async_session_factory)
     # DOCBOT-1506: wire the exact-match LLM response cache (SQL gen + intent
     # classification call sites read/write through this once wired).
     from api.utils.llm_cache import wire_llm_cache
@@ -941,6 +947,11 @@ async def chat(raw_request: Request, request: ChatRequest, _user=_rbac_viewer):
             },
         )
 
+        # DOCBOT-1510: per-answer lineage collector (docs mode)
+        from api.utils.lineage import LineageCollector
+        from api.utils.llm_provider import new_run_id
+        lineage = LineageCollector(new_run_id(), "docs", question=request.message)
+
         # ── DOCBOT-802: per-question persona routing ──────────────────────────
         # If the user is on Generalist (default/auto), route based on question
         # content. If they explicitly chose a specialist persona, respect it.
@@ -1013,13 +1024,16 @@ async def chat(raw_request: Request, request: ChatRequest, _user=_rbac_viewer):
             from api.utils.query_expansion import expand_query, deduplicate_docs
 
             expanded_queries = expand_query(search_query)
+            lineage.set_standalone_query(search_query)
+            lineage.set_expanded_queries(list(expanded_queries))
 
             loop = asyncio.get_running_loop()
-            with ThreadPoolExecutor(max_workers=min(len(expanded_queries), 6)) as pool:
-                result_lists = await asyncio.gather(
-                    *[loop.run_in_executor(pool, retriever.invoke, q) for q in expanded_queries]
-                )
-            retrieved_docs = deduplicate_docs(list(result_lists))
+            with lineage.step("retrieve", tool="vector_search", lane="docs"):
+                with ThreadPoolExecutor(max_workers=min(len(expanded_queries), 6)) as pool:
+                    result_lists = await asyncio.gather(
+                        *[loop.run_in_executor(pool, retriever.invoke, q) for q in expanded_queries]
+                    )
+                retrieved_docs = deduplicate_docs(list(result_lists))
 
             # ── Build prompt ─────────────────────────────────────────────────
             persona_data = EXPERT_PERSONAS.get(effective_persona, EXPERT_PERSONAS["Generalist"])
@@ -1078,6 +1092,8 @@ async def chat(raw_request: Request, request: ChatRequest, _user=_rbac_viewer):
 
             from api.utils.pii_masking import mask_pii
 
+            lineage.set_persona(effective_persona)
+            lineage.set_pii(True)
             async for chunk in qa_chain.astream({
                 "context": format_docs(retrieved_docs),
                 "chat_history": chat_history,
@@ -1090,6 +1106,7 @@ async def chat(raw_request: Request, request: ChatRequest, _user=_rbac_viewer):
             answer_text = "".join(full_answer)
 
             # ── Emit citations after stream ends ──────────────────────────────
+            from api.utils.lineage import safe_snippet
             citations = []
             seen_sources: set = set()
             for doc in retrieved_docs:
@@ -1099,8 +1116,26 @@ async def chat(raw_request: Request, request: ChatRequest, _user=_rbac_viewer):
                     citations.append({
                         "source": doc.metadata.get("source", "Unknown"),
                         "page": doc.metadata.get("page", 0),
+                        "text": safe_snippet(doc.page_content),
                     })
             yield f"data: {json.dumps({'type': 'citations', 'citations': citations, 'routed_persona': effective_persona})}\n\n"
+
+            # DOCBOT-1510: lineage (sources with snippets; cited = named in answer)
+            answer_lower = answer_text.lower()
+            for doc in retrieved_docs:
+                src = str(doc.metadata.get("source", "Unknown"))
+                lineage.add_source(
+                    kind="pdf",
+                    label=src,
+                    page=doc.metadata.get("page", 0),
+                    snippet=doc.page_content,
+                    cited=src.lower() in answer_lower,
+                )
+            lineage.add_step("generate", tool="llm_stream", lane="docs")
+            from api.lineage_service import emit_lineage
+            lineage_event = emit_lineage(lineage, request.session_id)
+            if lineage_event:
+                yield lineage_event
 
             # ── Persist to DB (fire-and-forget, non-blocking) ─────────────────
             async def _persist():
@@ -1666,6 +1701,7 @@ async def db_chat(raw_request: Request, request: DBChatRequest, _user=_rbac_view
                 expert_personas=EXPERT_PERSONAS,
                 chart_type=request.chart_type,
                 chat_history=_chat_history if _chat_history else None,
+                emit_lineage_event=True,
             ):
                 yield chunk
         except ConnectionNotFoundError as exc:
@@ -1924,6 +1960,21 @@ async def get_artifact_detail(artifact_id: str):
     if detail is None:
         raise HTTPException(status_code=404, detail="Artifact not found.")
     return detail.model_dump()
+
+
+# ---------------------------------------------------------------------------
+# Lineage route (DOCBOT-1510)
+# ---------------------------------------------------------------------------
+
+
+@app.get("/api/lineage/{run_id}", dependencies=[_rbac_viewer])
+async def get_answer_lineage(run_id: str):
+    """Return the persisted lineage for one answer, joined with llm_calls."""
+    from api.lineage_service import get_lineage
+    lineage = await get_lineage(run_id)
+    if lineage is None:
+        raise HTTPException(status_code=404, detail="Lineage not found.")
+    return lineage.model_dump(mode="json")
 
 
 # ---------------------------------------------------------------------------
