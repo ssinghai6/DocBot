@@ -192,6 +192,19 @@ class LineageCollector:
             )
         )
 
+    def mark_step(self, name: str, status: StepStatus, detail: Optional[str] = None) -> None:
+        """Change the status (and optionally detail) of the latest step named ``name``.
+
+        For stages that swallow their own errors and return None, so the
+        timing context manager alone would report success.
+        """
+        for step in reversed(self._data.steps):
+            if step.name == name:
+                step.status = status
+                if detail:
+                    step.detail = safe_snippet(detail, 200)
+                return
+
     @contextmanager
     def step(
         self,

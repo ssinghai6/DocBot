@@ -101,6 +101,16 @@ class TestCollector:
         assert len(built.model_calls) == 1
         assert built.total_latency_ms is not None
 
+    def test_mark_step_updates_latest_matching_step(self):
+        c = LineageCollector("r1", "hybrid")
+        c.add_step("run_sql_pipeline")
+        c.add_step("synthesize")
+        c.mark_step("run_sql_pipeline", "error", "boom")
+        steps = c.build().steps
+        assert steps[0].status == "error" and steps[0].detail == "boom"
+        assert steps[1].status == "ok"
+        c.mark_step("missing", "error")  # no-op, must not raise
+
     def test_mode_can_change(self):
         c = LineageCollector("r1", "db")
         c.set_mode("csv")

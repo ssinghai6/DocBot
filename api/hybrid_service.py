@@ -623,6 +623,9 @@ async def hybrid_chat(
             if sql_task is not None:
                 sql_metadata = await sql_task
 
+        if has_db and intent != "doc" and sql_metadata is None:
+            lineage.mark_step("run_sql_pipeline", "error", "SQL query failed; answered without database results")
+
         # BUG #3 FIX: forward any chart/analysis_code events captured by
         # _collect_sql_result so the frontend hybrid chart handler receives them.
         # Without this, plotting requests via hybrid_chat() silently drop all charts.
