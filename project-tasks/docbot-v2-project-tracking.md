@@ -68,7 +68,7 @@ Every story is only "done" when ALL of the following are true. No exceptions.
 | EPIC-10 | RAG Quality Enhancement | 4+ | ✅ Done | Chroma persistent store, cross-encoder reranker, SemanticChunker, FinanceBench accuracy baseline (**100% — 20/20**). PageIndex evaluated and rejected (2026-03-25). |
 | EPIC-12 | UI Redesign & Finance Vertical | 5 | ✅ Done | Progressive disclosure UI (tabbed sidebar, collapsible sections, Cmd+K command palette), unified file upload, 3-color palette, finance-focused copy, guided onboarding empty state. |
 | EPIC-13 | Sandbox Demo Mode | 5 | ✅ Done | Pre-loaded TechCorp 10-K + SQLite financial database via `/api/demo/init`. One-click hybrid analysis demo with deliberate discrepancies for showcase. |
-| EPIC-15 | AI Engineering Maturity | 6 | 🟡 In Progress (4/8, +1 in review) | DOCBOT-1501/1502 (tracing+dashboard), 1503 (eval CI gate), 1504 (structured-output validation), 1505 (multi-agent spike) — done, reviewed, merged 2026-10-03. DOCBOT-1509 (LangSmith tracing UI, metadata only) — implemented on `feature/DOCBOT-1509-langsmith-tracing`, pending merge. DOCBOT-1506 (response cache), 1507 (prompt versioning), 1508 (cost ceiling) — not started. Gap analysis 2026-09-27 (ai-engineer + senior-project-manager agents). |
+| EPIC-15 | AI Engineering Maturity | 6 | 🟡 In Progress (5/8, +1 in review) | DOCBOT-1501/1502 (tracing+dashboard), 1503 (eval CI gate), 1504 (structured-output validation), 1505 (multi-agent spike) — done, reviewed, merged 2026-10-03. DOCBOT-1509 (LangSmith tracing UI, metadata only) — implemented on `feature/DOCBOT-1509-langsmith-tracing`, pending merge. DOCBOT-1508 (per-session cost ceiling) — done on `feature/DOCBOT-1508-session-cost-ceiling`, pending merge. DOCBOT-1506 (response cache), 1507 (prompt versioning) — not started. Gap analysis 2026-09-27 (ai-engineer + senior-project-manager agents). |
 
 ---
 
@@ -1653,10 +1653,10 @@ As an admin, I want a soft per-session token/cost budget check before Autopilot 
 **Ground truth**: `api/index.py:332` "cost budget" comment refers to API rate-limiting, not LLM spend — no max-tokens-per-session or max-LLM-calls-per-request-type ceiling exists beyond fixed per-call `max_tokens`.
 
 **Acceptance Criteria**
-- [ ] Soft budget check gates Autopilot/Deep Research multi-call loops
-- [ ] Graceful degradation message if ceiling hit mid-investigation
+- [x] Soft budget check gates Autopilot/Deep Research multi-call loops
+- [x] Graceful degradation message if ceiling hit mid-investigation
 
-**Status**: 🔲 Planned
+**Status**: ✅ Done — in-memory per-run_id cost ledger in `api/utils/llm_provider.py` (reuses `estimated_cost_usd` already computed by DOCBOT-1501/1502, no DB round trip), gated via `SESSION_COST_CEILING_USD` (default $0.50); Autopilot's executor loop stops dispatching new waves and synthesizes partial results with a "warning" SSE event when the ceiling is hit, Deep Research's `deep_retrieve` skips its sub-question decomposition call and falls back to the original question.
 
 ---
 

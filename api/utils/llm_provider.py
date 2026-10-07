@@ -46,6 +46,7 @@ import logging
 import os
 import time
 import uuid
+from collections import OrderedDict
 from contextlib import contextmanager
 from typing import Callable, Iterator, List, Optional
 
@@ -181,6 +182,72 @@ def _estimate_cost_usd(
     return round((input_tokens / 1000) * in_rate + (output_tokens / 1000) * out_rate, 6)
 
 
+# ---------------------------------------------------------------------------
+# Per-session (per-run_id) soft cost ceiling — DOCBOT-1508
+#
+# Autopilot and Deep Research each group every LLM call belonging to one
+# multi-step investigation under a shared run_id (see run_trace() above).
+# This tracks a running total of `estimated_cost_usd` per run_id, purely
+# in-memory, so a multi-call loop can cheaply check "have we already spent
+# too much on this investigation?" before making another LLM call — no DB
+# round trip, and no dependency on the (eventually-consistent, queue-backed)
+# llm_calls persistence in api/llm_trace_service.py.
+#
+# "Soft" because it only gates the *next* additional call in a loop; it never
+# aborts a call already in flight and never raises — callers degrade
+# gracefully (stop looping, synthesize/return partial results) rather than
+# erroring. A calls contributes $0 toward the ceiling if its model has no
+# entry in _COST_PER_1K_TOKENS or its token counts weren't available (see
+# _estimate_cost_usd) — a conservative under-count, not an over-count, so the
+# ceiling never trips on data we don't actually have.
+#
+# Bounded with an LRU eviction so a long-running container can't leak memory
+# across thousands of past sessions/investigations.
+# ---------------------------------------------------------------------------
+
+SESSION_COST_CEILING_USD = float(os.getenv("SESSION_COST_CEILING_USD", "0.50"))
+
+_MAX_TRACKED_RUN_IDS = 500
+_session_cost_totals: "OrderedDict[str, float]" = OrderedDict()
+
+
+def _accumulate_session_cost(run_id: Optional[str], cost: Optional[float]) -> None:
+    """Add `cost` to the running total for `run_id`. No-op if either is unset."""
+    if not run_id or not cost:
+        return
+    _session_cost_totals[run_id] = _session_cost_totals.get(run_id, 0.0) + cost
+    _session_cost_totals.move_to_end(run_id)
+    while len(_session_cost_totals) > _MAX_TRACKED_RUN_IDS:
+        _session_cost_totals.popitem(last=False)
+
+
+def get_session_cost_usd(run_id: Optional[str]) -> float:
+    """Return the running estimated-cost total for this run_id (0.0 if unknown)."""
+    if not run_id:
+        return 0.0
+    return _session_cost_totals.get(run_id, 0.0)
+
+
+def is_session_budget_exceeded(run_id: Optional[str], ceiling: Optional[float] = None) -> bool:
+    """True once `run_id`'s accumulated estimated cost has reached the ceiling.
+
+    `ceiling` defaults to SESSION_COST_CEILING_USD (env-configurable). A
+    ceiling of 0 or less disables the check entirely (treated as "no limit"),
+    so an operator can opt out without code changes.
+    """
+    if not run_id:
+        return False
+    limit = SESSION_COST_CEILING_USD if ceiling is None else ceiling
+    if limit <= 0:
+        return False
+    return get_session_cost_usd(run_id) >= limit
+
+
+def _reset_session_cost_tracking_for_tests() -> None:
+    """Test-only helper — clears the in-memory per-run_id cost ledger."""
+    _session_cost_totals.clear()
+
+
 def _log_llm_call(
     *,
     provider: str,
@@ -209,6 +276,7 @@ def _log_llm_call(
     queryable after the fact, not just grep-able from stdout.
     """
     resolved_run_id = run_id or current_run_id() or new_run_id()
+    estimated_cost = _estimate_cost_usd(model, input_tokens, output_tokens)
     payload = {
         "event": "llm_call",
         "run_id": resolved_run_id,
@@ -217,7 +285,7 @@ def _log_llm_call(
         "llm_latency_ms": round(latency_ms),
         "llm_input_tokens": input_tokens,
         "llm_output_tokens": output_tokens,
-        "llm_estimated_cost_usd": _estimate_cost_usd(model, input_tokens, output_tokens),
+        "llm_estimated_cost_usd": estimated_cost,
         "llm_success": success,
         "llm_fallback_triggered": fallback_triggered,
         "llm_caller": caller,
@@ -227,6 +295,9 @@ def _log_llm_call(
         "error_class": error_class,
     }
     logger.info(json.dumps(payload), extra=payload)
+
+    # DOCBOT-1508: accumulate toward this run_id's soft session cost ceiling.
+    _accumulate_session_cost(resolved_run_id, estimated_cost)
 
     if _trace_sink is not None:
         try:

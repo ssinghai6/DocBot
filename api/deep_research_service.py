@@ -119,8 +119,17 @@ async def _deep_retrieve_impl(
     groq_api_key = os.getenv("groq_api_key", "")
 
     # ── Step 1: Decompose question into sub-questions ─────────────────────
+    # DOCBOT-1508: soft per-session LLM cost ceiling. If this investigation
+    # (shared run_id with Autopilot, when called as its doc_search tool) has
+    # already hit its budget, skip the decomposition call entirely and fall
+    # back to the single original question — the same graceful fallback
+    # already used below when the call itself fails. The rest of the
+    # pipeline (parallel retrieval, gap-fill) is pure vector search with no
+    # further LLM calls, so this is the only gate deep_retrieve needs.
+    from api.utils.llm_provider import is_session_budget_exceeded
+
     sub_questions: list[str] = [question]
-    if groq_api_key:
+    if groq_api_key and not is_session_budget_exceeded(resolved_run_id):
         from api.utils.llm_provider import GROQ_MODEL, get_llm, log_external_llm_call
 
         _start = time.monotonic()
@@ -160,6 +169,12 @@ async def _deep_retrieve_impl(
             )
             logger.warning("deep_retrieve planner failed, using original question: %s", exc)
             sub_questions = [question]
+    elif groq_api_key and is_session_budget_exceeded(resolved_run_id):
+        logger.warning(
+            "deep_retrieve: session cost ceiling reached for run_id=%s — "
+            "skipping sub-question decomposition, using original question",
+            resolved_run_id,
+        )
 
     logger.info("deep_retrieve sub-questions: %s", sub_questions)
 
