@@ -150,6 +150,26 @@ GEMINI_MODEL = "gemini-2.5-flash"
 _FALLBACK_STATUS_CODES = {429, 500, 502, 503, 504}
 
 # ---------------------------------------------------------------------------
+# Prompt versioning — DOCBOT-1507
+#
+# Every prompt-constructing function/module across the codebase keeps a
+# PROMPT_VERSION_<NAME> = "v1" string constant next to its prompt text (see
+# hybrid_service.py, autopilot_service.py, db_service.py, sandbox_service.py,
+# deep_research_service.py, document_extractor.py). Convention:
+#   - Start at "v1".
+#   - Bump manually ("v1" -> "v2") whenever the prompt's wording/instructions
+#     change in a way that could shift model behavior. Formatting-only
+#     touch-ups (e.g. fixing a typo in a comment) don't require a bump.
+#   - Pass the constant as `prompt_version=` at the call_llm / chat_completion
+#     / chat_completion_stream / log_external_llm_call call site so it lands
+#     on the persisted llm_calls row (DOCBOT-1501/1502) next to `caller`.
+# This makes it possible to correlate "which prompt revision was active" with
+# an eval score delta or a prod regression after the fact, without a full
+# registry/A-B system — git blame on the constant plus this column is enough
+# signal for a solo-deploy.
+# ---------------------------------------------------------------------------
+
+# ---------------------------------------------------------------------------
 # Thin LLM telemetry — DOCBOT-1401
 #
 # One structured log line per call, emitted from this module (the choke point
@@ -194,6 +214,7 @@ def _log_llm_call(
     run_id: Optional[str] = None,
     error_message: Optional[str] = None,
     error_class: Optional[str] = None,
+    prompt_version: Optional[str] = None,
 ) -> None:
     """Emit one structured log line for an LLM call as a JSON string in the
     message body — not via logging's `extra=` mechanism, which silently
@@ -221,6 +242,9 @@ def _log_llm_call(
         "llm_success": success,
         "llm_fallback_triggered": fallback_triggered,
         "llm_caller": caller,
+        # DOCBOT-1507: which PROMPT_VERSION_* constant was active at the call
+        # site — None for callers that haven't been tagged yet.
+        "prompt_version": prompt_version,
         "error_message": error_message,
         # DOCBOT-1509: exception class name only. Sent to LangSmith; error_message
         # (which may contain request content) is not.
@@ -253,6 +277,7 @@ def log_external_llm_call(
     run_id: Optional[str] = None,
     error_message: Optional[str] = None,
     error_class: Optional[str] = None,
+    prompt_version: Optional[str] = None,
 ) -> None:
     """Public logging hook for call sites that build their own LLM client
     instead of going through call_llm/chat_completion/chat_completion_stream
@@ -276,6 +301,7 @@ def log_external_llm_call(
         run_id=run_id,
         error_message=error_message,
         error_class=error_class,
+        prompt_version=prompt_version,
     )
 
 
@@ -443,6 +469,7 @@ async def call_llm(
     gemini_api_key: Optional[str] = None,
     caller: Optional[str] = None,
     run_id: Optional[str] = None,
+    prompt_version: Optional[str] = None,
 ) -> str:
     """Call the LLM with automatic fallback from Groq to Gemini.
 
@@ -483,6 +510,7 @@ async def call_llm(
             provider="groq", model=GROQ_MODEL, latency_ms=elapsed * 1000,
             success=True, fallback_triggered=False, caller=caller,
             input_tokens=in_tok, output_tokens=out_tok, run_id=run_id,
+            prompt_version=prompt_version,
         )
         return response.content
     except ValueError:
@@ -514,6 +542,7 @@ async def call_llm(
         provider="gemini", model=GEMINI_MODEL, latency_ms=elapsed * 1000,
         success=True, fallback_triggered=True, caller=caller,
         input_tokens=in_tok, output_tokens=out_tok, run_id=run_id,
+        prompt_version=prompt_version,
     )
     return response.content
 
@@ -617,6 +646,7 @@ def chat_completion(
     max_tokens: int = 800,
     caller: Optional[str] = None,
     run_id: Optional[str] = None,
+    prompt_version: Optional[str] = None,
 ) -> str:
     """Non-streaming chat completion with Groq → Gemini fallback.
 
@@ -629,6 +659,9 @@ def chat_completion(
     run_id : str, optional
         Explicit trace id override. Usually left unset — resolved from the
         active run_trace() ContextVar instead (see llm_provider module docs).
+    prompt_version : str, optional
+        DOCBOT-1507: the PROMPT_VERSION_* constant active at the call site —
+        carried into the persisted llm_calls row alongside `caller`.
     """
     # Try Groq first
     try:
@@ -653,6 +686,7 @@ def chat_completion(
             input_tokens=safe_int(getattr(usage, "prompt_tokens", None)),
             output_tokens=safe_int(getattr(usage, "completion_tokens", None)),
             run_id=run_id,
+            prompt_version=prompt_version,
         )
         return response.choices[0].message.content.strip()
     except Exception as exc:
@@ -669,6 +703,7 @@ def chat_completion(
     _log_llm_call(
         provider="gemini", model=GEMINI_MODEL, latency_ms=elapsed * 1000,
         success=True, fallback_triggered=True, caller=caller, run_id=run_id,
+        prompt_version=prompt_version,
     )
     return result
 
@@ -681,6 +716,7 @@ def chat_completion_stream(
     max_tokens: int = 800,
     caller: Optional[str] = None,
     run_id: Optional[str] = None,
+    prompt_version: Optional[str] = None,
 ) -> Iterator[str]:
     """Streaming chat completion with Groq → Gemini fallback.
 
@@ -715,6 +751,7 @@ def chat_completion_stream(
         _log_llm_call(
             provider="groq", model=model, latency_ms=(time.monotonic() - start) * 1000,
             success=True, fallback_triggered=False, caller=caller, run_id=run_id,
+            prompt_version=prompt_version,
         )
         return  # success — don't fall through
     except Exception as exc:
@@ -730,6 +767,7 @@ def chat_completion_stream(
         _log_llm_call(
             provider="gemini", model=GEMINI_MODEL, latency_ms=(time.monotonic() - start) * 1000,
             success=True, fallback_triggered=True, caller=caller, run_id=run_id,
+            prompt_version=prompt_version,
         )
     except Exception as exc:
         _log_llm_call(
@@ -737,5 +775,6 @@ def chat_completion_stream(
             success=False, fallback_triggered=True, caller=caller, run_id=run_id,
             error_message=f"{type(exc).__name__}: {str(exc)[:200]}",
             error_class=type(exc).__name__,
+            prompt_version=prompt_version,
         )
         raise

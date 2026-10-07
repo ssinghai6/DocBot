@@ -24,6 +24,13 @@ logger = logging.getLogger(__name__)
 # DOCBOT-305: supported chart types for validate + prompt routing
 VALID_CHART_TYPES = {"auto", "bar", "line", "scatter", "heatmap"}
 
+# DOCBOT-1507: one PROMPT_VERSION_* constant per prompt-constructing function
+# in this module. Bump manually ("v1" -> "v2") when wording/instructions
+# change — see the convention note in api/utils/llm_provider.py.
+PROMPT_VERSION_SANDBOX_ANALYSIS_CODE_GEN = "v1"  # generate_analysis_code (SQL-fed chart codegen)
+PROMPT_VERSION_SANDBOX_REPHRASE = "v1"           # _rephrase_for_csv
+PROMPT_VERSION_SANDBOX_CSV_CODE_GEN = "v1"       # CSV-on-E2B code generation
+
 # Regex to detect complex analytical queries that need more code/time
 _COMPLEX_QUERY_RE = _re_module.compile(
     r'\b(predict|forecast|trend|seasonalit|correlat|regress|cluster|anomal'
@@ -642,6 +649,7 @@ async def generate_analysis_code(
             temperature=0,
             max_tokens=max_tokens,
             caller="sandbox_analysis_code_gen",
+            prompt_version=PROMPT_VERSION_SANDBOX_ANALYSIS_CODE_GEN,
         )
         code = raw or ""
         # Defensive strip of any <think>...</think> reasoning blocks (incl. truncated)
@@ -870,6 +878,7 @@ def _rephrase_for_csv(
             temperature=0,
             max_tokens=200,
             caller="sandbox_rephrase_question",
+            prompt_version=PROMPT_VERSION_SANDBOX_REPHRASE,
         ).strip()
 
         # Defensive strip of any inline <think>...</think> reasoning blocks
@@ -1025,6 +1034,7 @@ async def generate_csv_analysis_code(
             temperature=0,
             max_tokens=max_tokens,
             caller="sandbox_csv_code_gen",
+            prompt_version=PROMPT_VERSION_SANDBOX_CSV_CODE_GEN,
         )
         code = response_text or ""
 

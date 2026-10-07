@@ -45,6 +45,14 @@ _SYSTEM_PROMPT = (
     "  hybrid — the answer requires both database data and document context\n\n"
     "Respond with one word only: sql, doc, or hybrid. No punctuation, no explanation."
 )
+# DOCBOT-1507: bump manually ("v1" -> "v2") whenever _SYSTEM_PROMPT's wording
+# changes — see PROMPT_VERSION convention in api/utils/llm_provider.py.
+PROMPT_VERSION_INTENT_CLASSIFICATION = "v1"
+
+# DOCBOT-1507: hybrid_chat's synthesis prompt is built dynamically (persona +
+# doc/sql context), so there's no single string constant to tag — this
+# version applies to the prompt-assembly logic in hybrid_chat() below.
+PROMPT_VERSION_HYBRID_SYNTHESIS = "v1"
 
 
 # ---------------------------------------------------------------------------
@@ -183,6 +191,7 @@ async def classify_intent(
             log_external_llm_call(
                 provider="groq", model=_MODEL, latency_ms=(time.monotonic() - _start) * 1000,
                 success=False, caller="intent_classification",
+                prompt_version=PROMPT_VERSION_INTENT_CLASSIFICATION,
             )
             raise
 
@@ -192,6 +201,7 @@ async def classify_intent(
             success=True, caller="intent_classification",
             input_tokens=safe_int(getattr(usage, "prompt_tokens", None)),
             output_tokens=safe_int(getattr(usage, "completion_tokens", None)),
+            prompt_version=PROMPT_VERSION_INTENT_CLASSIFICATION,
         )
 
         raw = response.choices[0].message.content.strip().lower()
@@ -687,6 +697,7 @@ async def hybrid_chat(
                 max_tokens=2000,
                 caller="hybrid_synthesis",
                 run_id=run_id,
+                prompt_version=PROMPT_VERSION_HYBRID_SYNTHESIS,
             ):
                 yield f"data: {json.dumps({'type': 'token', 'content': mask_pii(token)})}\n\n"
         except Exception as exc:

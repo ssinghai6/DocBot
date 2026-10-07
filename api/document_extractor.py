@@ -33,6 +33,22 @@ from pydantic import BaseModel
 logger = logging.getLogger(__name__)
 
 # ---------------------------------------------------------------------------
+# Prompt versions — DOCBOT-1507
+#
+# One version per entry in _PROMPTS (keyed by doc_type). Bump the relevant
+# entry manually ("v1" -> "v2") when that doc_type's prompt text changes —
+# see the convention note in api/utils/llm_provider.py.
+# ---------------------------------------------------------------------------
+
+_PROMPT_VERSIONS: dict[str, str] = {
+    "financial": "v1",
+    "legal": "v1",
+    "medical": "v1",
+    "research": "v1",
+    "general": "v1",
+}
+
+# ---------------------------------------------------------------------------
 # Document type detection
 # ---------------------------------------------------------------------------
 
@@ -309,7 +325,12 @@ async def extract_document_fields(
         return []
 
     doc_type = detect_document_type(text)
+    prompt_version = _PROMPT_VERSIONS.get(doc_type, "v1")
 
+    import time as _time
+    from api.utils.llm_provider import log_external_llm_call
+
+    _start = _time.monotonic()
     try:
         import asyncio
         import langextract as lx
@@ -329,6 +350,16 @@ async def extract_document_fields(
                 show_progress=False,
                 max_workers=2,  # free tier: 10 RPM cap
             ),
+        )
+        # DOCBOT-1507: this call bypasses llm_provider's chat_completion/call_llm
+        # wrappers entirely (LangExtract drives its own Gemini SDK calls), so it
+        # gets its own log_external_llm_call here rather than via that choke
+        # point — the only LLM path in the codebase that does.
+        log_external_llm_call(
+            provider="gemini", model="gemini-2.5-flash",
+            latency_ms=(_time.monotonic() - _start) * 1000,
+            success=True, caller="document_extraction",
+            prompt_version=prompt_version,
         )
 
         raw_extractions = result.extractions if result.extractions else []
@@ -373,6 +404,14 @@ async def extract_document_fields(
         return fields
 
     except Exception as exc:
+        log_external_llm_call(
+            provider="gemini", model="gemini-2.5-flash",
+            latency_ms=(_time.monotonic() - _start) * 1000,
+            success=False, caller="document_extraction",
+            prompt_version=prompt_version,
+            error_message=f"{type(exc).__name__}: {str(exc)[:200]}",
+            error_class=type(exc).__name__,
+        )
         logger.warning("extract_document_fields failed (type=%s): %s", doc_type, exc)
         return []
 

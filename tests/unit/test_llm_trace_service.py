@@ -64,9 +64,9 @@ class TestRegisterTable:
         table = llm_trace_service.register_llm_calls_table(metadata)
         col_names = {c.name for c in table.columns}
         assert col_names == {
-            "id", "run_id", "provider", "model", "caller", "latency_ms",
-            "input_tokens", "output_tokens", "estimated_cost_usd", "success",
-            "fallback_triggered", "error_message", "created_at",
+            "id", "run_id", "provider", "model", "caller", "prompt_version",
+            "latency_ms", "input_tokens", "output_tokens", "estimated_cost_usd",
+            "success", "fallback_triggered", "error_message", "created_at",
         }
 
     def test_table_name(self):
@@ -274,6 +274,78 @@ class TestWriterLoop:
 # ---------------------------------------------------------------------------
 # get_call_stats — read path for DOCBOT-1502
 # ---------------------------------------------------------------------------
+
+
+class TestPromptVersionPersistence:
+    """DOCBOT-1507: prompt_version flows from the enqueued payload through
+    to the persisted row and back out through get_call_stats()."""
+
+    @pytest.mark.asyncio
+    async def test_prompt_version_is_persisted(self, wired_store):
+        table, session_factory = wired_store
+
+        llm_trace_service.enqueue_call({
+            "run_id": "pv-run",
+            "llm_provider": "groq",
+            "llm_model": "openai/gpt-oss-20b",
+            "llm_caller": "sql_gen",
+            "prompt_version": "v1",
+            "llm_success": True,
+            "llm_fallback_triggered": False,
+        })
+
+        llm_trace_service.start_writer()
+        await asyncio.sleep(0.05)
+        await llm_trace_service.stop_writer()
+
+        async with session_factory() as session:
+            result = await session.execute(select(table))
+            rows = result.fetchall()
+
+        assert len(rows) == 1
+        assert rows[0].prompt_version == "v1"
+
+    @pytest.mark.asyncio
+    async def test_missing_prompt_version_persists_as_null(self, wired_store):
+        """Untagged callers must not break the writer — prompt_version is
+        nullable and simply lands as None."""
+        table, session_factory = wired_store
+
+        llm_trace_service.enqueue_call({
+            "run_id": "no-pv-run",
+            "llm_provider": "groq",
+            "llm_success": True,
+        })
+
+        llm_trace_service.start_writer()
+        await asyncio.sleep(0.05)
+        await llm_trace_service.stop_writer()
+
+        async with session_factory() as session:
+            result = await session.execute(select(table))
+            rows = result.fetchall()
+
+        assert len(rows) == 1
+        assert rows[0].prompt_version is None
+
+    @pytest.mark.asyncio
+    async def test_get_call_stats_includes_prompt_version(self, wired_store):
+        table, session_factory = wired_store
+
+        llm_trace_service.enqueue_call({
+            "run_id": "pv-stats-run",
+            "llm_provider": "groq",
+            "llm_caller": "autopilot_planner",
+            "prompt_version": "v2",
+            "llm_success": True,
+        })
+        llm_trace_service.start_writer()
+        await asyncio.sleep(0.05)
+        await llm_trace_service.stop_writer()
+
+        stats = await llm_trace_service.get_call_stats()
+        assert len(stats) == 1
+        assert stats[0]["prompt_version"] == "v2"
 
 
 class TestGetCallStats:
