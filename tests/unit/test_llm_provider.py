@@ -749,3 +749,135 @@ class TestTraceSink:
             provider="groq", model="openai/gpt-oss-20b", latency_ms=1.0,
             success=True, fallback_triggered=False, caller="test_caller",
         )
+
+
+# ---------------------------------------------------------------------------
+# DOCBOT-1508: per-session soft LLM cost ceiling
+# ---------------------------------------------------------------------------
+
+
+class TestSessionCostCeiling:
+    def setup_method(self):
+        from api.utils.llm_provider import _reset_session_cost_tracking_for_tests
+        _reset_session_cost_tracking_for_tests()
+
+    def teardown_method(self):
+        from api.utils.llm_provider import _reset_session_cost_tracking_for_tests
+        _reset_session_cost_tracking_for_tests()
+
+    def test_get_session_cost_usd_defaults_to_zero(self):
+        from api.utils.llm_provider import get_session_cost_usd
+        assert get_session_cost_usd("never-seen-run-id") == 0.0
+
+    def test_get_session_cost_usd_none_run_id_is_zero(self):
+        from api.utils.llm_provider import get_session_cost_usd
+        assert get_session_cost_usd(None) == 0.0
+
+    def test_log_llm_call_accumulates_cost_for_run_id(self):
+        from api.utils.llm_provider import GROQ_MODEL, _log_llm_call, get_session_cost_usd
+
+        _log_llm_call(
+            provider="groq", model=GROQ_MODEL, latency_ms=1.0,
+            success=True, fallback_triggered=False, caller="test",
+            input_tokens=1000, output_tokens=1000, run_id="run-a",
+        )
+        first = get_session_cost_usd("run-a")
+        assert first > 0.0
+
+        _log_llm_call(
+            provider="groq", model=GROQ_MODEL, latency_ms=1.0,
+            success=True, fallback_triggered=False, caller="test",
+            input_tokens=1000, output_tokens=1000, run_id="run-a",
+        )
+        assert get_session_cost_usd("run-a") == pytest.approx(first * 2)
+
+    def test_cost_accumulation_is_isolated_per_run_id(self):
+        from api.utils.llm_provider import GROQ_MODEL, _log_llm_call, get_session_cost_usd
+
+        _log_llm_call(
+            provider="groq", model=GROQ_MODEL, latency_ms=1.0,
+            success=True, fallback_triggered=False, caller="test",
+            input_tokens=1000, output_tokens=1000, run_id="run-a",
+        )
+        assert get_session_cost_usd("run-a") > 0.0
+        assert get_session_cost_usd("run-b") == 0.0
+
+    def test_unknown_model_contributes_zero_cost(self):
+        from api.utils.llm_provider import _log_llm_call, get_session_cost_usd
+
+        _log_llm_call(
+            provider="groq", model="some-unlisted-model", latency_ms=1.0,
+            success=True, fallback_triggered=False, caller="test",
+            input_tokens=1000, output_tokens=1000, run_id="run-unknown-model",
+        )
+        assert get_session_cost_usd("run-unknown-model") == 0.0
+
+    def test_missing_token_counts_contribute_zero_cost(self):
+        from api.utils.llm_provider import GROQ_MODEL, _log_llm_call, get_session_cost_usd
+
+        _log_llm_call(
+            provider="groq", model=GROQ_MODEL, latency_ms=1.0,
+            success=True, fallback_triggered=False, caller="test",
+            run_id="run-no-tokens",
+        )
+        assert get_session_cost_usd("run-no-tokens") == 0.0
+
+    def test_is_session_budget_exceeded_false_under_ceiling(self):
+        from api.utils.llm_provider import is_session_budget_exceeded
+        assert is_session_budget_exceeded("fresh-run", ceiling=1.0) is False
+
+    def test_is_session_budget_exceeded_true_at_or_over_ceiling(self):
+        from api.utils.llm_provider import GROQ_MODEL, _log_llm_call, is_session_budget_exceeded
+
+        _log_llm_call(
+            provider="groq", model=GROQ_MODEL, latency_ms=1.0,
+            success=True, fallback_triggered=False, caller="test",
+            input_tokens=1_000_000, output_tokens=1_000_000, run_id="run-over",
+        )
+        # 1M in + 1M out tokens at gpt-oss-20b rates is well over a $0.0001 ceiling.
+        assert is_session_budget_exceeded("run-over", ceiling=0.0001) is True
+
+    def test_is_session_budget_exceeded_none_run_id_is_false(self):
+        from api.utils.llm_provider import is_session_budget_exceeded
+        assert is_session_budget_exceeded(None, ceiling=0.0001) is False
+
+    def test_ceiling_of_zero_disables_check(self):
+        from api.utils.llm_provider import GROQ_MODEL, _log_llm_call, is_session_budget_exceeded
+
+        _log_llm_call(
+            provider="groq", model=GROQ_MODEL, latency_ms=1.0,
+            success=True, fallback_triggered=False, caller="test",
+            input_tokens=1_000_000, output_tokens=1_000_000, run_id="run-disabled",
+        )
+        assert is_session_budget_exceeded("run-disabled", ceiling=0) is False
+
+    def test_negative_ceiling_disables_check(self):
+        from api.utils.llm_provider import is_session_budget_exceeded
+        assert is_session_budget_exceeded("any-run", ceiling=-1.0) is False
+
+    def test_default_ceiling_env_var_is_read(self, monkeypatch):
+        """SESSION_COST_CEILING_USD is read from env at import time — verify
+        the constant exists and is a positive float by default."""
+        from api.utils.llm_provider import SESSION_COST_CEILING_USD
+        assert isinstance(SESSION_COST_CEILING_USD, float)
+        assert SESSION_COST_CEILING_USD > 0
+
+    def test_lru_eviction_bounds_tracked_run_ids(self):
+        from api.utils.llm_provider import (
+            GROQ_MODEL,
+            _log_llm_call,
+            _MAX_TRACKED_RUN_IDS,
+            get_session_cost_usd,
+        )
+
+        for i in range(_MAX_TRACKED_RUN_IDS + 10):
+            _log_llm_call(
+                provider="groq", model=GROQ_MODEL, latency_ms=1.0,
+                success=True, fallback_triggered=False, caller="test",
+                input_tokens=100, output_tokens=100, run_id=f"run-{i}",
+            )
+
+        # The earliest run_ids should have been evicted.
+        assert get_session_cost_usd("run-0") == 0.0
+        # The most recent one should still be tracked.
+        assert get_session_cost_usd(f"run-{_MAX_TRACKED_RUN_IDS + 9}") > 0.0

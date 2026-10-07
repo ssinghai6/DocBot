@@ -585,3 +585,92 @@ class TestAutopilotStateOptionalConnection:
             os.environ.pop("groq_api_key", None)
             result = asyncio.run(_planner_node(state))
         assert result["plan"] == ["Summarize the report"]
+
+
+# ---------------------------------------------------------------------------
+# DOCBOT-1508: per-session soft LLM cost ceiling gating
+# ---------------------------------------------------------------------------
+
+
+class TestSessionCostCeilingGate:
+    def test_should_continue_synthesize_when_budget_exceeded(self):
+        """budget_exceeded=True routes to synthesize even with steps remaining
+        and iteration well under MAX_ITERATIONS."""
+        state = _make_state(
+            plan=["a", "b", "c"], iteration=1, steps_completed=[{"step": "a", "tool": "sql_query"}],
+            budget_exceeded=True,
+        )
+        assert _should_continue(state) == "synthesize"
+
+    def test_should_continue_execute_when_budget_not_exceeded(self):
+        state = _make_state(
+            plan=["a", "b"], iteration=0, steps_completed=[], budget_exceeded=False,
+        )
+        assert _should_continue(state) == "execute"
+
+    def test_should_continue_defaults_budget_exceeded_to_false(self):
+        """A state dict without the key (e.g. older callers) behaves as if unset."""
+        state = _make_state(plan=["a", "b"], iteration=0, steps_completed=[])
+        state.pop("budget_exceeded", None)
+        assert _should_continue(state) == "execute"
+
+    def test_executor_stops_wave_dispatch_when_budget_exceeded(self):
+        """When the session cost ceiling has been hit, executor_node returns a
+        budget_exceeded update and does not dispatch a new wave of steps —
+        no sql_query/doc_search/python_analysis side effects should run."""
+        node = make_executor_node(
+            db_connections_table=MagicMock(),
+            schema_cache_table=MagicMock(),
+            query_history_table=MagicMock(),
+            query_embeddings_table=MagicMock(),
+            session_artifacts_table=MagicMock(),
+            table_embeddings_table=MagicMock(),
+            async_session_factory=MagicMock(),
+            expert_personas={"Generalist": {"persona_def": ""}},
+            vector_stores={},
+        )
+        state = _make_state(
+            plan=["Fetch revenue by region", "Fetch costs by region"],
+            steps_completed=[],
+            iteration=0,
+            run_id="over-budget-run",
+        )
+
+        with patch(
+            "api.utils.llm_provider.is_session_budget_exceeded", return_value=True
+        ):
+            result = asyncio.run(node(state))
+
+        assert result["budget_exceeded"] is True
+        assert result["iteration"] == 1
+        assert "steps_completed" not in result
+
+    def test_executor_dispatches_normally_when_under_budget(self):
+        """Sanity check: with the ceiling check mocked to False, the executor
+        still dispatches a wave as before (no change to the happy path)."""
+        node = make_executor_node(
+            db_connections_table=MagicMock(),
+            schema_cache_table=MagicMock(),
+            query_history_table=MagicMock(),
+            query_embeddings_table=MagicMock(),
+            session_artifacts_table=MagicMock(),
+            table_embeddings_table=MagicMock(),
+            async_session_factory=MagicMock(),
+            expert_personas={"Generalist": {"persona_def": ""}},
+            vector_stores={},
+        )
+        state = _make_state(
+            plan=["Fetch revenue by region"],
+            steps_completed=[],
+            iteration=0,
+            has_db=False, has_docs=False, has_csv=False,
+            run_id="under-budget-run",
+        )
+
+        with patch(
+            "api.utils.llm_provider.is_session_budget_exceeded", return_value=False
+        ):
+            result = asyncio.run(node(state))
+
+        assert "steps_completed" in result
+        assert "budget_exceeded" not in result

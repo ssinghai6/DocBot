@@ -111,6 +111,7 @@ Next.js proxies `/api/*` to `localhost:8000` in development.
 | `SESSION_TTL_HOURS` | No | Session cookie TTL in hours, default 8 |
 | `AUTH_REQUIRED` | No | Set to `true` to enforce RBAC login on all protected routes. Default off (open/demo mode) |
 | `SENTRY_DSN` | No | Enables Sentry error tracking (errors only, `traces_sample_rate=0.0` — no APM/tracing spend). No-op if unset |
+| `SESSION_COST_CEILING_USD` | No | Soft per-session (per-run_id) LLM cost ceiling in USD for Autopilot/Deep Research multi-call loops, default `0.50`. `0` or negative disables the check |
 | `SAML_SP_ENTITY_ID` | SSO | SP entity ID for SAML 2.0 |
 | `SAML_SP_ACS_URL` | SSO | SP Assertion Consumer Service URL |
 | `SAML_IDP_ENTITY_ID` | SSO | IdP entity ID (from IdP metadata) |

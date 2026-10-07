@@ -95,6 +95,10 @@ class AutopilotState(TypedDict):
     citations: Annotated[list[dict], operator.add]
     # set True when the wall-clock guard fires
     timed_out: bool
+    # DOCBOT-1508: set True when the session's soft LLM cost ceiling was hit
+    # mid-investigation — the executor loop stops dispatching new waves and
+    # the synthesizer still runs on whatever steps_completed has so far.
+    budget_exceeded: bool
     # data-source availability flags
     has_docs: bool
     has_db: bool
@@ -865,6 +869,28 @@ def make_executor_node(
             # _should_continue routes straight to the synthesizer.
             return {"iteration": state.get("iteration", 0)}
 
+        # DOCBOT-1508: soft per-session LLM cost ceiling. Checked before
+        # dispatching another wave (each wave can trigger several LLM calls —
+        # SQL gen, codegen, deep_retrieve's planner, etc.) rather than before
+        # every individual call inside a step, since a wave's steps run
+        # concurrently and any one of them could already be mid-flight by
+        # the time its own internal check would fire. Stops the loop
+        # gracefully — partial results already in steps_completed still get
+        # synthesized — instead of erroring.
+        from api.utils.llm_provider import is_session_budget_exceeded, SESSION_COST_CEILING_USD
+
+        run_id = state.get("run_id")
+        if is_session_budget_exceeded(run_id):
+            logger.warning(
+                "executor_node: session cost ceiling ($%.4f) reached for run_id=%s "
+                "— stopping investigation early with %d/%d steps completed",
+                SESSION_COST_CEILING_USD, run_id, pointer, len(plan),
+            )
+            return {
+                "iteration": state.get("iteration", 0) + 1,
+                "budget_exceeded": True,
+            }
+
         wave_indices = _next_wave_indices(plan, pointer, state)
 
         results = await asyncio.gather(
@@ -989,7 +1015,8 @@ def _should_continue(state: AutopilotState) -> str:
     plan = state.get("plan", [])
     steps_done = len(state.get("steps_completed", []))
     timed_out = state.get("timed_out", False)
-    if timed_out or steps_done >= len(plan) or iteration >= MAX_ITERATIONS:
+    budget_exceeded = state.get("budget_exceeded", False)
+    if timed_out or budget_exceeded or steps_done >= len(plan) or iteration >= MAX_ITERATIONS:
         return "synthesize"
     return "execute"
 
@@ -1051,7 +1078,12 @@ async def run_autopilot(
     # investigation (planner, each executor wave, synthesizer, and any
     # nested deep_retrieve / SQL-pipeline / codegen calls) in the persisted
     # call log — see api/utils/llm_provider.py's run_trace().
-    from api.utils.llm_provider import current_run_id, new_run_id, run_trace
+    from api.utils.llm_provider import (
+        SESSION_COST_CEILING_USD,
+        current_run_id,
+        new_run_id,
+        run_trace,
+    )
     run_id = current_run_id() or new_run_id()
 
     # Rephrase follow-up questions into standalone queries using chat history
@@ -1088,6 +1120,7 @@ async def run_autopilot(
         "final_answer": "",
         "citations": [],
         "timed_out": False,
+        "budget_exceeded": False,
         "has_docs": has_docs,
         "has_db": has_db,
         "has_csv": has_csv,
@@ -1126,6 +1159,15 @@ async def run_autopilot(
                     })
 
                 elif node_name == "executor":
+                    if updates.get("budget_exceeded"):
+                        yield _sse({
+                            "type": "warning",
+                            "content": (
+                                f"This investigation reached its session cost ceiling "
+                                f"(${SESSION_COST_CEILING_USD:.2f}). Showing results from the "
+                                "steps completed so far."
+                            ),
+                        })
                     completed = updates.get("steps_completed", [])
                     for step_result in completed:
                         step_num += 1

@@ -68,7 +68,7 @@ Every story is only "done" when ALL of the following are true. No exceptions.
 | EPIC-10 | RAG Quality Enhancement | 4+ | ✅ Done | Chroma persistent store, cross-encoder reranker, SemanticChunker, FinanceBench accuracy baseline (**100% — 20/20**). PageIndex evaluated and rejected (2026-03-25). |
 | EPIC-12 | UI Redesign & Finance Vertical | 5 | ✅ Done | Progressive disclosure UI (tabbed sidebar, collapsible sections, Cmd+K command palette), unified file upload, 3-color palette, finance-focused copy, guided onboarding empty state. |
 | EPIC-13 | Sandbox Demo Mode | 5 | ✅ Done | Pre-loaded TechCorp 10-K + SQLite financial database via `/api/demo/init`. One-click hybrid analysis demo with deliberate discrepancies for showcase. |
-| EPIC-15 | AI Engineering Maturity | 6 | 🟡 In Progress (5/8, +1 in review) | DOCBOT-1501/1502 (tracing+dashboard), 1503 (eval CI gate), 1504 (structured-output validation), 1505 (multi-agent spike) — done, reviewed, merged 2026-10-03. DOCBOT-1506 (exact-match response cache) — implemented on `feature/DOCBOT-1506-llm-response-cache`, pending merge. DOCBOT-1509 (LangSmith tracing UI, metadata only) — implemented on `feature/DOCBOT-1509-langsmith-tracing`, pending merge. DOCBOT-1507 (prompt versioning), 1508 (cost ceiling) — not started. Gap analysis 2026-09-27 (ai-engineer + senior-project-manager agents). |
+| EPIC-15 | AI Engineering Maturity | 6 | ✅ Done (8/8) | DOCBOT-1501/1502 (tracing+dashboard), 1503 (eval CI gate), 1504 (structured-output validation), 1505 (multi-agent spike) — merged 2026-10-03. DOCBOT-1509 (LangSmith tracing, metadata only) — merged 2026-10-06. DOCBOT-1506 (exact-match response cache), 1507 (prompt versioning), 1508 (per-session cost ceiling) — merged 2026-10-07. Gap analysis 2026-09-27 (ai-engineer + senior-project-manager agents). |
 
 ---
 
@@ -1604,7 +1604,7 @@ As a developer, I want a time-boxed, code-free evaluation of whether Autopilot's
 - Sends are queued to a 2-worker background pool with a 500-item cap. Overflow drops the run rather than blocking.
 - Verified without network: LangGraph node dispatch carries the parent into LLM runs created inside nodes (test `test_child_llm_runs_group_under_langgraph_node_dispatch`). Real LangSmith UI rendering is not verified.
 
-**Status**: 🟡 Implemented (branch `feature/DOCBOT-1509-langsmith-tracing`, pending review and merge to main)
+**Status**: ✅ Done (merged to `main` 2026-10-06)
 
 ---
 
@@ -1624,7 +1624,7 @@ As a developer, I want deterministic-ish LLM calls (SQL gen, intent classificati
 
 **Implementation notes**: New module `api/utils/llm_cache.py` (table-registration/wiring pattern mirrors `llm_trace_service.py`) — `llm_response_cache` Postgres table keyed on `(prompt_hash, model)` with a 6h TTL (`expires_at` column), wired into `db_service._generate_sql` (SQL gen) and `hybrid_service.classify_intent` (intent classification), both temperature=0 call sites; in-process hit/miss/set/error counters exposed via `llm_cache.get_cache_metrics()` and surfaced in `/admin/metrics` as `llm_cache_metrics`. 19 new unit tests in `tests/unit/test_llm_cache.py` (in-memory SQLite, mirrors `test_llm_trace_service.py`).
 
-**Status**: ✅ Done (branch `feature/DOCBOT-1506-llm-response-cache`, pending review and merge to main)
+**Status**: ✅ Done (merged to `main` 2026-10-07)
 
 ---
 
@@ -1643,7 +1643,7 @@ As a developer, I want each prompt tagged with a version constant included in th
 
 **Implementation note**: added a `PROMPT_VERSION_*` string constant beside every prompt-constructing call site in `hybrid_service.py`, `autopilot_service.py`, `db_service.py`, `sandbox_service.py`, `deep_research_service.py`, `document_extractor.py` (`_PROMPT_VERSIONS` dict), `query_expansion.py`, and `context_compressor.py`; threaded a new `prompt_version` kwarg through `call_llm`/`chat_completion`/`chat_completion_stream`/`log_external_llm_call` in `llm_provider.py` into `_log_llm_call`'s payload and the persisted `llm_calls.prompt_version` column (`llm_trace_service.py`); a static AST test enforces every call site passes it (mirrors DOCBOT-1402's `caller=` coverage check).
 
-**Status**: ✅ Done
+**Status**: ✅ Done (merged to `main` 2026-10-07)
 
 ---
 
@@ -1657,10 +1657,10 @@ As an admin, I want a soft per-session token/cost budget check before Autopilot 
 **Ground truth**: `api/index.py:332` "cost budget" comment refers to API rate-limiting, not LLM spend — no max-tokens-per-session or max-LLM-calls-per-request-type ceiling exists beyond fixed per-call `max_tokens`.
 
 **Acceptance Criteria**
-- [ ] Soft budget check gates Autopilot/Deep Research multi-call loops
-- [ ] Graceful degradation message if ceiling hit mid-investigation
+- [x] Soft budget check gates Autopilot/Deep Research multi-call loops
+- [x] Graceful degradation message if ceiling hit mid-investigation
 
-**Status**: 🔲 Planned
+**Status**: ✅ Done (merged to `main` 2026-10-07) — in-memory per-run_id cost ledger in `api/utils/llm_provider.py` (reuses `estimated_cost_usd` already computed by DOCBOT-1501/1502, no DB round trip), gated via `SESSION_COST_CEILING_USD` (default $0.50); Autopilot's executor loop stops dispatching new waves and synthesizes partial results with a "warning" SSE event when the ceiling is hit, Deep Research's `deep_retrieve` skips its sub-question decomposition call and falls back to the original question.
 
 ---
 
