@@ -355,9 +355,9 @@ async def rag_retrieve(
 
         # DOCBOT-1002: re-rank with cross-encoder when HF key is available
         from api.utils.reranker import rerank_scored
-        hf_key = os.getenv("huggingface_api_key", "")
+        hf_key = os.getenv("huggingface_api_key", "")  # only used when RERANKER_PROVIDER=hf
         rerank_scores: dict[int, float | None] = {}
-        if hf_key and docs:
+        if docs:
             scored = rerank_scored(question, docs, hf_key, top_k=5)
             docs = [d for d, _ in scored]
             rerank_scores = {id(d): sc for d, sc in scored}

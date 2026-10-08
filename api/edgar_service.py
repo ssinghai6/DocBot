@@ -73,8 +73,7 @@ async def ingest_edgar_filing(
 
     # ── 3. Chunk the document ────────────────────────────────────────────
     doc_type = detect_doc_type(text)
-    hf_api_key = os.getenv("huggingface_api_key") or os.getenv("HUGGINGFACEHUB_API_TOKEN") or ""
-    chunks = chunk_document(text, hf_api_key, doc_type)
+    chunks = chunk_document(text, doc_type=doc_type)
 
     # Tag every chunk with filing metadata
     source_label = f"{ticker}-{filing_type}-{filing_date}"

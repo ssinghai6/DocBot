@@ -1634,6 +1634,25 @@ As a developer, I want a time-boxed, code-free evaluation of whether Autopilot's
 
 ---
 
+#### DOCBOT-1511: Free Local Embeddings and Reranker
+
+**Story**: As the owner of a free-tier deployment, I want embeddings and reranking to run locally with open-source models, so that PDF upload, the demo and retrieval never depend on paid HuggingFace Inference credits (which hit 402 on 2026-10-07).
+
+**Acceptance Criteria**:
+- [x] `api/utils/embeddings_provider.py`: `all-MiniLM-L6-v2` via chromadb's bundled ONNX copy (same model as before, so stored vectors stay compatible; no new package)
+- [x] `EMBEDDINGS_PROVIDER=local` (default) | `hf` (falls back to local on any error). An HF key alone never routes to the paid API
+- [x] Reranker: local ONNX `Xenova/ms-marco-MiniLM-L-6-v2` via fastembed, sigmoid-scaled to 0-1; `RERANKER_PROVIDER=local|hf|off`; failure keeps retrieval order
+- [x] SemanticChunker, upload, EDGAR ingest, DB table/few-shot embeddings and demo all use the shared provider; `huggingface_api_key` is optional
+- [x] Dockerfile pre-downloads both models (best effort; untested build); `fastembed` added to `requirements.txt`
+- [x] Tests: 929 pass (`test_embeddings_provider.py`, reranker local-provider tests, chunker no-key test)
+- [x] Verified on a real local run: demo init 0.4s, hybrid answer with rerank scores and SQL lineage, no HF calls
+- [ ] Docker image build and Railway memory/cold-start not verified
+- [ ] SemanticChunker on a full 10-K runs on CPU in the request thread; not benchmarked
+
+**Status**: 🚧 In progress (branch `feature/DOCBOT-1511-local-embeddings`)
+
+---
+
 #### DOCBOT-1506: Exact-Match LLM Response Cache
 
 **Story**

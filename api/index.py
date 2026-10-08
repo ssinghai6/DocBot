@@ -513,21 +513,10 @@ async def lifespan(app: FastAPI):
 app.router.lifespan_context = lifespan
 
 
-# Performance optimization: Cache for embeddings model
-_EMBEDDINGS_CACHE = None
-
 def get_embeddings():
-    """Get cached embeddings model for performance"""
-    global _EMBEDDINGS_CACHE
-    if _EMBEDDINGS_CACHE is None:
-        from langchain_huggingface import HuggingFaceEndpointEmbeddings
-        hf_token = os.getenv('huggingface_api_key') or os.getenv('HUGGINGFACEHUB_API_TOKEN')
-        _EMBEDDINGS_CACHE = HuggingFaceEndpointEmbeddings(
-            model="sentence-transformers/all-MiniLM-L6-v2",
-            task="feature-extraction",
-            huggingfacehub_api_token=hf_token,
-        )
-    return _EMBEDDINGS_CACHE
+    """Process-wide embeddings model (local ONNX by default, DOCBOT-1511)."""
+    from api.utils.embeddings_provider import get_embeddings as _get
+    return _get()
 
 
 
@@ -691,7 +680,6 @@ async def upload_documents(
     try:
         from langchain_community.document_loaders import PyPDFLoader
         from langchain_text_splitters import RecursiveCharacterTextSplitter
-        from langchain_huggingface import HuggingFaceEndpointEmbeddings
         from api.utils.vector_store import create_store
         from langchain_core.documents import Document
         
@@ -752,9 +740,8 @@ async def upload_documents(
         # RecursiveCharacterTextSplitter fallback for all other types.
         full_text = " ".join(d.page_content for d in all_content)
         from api.utils.chunker import chunk_document, detect_doc_type
-        _hf_key = os.getenv("huggingface_api_key", "")
         _detected_type = detect_doc_type(full_text)
-        splits = chunk_document(full_text, _hf_key, doc_type=_detected_type)
+        splits = chunk_document(full_text, doc_type=_detected_type)
 
         # Restore per-page metadata: map each split back to the nearest source
         # document by matching content prefix, falling back to the first doc.

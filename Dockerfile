@@ -35,6 +35,13 @@ COPY api/ api/
 # Switch to non-root user
 USER appuser
 
+# DOCBOT-1511: pre-download the free local models (embeddings ~80MB, reranker ~90MB)
+# so the first upload/question does not pay a cold-start download. Best effort:
+# a build without network access still succeeds and downloads on first use.
+ENV FASTEMBED_CACHE_PATH=/home/appuser/.cache/fastembed
+RUN python -c "from chromadb.utils.embedding_functions import ONNXMiniLM_L6_V2; ONNXMiniLM_L6_V2()(['warm']); from fastembed.rerank.cross_encoder import TextCrossEncoder; TextCrossEncoder('Xenova/ms-marco-MiniLM-L-6-v2')" \
+ || echo "model pre-download skipped; will download on first use"
+
 # Start server using Railway's PORT env var
 EXPOSE 8000
 CMD ["sh", "-c", "uvicorn api.index:app --host 0.0.0.0 --port ${PORT:-8000}"]

@@ -1,7 +1,9 @@
 """Semantic chunker for financial and legal documents.
 
-Uses LangChain SemanticChunker with HuggingFace Endpoint embeddings (API).
-Falls back to RecursiveCharacterTextSplitter if embeddings unavailable.
+Uses LangChain SemanticChunker with the shared embeddings model
+(``api.utils.embeddings_provider``: local ONNX by default, DOCBOT-1511, so no
+API key is needed). Falls back to RecursiveCharacterTextSplitter if the
+embeddings or SemanticChunker are unavailable.
 
 PR5 (DOCBOT-1200): switched from ``HuggingFaceEmbeddings`` (which downloads
 sentence-transformers locally — ~90MB on Railway cold start, plus torch) to
@@ -21,12 +23,12 @@ logger = logging.getLogger(__name__)
 
 try:
     from langchain_experimental.text_splitter import SemanticChunker
-    from langchain_huggingface import HuggingFaceEndpointEmbeddings
     _SEMANTIC_AVAILABLE = True
 except ImportError:
     SemanticChunker = None  # type: ignore[assignment,misc]
-    HuggingFaceEndpointEmbeddings = None  # type: ignore[assignment,misc]
     _SEMANTIC_AVAILABLE = False
+
+from api.utils.embeddings_provider import get_embeddings
 
 # Document types that benefit from semantic chunking (boundary-aware splitting
 # rather than fixed character windows).
@@ -68,7 +70,7 @@ def _fallback_splitter() -> RecursiveCharacterTextSplitter:
 
 def chunk_document(
     text: str,
-    hf_api_key: str,
+    hf_api_key: str = "",
     doc_type: str = "general",
 ) -> list[Document]:
     """Split ``text`` into LangChain Document chunks.
@@ -78,9 +80,8 @@ def chunk_document(
     text:
         Full document text to split.
     hf_api_key:
-        HuggingFace API key used to initialise the embeddings model for
-        SemanticChunker.  When empty the function falls back to
-        RecursiveCharacterTextSplitter.
+        Deprecated and ignored (DOCBOT-1511): embeddings no longer need an
+        API key. Kept so existing positional callers keep working.
     doc_type:
         One of the known financial/legal types or ``"general"``.
         Financial/legal types use SemanticChunker; others use
@@ -91,12 +92,9 @@ def chunk_document(
     list[Document]
         List of LangChain Document objects with ``page_content`` set.
     """
-    if doc_type in _SEMANTIC_DOC_TYPES and hf_api_key and SemanticChunker is not None:
+    if doc_type in _SEMANTIC_DOC_TYPES and SemanticChunker is not None:
         try:
-            embeddings = HuggingFaceEndpointEmbeddings(
-                model="sentence-transformers/all-MiniLM-L6-v2",
-                huggingfacehub_api_token=hf_api_key,
-            )
+            embeddings = get_embeddings()
             chunker = SemanticChunker(
                 embeddings,
                 breakpoint_threshold_type="percentile",

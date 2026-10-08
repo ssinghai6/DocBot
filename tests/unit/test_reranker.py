@@ -10,7 +10,14 @@ from unittest.mock import MagicMock, patch
 import httpx
 import pytest
 
-from api.utils.reranker import rerank
+from api.utils import reranker
+from api.utils.reranker import rerank, rerank_scored
+
+
+@pytest.fixture(autouse=True)
+def _hf_provider(monkeypatch):
+    """Existing tests exercise the HF endpoint path; local provider is tested below."""
+    monkeypatch.setenv("RERANKER_PROVIDER", "hf")
 
 
 # ---------------------------------------------------------------------------
@@ -180,3 +187,58 @@ class TestRerankEdgeCases:
 
         assert len(result) == 1
         assert result[0].page_content == "only doc"
+
+
+# ---------------------------------------------------------------------------
+# DOCBOT-1511: local (free) provider
+# ---------------------------------------------------------------------------
+
+
+class TestLocalProvider:
+    @pytest.fixture(autouse=True)
+    def _local(self, monkeypatch):
+        monkeypatch.setenv("RERANKER_PROVIDER", "local")
+
+    def test_local_scores_rank_docs_and_need_no_key(self):
+        docs = _make_docs(["cat", "net income was 325", "revenue"])
+        with patch("api.utils.reranker._local_scores", return_value=[0.01, 0.99, 0.2]) as local, \
+             patch("api.utils.reranker.httpx.post") as post:
+            out = rerank_scored("q", docs, "", top_k=2)
+        assert [d.page_content for d, _ in out] == ["net income was 325", "revenue"]
+        assert out[0][1] == pytest.approx(0.99)
+        post.assert_not_called()
+        local.assert_called_once()
+
+    def test_local_failure_keeps_retrieval_order_with_none_scores(self):
+        docs = _make_docs(["a", "b", "c"])
+        with patch("api.utils.reranker._local_scores", return_value=None):
+            out = rerank_scored("q", docs, "", top_k=2)
+        assert [d.page_content for d, _ in out] == ["a", "b"]
+        assert all(score is None for _, score in out)
+
+    def test_length_mismatch_is_treated_as_failure(self):
+        docs = _make_docs(["a", "b"])
+        with patch("api.utils.reranker._local_scores", return_value=[0.5]):
+            out = rerank_scored("q", docs, "", top_k=2)
+        assert [d.page_content for d, _ in out] == ["a", "b"]
+
+    def test_off_provider_skips_everything(self, monkeypatch):
+        monkeypatch.setenv("RERANKER_PROVIDER", "off")
+        docs = _make_docs(["a", "b"])
+        with patch("api.utils.reranker._local_scores") as local:
+            out = rerank_scored("q", docs, "key", top_k=1)
+        local.assert_not_called()
+        assert [d.page_content for d, _ in out] == ["a"]
+
+    def test_local_scores_applies_sigmoid_and_survives_missing_fastembed(self, monkeypatch):
+        monkeypatch.setattr(reranker, "_local_encoder", MagicMock(rerank=lambda q, t: [8.0, -8.0]))
+        monkeypatch.setattr(reranker, "_local_unavailable", False)
+        scores = reranker._local_scores("q", ["a", "b"])
+        assert scores is not None and scores[0] > 0.99 and scores[1] < 0.01
+
+    def test_inference_error_returns_none(self, monkeypatch):
+        boom = MagicMock()
+        boom.rerank.side_effect = RuntimeError("onnx exploded")
+        monkeypatch.setattr(reranker, "_local_encoder", boom)
+        monkeypatch.setattr(reranker, "_local_unavailable", False)
+        assert reranker._local_scores("q", ["a"]) is None
