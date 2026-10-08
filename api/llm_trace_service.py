@@ -270,3 +270,37 @@ async def get_call_stats(since: Optional[datetime] = None) -> list[dict[str, Any
             "created_at": r.created_at.isoformat() if r.created_at else None,
         })
     return out
+
+
+async def get_calls_by_run(run_id: str) -> list[dict[str, Any]]:
+    """Return llm_calls rows (metadata only) for one run_id, oldest first.
+
+    DOCBOT-1510: the Inspector's Run tab joins these onto the persisted
+    lineage record. Returns [] when the store is not wired.
+    """
+    if _llm_calls_table is None or _async_session_factory is None or not run_id:
+        return []
+
+    stmt = (
+        select(_llm_calls_table)
+        .where(_llm_calls_table.c.run_id == run_id)
+        .order_by(_llm_calls_table.c.created_at)
+    )
+    async with _async_session_factory() as session:
+        result = await session.execute(stmt)
+        rows = result.all()
+
+    return [
+        {
+            "caller": r.caller,
+            "provider": r.provider,
+            "model": r.model,
+            "latency_ms": r.latency_ms,
+            "input_tokens": r.input_tokens,
+            "output_tokens": r.output_tokens,
+            "estimated_cost_usd": r.estimated_cost_usd,
+            "success": r.success,
+            "fallback_triggered": r.fallback_triggered,
+        }
+        for r in rows
+    ]

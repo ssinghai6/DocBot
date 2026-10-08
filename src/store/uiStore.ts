@@ -1,7 +1,14 @@
 import { create } from "zustand";
 import { persist } from "zustand/middleware";
+import type { Lineage } from "@/components/types";
 
-export type InspectorTab = "query" | "metadata" | "artifact";
+export const INSPECTOR_TABS = ["lineage", "sources", "query", "data", "run"] as const;
+export type InspectorTab = (typeof INSPECTOR_TABS)[number];
+
+/** Persisted values from older builds ("metadata", "artifact") fall back to lineage. */
+export function normalizeInspectorTab(tab: string): InspectorTab {
+  return (INSPECTOR_TABS as readonly string[]).includes(tab) ? (tab as InspectorTab) : "lineage";
+}
 
 export interface SelectedArtifact {
   messageId: string;
@@ -27,6 +34,12 @@ interface UIState {
   selectedArtifact: SelectedArtifact | null;
   selectArtifact: (artifact: SelectedArtifact | null) => void;
 
+  // DOCBOT-1510: lineage of the answer being inspected (latest answer by default)
+  selectedLineage: Lineage | null;
+  /** Source id (LineageSource.id) to highlight in the Sources tab */
+  focusSourceId: string | null;
+  selectLineage: (lineage: Lineage | null, opts?: { tab?: InspectorTab; focusSourceId?: string | null }) => void;
+
   // Command palette
   commandPaletteOpen: boolean;
   setCommandPaletteOpen: (open: boolean) => void;
@@ -43,8 +56,17 @@ export const useUIStore = create<UIState>()(
       setInspectorOpen: (open) => set({ inspectorOpen: open }),
       toggleInspector: () => set((s) => ({ inspectorOpen: !s.inspectorOpen })),
 
-      inspectorTab: "query",
+      inspectorTab: "lineage",
       setInspectorTab: (tab) => set({ inspectorTab: tab }),
+
+      selectedLineage: null,
+      focusSourceId: null,
+      selectLineage: (lineage, opts) =>
+        set((s) => ({
+          selectedLineage: lineage,
+          focusSourceId: opts?.focusSourceId ?? null,
+          inspectorTab: opts?.tab ?? s.inspectorTab,
+        })),
 
       selectedArtifact: null,
       selectArtifact: (artifact) =>
@@ -56,12 +78,10 @@ export const useUIStore = create<UIState>()(
           inspectorTab: artifact
             ? artifact.type === "sql"
               ? "query"
-              : artifact.type === "chart"
-              ? "artifact"
-              : artifact.type === "table"
-              ? "artifact"
+              : artifact.type === "chart" || artifact.type === "table" || artifact.type === "code"
+              ? "data"
               : artifact.type === "citations"
-              ? "metadata"
+              ? "sources"
               : s.inspectorTab
             : s.inspectorTab,
         })),
@@ -72,6 +92,11 @@ export const useUIStore = create<UIState>()(
     }),
     {
       name: "docbot-ui-store",
+      version: 2,
+      migrate: (persisted) => {
+        const p = (persisted ?? {}) as Partial<UIState>;
+        return { ...p, inspectorTab: normalizeInspectorTab(p.inspectorTab ?? "") } as UIState;
+      },
       partialize: (s) => ({
         sidebarCollapsed: s.sidebarCollapsed,
         inspectorOpen: s.inspectorOpen,

@@ -86,6 +86,84 @@ export type ChartMeta = {
   series_count: number
 }
 
+// DOCBOT-1510: per-answer lineage trace (mirrors api/utils/lineage.py::Lineage)
+export const LineageStepSchema = z.object({
+  name: z.string(),
+  tool: z.string().nullish(),
+  status: z.enum(["ok", "error", "skipped", "retried"]).default("ok"),
+  latency_ms: z.number().nullish(),
+  detail: z.string().nullish(),
+  lane: z.enum(["docs", "db"]).nullish(),
+})
+export type LineageStep = z.infer<typeof LineageStepSchema>
+
+export const LineageSourceSchema = z.object({
+  id: z.string(),
+  kind: z.enum(["pdf", "sql_table", "csv", "edgar", "other"]).default("other"),
+  label: z.string(),
+  page: z.number().nullish(),
+  snippet: z.string().nullish(),
+  score: z.number().nullish(),
+  rerank_score: z.number().nullish(),
+  cited: z.boolean().default(true),
+  step_num: z.number().nullish(),
+  sub_question: z.string().nullish(),
+})
+export type LineageSource = z.infer<typeof LineageSourceSchema>
+
+export const LineageSqlSchema = z.object({
+  sql: z.string().nullish(),
+  tables_selected: z.array(z.string()).default([]),
+  tables_considered: z.array(z.string()).default([]),
+  row_count: z.number().nullish(),
+  execution_time_ms: z.number().nullish(),
+  drift_retry: z.boolean().default(false),
+  result_preview: z.array(z.record(z.string(), z.unknown())).default([]),
+})
+export type LineageSql = z.infer<typeof LineageSqlSchema>
+
+export const LineageDiscrepancySchema = z.object({
+  label: z.string(),
+  doc_value: z.number().nullish(),
+  db_value: z.number().nullish(),
+  delta: z.number().nullish(),
+  pct: z.number().nullish(),
+})
+export type LineageDiscrepancy = z.infer<typeof LineageDiscrepancySchema>
+
+export const LineageModelCallSchema = z.object({
+  caller: z.string().nullish(),
+  provider: z.string(),
+  model: z.string(),
+  latency_ms: z.number().nullish(),
+  input_tokens: z.number().nullish(),
+  output_tokens: z.number().nullish(),
+  estimated_cost_usd: z.number().nullish(),
+  fallback_triggered: z.boolean().default(false),
+  success: z.boolean().default(true),
+})
+export type LineageModelCall = z.infer<typeof LineageModelCallSchema>
+
+export const LineageSchema = z.object({
+  run_id: z.string(),
+  mode: z.enum(["docs", "db", "csv", "hybrid", "autopilot"]),
+  intent: z.string().nullish(),
+  question: z.string().nullish(),
+  standalone_query: z.string().nullish(),
+  expanded_queries: z.array(z.string()).default([]),
+  sub_questions: z.array(z.string()).default([]),
+  steps: z.array(LineageStepSchema).default([]),
+  sources: z.array(LineageSourceSchema).default([]),
+  sql: LineageSqlSchema.nullish(),
+  discrepancies: z.array(LineageDiscrepancySchema).default([]),
+  model_calls: z.array(LineageModelCallSchema).default([]),
+  pii: z.object({ masked: z.boolean().default(false), counts: z.record(z.string(), z.number()).default({}) }).default({ masked: false, counts: {} }),
+  cache_hit: z.boolean().default(false),
+  persona: z.string().nullish(),
+  total_latency_ms: z.number().nullish(),
+})
+export type Lineage = z.infer<typeof LineageSchema>
+
 export type Toast = {
   id: string
   type: "success" | "error" | "info" | "warning"
@@ -130,6 +208,7 @@ export type Message = {
   autopilotSteps?: AutopilotStep[]  // DOCBOT-405: persisted investigation steps
   agentPersona?: string       // DOCBOT-802: which persona handled this message
   agentPersonas?: string[]    // DOCBOT-802: for hybrid messages with multiple personas
+  lineage?: Lineage           // DOCBOT-1510: provenance for this answer
 }
 
 // ── Connector schemas ────────────────────────────────────────────────────

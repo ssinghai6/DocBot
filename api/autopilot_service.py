@@ -477,7 +477,11 @@ def make_executor_node(
                         )
                         result_entry["result"] = context[:800]
 
+                        # DOCBOT-1510: keep the sub-questions deep_retrieve used
+                        result_entry["sub_questions"] = list(sub_questions or [])
+
                         # Build citations from retrieved documents
+                        from api.utils.lineage import safe_snippet
                         seen_keys: set[str] = set()
                         for doc in docs:
                             key = f"{doc.metadata.get('source', 'Unknown')}_{doc.metadata.get('page', 0)}"
@@ -486,6 +490,9 @@ def make_executor_node(
                                 new_citations.append({
                                     "source": doc.metadata.get("source", "Unknown"),
                                     "page": doc.metadata.get("page", 0),
+                                    # PII-masked excerpt + owning step for lineage
+                                    "text": safe_snippet(doc.page_content),
+                                    "step_label": step,
                                 })
                     else:
                         result_entry["result"] = "No relevant documents found."
@@ -1129,6 +1136,13 @@ async def run_autopilot(
     step_num = 0
     all_citations: list[dict] = []
 
+    # DOCBOT-1510: per-answer lineage
+    from api.utils.lineage import LineageCollector
+    lineage = LineageCollector(run_id, "autopilot", question=question)
+    lineage.set_persona(persona)
+    lineage.set_pii(True)
+    step_by_label: dict[str, int] = {}
+
     # DOCBOT-1501: bind run_id for the duration of the investigation. Entered
     # manually (not `with`) so the existing try/except body below doesn't
     # need re-indenting; asyncio.Task copies the current context at creation
@@ -1197,6 +1211,18 @@ async def run_autopilot(
                         if isinstance(step_code, str) and len(step_code) > 6000:
                             step_code = step_code[:6000] + "\n# … (truncated)"
 
+                        step_by_label[step_result.get("step", "")] = step_num
+                        lineage.add_step(
+                            step_result.get("step", f"step {step_num}") or f"step {step_num}",
+                            tool=step_result.get("tool", ""),
+                            status="error" if raw_error else "ok",
+                            detail=friendly_error,
+                        )
+                        if step_result.get("sub_questions"):
+                            lineage.set_sub_questions(step_result["sub_questions"])
+                        if step_result.get("sql"):
+                            lineage.set_sql(sql=step_result.get("sql"))
+
                         yield _sse({
                             "type": "step",
                             "step_num": step_num,
@@ -1219,6 +1245,19 @@ async def run_autopilot(
                     from api.utils.pii_masking import mask_pii
                     final_answer = mask_pii(updates.get("final_answer", ""))
                     yield _sse({"type": "answer", "content": final_answer})
+                    for cit in all_citations:
+                        lineage.add_source(
+                            kind="pdf",
+                            label=str(cit.get("source", "Unknown")),
+                            page=cit.get("page"),
+                            snippet=cit.get("text"),
+                            step_num=step_by_label.get(cit.get("step_label", "")),
+                        )
+                    lineage.add_step("synthesize", tool="llm")
+                    from api.lineage_service import emit_lineage
+                    _lin_evt = emit_lineage(lineage, session_id)
+                    if _lin_evt:
+                        yield _lin_evt
                     yield _sse({"type": "done", "citations": all_citations, "run_id": run_id})
 
     except Exception as exc:

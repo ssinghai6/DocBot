@@ -6,10 +6,10 @@ import remarkGfm from "remark-gfm"
 import {
   Brain, Clock, Maximize2, Download,
   ChevronDown, BookOpen, Wand2, AlertTriangle,
-  Copy, Code2, Sparkles,
+  Copy, Code2, Sparkles, GitBranch,
 } from "lucide-react"
 
-import type { Message, ChartMeta, AutopilotStep, Citation } from "./types"
+import type { Message, ChartMeta, AutopilotStep, Citation, Lineage } from "./types"
 import { useUIStore } from "@/store/uiStore"
 
 // ── Expert personas accent colors ─────────────────────────────────────────
@@ -197,8 +197,35 @@ function AutopilotStepsList({ steps }: { steps: AutopilotStep[] }) {
   )
 }
 
-function CitationsBlock({ citations, messageId }: { citations: Citation[]; messageId: string }) {
+function LineageChip({ lineage }: { lineage: Lineage }) {
+  const selectLineage = useUIStore((s) => s.selectLineage)
+  const setInspectorOpen = useUIStore((s) => s.setInspectorOpen)
+  const nSources = lineage.sources.length
+  const nSteps = lineage.steps.length
+  const nDisc = lineage.discrepancies.length
+  return (
+    <button
+      type="button"
+      onClick={() => {
+        selectLineage(lineage, { tab: "lineage" })
+        setInspectorOpen(true)
+      }}
+      className="mt-3 inline-flex items-center gap-1.5 text-[10px] px-2 h-6 rounded-[3px] border border-[var(--color-border-subtle)] bg-[var(--color-bg-surface)] text-[var(--color-text-tertiary)] hover:text-[var(--color-text-primary)] hover:border-[var(--color-cyan-500)]/40 transition-colors"
+      title="Trace how this answer was produced"
+    >
+      <GitBranch className="w-3 h-3 text-[var(--color-cyan-500)]" />
+      <span className="font-semibold uppercase tracking-wider">Lineage</span>
+      <span className="tabular-nums">{nSources} sources · {nSteps} steps</span>
+      {nDisc > 0 && (
+        <span className="text-[var(--color-amber-500)] font-semibold">{nDisc} discrepanc{nDisc === 1 ? "y" : "ies"}</span>
+      )}
+    </button>
+  )
+}
+
+function CitationsBlock({ citations, messageId, lineage }: { citations: Citation[]; messageId: string; lineage?: Lineage }) {
   const selectArtifact = useUIStore((s) => s.selectArtifact)
+  const selectLineage = useUIStore((s) => s.selectLineage)
   return (
     <div className="mt-3 pt-3 border-t border-[var(--color-border-subtle)]">
       <div className="flex items-center gap-1.5 mb-2">
@@ -210,13 +237,21 @@ function CitationsBlock({ citations, messageId }: { citations: Citation[]; messa
           <button
             key={idx}
             type="button"
-            onClick={() =>
+            onClick={() => {
+              // Prefer the lineage Sources tab (full excerpt, scores, cited flag)
+              const match = lineage?.sources.find(
+                (src) => src.label === citation.source && (src.page ?? 0) === (citation.page ?? 0)
+              )
+              if (lineage && match) {
+                selectLineage(lineage, { tab: "sources", focusSourceId: match.id })
+                return
+              }
               selectArtifact({
                 messageId: `${messageId}-cite-${idx}`,
                 type: "citations",
-                payload: { citations },
+                payload: { citations: [citation] },
               })
-            }
+            }}
             className="text-[10px] px-2 py-1 bg-[var(--color-bg-surface)] rounded-[3px] border border-[var(--color-border-subtle)] text-[var(--color-text-tertiary)] hover:text-[var(--color-text-primary)] hover:border-[var(--color-cyan-500)]/40 transition-colors"
             title={`${citation.source} — Page ${citation.page}`}
           >
@@ -366,6 +401,9 @@ export default function ChatMessage({
           <AgentMessageContent msg={msg} />
         )}
 
+        {/* Lineage chip */}
+        {msg.lineage && <LineageChip lineage={msg.lineage} />}
+
         {/* SQL card */}
         {msg.sql && <SqlCard sql={msg.sql} explanation={msg.explanation} messageId={messageId} />}
 
@@ -382,7 +420,7 @@ export default function ChatMessage({
 
         {/* Citations */}
         {msg.citations && msg.citations.length > 0 && (
-          <CitationsBlock citations={msg.citations} messageId={messageId} />
+          <CitationsBlock citations={msg.citations} messageId={messageId} lineage={msg.lineage} />
         )}
 
         {/* Actions row */}

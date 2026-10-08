@@ -896,9 +896,14 @@ async def run_sql_pipeline(
     table_embeddings_table: Optional[Table] = None,
     chart_type: str = "auto",
     chat_history: Optional[List[Dict[str, str]]] = None,
+    emit_lineage_event: bool = False,
 ) -> AsyncGenerator[str, None]:
     """
     Execute the 7-step bounded SQL pipeline and yield SSE-formatted strings.
+
+    ``emit_lineage_event`` (DOCBOT-1510): when True, a ``lineage`` SSE event
+    is yielded just before ``done``. Off for hybrid/Autopilot callers, which
+    assemble their own lineage from the metadata event.
 
     Yield order:
       1. One metadata chunk (JSON) with sql, explanation, preview, row_count, execution_time_ms
@@ -915,12 +920,18 @@ async def run_sql_pipeline(
     run_id = current_run_id() or new_run_id()
     _trace_cm = run_trace(run_id)
     _trace_cm.__enter__()
+
+    # DOCBOT-1510: per-answer lineage (only streamed when emit_lineage_event)
+    from api.utils.lineage import LineageCollector
+    lin = LineageCollector(run_id, "db", question=question)
+    lin.set_persona(persona)
     try:
         # ── Step 0: Conversational rephrase — resolve follow-ups ─────────────
         # If chat_history is provided, rephrase the question into a standalone
         # query so table selection and SQL generation get full context.
         if chat_history:
             question = await _rephrase_with_history(question, chat_history)
+            lin.set_standalone_query(question)
 
         # ── CSV fast-path: bypass SQL pipeline, run pandas on E2B ────────────
         async with async_session_factory() as _sess:
@@ -933,6 +944,9 @@ async def run_sql_pipeline(
             raise ConnectionNotFoundError(f"Connection '{connection_id}' not found.")
 
         if _conn_row.dialect == "csv":
+            lin.set_mode("csv")
+            lin.set_pii(True)
+            _csv_t0 = time.perf_counter()
             _creds = decrypt_credentials(_conn_row.credentials_blob)
             # Build data profile string from credentials blob (stored during upload)
             _data_profile = _creds.get("data_profile")
@@ -954,13 +968,44 @@ async def run_sql_pipeline(
                 chat_history=chat_history,
                 data_profile_str=_data_profile_str,
             ):
+                if emit_lineage_event and _chunk.startswith("data: "):
+                    try:
+                        _evt = json.loads(_chunk[6:].strip())
+                    except ValueError:
+                        _evt = {}
+                    _evt_type = _evt.get("type")
+                    if _evt_type == "metadata":
+                        _tbl = _creds.get("table_name", "data")
+                        lin.add_source(
+                            kind="csv",
+                            label=str(_tbl),
+                            snippet=", ".join(map(str, (_creds.get("columns") or [])[:20])),
+                        )
+                    elif _evt_type == "analysis_code":
+                        lin.add_step("generate_code", tool="pandas_codegen")
+                    elif _evt_type == "status":
+                        lin.add_step("retry", tool="pandas_codegen", status="retried",
+                                     detail=str(_evt.get("content", ""))[:200])
+                    elif _evt_type == "done":
+                        lin.add_step(
+                            "run_pandas_sandbox", tool="e2b",
+                            latency_ms=(time.perf_counter() - _csv_t0) * 1000,
+                        )
+                        from api.lineage_service import emit_lineage
+                        _lin_evt = emit_lineage(lin, session_id)
+                        if _lin_evt:
+                            yield _lin_evt
                 yield _chunk
             return
 
         # ── Step 1: Schema retrieval ──────────────────────────────────────────
+        _t = time.perf_counter()
         schema = await get_schema(
             connection_id, db_connections_table, schema_cache_table, async_session_factory
         )
+        lin.add_step("schema_retrieval", tool="schema_cache",
+                     latency_ms=(time.perf_counter() - _t) * 1000,
+                     detail=f"{len(schema)} tables/views")
 
         # DOCBOT-503: Background upsert of table embeddings (non-blocking)
         if table_embeddings_table is not None:
@@ -979,6 +1024,8 @@ async def run_sql_pipeline(
                 pass  # never block the pipeline
 
         # ── Step 2: Table selector — semantic first, LLM fallback ────────────
+        _t = time.perf_counter()
+        _selector = "semantic"
         selected_tables: List[str] = []
 
         # DOCBOT-503: Try semantic similarity against stored table embeddings first
@@ -999,22 +1046,33 @@ async def run_sql_pipeline(
 
         # Fall back to LLM table selector when semantic path returns nothing
         if not selected_tables:
+            _selector = "llm"
             selected_tables = await _select_relevant_tables(question, schema)
 
         schema_subset = [t for t in schema if t["name"] in set(selected_tables)]
         if not schema_subset:
             schema_subset = schema[:10]
+        lin.add_step("table_selection", tool=_selector,
+                     latency_ms=(time.perf_counter() - _t) * 1000,
+                     detail=", ".join(t["name"] for t in schema_subset))
 
         # ── Step 3: Few-shot retrieval ────────────────────────────────────────
+        _t = time.perf_counter()
         embeddings_model = _get_embeddings_model()
         q_embedding: List[float] = await _get_embedding(question, embeddings_model)
         few_shot_examples = await _retrieve_few_shot(
             connection_id, q_embedding,
             query_history_table, query_embeddings_table, async_session_factory
         )
+        lin.add_step("few_shot_retrieval", tool="embeddings",
+                     latency_ms=(time.perf_counter() - _t) * 1000,
+                     detail=f"{len(few_shot_examples or [])} examples")
 
         # ── Step 4: SQL generation (LLM call #2) ─────────────────────────────
+        _t = time.perf_counter()
         raw_sql = await _generate_sql(question, schema_subset, few_shot_examples)
+        lin.add_step("sql_generation", tool="llm",
+                     latency_ms=(time.perf_counter() - _t) * 1000)
 
         # ── Step 5: SQL validation (deterministic, no LLM) ───────────────────
         async with async_session_factory() as session:
@@ -1028,8 +1086,11 @@ async def run_sql_pipeline(
 
         dialect = conn_row.dialect
         validated_sql = validate_and_sanitize_sql(raw_sql, dialect=dialect)
+        lin.add_step("sql_validation", tool="sqlglot_ast")
 
         # ── Step 6: Execute (with schema drift retry) ──────────────────────
+        _drift_retry = False
+        _t = time.perf_counter()
         creds = decrypt_credentials(conn_row.credentials_blob)
         import asyncio as _asyncio
         sync_url, entra_connect_args = await _asyncio.get_running_loop().run_in_executor(
@@ -1047,6 +1108,7 @@ async def run_sql_pipeline(
                 raise
 
             # Schema drift detected — invalidate cache, re-introspect, regenerate SQL, retry once
+            _drift_retry = True
             logger.warning("Schema drift detected, refreshing schema and retrying: %s", exec_err)
             async with async_session_factory() as session:
                 async with session.begin():
@@ -1066,6 +1128,9 @@ async def run_sql_pipeline(
             rows, column_names = await _execute_query(validated_sql, sync_url, dialect, entra_connect_args)
 
         execution_time_ms = int(time.time() * 1000) - start_ms
+        lin.add_step("execute", tool=dialect, status="retried" if _drift_retry else "ok",
+                     latency_ms=(time.perf_counter() - _t) * 1000,
+                     detail="schema drift: refreshed and retried" if _drift_retry else None)
 
         result_dicts = [dict(zip(column_names, row)) for row in rows]
 
@@ -1075,6 +1140,7 @@ async def run_sql_pipeline(
             pii_found = detect_pii_summary(result_dicts)
             if any(pii_found.values()):
                 logger.info("PII detected and masked — %s", pii_found)
+            lin.set_pii(True, {k: int(v) for k, v in pii_found.items() if v})
             result_dicts = mask_rows(result_dicts)
 
         # ── Step 6.5: Python code generation + E2B sandbox (DOCBOT-301/302) ──
@@ -1164,6 +1230,16 @@ async def run_sql_pipeline(
         }
         yield f"data: {_json_dumps(meta_chunk)}\n\n"
 
+        lin.set_sql(
+            sql=validated_sql,
+            tables_selected=[t["name"] for t in schema_subset],
+            tables_considered=[t["name"] for t in schema][:50],
+            row_count=len(rows),
+            execution_time_ms=execution_time_ms,
+            drift_retry=_drift_retry,
+            result_preview=meta_chunk["result_preview"],
+        )
+
         # Persist query + embedding (non-blocking; failure is only a warning)
         query_id = str(uuid.uuid4())
         await _store_query_history(
@@ -1175,6 +1251,12 @@ async def run_sql_pipeline(
         # Stream answer tokens
         async for token in _stream_answer(question, validated_sql, result_dicts, persona_def):
             yield f"data: {_json_dumps({'type': 'token', 'content': token})}\n\n"
+
+        if emit_lineage_event:
+            from api.lineage_service import emit_lineage
+            _lin_evt = emit_lineage(lin, session_id)
+            if _lin_evt:
+                yield _lin_evt
 
         yield f"data: {_json_dumps({'type': 'done'})}\n\n"
     finally:

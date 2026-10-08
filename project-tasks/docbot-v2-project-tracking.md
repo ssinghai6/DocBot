@@ -1608,6 +1608,32 @@ As a developer, I want a time-boxed, code-free evaluation of whether Autopilot's
 
 ---
 
+#### DOCBOT-1510: Inspector v2 with Lineage Trace
+
+**Story**: As an analyst, I want the right-side Inspector to show how each answer was produced (sources, pipeline steps, SQL, discrepancies, model and cost), so that I can verify an answer without leaving the chat.
+
+**Acceptance Criteria**:
+- [x] Per-request `LineageCollector` (`api/utils/lineage.py`); metadata only, source snippets PII-masked and truncated to 300 chars
+- [x] `lineage` SSE event emitted before `done` on docs, db, csv, hybrid and autopilot paths
+- [x] `answer_lineage` table (upsert by `run_id`) and `GET /api/lineage/{run_id}` (viewer RBAC), joined with `llm_calls` by `run_id`
+- [x] Reranker scores preserved (`rerank_scored`; `rerank` contract unchanged)
+- [x] Hybrid forwards SQL metadata and structured discrepancies; hybrid client keeps citations and chart metadata
+- [x] Autopilot keeps `deep_retrieve` sub-questions and ties citations to steps
+- [x] Inspector tabs: Lineage, Sources, Query, Data, Run. Panel is non-empty after the first answer. Single-citation click opens that source
+- [x] Zod `LineageSchema` validates the event on the client; backend payload checked against it
+- [x] Unit tests: `tests/unit/test_lineage.py`, `tests/unit/test_hybrid_lineage.py`
+- [ ] Manual E2E in browser against demo mode (not run in this session)
+- [ ] P1 enrichments: vector similarity scores, LLM cache-hit flag, intent confidence, EDGAR accession/CIK in sources, per-step autopilot latency
+
+**Implementation notes**:
+- Docs mode (`/api/chat`) goes through LangChain `get_llm`, so its Run tab may show no `llm_calls` rows. Not verified.
+- `llm_calls` rows are written by a background queue, so the SSE event omits `model_calls`. The Run tab fetches `/api/lineage/{run_id}` after a short delay.
+- `run_sql_pipeline(emit_lineage_event=True)` is opt-in. Hybrid and Autopilot build their own lineage from the metadata event.
+
+**Status**: 🚧 In progress (branch `feature/DOCBOT-1510-inspector-lineage`)
+
+---
+
 #### DOCBOT-1506: Exact-Match LLM Response Cache
 
 **Story**

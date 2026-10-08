@@ -48,38 +48,25 @@ _INFERENCE_URL = f"https://router.huggingface.co/hf-inference/models/{_MODEL}"
 _TIMEOUT_SECONDS = 10
 
 
-def rerank(
+def rerank_scored(
     query: str,
     docs: list,
     hf_api_key: str,
     top_k: int = 5,
-) -> list:
-    """Re-score retrieved documents with a cross-encoder and return top_k.
+) -> list[tuple]:
+    """Like :func:`rerank` but returns ``(doc, score)`` pairs.
 
-    Parameters
-    ----------
-    query:
-        The natural-language question used for retrieval.
-    docs:
-        List of LangChain Document objects (must have ``.page_content``).
-    hf_api_key:
-        HuggingFace Inference API key.  When empty the function returns
-        ``docs[:top_k]`` without making any network call.
-    top_k:
-        Maximum number of documents to return after re-ranking.
-
-    Returns
-    -------
-    list
-        Up to ``top_k`` Document objects, sorted by cross-encoder score
-        descending.  On any failure the original order is preserved.
+    DOCBOT-1510: the Inspector lineage shows each chunk's cross-encoder
+    score. ``score`` is ``None`` whenever no cross-encoder ran (empty key,
+    API failure, unexpected response) so callers can tell "not reranked"
+    apart from "scored low".
     """
     if not hf_api_key:
         logger.debug("rerank: hf_api_key is empty — skipping cross-encoder")
-        return docs[:top_k]
+        return [(d, None) for d in docs[:top_k]]
 
     if not docs:
-        return docs
+        return []
 
     payload = {
         "inputs": [
@@ -108,16 +95,16 @@ def rerank(
                 "falling back to original order. response=%r",
                 result,
             )
-            return docs[:top_k]
+            return [(d, None) for d in docs[:top_k]]
 
         scores = [item["score"] for item in result[0]]
 
         ranked = sorted(
-            zip(scores, docs),
-            key=lambda pair: pair[0],
+            zip(docs, scores),
+            key=lambda pair: pair[1],
             reverse=True,
         )
-        return [doc for _, doc in ranked[:top_k]]
+        return [(doc, float(score)) for doc, score in ranked[:top_k]]
 
     except (httpx.HTTPError, KeyError, TypeError, ValueError) as exc:
         logger.warning(
@@ -125,4 +112,33 @@ def rerank(
             "falling back to original retrieval order",
             exc,
         )
-        return docs[:top_k]
+        return [(d, None) for d in docs[:top_k]]
+
+
+def rerank(
+    query: str,
+    docs: list,
+    hf_api_key: str,
+    top_k: int = 5,
+) -> list:
+    """Re-score retrieved documents with a cross-encoder and return top_k.
+
+    Parameters
+    ----------
+    query:
+        The natural-language question used for retrieval.
+    docs:
+        List of LangChain Document objects (must have ``.page_content``).
+    hf_api_key:
+        HuggingFace Inference API key.  When empty the function returns
+        ``docs[:top_k]`` without making any network call.
+    top_k:
+        Maximum number of documents to return after re-ranking.
+
+    Returns
+    -------
+    list
+        Up to ``top_k`` Document objects, sorted by cross-encoder score
+        descending.  On any failure the original order is preserved.
+    """
+    return [doc for doc, _ in rerank_scored(query, docs, hf_api_key, top_k)]
