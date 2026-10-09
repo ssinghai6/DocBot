@@ -8,9 +8,12 @@ import {
 
 import { EXPERT_PERSONAS } from "@/components/personas"
 
-// Visible personas in the Tools tab (Generalist, Finance Expert, Data Analyst,
-// Strategy Analyst). Lawyer + Doctor stay in EXPERT_PERSONAS for auto-routing
-// but are not surfaced here, since the visible product is finance-vertical.
+// Default visible personas in the Tools tab (Generalist, Finance Expert, Data
+// Analyst, Strategy Analyst). Lawyer + Doctor stay in EXPERT_PERSONAS for
+// auto-routing but are not surfaced here by default, since the visible
+// product is finance-vertical. DOCBOT-1514: Sidebar now passes the list
+// explicitly (sourced from the backend tool registry) but keeps the same
+// exclusion — see Sidebar.tsx for the rationale note.
 const VISIBLE_PERSONA_KEYS = ["Generalist", "Finance Expert", "Data Analyst", "Strategy Analyst"] as const
 
 interface PersonaSelectorProps {
@@ -18,6 +21,8 @@ interface PersonaSelectorProps {
   isAutoMode: boolean
   onSelectPersona: (name: string) => void
   onSetAutoMode: (value: boolean) => void
+  /** DOCBOT-1514: override which persona keys render as cards (defaults to VISIBLE_PERSONA_KEYS). */
+  visiblePersonaKeys?: readonly string[]
 }
 
 export default function PersonaSelector({
@@ -25,6 +30,7 @@ export default function PersonaSelector({
   isAutoMode,
   onSelectPersona,
   onSetAutoMode,
+  visiblePersonaKeys = VISIBLE_PERSONA_KEYS,
 }: PersonaSelectorProps) {
   return (
     <div className="flex-1">
@@ -61,7 +67,7 @@ export default function PersonaSelector({
         <div>
           {/* Persona Cards Grid */}
           <div className="grid grid-cols-2 gap-2 mb-2">
-            {VISIBLE_PERSONA_KEYS.map((name) => {
+            {visiblePersonaKeys.map((name) => {
               const data = EXPERT_PERSONAS[name]
               if (!data) return null
               const isSelected = selectedPersona === name

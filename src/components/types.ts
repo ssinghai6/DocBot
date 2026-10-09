@@ -209,7 +209,16 @@ export type Message = {
   agentPersona?: string       // DOCBOT-802: which persona handled this message
   agentPersonas?: string[]    // DOCBOT-802: for hybrid messages with multiple personas
   lineage?: Lineage           // DOCBOT-1510: provenance for this answer
+  traceId?: string            // DOCBOT-1512: agent trace id for feedback submission
 }
+
+// DOCBOT-1512: feedback POST response
+export const TraceFeedbackResponseSchema = z.object({
+  status: z.string(),
+  trace_id: z.string(),
+  feedback: z.enum(["up", "down"]),
+})
+export type TraceFeedbackResponse = z.infer<typeof TraceFeedbackResponseSchema>
 
 // ── Connector schemas ────────────────────────────────────────────────────
 
@@ -228,6 +237,31 @@ export const ConnectorSyncResponseSchema = z.object({
   financials_persisted: z.number().optional(),
 })
 export type ConnectorSyncResponse = z.infer<typeof ConnectorSyncResponseSchema>
+
+// ── Tool registry schemas (DOCBOT-1514) ─────────────────────────────────────
+
+export const ToolInfoSchema = z.object({
+  key: z.string(),
+  name: z.string(),
+  description: z.string(),
+  category: z.string(),
+  input_schema: z.record(z.string(), z.unknown()).default({}),
+  output_schema: z.record(z.string(), z.unknown()).default({}),
+  cost_estimate: z.string().nullish(),
+  icon: z.string().nullish(),
+})
+export type ToolInfo = z.infer<typeof ToolInfoSchema>
+
+export const ToolsResponseSchema = z.object({
+  tools: z.array(ToolInfoSchema),
+})
+
+/** A one-shot explicit tool pick (DOCBOT-1514) — cleared after the next send. */
+export type PickedTool = {
+  key: string
+  name: string
+  category: string
+}
 
 // Live DB connection form state shape
 export type LiveDbForm = {

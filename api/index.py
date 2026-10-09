@@ -18,7 +18,7 @@ from sqlalchemy import (
     MetaData, Table, Column, String, Text, Integer, DateTime,
     func, select, insert, update, delete, text, Boolean,
 )
-from typing import List, Dict, Any, Optional
+from typing import List, Dict, Any, Optional, Literal
 import os
 import re
 import sys
@@ -301,6 +301,10 @@ answer_lineage_table = register_lineage_table(metadata)
 from api.utils.llm_cache import register_llm_cache_table
 llm_response_cache_table = register_llm_cache_table(metadata)
 
+# ── DOCBOT-1512: agent trace logging + feedback ───────────────────────────────
+from api.trace_service import register_agent_traces_table
+agent_traces_table = register_agent_traces_table(metadata)
+
 # ── EPIC-06: RBAC dependencies (DOCBOT-603) ──────────────────────────────────
 # Imported here so Depends() objects can be declared at module level.
 # require_role() checks is_auth_enforcement_active() at request time — safe to import early.
@@ -405,13 +409,18 @@ async def init_db() -> None:
         "Database tables verified / created "
         "(sessions, messages, db_connections, schema_cache, query_history, "
         "query_embeddings, session_artifacts, table_embeddings, audit_log, "
-        "commerce_orders, commerce_financials, marketplace_connections)."
+        "commerce_orders, commerce_financials, marketplace_connections, "
+        "agent_traces)."
     )
 
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     await init_db()
+    # DOCBOT-1514: populate the tool/capability registry (pipelines,
+    # autopilot tools, personas, connectors) for the frontend tool picker.
+    from api.tools.builtin import register_builtin_tools
+    register_builtin_tools()
     # DOCBOT-603: wire RBAC module-level table references
     from api.rbac_service import wire_rbac
     wire_rbac(users_table, user_sessions_table, async_session_factory)
@@ -435,6 +444,9 @@ async def lifespan(app: FastAPI):
     # classification call sites read/write through this once wired).
     from api.utils.llm_cache import wire_llm_cache
     wire_llm_cache(llm_response_cache_table, async_session_factory)
+    # DOCBOT-1512: wire agent trace log persistence
+    from api.trace_service import wire_trace_store
+    wire_trace_store(agent_traces_table, async_session_factory)
     # Clean up any expired file uploads from previous runs
     try:
         from api.file_upload_service import cleanup_expired_uploads
@@ -647,6 +659,48 @@ def get_personas():
             for name, data in EXPERT_PERSONAS.items()
         ]
     }
+
+
+class ToolInfo(BaseModel):
+    """DOCBOT-1514: a single entry from the tool/capability registry."""
+    key: str
+    name: str
+    description: str
+    category: str
+    input_schema: Dict[str, Any]
+    output_schema: Dict[str, Any]
+    cost_estimate: Optional[str] = None
+    icon: Optional[str] = None
+
+
+class ToolsResponse(BaseModel):
+    tools: List[ToolInfo]
+
+
+@app.get("/api/tools", response_model=ToolsResponse)
+def get_tools(category: Optional[str] = None):
+    """List all registered tools/capabilities (pipelines, autopilot tools,
+    personas, connectors) for the frontend's explicit tool picker.
+
+    DOCBOT-1514: read-only, additive — does not affect existing auto-routing.
+    """
+    from api.tools.registry import list_tools
+
+    specs = list_tools(category=category)
+    return ToolsResponse(tools=[
+        ToolInfo(
+            key=s.key,
+            name=s.name,
+            description=s.description,
+            category=s.category,
+            input_schema=s.input_schema,
+            output_schema=s.output_schema,
+            cost_estimate=s.cost_estimate,
+            icon=s.icon,
+        )
+        for s in specs
+    ])
+
 
 @app.post("/api/demo/init")
 async def init_demo(dataset: str = "quickbite"):
@@ -919,6 +973,9 @@ async def chat(raw_request: Request, request: ChatRequest, _user=_rbac_viewer):
         raise HTTPException(status_code=500, detail="Groq API key not configured")
 
     async def event_stream():
+        # DOCBOT-1512: wall-clock timer for this turn's agent trace row
+        _chat_start = time.monotonic()
+
         # ── DOCBOT-602: audit doc-chat query ──────────────────────────────────
         from api.audit_service import log_event, AuditEventType, get_client_ip
         log_event(
@@ -937,7 +994,8 @@ async def chat(raw_request: Request, request: ChatRequest, _user=_rbac_viewer):
         # DOCBOT-1510: per-answer lineage collector (docs mode)
         from api.utils.lineage import LineageCollector
         from api.utils.llm_provider import new_run_id
-        lineage = LineageCollector(new_run_id(), "docs", question=request.message)
+        _run_id = new_run_id()
+        lineage = LineageCollector(_run_id, "docs", question=request.message)
 
         # ── DOCBOT-802: per-question persona routing ──────────────────────────
         # If the user is on Generalist (default/auto), route based on question
@@ -1105,7 +1163,21 @@ async def chat(raw_request: Request, request: ChatRequest, _user=_rbac_viewer):
                         "page": doc.metadata.get("page", 0),
                         "text": safe_snippet(doc.page_content),
                     })
-            yield f"data: {json.dumps({'type': 'citations', 'citations': citations, 'routed_persona': effective_persona})}\n\n"
+
+            # DOCBOT-1512: fire-and-forget agent trace row for this turn
+            from api.trace_service import log_trace
+            _trace_id = await log_trace(
+                run_id=_run_id,
+                session_id=request.session_id,
+                pipeline="chat",
+                question=request.message,
+                tool_chosen="rag",
+                retrieved_refs=citations,
+                final_answer=answer_text,
+                latency_ms=(time.monotonic() - _chat_start) * 1000,
+            )
+
+            yield f"data: {json.dumps({'type': 'citations', 'citations': citations, 'routed_persona': effective_persona, 'trace_id': _trace_id})}\n\n"
 
             # DOCBOT-1510: lineage (sources with snippets; cited = named in answer)
             answer_lower = answer_text.lower()
@@ -1962,6 +2034,25 @@ async def get_answer_lineage(run_id: str):
     if lineage is None:
         raise HTTPException(status_code=404, detail="Lineage not found.")
     return lineage.model_dump(mode="json")
+
+
+# ---------------------------------------------------------------------------
+# Agent trace feedback route (DOCBOT-1512)
+# ---------------------------------------------------------------------------
+
+
+class TraceFeedbackRequest(BaseModel):
+    feedback: Literal["up", "down"]
+
+
+@app.post("/api/traces/{trace_id}/feedback", dependencies=[_rbac_viewer])
+async def submit_trace_feedback(trace_id: str, request: TraceFeedbackRequest):
+    """Record a thumbs up/down for a logged agent trace."""
+    from api.trace_service import record_feedback
+    found = await record_feedback(trace_id, request.feedback)
+    if not found:
+        raise HTTPException(status_code=404, detail="Trace not found.")
+    return {"status": "ok", "trace_id": trace_id, "feedback": request.feedback}
 
 
 # ---------------------------------------------------------------------------

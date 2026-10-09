@@ -1,6 +1,6 @@
 import { create } from "zustand";
 import { persist } from "zustand/middleware";
-import type { Lineage } from "@/components/types";
+import type { Lineage, PickedTool } from "@/components/types";
 
 export const INSPECTOR_TABS = ["lineage", "sources", "query", "data", "run"] as const;
 export type InspectorTab = (typeof INSPECTOR_TABS)[number];
@@ -44,6 +44,14 @@ interface UIState {
   commandPaletteOpen: boolean;
   setCommandPaletteOpen: (open: boolean) => void;
   toggleCommandPalette: () => void;
+
+  // DOCBOT-1514: explicit tool picker (power-user, additive to auto-routing)
+  toolPickerOpen: boolean;
+  setToolPickerOpen: (open: boolean) => void;
+  toggleToolPicker: () => void;
+  /** One-shot per-turn tool pick — cleared after the next message is sent. */
+  pickedTool: PickedTool | null;
+  setPickedTool: (tool: PickedTool | null) => void;
 }
 
 export const useUIStore = create<UIState>()(
@@ -89,6 +97,12 @@ export const useUIStore = create<UIState>()(
       commandPaletteOpen: false,
       setCommandPaletteOpen: (open) => set({ commandPaletteOpen: open }),
       toggleCommandPalette: () => set((s) => ({ commandPaletteOpen: !s.commandPaletteOpen })),
+
+      toolPickerOpen: false,
+      setToolPickerOpen: (open) => set({ toolPickerOpen: open }),
+      toggleToolPicker: () => set((s) => ({ toolPickerOpen: !s.toolPickerOpen })),
+      pickedTool: null,
+      setPickedTool: (tool) => set({ pickedTool: tool }),
     }),
     {
       name: "docbot-ui-store",

@@ -267,6 +267,115 @@ def _select_tool_heuristic(step: str, has_db: bool = True, has_docs: bool = Fals
     return "doc_search" if has_docs else "python_analysis"
 
 
+# DOCBOT-1513: the exact tool-name strings _select_tool_heuristic (and its
+# model-driven replacement below) may return — kept in sync with
+# api/tools/builtin.py's ToolSpec registrations, which cite this set.
+_VALID_TOOL_SELECTIONS = {"sql_query", "doc_search", "python_analysis", "unsupported"}
+
+# DOCBOT-1507: bump manually ("v1" -> "v2") whenever the system prompt below
+# changes — see PROMPT_VERSION convention in api/utils/llm_provider.py.
+PROMPT_VERSION_AUTOPILOT_TOOL_ROUTER = "v1"
+
+
+async def _select_tool_llm(
+    step: str,
+    has_db: bool = True,
+    has_docs: bool = False,
+    has_csv: bool = False,
+    persona_tool_preference: str | None = None,
+    run_id: str | None = None,
+) -> str:
+    """Model-driven replacement for ``_select_tool_heuristic`` — DOCBOT-1513.
+
+    Makes ONE structured-JSON Groq call (cheap general model, not the code
+    model) to pick exactly one of ``sql_query`` / ``doc_search`` /
+    ``python_analysis`` / ``unsupported`` for a single investigation step,
+    given which data sources are available and an optional persona
+    tool-preference hint (``EXPERT_PERSONAS[persona]["tool_preference"]`` —
+    ``"balanced"`` / ``"rag_first"`` / ``"sql_first"``).
+
+    On ANY failure — the LLM call raising, the response not parsing as JSON,
+    or the parsed value falling outside ``_VALID_TOOL_SELECTIONS`` — falls
+    back to ``_select_tool_heuristic`` unchanged, so a transient LLM outage
+    never breaks step execution. This function never raises.
+    """
+    if not has_db and not has_docs and not has_csv:
+        return "unsupported"
+
+    available: list[str] = []
+    if has_db and not has_csv:
+        available.append("sql_query — run a SQL query against the connected database")
+    if has_docs:
+        available.append("doc_search — search uploaded PDF documents")
+    if has_csv or has_db or has_docs:
+        available.append(
+            "python_analysis — run Python/pandas (charts, forecasting, stats) on data "
+            "already fetched by a prior step, or directly on an uploaded CSV"
+        )
+    if not available:
+        available.append("python_analysis — run Python/pandas analysis")
+
+    tools_str = "\n".join(f"  - {a}" for a in available)
+    pref_hint = (
+        f"\nThe active persona's soft tool preference is \"{persona_tool_preference}\" "
+        "— use it only as a light tie-breaker, never override an obvious data-fetch vs. "
+        "analysis distinction because of it."
+        if persona_tool_preference
+        else ""
+    )
+
+    system_prompt = (
+        "You are a tool router for a multi-step AI investigation agent. Given ONE "
+        "investigation step, choose exactly one tool to execute it, from:\n"
+        f"{tools_str}\n"
+        f"{pref_hint}\n\n"
+        "RULES:\n"
+        "- A step that fetches/queries/retrieves/counts/aggregates data should use "
+        "sql_query (when a database is available) even if it also mentions a chart — "
+        "the chart itself is a later step.\n"
+        "- Use python_analysis only for a step that itself asks to visualise, plot, "
+        "forecast, model, or compute on data a prior step already fetched (or any step "
+        "at all when the only source is an uploaded CSV).\n"
+        "- Use doc_search for steps about documents, reports, PDFs, contracts, filings, "
+        "or policies.\n\n"
+        'Respond with ONLY a JSON object, e.g. {"tool": "sql_query"}. No explanation, '
+        "no markdown fences."
+    )
+
+    try:
+        # DOCBOT-1513: use the async call_llm (LangChain .ainvoke under the
+        # hood), NOT the synchronous chat_completion — _select_tool_llm runs
+        # concurrently for every step in a wave via asyncio.gather (see
+        # executor_node), and a blocking sync HTTP call here would serialize
+        # the whole wave on the event loop, silently defeating DOCBOT-1406's
+        # concurrent-wave dispatch.
+        from api.utils.llm_provider import call_llm
+
+        raw = await call_llm(
+            f"{system_prompt}\n\nStep: {step}",
+            temperature=0,
+            caller="autopilot_tool_router",
+            run_id=run_id,
+            prompt_version=PROMPT_VERSION_AUTOPILOT_TOOL_ROUTER,
+        )
+        # The model may wrap the JSON in markdown fences or add stray text —
+        # extract the first {...} object rather than assuming the whole
+        # response is bare JSON.
+        start_idx = raw.index("{")
+        end_idx = raw.rindex("}") + 1
+        parsed = json.loads(raw[start_idx:end_idx])
+        tool = str(parsed.get("tool", "")).strip()
+        if tool not in _VALID_TOOL_SELECTIONS:
+            raise ValueError(f"LLM returned an out-of-set tool: {tool!r}")
+        return tool
+    except Exception as exc:
+        logger.warning(
+            "_select_tool_llm failed (%s) — falling back to heuristic for step: %s",
+            exc, step[:80],
+        )
+        return _select_tool_heuristic(step, has_db=has_db, has_docs=has_docs, has_csv=has_csv)
+
+
 # ---------------------------------------------------------------------------
 # Wave grouping — decide which plan steps can run concurrently
 # ---------------------------------------------------------------------------
@@ -285,6 +394,15 @@ def _wave_tool_hint(step: str, state: AutopilotState) -> str:
     *results* of earlier steps, which aren't known until the barrier those
     results imply has already been respected by wave grouping below. Wave
     grouping only needs the fetch vs. non-fetch category, not the exact tool.
+
+    DOCBOT-1513: deliberately still uses ``_select_tool_heuristic`` rather
+    than the model-driven ``_select_tool_llm`` — this function's only job is
+    a *fetch-vs-non-fetch* grouping guess, called once per step on every wave
+    boundary, and its own docstring already commits to being "cheap,
+    side-effect-free". ``_run_single_step`` makes the authoritative,
+    model-driven tool choice for each step right before executing it (see
+    below), so a wrong grouping guess here only risks suboptimal
+    concurrency batching, never an incorrect tool execution.
     """
     return _select_tool_heuristic(
         step,
@@ -348,11 +466,21 @@ def make_executor_node(
         concurrently via asyncio.gather: one step's failure cannot cancel or
         corrupt its siblings' results.
         """
-        tool = _select_tool_heuristic(
+        # DOCBOT-1513: model-driven tool selection (falls back to
+        # _select_tool_heuristic internally on any LLM/parse failure).
+        persona_name = state.get("persona", "Generalist")
+        persona_pref = (
+            expert_personas.get(persona_name, {}).get("tool_preference")
+            if isinstance(expert_personas.get(persona_name), dict)
+            else None
+        )
+        tool = await _select_tool_llm(
             step,
             has_db=state.get("has_db", True),
             has_docs=state.get("has_docs", False),
             has_csv=state.get("has_csv", False),
+            persona_tool_preference=persona_pref,
+            run_id=state.get("run_id"),
         )
 
         # Bug #12: python_analysis needs prior data (a sql_query row-set or a
@@ -1135,6 +1263,9 @@ async def run_autopilot(
 
     step_num = 0
     all_citations: list[dict] = []
+    # DOCBOT-1512: every completed step's result dict, kept for the trace row's
+    # tool_chosen/plan_steps fields (step_by_label only maps label -> step_num).
+    all_step_results: list[dict] = []
 
     # DOCBOT-1510: per-answer lineage
     from api.utils.lineage import LineageCollector
@@ -1212,6 +1343,7 @@ async def run_autopilot(
                             step_code = step_code[:6000] + "\n# … (truncated)"
 
                         step_by_label[step_result.get("step", "")] = step_num
+                        all_step_results.append(step_result)
                         lineage.add_step(
                             step_result.get("step", f"step {step_num}") or f"step {step_num}",
                             tool=step_result.get("tool", ""),
@@ -1258,7 +1390,29 @@ async def run_autopilot(
                     _lin_evt = emit_lineage(lineage, session_id)
                     if _lin_evt:
                         yield _lin_evt
-                    yield _sse({"type": "done", "citations": all_citations, "run_id": run_id})
+
+                    # DOCBOT-1512: fire-and-forget agent trace row for this run
+                    from api.trace_service import log_trace
+                    _tools_used = sorted({
+                        s.get("tool", "") for s in all_step_results if s.get("tool")
+                    })
+                    trace_id = await log_trace(
+                        run_id=run_id,
+                        session_id=session_id,
+                        pipeline="autopilot",
+                        question=question,
+                        tool_chosen=", ".join(_tools_used) or None,
+                        plan_steps=list(step_by_label.keys()),
+                        retrieved_refs=all_citations,
+                        final_answer=final_answer,
+                        latency_ms=(time.monotonic() - start_time) * 1000,
+                    )
+                    yield _sse({
+                        "type": "done",
+                        "citations": all_citations,
+                        "run_id": run_id,
+                        "trace_id": trace_id,
+                    })
 
     except Exception as exc:
         logger.error("run_autopilot failed: %s", exc)

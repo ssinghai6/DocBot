@@ -12,6 +12,7 @@ import InspectorPanel from "@/components/InspectorPanel"
 import AuthModal from "@/components/AuthModal"
 import AdminPanel from "@/components/AdminPanel"
 import CommandPalette, { useCommandPalette, buildCommands } from "@/components/CommandPalette"
+import ToolPicker, { useToolPicker } from "@/components/ToolPicker"
 import { useChatHandlers } from "@/hooks/useChatHandlers"
 import { useChatSubmit } from "@/hooks/useChatSubmit"
 import { PanelGroup, Panel, ResizeHandle, type PanelImperativeHandle } from "@/components/ui"
@@ -103,6 +104,9 @@ export default function Home() {
 
   // Command palette
   const cmdPalette = useCommandPalette();
+
+  // DOCBOT-1514: explicit tool picker (additive power-user feature)
+  const toolPicker = useToolPicker();
 
   // Database connection state
   const [isDbConnected, setIsDbConnected] = useState(false);
@@ -307,6 +311,8 @@ export default function Home() {
     isCsvConnection,
     chartType,
     messages,
+    pickedTool: toolPicker.pickedTool,
+    clearPickedTool: toolPicker.clearPickedTool,
 
     setMessages,
     setInput,
@@ -591,6 +597,9 @@ export default function Home() {
         onBrowseEdgar={() => { setSidebarOpen(true); setSidebarTab("tools"); }}
         onTryDemo={handleTryDemo}
         demoLoading={demoLoading}
+        pickedTool={toolPicker.pickedTool}
+        onOpenToolPicker={() => toolPicker.setIsOpen(true)}
+        onClearPickedTool={toolPicker.clearPickedTool}
       />
       </Panel>
 
@@ -674,6 +683,13 @@ export default function Home() {
           onSwitchPersona: setSelectedPersona,
           onSetAutoMode: setIsAutoMode,
         })}
+      />
+
+      {/* Tool Picker (DOCBOT-1514) — explicit, additive power-user tool pick */}
+      <ToolPicker
+        isOpen={toolPicker.isOpen}
+        onClose={toolPicker.onClose}
+        onPick={toolPicker.setPickedTool}
       />
     </div>
   );

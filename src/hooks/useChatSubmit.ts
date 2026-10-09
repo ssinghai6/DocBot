@@ -8,6 +8,7 @@ import type {
   ChartMeta,
   Citation,
   Toast,
+  PickedTool,
 } from "@/components/types"
 import { useUIStore } from "@/store/uiStore"
 
@@ -41,6 +42,9 @@ interface UseChatSubmitParams {
   isCsvConnection: boolean
   chartType: string
   messages: Message[]
+  /** DOCBOT-1514: explicit one-shot tool pick from the ToolPicker, or null for default auto-routing. */
+  pickedTool?: PickedTool | null
+  clearPickedTool?: () => void
 
   setMessages: React.Dispatch<React.SetStateAction<Message[]>>
   setInput: React.Dispatch<React.SetStateAction<string>>
@@ -67,6 +71,8 @@ export function useChatSubmit(params: UseChatSubmitParams) {
     isCsvConnection,
     chartType,
     messages,
+    pickedTool,
+    clearPickedTool,
 
     setMessages,
     setInput,
@@ -99,20 +105,72 @@ export function useChatSubmit(params: UseChatSubmitParams) {
 
     let personaToSend = selectedPersona;
     let effectiveChatMode = chatMode;
-    if (sessionId && isDbConnected && chatMode !== "hybrid") {
-      effectiveChatMode = "hybrid";
+    let useAutopilot = autopilotMode;
+
+    // DOCBOT-1514: an explicit ToolPicker pick bypasses all 3 auto-routing
+    // mechanisms (keyword persona routing, connection-state chat-mode
+    // selection, regex autopilot triggers) for THIS turn only. The `else`
+    // branch below is the pre-1514 logic, unchanged, run whenever no tool
+    // is picked (the default for every existing caller).
+    if (pickedTool) {
+      applyPickedToolRouting();
+      clearPickedTool?.();
+    } else {
+      defaultAutoRoute();
     }
-    if (isAutoMode) {
-      const routing = routeQuestion(input, effectiveChatMode, isDbConnected, !!sessionId, EXPERT_PERSONAS);
-      if (routing.confidence !== "low") {
-        personaToSend = routing.persona;
-        const pref = EXPERT_PERSONAS[routing.persona as keyof typeof EXPERT_PERSONAS]?.tool_preference;
-        if (pref === "sql_first" && isDbConnected && !sessionId) effectiveChatMode = "database";
-        else if (pref === "rag_first" && sessionId && !isDbConnected) effectiveChatMode = "docs";
-      } else {
-        personaToSend = "Generalist";
+
+    function defaultAutoRoute() {
+      if (sessionId && isDbConnected && chatMode !== "hybrid") {
+        effectiveChatMode = "hybrid";
+      }
+      if (isAutoMode) {
+        const routing = routeQuestion(input, effectiveChatMode, isDbConnected, !!sessionId, EXPERT_PERSONAS);
+        if (routing.confidence !== "low") {
+          personaToSend = routing.persona;
+          const pref = EXPERT_PERSONAS[routing.persona as keyof typeof EXPERT_PERSONAS]?.tool_preference;
+          if (pref === "sql_first" && isDbConnected && !sessionId) effectiveChatMode = "database";
+          else if (pref === "rag_first" && sessionId && !isDbConnected) effectiveChatMode = "docs";
+        } else {
+          personaToSend = "Generalist";
+        }
       }
     }
+
+    function applyPickedToolRouting() {
+      const pick = pickedTool!;
+      if (pick.category === "persona") {
+        // Force the persona; chat-mode selection still follows the existing
+        // connection-state rule (picking a persona doesn't imply a pipeline).
+        personaToSend = pick.key;
+        if (sessionId && isDbConnected && chatMode !== "hybrid") {
+          effectiveChatMode = "hybrid";
+        }
+        useAutopilot = false;
+      } else if (pick.key === "autopilot") {
+        useAutopilot = true;
+      } else if (
+        pick.key === "db_chat" || pick.key === "database" ||
+        pick.key === "sql_query" || pick.key === "python_analysis"
+      ) {
+        // sql_query / python_analysis are autopilot's internal tool names;
+        // from the frontend they both map to the direct DB/CSV pipeline
+        // (the backend dialect flag decides SQL vs. pandas execution).
+        effectiveChatMode = "database";
+        useAutopilot = false;
+      } else if (pick.key === "hybrid") {
+        effectiveChatMode = "hybrid";
+        useAutopilot = false;
+      } else if (pick.key === "chat" || pick.key === "docs" || pick.key === "doc_search") {
+        effectiveChatMode = "docs";
+        useAutopilot = false;
+      } else {
+        // Connector pick (or any other unmapped key) has no 1:1 pipeline —
+        // connectors are data sources, not per-message routes. Fall back to
+        // default auto-routing for this turn.
+        defaultAutoRoute();
+      }
+    }
+
     if (effectiveChatMode !== chatMode) {
       setChatMode(effectiveChatMode);
     }
@@ -126,8 +184,8 @@ export function useChatSubmit(params: UseChatSubmitParams) {
     const MULTI_STEP_TRIGGER = /\b(predict|forecast|what.?if|simulat|root.?cause|deep.?dive|break.?down|investigat|diagnos|scenario|correlat|regress|cluster|anomal|outli)\b/i;
     const COMPLEX_COMPARE = /\bcompar\w*\s+.+\s+(vs|versus|against|with|to)\b/i;
 
-    let useAutopilot = autopilotMode;
-    if (!useAutopilot && (connectionId || sessionId)) {
+    // Skipped entirely when an explicit tool pick already decided useAutopilot.
+    if (!pickedTool && !useAutopilot && (connectionId || sessionId)) {
       if (SIMPLE_VIZ.test(input)) {
         // Simple viz — never auto-trigger, use the fast path
         useAutopilot = false;
@@ -275,6 +333,7 @@ export function useChatSubmit(params: UseChatSubmitParams) {
                         ? [...(last.charts ?? []), ...aggregatedCharts]
                         : last.charts,
                       citations: doneCitations.length > 0 ? doneCitations : last.citations,
+                      traceId: typeof data.trace_id === "string" ? data.trace_id : last.traceId,
                     };
                   }
                   return updated;
@@ -469,9 +528,16 @@ export function useChatSubmit(params: UseChatSubmitParams) {
                 }
               } else if (chunk.type === "done") {
                 const doneCitations: Citation[] = Array.isArray(chunk.citations) ? chunk.citations : [];
-                if (doneCitations.length > 0) {
+                const doneTraceId: string | undefined = typeof chunk.trace_id === "string" ? chunk.trace_id : undefined;
+                if (doneCitations.length > 0 || doneTraceId) {
                   setMessages(prev => prev.map((m, i) =>
-                    i === prev.length - 1 ? { ...m, citations: doneCitations } : m
+                    i === prev.length - 1
+                      ? {
+                          ...m,
+                          citations: doneCitations.length > 0 ? doneCitations : m.citations,
+                          traceId: doneTraceId ?? m.traceId,
+                        }
+                      : m
                   ));
                 }
               } else if (chunk.type === "analysis_code") {
@@ -561,7 +627,13 @@ export function useChatSubmit(params: UseChatSubmitParams) {
               ));
             } else if (chunk.type === "citations") {
               setMessages(prev => prev.map((m, i) =>
-                i === prev.length - 1 ? { ...m, citations: chunk.citations } : m
+                i === prev.length - 1
+                  ? {
+                      ...m,
+                      citations: chunk.citations,
+                      traceId: typeof chunk.trace_id === "string" ? chunk.trace_id : m.traceId,
+                    }
+                  : m
               ));
             } else if (chunk.type === "lineage") {
               applyLineageEvent(chunk, setMessages);
