@@ -123,6 +123,10 @@ class TestCollector:
 
 
 class TestRerankScored:
+    @pytest.fixture(autouse=True)
+    def _hf_provider(self, monkeypatch):
+        monkeypatch.setenv("RERANKER_PROVIDER", "hf")
+
     def test_no_key_returns_none_scores(self):
         docs = [_Doc("a"), _Doc("b")]
         out = rerank_scored("q", docs, "", top_k=1)

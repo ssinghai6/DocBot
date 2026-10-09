@@ -77,7 +77,7 @@ Next.js 16 (Vercel) → FastAPI (Railway container) → Groq / Gemini
 - **Frontend**: Next.js 16, React 19, TailwindCSS 4, TypeScript, lucide-react, react-markdown
 - **Backend**: FastAPI, Python 3.12, Groq (Llama 3.3-70b), LangChain, PyMuPDF
 - **AI/ML**: Groq openai/gpt-oss-120b (code gen), Gemini 2.5 Flash via LangExtract (financial docs), LangGraph (agentic flows)
-- **Embeddings**: sentence-transformers/all-MiniLM-L6-v2 via HuggingFace API
+- **Embeddings**: sentence-transformers/all-MiniLM-L6-v2, run locally via ONNX (chromadb's bundled copy, free, no API key; DOCBOT-1511). HuggingFace API only if `EMBEDDINGS_PROVIDER=hf`. Reranker: local ONNX `ms-marco-MiniLM-L-6-v2` via fastembed (`RERANKER_PROVIDER`)
 - **Storage**: PostgreSQL on Railway (sessions, connections, audit log, schema cache)
 - **Sandbox**: E2B code-interpreter (Python/pandas execution, matplotlib charts)
 - **Auth**: python3-saml (SAML 2.0), httpx (OAuth), bcrypt (passwords), azure-identity (Entra)
@@ -102,7 +102,9 @@ Next.js proxies `/api/*` to `localhost:8000` in development.
 | Variable | Required | Notes |
 |----------|----------|-------|
 | `groq_api_key` | Yes | Groq API key |
-| `huggingface_api_key` | Yes | For embeddings model |
+| `huggingface_api_key` | No | Only used when `EMBEDDINGS_PROVIDER=hf` or `RERANKER_PROVIDER=hf` (embeddings/reranking are local and free by default) |
+| `EMBEDDINGS_PROVIDER` | No | `local` (default, ONNX) or `hf` (HF API, falls back to local on error) |
+| `RERANKER_PROVIDER` | No | `local` (default), `hf`, or `off` |
 | `DATABASE_URL` | Yes | Railway PostgreSQL connection string |
 | `DB_ENCRYPTION_KEY` | Yes | Fernet key for credential encryption — never hardcode |
 | `E2B_API_KEY` | Yes | E2B sandbox API key (CSV queries + Python analysis) |
@@ -236,7 +238,7 @@ All work is tracked in `project-tasks/docbot-v2-project-tracking.md`.
 
 **Never use `create_sql_agent()`** — it has unbounded LLM loops (3–8 calls typical). Use the 7-step bounded pipeline defined in the master plan instead.
 
-**Never use the `vanna` package** — 150MB of deps (Chromadb, fastembed). Use sqlglot + existing embedding model.
+**Never use the `vanna` package** — 150MB of deps (Chromadb, fastembed). Use sqlglot + existing embedding model. (`fastembed` itself is allowed since DOCBOT-1511, for the local ONNX reranker only.)
 
 **Never use regex for SQL validation** — trivially bypassed. Always use sqlglot AST parsing.
 

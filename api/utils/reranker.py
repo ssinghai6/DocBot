@@ -38,6 +38,10 @@ Inference API (not just mocked) before landing.
 from __future__ import annotations
 
 import logging
+import math
+import os
+import threading
+from typing import Optional
 
 import httpx
 
@@ -47,11 +51,48 @@ _MODEL = "BAAI/bge-reranker-base"
 _INFERENCE_URL = f"https://router.huggingface.co/hf-inference/models/{_MODEL}"
 _TIMEOUT_SECONDS = 10
 
+# DOCBOT-1511: free local reranker (ONNX, ~90MB). Env ``RERANKER_PROVIDER``:
+#   local (default) | hf (HuggingFace Inference API, needs a key) | off
+_LOCAL_MODEL = "Xenova/ms-marco-MiniLM-L-6-v2"
+_local_encoder = None
+_local_lock = threading.Lock()
+_local_unavailable = False
+
+
+def _sigmoid(x: float) -> float:
+    return 1.0 / (1.0 + math.exp(-max(-60.0, min(60.0, x))))
+
+
+def _local_scores(query: str, texts: list[str]) -> Optional[list[float]]:
+    """Score ``texts`` against ``query`` with the local cross-encoder (0-1).
+
+    Returns None when fastembed is missing or inference fails, so the caller
+    falls back to retrieval order.
+    """
+    global _local_encoder, _local_unavailable
+    if _local_unavailable:
+        return None
+    try:
+        if _local_encoder is None:
+            with _local_lock:
+                if _local_encoder is None:
+                    from fastembed.rerank.cross_encoder import TextCrossEncoder
+
+                    _local_encoder = TextCrossEncoder(_LOCAL_MODEL)
+        return [_sigmoid(float(x)) for x in _local_encoder.rerank(query, texts)]
+    except ImportError:
+        _local_unavailable = True
+        logger.warning("rerank: fastembed not installed; keeping retrieval order")
+        return None
+    except Exception as exc:  # onnx/model-download errors vary
+        logger.warning("rerank: local cross-encoder failed (%s); keeping retrieval order", exc)
+        return None
+
 
 def rerank_scored(
     query: str,
     docs: list,
-    hf_api_key: str,
+    hf_api_key: str = "",
     top_k: int = 5,
 ) -> list[tuple]:
     """Like :func:`rerank` but returns ``(doc, score)`` pairs.
@@ -61,12 +102,22 @@ def rerank_scored(
     API failure, unexpected response) so callers can tell "not reranked"
     apart from "scored low".
     """
+    if not docs:
+        return []
+
+    provider = os.getenv("RERANKER_PROVIDER", "local").strip().lower()
+    if provider == "off":
+        return [(d, None) for d in docs[:top_k]]
+    if provider != "hf":
+        scores = _local_scores(query, [d.page_content for d in docs])
+        if scores is None or len(scores) != len(docs):
+            return [(d, None) for d in docs[:top_k]]
+        ranked = sorted(zip(docs, scores), key=lambda pair: pair[1], reverse=True)
+        return [(doc, float(score)) for doc, score in ranked[:top_k]]
+
     if not hf_api_key:
         logger.debug("rerank: hf_api_key is empty — skipping cross-encoder")
         return [(d, None) for d in docs[:top_k]]
-
-    if not docs:
-        return []
 
     payload = {
         "inputs": [
@@ -118,7 +169,7 @@ def rerank_scored(
 def rerank(
     query: str,
     docs: list,
-    hf_api_key: str,
+    hf_api_key: str = "",
     top_k: int = 5,
 ) -> list:
     """Re-score retrieved documents with a cross-encoder and return top_k.

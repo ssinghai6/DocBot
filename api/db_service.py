@@ -488,14 +488,9 @@ def _get_groq_client():
 
 
 def _get_embeddings_model():
-    """Reuse the same HuggingFace embeddings singleton pattern used by the PDF pipeline."""
-    from langchain_huggingface import HuggingFaceEndpointEmbeddings
-    hf_token = os.getenv("huggingface_api_key") or os.getenv("HUGGINGFACEHUB_API_TOKEN")
-    return HuggingFaceEndpointEmbeddings(
-        model="sentence-transformers/all-MiniLM-L6-v2",
-        task="feature-extraction",
-        huggingfacehub_api_token=hf_token,
-    )
+    """Shared embeddings model (local ONNX by default, DOCBOT-1511)."""
+    from api.utils.embeddings_provider import get_embeddings
+    return get_embeddings()
 
 
 # ---------------------------------------------------------------------------
