@@ -850,7 +850,7 @@ async def upload_documents(
             audit_log_table,
             async_session_factory,
             session_id=session_id,
-            detail=", ".join(f["name"] for f in files_info),
+            detail=", ".join(f["filename"] for f in files_info),
             metadata={"file_count": len(files_info), "chunks": len(splits)},
         )
 
