@@ -3,9 +3,11 @@ name: Nightly Eval
 # DOCBOT-1503: wires tests/eval/ (the real Recall@k / discrepancy eval suite)
 # into a scheduled job so prompt/retrieval changes can't silently regress
 # quality between manual runs. Deliberately NOT part of ci.yml's per-push/PR
-# job: test_retrieval_eval.py needs a live HuggingFace embeddings call
-# (huggingface_api_key), which is slow and costs external API quota on every
-# push — a nightly cadence is the right tradeoff for an eval, not a unit test.
+# job: test_retrieval_eval.py builds a real vector store end-to-end, which is
+# slow — a nightly cadence is the right tradeoff for an eval, not a unit test.
+# DOCBOT-1511: embeddings are free local ONNX by default (no HuggingFace key
+# needed); the HUGGINGFACE_API_KEY secret below is optional and only matters
+# if EMBEDDINGS_PROVIDER is ever set to "hf".
 #
 # tests/eval/test_discrepancy_eval.py (precision/recall/F1 on the discrepancy
 # detector) is pure code with no external dependency and already runs in
@@ -24,12 +26,9 @@ name: Nightly Eval
 # — a nightly run failing that assertion fails this job and should be treated
 # as a real retrieval regression, not flaked away.
 #
-# Requires the HUGGINGFACE_API_KEY repository secret to be set (Settings →
-# Secrets and variables → Actions). Without it, the external-marked tests
-# self-skip via `pytest.skip("huggingface_api_key not set")` rather than
-# failing — this job still reports green, so a missing secret is a silent
-# gap, not a red X. Check the job's "Run nightly retrieval eval" step output
-# for a SKIPPED result if this ever needs debugging.
+# No external API key is required to run this job (DOCBOT-1511: embeddings
+# are free local ONNX by default). HUGGINGFACE_API_KEY is only forwarded in
+# case EMBEDDINGS_PROVIDER is explicitly set to "hf" elsewhere in env.
 
 on:
   schedule:
@@ -59,8 +58,10 @@ jobs:
           python -m pip install --upgrade pip
           pip install -r requirements-dev.txt
 
-      - name: Run nightly retrieval eval (external — needs HuggingFace key)
+      - name: Run nightly retrieval eval (free local embeddings, no API key needed)
         env:
+          # Optional — only used if EMBEDDINGS_PROVIDER=hf is set; default
+          # provider is local ONNX and needs no key (DOCBOT-1511).
           huggingface_api_key: ${{ secrets.HUGGINGFACE_API_KEY }}
           # Fernet key generated fresh for CI — never a real production key
           DB_ENCRYPTION_KEY: ${{ secrets.CI_FERNET_KEY || '' }}
