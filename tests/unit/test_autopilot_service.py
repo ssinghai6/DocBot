@@ -26,6 +26,7 @@ from api.autopilot_service import (
     _next_wave_indices,
     _planner_node,
     _select_tool_heuristic,
+    _select_tool_llm,
     _should_continue,
     _sse,
     _synthesizer_node,
@@ -367,6 +368,26 @@ class TestExecutorConcurrency:
     """Verifies the executor dispatches an independent wave of steps via
     asyncio.gather rather than one step per LangGraph iteration."""
 
+    @pytest.fixture(autouse=True)
+    def _mock_tool_router(self):
+        """DOCBOT-1513: _run_single_step now calls the model-driven
+        _select_tool_llm instead of the heuristic directly. Mock call_llm to
+        mirror the heuristic's own answer (these tests all use has_db=True,
+        has_docs=False) so the asserted tool ("sql_query") and the
+        concurrency/fan-in behavior under test are unaffected, without ever
+        making a real network call."""
+
+        async def _fake_call_llm(prompt, **kwargs):
+            step_text = prompt.rsplit("Step:", 1)[-1].strip()
+            tool = _select_tool_heuristic(step_text, has_db=True, has_docs=False)
+            return json.dumps({"tool": tool})
+
+        with patch(
+            "api.utils.llm_provider.call_llm",
+            new=AsyncMock(side_effect=_fake_call_llm),
+        ):
+            yield
+
     def _node(self):
         return make_executor_node(
             db_connections_table=MagicMock(),
@@ -674,3 +695,126 @@ class TestSessionCostCeilingGate:
 
         assert "steps_completed" in result
         assert "budget_exceeded" not in result
+
+
+
+
+# ---------------------------------------------------------------------------
+# _select_tool_llm() — DOCBOT-1513 model-driven tool router
+#
+# call_llm() is async (LangChain .ainvoke) rather than the synchronous
+# chat_completion() — _select_tool_llm runs concurrently for every step in a
+# wave via asyncio.gather, and a blocking sync call would serialize the
+# whole wave on the event loop. Tests mock call_llm with AsyncMock.
+# ---------------------------------------------------------------------------
+
+
+def _mock_call_llm_json(tool: str):
+    """AsyncMock replacement for llm_provider.call_llm returning a JSON
+    tool-selection payload."""
+    return AsyncMock(return_value=json.dumps({"tool": tool}))
+
+
+class TestSelectToolLlm:
+    def test_valid_tool_is_used_as_is(self):
+        """A well-formed LLM response is trusted without falling back."""
+        with patch(
+            "api.utils.llm_provider.call_llm",
+            _mock_call_llm_json("sql_query"),
+        ) as mock_cl:
+            result = asyncio.run(
+                _select_tool_llm("Fetch revenue by region", has_db=True, has_docs=False)
+            )
+        assert result == "sql_query"
+        mock_cl.assert_called_once()
+
+    def test_llm_exception_falls_back_to_heuristic(self):
+        """If the LLM call raises, the heuristic's result is used instead."""
+        heuristic_result = _select_tool_heuristic(
+            "Fetch revenue by region", has_db=True, has_docs=False
+        )
+        with patch(
+            "api.utils.llm_provider.call_llm",
+            new=AsyncMock(side_effect=RuntimeError("groq exploded")),
+        ):
+            result = asyncio.run(
+                _select_tool_llm("Fetch revenue by region", has_db=True, has_docs=False)
+            )
+        assert result == heuristic_result == "sql_query"
+
+    def test_invalid_tool_string_falls_back_to_heuristic(self):
+        """An out-of-set tool name from the LLM is rejected and the heuristic
+        result is used instead."""
+        heuristic_result = _select_tool_heuristic(
+            "Search the uploaded document", has_db=False, has_docs=True
+        )
+        with patch(
+            "api.utils.llm_provider.call_llm",
+            _mock_call_llm_json("totally_made_up_tool"),
+        ):
+            result = asyncio.run(
+                _select_tool_llm(
+                    "Search the uploaded document", has_db=False, has_docs=True
+                )
+            )
+        assert result == heuristic_result == "doc_search"
+
+    def test_malformed_json_falls_back_to_heuristic(self):
+        """Non-JSON LLM output (no braces at all) is treated as a parse
+        failure, not trusted."""
+        heuristic_result = _select_tool_heuristic(
+            "Create a bar chart of sales", has_db=True, has_docs=False
+        )
+        with patch(
+            "api.utils.llm_provider.call_llm",
+            new=AsyncMock(return_value="sure, the answer is sql_query"),
+        ):
+            result = asyncio.run(
+                _select_tool_llm(
+                    "Create a bar chart of sales", has_db=True, has_docs=False
+                )
+            )
+        assert result == heuristic_result
+
+    def test_no_data_source_short_circuits_without_llm_call(self):
+        """When no data source is available, 'unsupported' is returned
+        immediately without ever calling the LLM."""
+        with patch("api.utils.llm_provider.call_llm", new=AsyncMock()) as mock_cl:
+            result = asyncio.run(
+                _select_tool_llm(
+                    "Fetch the data", has_db=False, has_docs=False, has_csv=False
+                )
+            )
+        assert result == "unsupported"
+        mock_cl.assert_not_called()
+
+    def test_strips_markdown_fences_before_parsing(self):
+        """A fenced JSON response (```json ... ```) is still parsed correctly."""
+        fenced = '```json\n{"tool": "doc_search"}\n```'
+        with patch(
+            "api.utils.llm_provider.call_llm", new=AsyncMock(return_value=fenced)
+        ):
+            result = asyncio.run(
+                _select_tool_llm("Find the clause in the PDF", has_db=False, has_docs=True)
+            )
+        assert result == "doc_search"
+
+    def test_persona_preference_is_passed_without_overriding_response(self):
+        """persona_tool_preference is accepted and threaded into the prompt,
+        but the LLM's own tool choice still wins."""
+        with patch(
+            "api.utils.llm_provider.call_llm",
+            _mock_call_llm_json("doc_search"),
+        ) as mock_cl:
+            result = asyncio.run(
+                _select_tool_llm(
+                    "Search the filing",
+                    has_db=True,
+                    has_docs=True,
+                    persona_tool_preference="sql_first",
+                )
+            )
+        assert result == "doc_search"
+        # The preference hint should appear in the prompt sent to the LLM.
+        sent_prompt = mock_cl.call_args.args[0]
+        assert "sql_first" in sent_prompt
