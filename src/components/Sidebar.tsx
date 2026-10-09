@@ -174,9 +174,31 @@ export default function Sidebar(props: SidebarProps) {
   // This keeps that exclusion while sourcing the remaining keys from the
   // registry rather than a second hardcoded list.
   const HIDDEN_PERSONA_KEYS = new Set(["Doctor", "Lawyer"]);
-  const visiblePersonaKeys = registryTools
-    .filter((t) => t.category === "persona" && !HIDDEN_PERSONA_KEYS.has(t.key))
-    .map((t) => t.key);
+  // DOCBOT-1516: the registry's order is EXPERT_PERSONAS's dict insertion
+  // order (api/personas.py), which is a backend implementation detail, not
+  // a deliberate display order. Sorting by this fixed canonical order keeps
+  // the registry as the source of truth for *which* personas are visible
+  // (so future additions/removals there need no frontend change) while
+  // making the *order* deterministic and matching the original hardcoded
+  // list. It also matches PersonaSelector.tsx's own fallback default, so
+  // the pre-fetch and post-fetch renders agree and there's no reorder flash.
+  // Any registry persona not in this list (e.g. Doctor/Lawyer if ever
+  // unhidden) is appended after, in registry order, rather than dropped.
+  const CANONICAL_PERSONA_ORDER = ["Generalist", "Finance Expert", "Data Analyst", "Strategy Analyst"];
+  const sortByCanonicalPersonaOrder = (keys: string[]) =>
+    [...keys].sort((a, b) => {
+      const ai = CANONICAL_PERSONA_ORDER.indexOf(a);
+      const bi = CANONICAL_PERSONA_ORDER.indexOf(b);
+      if (ai === -1 && bi === -1) return 0;
+      if (ai === -1) return 1;
+      if (bi === -1) return -1;
+      return ai - bi;
+    });
+  const visiblePersonaKeys = sortByCanonicalPersonaOrder(
+    registryTools
+      .filter((t) => t.category === "persona" && !HIDDEN_PERSONA_KEYS.has(t.key))
+      .map((t) => t.key)
+  );
 
   return (
     <>
