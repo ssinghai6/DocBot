@@ -209,7 +209,16 @@ export type Message = {
   agentPersona?: string       // DOCBOT-802: which persona handled this message
   agentPersonas?: string[]    // DOCBOT-802: for hybrid messages with multiple personas
   lineage?: Lineage           // DOCBOT-1510: provenance for this answer
+  traceId?: string            // DOCBOT-1512: agent trace id for feedback submission
 }
+
+// DOCBOT-1512: feedback POST response
+export const TraceFeedbackResponseSchema = z.object({
+  status: z.string(),
+  trace_id: z.string(),
+  feedback: z.enum(["up", "down"]),
+})
+export type TraceFeedbackResponse = z.infer<typeof TraceFeedbackResponseSchema>
 
 // ── Connector schemas ────────────────────────────────────────────────────
 

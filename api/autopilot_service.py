@@ -1135,6 +1135,9 @@ async def run_autopilot(
 
     step_num = 0
     all_citations: list[dict] = []
+    # DOCBOT-1512: every completed step's result dict, kept for the trace row's
+    # tool_chosen/plan_steps fields (step_by_label only maps label -> step_num).
+    all_step_results: list[dict] = []
 
     # DOCBOT-1510: per-answer lineage
     from api.utils.lineage import LineageCollector
@@ -1212,6 +1215,7 @@ async def run_autopilot(
                             step_code = step_code[:6000] + "\n# … (truncated)"
 
                         step_by_label[step_result.get("step", "")] = step_num
+                        all_step_results.append(step_result)
                         lineage.add_step(
                             step_result.get("step", f"step {step_num}") or f"step {step_num}",
                             tool=step_result.get("tool", ""),
@@ -1258,7 +1262,29 @@ async def run_autopilot(
                     _lin_evt = emit_lineage(lineage, session_id)
                     if _lin_evt:
                         yield _lin_evt
-                    yield _sse({"type": "done", "citations": all_citations, "run_id": run_id})
+
+                    # DOCBOT-1512: fire-and-forget agent trace row for this run
+                    from api.trace_service import log_trace
+                    _tools_used = sorted({
+                        s.get("tool", "") for s in all_step_results if s.get("tool")
+                    })
+                    trace_id = await log_trace(
+                        run_id=run_id,
+                        session_id=session_id,
+                        pipeline="autopilot",
+                        question=question,
+                        tool_chosen=", ".join(_tools_used) or None,
+                        plan_steps=list(step_by_label.keys()),
+                        retrieved_refs=all_citations,
+                        final_answer=final_answer,
+                        latency_ms=(time.monotonic() - start_time) * 1000,
+                    )
+                    yield _sse({
+                        "type": "done",
+                        "citations": all_citations,
+                        "run_id": run_id,
+                        "trace_id": trace_id,
+                    })
 
     except Exception as exc:
         logger.error("run_autopilot failed: %s", exc)

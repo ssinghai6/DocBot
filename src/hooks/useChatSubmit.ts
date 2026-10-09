@@ -275,6 +275,7 @@ export function useChatSubmit(params: UseChatSubmitParams) {
                         ? [...(last.charts ?? []), ...aggregatedCharts]
                         : last.charts,
                       citations: doneCitations.length > 0 ? doneCitations : last.citations,
+                      traceId: typeof data.trace_id === "string" ? data.trace_id : last.traceId,
                     };
                   }
                   return updated;
@@ -469,9 +470,16 @@ export function useChatSubmit(params: UseChatSubmitParams) {
                 }
               } else if (chunk.type === "done") {
                 const doneCitations: Citation[] = Array.isArray(chunk.citations) ? chunk.citations : [];
-                if (doneCitations.length > 0) {
+                const doneTraceId: string | undefined = typeof chunk.trace_id === "string" ? chunk.trace_id : undefined;
+                if (doneCitations.length > 0 || doneTraceId) {
                   setMessages(prev => prev.map((m, i) =>
-                    i === prev.length - 1 ? { ...m, citations: doneCitations } : m
+                    i === prev.length - 1
+                      ? {
+                          ...m,
+                          citations: doneCitations.length > 0 ? doneCitations : m.citations,
+                          traceId: doneTraceId ?? m.traceId,
+                        }
+                      : m
                   ));
                 }
               } else if (chunk.type === "analysis_code") {
@@ -561,7 +569,13 @@ export function useChatSubmit(params: UseChatSubmitParams) {
               ));
             } else if (chunk.type === "citations") {
               setMessages(prev => prev.map((m, i) =>
-                i === prev.length - 1 ? { ...m, citations: chunk.citations } : m
+                i === prev.length - 1
+                  ? {
+                      ...m,
+                      citations: chunk.citations,
+                      traceId: typeof chunk.trace_id === "string" ? chunk.trace_id : m.traceId,
+                    }
+                  : m
               ));
             } else if (chunk.type === "lineage") {
               applyLineageEvent(chunk, setMessages);
