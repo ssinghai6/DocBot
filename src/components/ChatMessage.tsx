@@ -6,10 +6,11 @@ import remarkGfm from "remark-gfm"
 import {
   Brain, Clock, Maximize2, Download,
   ChevronDown, BookOpen, Wand2, AlertTriangle,
-  Copy, Code2, Sparkles, GitBranch,
+  Copy, Code2, Sparkles, GitBranch, ThumbsUp, ThumbsDown,
 } from "lucide-react"
 
 import type { Message, ChartMeta, AutopilotStep, Citation, Lineage } from "./types"
+import { TraceFeedbackResponseSchema } from "./types"
 import { useUIStore } from "@/store/uiStore"
 
 // ── Expert personas accent colors ─────────────────────────────────────────
@@ -265,6 +266,61 @@ function CitationsBlock({ citations, messageId, lineage }: { citations: Citation
   )
 }
 
+function FeedbackButtons({ traceId }: { traceId: string }) {
+  const [sent, setSent] = useState<"up" | "down" | null>(null)
+  const [pending, setPending] = useState(false)
+
+  async function submit(feedback: "up" | "down") {
+    if (pending || sent) return
+    setPending(true)
+    try {
+      const res = await fetch(`/api/traces/${traceId}/feedback`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        credentials: "include",
+        body: JSON.stringify({ feedback }),
+      })
+      if (!res.ok) return
+      const data = await res.json()
+      const parsed = TraceFeedbackResponseSchema.safeParse(data)
+      if (parsed.success) {
+        setSent(parsed.data.feedback)
+      }
+    } catch {
+      // non-fatal — feedback is best-effort
+    } finally {
+      setPending(false)
+    }
+  }
+
+  return (
+    <div className="flex items-center gap-1.5">
+      <button
+        type="button"
+        onClick={() => submit("up")}
+        disabled={pending || sent !== null}
+        title="Good answer"
+        className={`flex items-center transition-colors ${
+          sent === "up" ? "text-[var(--color-success-500)]" : "text-[var(--color-text-tertiary)] hover:text-[var(--color-text-primary)]"
+        }`}
+      >
+        <ThumbsUp className="w-3 h-3" />
+      </button>
+      <button
+        type="button"
+        onClick={() => submit("down")}
+        disabled={pending || sent !== null}
+        title="Bad answer"
+        className={`flex items-center transition-colors ${
+          sent === "down" ? "text-[var(--color-danger-500)]" : "text-[var(--color-text-tertiary)] hover:text-[var(--color-text-primary)]"
+        }`}
+      >
+        <ThumbsDown className="w-3 h-3" />
+      </button>
+    </div>
+  )
+}
+
 // ── Agent formatting helpers ──────────────────────────────────────────────────
 
 function renderMessageContent(content: string): React.ReactNode[] | null {
@@ -432,6 +488,7 @@ export default function ChatMessage({
             <Copy className="w-3 h-3" />
             Copy
           </button>
+          {msg.traceId && <FeedbackButtons traceId={msg.traceId} />}
           {msg.charts && msg.charts.length > 0 && (
             <span className="flex items-center gap-1 text-[10px] text-[var(--color-text-quaternary)] uppercase tracking-wider">
               <Sparkles className="w-3 h-3 text-[var(--color-amber-500)]" />

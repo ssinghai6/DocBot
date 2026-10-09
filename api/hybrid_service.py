@@ -506,6 +506,8 @@ async def hybrid_chat(
       {"type": "done"}
     """
     has_db = connection_id is not None
+    # DOCBOT-1512: wall-clock timer for this turn's agent trace row
+    _hybrid_start = time.perf_counter()
 
     # DOCBOT-1501: bind one run_id for every LLM call made in this hybrid
     # turn (intent classification, SQL pipeline, RAG synthesis). The CM
@@ -765,6 +767,7 @@ async def hybrid_chat(
 
             lineage.set_pii(True)
             _synth_start = time.perf_counter()
+            _answer_parts: list[str] = []
             for token in chat_completion_stream(
                 [{"role": "user", "content": prompt}],
                 temperature=0.2,
@@ -773,7 +776,9 @@ async def hybrid_chat(
                 run_id=run_id,
                 prompt_version=PROMPT_VERSION_HYBRID_SYNTHESIS,
             ):
-                yield f"data: {json.dumps({'type': 'token', 'content': mask_pii(token)})}\n\n"
+                masked_token = mask_pii(token)
+                _answer_parts.append(masked_token)
+                yield f"data: {json.dumps({'type': 'token', 'content': masked_token})}\n\n"
         except Exception as exc:
             logger.error("hybrid_chat synthesis failed: %s", exc)
             yield f"data: {json.dumps({'type': 'error', 'detail': 'Synthesis failed. Please try again.'})}\n\n"
@@ -789,6 +794,23 @@ async def hybrid_chat(
         if lineage_event:
             yield lineage_event
 
-        yield f"data: {json.dumps({'type': 'done', 'citations': doc_citations, 'run_id': run_id})}\n\n"
+        # DOCBOT-1512: fire-and-forget agent trace row for this turn
+        from api.trace_service import log_trace
+        _tool_chosen = (
+            "sql+rag" if intent == "hybrid" else ("sql" if intent == "sql" else "rag")
+        )
+        trace_id = await log_trace(
+            run_id=run_id,
+            session_id=session_id,
+            pipeline="hybrid",
+            question=question,
+            intent_classified=intent,
+            tool_chosen=_tool_chosen,
+            retrieved_refs=doc_citations,
+            final_answer="".join(_answer_parts),
+            latency_ms=(time.perf_counter() - _hybrid_start) * 1000,
+        )
+
+        yield f"data: {json.dumps({'type': 'done', 'citations': doc_citations, 'run_id': run_id, 'trace_id': trace_id})}\n\n"
     finally:
         _trace_cm.__exit__(None, None, None)
