@@ -33,7 +33,7 @@ _REGISTRY: dict[str, "ToolSpec"] = {}
 class ToolSpec:
     """Static descriptor for a tool/capability exposed to the frontend picker.
 
-    ``category`` is one of ``"pipeline"``, ``"connector"``, or ``"persona"``
+    ``category`` is one of ``"pipeline"``, ``"tool"``, ``"persona"``, or ``"connector"``
     (not an enum, to keep this module dependency-free and easy to extend).
     """
 
