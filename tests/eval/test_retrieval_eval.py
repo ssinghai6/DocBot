@@ -2,8 +2,10 @@
 
 Builds a real vector store from the demo document chunks, runs a gold set of
 questions, and measures how often the correct source page is retrieved in the
-top-k. Requires HuggingFace embeddings (huggingface_api_key), so it is marked
-external and skipped in CI.
+top-k. Embeddings go through `api.utils.embeddings_provider.get_embeddings()`
+(DOCBOT-1511) — free local ONNX by default, no API key required. Still marked
+``external`` since it's a slower end-to-end eval (builds a real vector store),
+not because it needs a paid dependency anymore.
 
 DOCBOT-1301 baseline: `evaluate_with_expansion()` additionally runs each gold
 question through `api.utils.query_expansion.expand_query()` (multi-query
@@ -17,8 +19,6 @@ Run:  pytest tests/eval/eval_retrieval.py -s -m external
 """
 
 from __future__ import annotations
-
-import os
 
 import pytest
 
@@ -43,16 +43,11 @@ GOLD_QA: list[tuple[str, set[int]]] = [
 
 
 def _build_store():
-    from langchain_huggingface import HuggingFaceEndpointEmbeddings
     from api.demo_service import DEMO_DOCUMENT_CHUNKS
+    from api.utils.embeddings_provider import get_embeddings
     from api.utils.vector_store import create_store
 
-    embeddings = HuggingFaceEndpointEmbeddings(
-        model="sentence-transformers/all-MiniLM-L6-v2",
-        huggingfacehub_api_token=os.getenv("huggingface_api_key")
-        or os.getenv("HUGGINGFACEHUB_API_TOKEN"),
-    )
-    return create_store("eval_retrieval", DEMO_DOCUMENT_CHUNKS, embeddings)
+    return create_store("eval_retrieval", DEMO_DOCUMENT_CHUNKS, get_embeddings())
 
 
 def evaluate(k_values=(1, 3, 5)) -> dict[int, float]:
@@ -123,8 +118,6 @@ def evaluate_with_expansion(k_values=(1, 3, 5)) -> dict[int, float]:
 
 @pytest.mark.external
 def test_retrieval_recall():
-    if not (os.getenv("huggingface_api_key") or os.getenv("HUGGINGFACEHUB_API_TOKEN")):
-        pytest.skip("huggingface_api_key not set")
     recall = evaluate()
     # A well-tuned retriever should surface the right page in the top-5 for the
     # large majority of demo questions.
@@ -140,8 +133,6 @@ def test_retrieval_recall_expansion_does_not_regress():
     to be neutral-to-harmful. Once the finance rewrite lands, this test's
     recall_with_expansion should meet or beat raw recall.
     """
-    if not (os.getenv("huggingface_api_key") or os.getenv("HUGGINGFACEHUB_API_TOKEN")):
-        pytest.skip("huggingface_api_key not set")
     raw = evaluate()
     expanded = evaluate_with_expansion()
     print("\n=== Baseline comparison (raw vs expand_query) ===")
