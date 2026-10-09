@@ -11,6 +11,7 @@ import ConnectionPanel from "@/components/ConnectionPanel"
 import MarketplacePanel from "@/components/MarketplacePanel"
 import EdgarPanel from "@/components/EdgarPanel"
 import PersonaSelector from "@/components/PersonaSelector"
+import { useToolRegistry } from "@/components/ToolPicker"
 import type {
   AuthUser,
   FileUploadState,
@@ -162,6 +163,20 @@ export default function Sidebar(props: SidebarProps) {
 
   const [marketplaceOpen, setMarketplaceOpen] = useState(false);
   const [personaOpen, setPersonaOpen] = useState(false);
+
+  // DOCBOT-1514: unified Connectors + Personas list, driven by the backend
+  // tool registry (GET /api/tools) instead of two independently hardcoded
+  // accordions. Fetched only while the Tools tab is active.
+  const { tools: registryTools } = useToolRegistry(activeTab === "tools");
+  const connectorToolCount = registryTools.filter((t) => t.category === "connector").length;
+  // Doctor + Lawyer are deliberately excluded from the default persona view
+  // (see PersonaSelector.tsx) — the visible product is finance-vertical.
+  // This keeps that exclusion while sourcing the remaining keys from the
+  // registry rather than a second hardcoded list.
+  const HIDDEN_PERSONA_KEYS = new Set(["Doctor", "Lawyer"]);
+  const visiblePersonaKeys = registryTools
+    .filter((t) => t.category === "persona" && !HIDDEN_PERSONA_KEYS.has(t.key))
+    .map((t) => t.key);
 
   return (
     <>
@@ -366,50 +381,61 @@ export default function Sidebar(props: SidebarProps) {
                 showToast={showToast}
               />
 
-              {/* Marketplace */}
-              <div className="mb-4">
-                <button
-                  onClick={() => setMarketplaceOpen(!marketplaceOpen)}
-                  className="w-full flex items-center gap-2 mb-2"
-                >
-                  <span className="text-[10px] font-semibold text-[var(--color-text-tertiary)] uppercase tracking-wider flex-1 text-left">Marketplace</span>
-                  {connectors.length > 0 && (
-                    <span className="text-[10px] text-[var(--color-cyan-500)] font-medium bg-[var(--color-cyan-500)]/10 px-1.5 py-0.5 rounded-[3px]">
-                      {connectors.length}
+              {/* DOCBOT-1514: unified Connectors + Personas list, driven by
+                  GET /api/tools (replaces two independent accordions). */}
+              <div className="mb-4 rounded-[8px] border border-[var(--color-border-subtle)] divide-y divide-[var(--color-border-subtle)] overflow-hidden">
+                {/* Connectors group */}
+                <div className="p-3">
+                  <button
+                    onClick={() => setMarketplaceOpen(!marketplaceOpen)}
+                    className="w-full flex items-center gap-2"
+                  >
+                    <span className="text-[10px] font-semibold text-[var(--color-text-tertiary)] uppercase tracking-wider flex-1 text-left">
+                      Connectors{connectorToolCount > 0 ? ` (${connectorToolCount})` : ""}
                     </span>
+                    {connectors.length > 0 && (
+                      <span className="text-[10px] text-[var(--color-cyan-500)] font-medium bg-[var(--color-cyan-500)]/10 px-1.5 py-0.5 rounded-[3px]">
+                        {connectors.length}
+                      </span>
+                    )}
+                    <ChevronDown className={`w-3 h-3 text-[var(--color-text-tertiary)] transition-transform ${marketplaceOpen ? "rotate-180" : ""}`} />
+                  </button>
+                  {marketplaceOpen && (
+                    <div className="mt-2">
+                      <MarketplacePanel
+                        connectors={connectors}
+                        onRegister={onConnectorRegister}
+                        onSync={onConnectorSync}
+                        onDisconnect={onConnectorDisconnect}
+                      />
+                    </div>
                   )}
-                  <ChevronDown className={`w-3 h-3 text-[var(--color-text-tertiary)] transition-transform ${marketplaceOpen ? "rotate-180" : ""}`} />
-                </button>
-                {marketplaceOpen && (
-                  <MarketplacePanel
-                    connectors={connectors}
-                    onRegister={onConnectorRegister}
-                    onSync={onConnectorSync}
-                    onDisconnect={onConnectorDisconnect}
-                  />
-                )}
-              </div>
+                </div>
 
-              {/* Persona Selector */}
-              <div className="mb-4">
-                <button
-                  onClick={() => setPersonaOpen(!personaOpen)}
-                  className="w-full flex items-center gap-2 mb-2"
-                >
-                  <Sparkles className="w-3 h-3 text-[var(--color-amber-500)]" />
-                  <span className="text-[10px] font-semibold text-[var(--color-text-tertiary)] uppercase tracking-wider flex-1 text-left">
-                    {isAutoMode ? "Auto-routing" : selectedPersona}
-                  </span>
-                  <ChevronDown className={`w-3 h-3 text-[var(--color-text-tertiary)] transition-transform ${personaOpen ? "rotate-180" : ""}`} />
-                </button>
-                {personaOpen && (
-                  <PersonaSelector
-                    selectedPersona={selectedPersona}
-                    isAutoMode={isAutoMode}
-                    onSelectPersona={onSelectPersona}
-                    onSetAutoMode={onSetAutoMode}
-                  />
-                )}
+                {/* Personas group */}
+                <div className="p-3">
+                  <button
+                    onClick={() => setPersonaOpen(!personaOpen)}
+                    className="w-full flex items-center gap-2"
+                  >
+                    <Sparkles className="w-3 h-3 text-[var(--color-amber-500)]" />
+                    <span className="text-[10px] font-semibold text-[var(--color-text-tertiary)] uppercase tracking-wider flex-1 text-left">
+                      {isAutoMode ? "Auto-routing" : selectedPersona}
+                    </span>
+                    <ChevronDown className={`w-3 h-3 text-[var(--color-text-tertiary)] transition-transform ${personaOpen ? "rotate-180" : ""}`} />
+                  </button>
+                  {personaOpen && (
+                    <div className="mt-2">
+                      <PersonaSelector
+                        selectedPersona={selectedPersona}
+                        isAutoMode={isAutoMode}
+                        onSelectPersona={onSelectPersona}
+                        onSetAutoMode={onSetAutoMode}
+                        {...(visiblePersonaKeys.length > 0 ? { visiblePersonaKeys } : {})}
+                      />
+                    </div>
+                  )}
+                </div>
               </div>
             </div>
           )}

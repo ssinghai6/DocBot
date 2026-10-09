@@ -9,10 +9,10 @@ import {
   Download, FileJson, FileText as FileTxt,
   Sparkles, HelpCircle,
   Wand2, CheckCircle2, Hash, XCircle,
-  ChevronDown,
+  ChevronDown, Plus, X,
 } from "lucide-react"
 import ChatMessage from "@/components/ChatMessage"
-import type { Message, AutopilotStep, Toast } from "@/components/types"
+import type { Message, AutopilotStep, Toast, PickedTool } from "@/components/types"
 
 function TypingIndicator() {
   return (
@@ -119,6 +119,11 @@ export interface ChatAreaProps {
   onBrowseEdgar?: () => void
   onTryDemo?: (dataset?: "quickbite" | "fuel") => void
   demoLoading?: boolean
+
+  // DOCBOT-1514: explicit tool picker (additive power-user feature)
+  pickedTool?: PickedTool | null
+  onOpenToolPicker?: () => void
+  onClearPickedTool?: () => void
 }
 
 export default function ChatArea(props: ChatAreaProps) {
@@ -156,6 +161,9 @@ export default function ChatArea(props: ChatAreaProps) {
     onBrowseEdgar,
     onTryDemo,
     demoLoading,
+    pickedTool,
+    onOpenToolPicker,
+    onClearPickedTool,
   } = props;
 
   const copyToClipboard = (text: string) => {
@@ -520,11 +528,39 @@ export default function ChatArea(props: ChatAreaProps) {
           </div>
         )}
 
+        {/* Explicit tool pick chip (DOCBOT-1514) — one-shot, cleared after send */}
+        {pickedTool && (
+          <div className="flex items-center gap-1.5 mb-2">
+            <span className="inline-flex items-center gap-1.5 h-6 pl-2.5 pr-1.5 rounded-full text-[11px] font-medium bg-[var(--color-cyan-500)]/15 text-[var(--color-cyan-500)] border border-[var(--color-cyan-500)]/30">
+              Using: {pickedTool.name}
+              <button
+                type="button"
+                onClick={onClearPickedTool}
+                className="p-0.5 rounded-full hover:bg-[var(--color-cyan-500)]/20 transition-colors"
+                title="Clear tool pick"
+              >
+                <X className="w-3 h-3" />
+              </button>
+            </span>
+          </div>
+        )}
+
         <form
           onSubmit={handleSendMessage}
           className="relative bg-[var(--color-bg-elevated)] border border-[var(--color-border-default)] rounded-[8px] shadow-[var(--elev-1)] focus-within:border-[var(--color-cyan-500)]/60 focus-within:shadow-[0_0_0_3px_var(--glow-cyan)] transition-all overflow-hidden"
         >
           <div className="flex items-end">
+            {onOpenToolPicker && (
+              <button
+                type="button"
+                onClick={onOpenToolPicker}
+                disabled={(!sessionId && !isDbConnected) || isLoading}
+                title="Pick a tool for this message"
+                className="m-2 h-8 w-8 flex items-center justify-center rounded-[5px] text-[var(--color-text-tertiary)] hover:bg-[var(--color-bg-overlay)] hover:text-[var(--color-text-primary)] disabled:opacity-40 disabled:cursor-not-allowed transition-colors shrink-0"
+              >
+                <Plus className="w-4 h-4" />
+              </button>
+            )}
             <div className="flex-1 relative">
               <textarea
                 ref={textareaRef}

@@ -229,6 +229,31 @@ export const ConnectorSyncResponseSchema = z.object({
 })
 export type ConnectorSyncResponse = z.infer<typeof ConnectorSyncResponseSchema>
 
+// ── Tool registry schemas (DOCBOT-1514) ─────────────────────────────────────
+
+export const ToolInfoSchema = z.object({
+  key: z.string(),
+  name: z.string(),
+  description: z.string(),
+  category: z.string(),
+  input_schema: z.record(z.string(), z.unknown()).default({}),
+  output_schema: z.record(z.string(), z.unknown()).default({}),
+  cost_estimate: z.string().nullish(),
+  icon: z.string().nullish(),
+})
+export type ToolInfo = z.infer<typeof ToolInfoSchema>
+
+export const ToolsResponseSchema = z.object({
+  tools: z.array(ToolInfoSchema),
+})
+
+/** A one-shot explicit tool pick (DOCBOT-1514) — cleared after the next send. */
+export type PickedTool = {
+  key: string
+  name: string
+  category: string
+}
+
 // Live DB connection form state shape
 export type LiveDbForm = {
   dialect: string

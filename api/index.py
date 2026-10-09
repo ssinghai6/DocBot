@@ -412,6 +412,10 @@ async def init_db() -> None:
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     await init_db()
+    # DOCBOT-1514: populate the tool/capability registry (pipelines,
+    # autopilot tools, personas, connectors) for the frontend tool picker.
+    from api.tools.builtin import register_builtin_tools
+    register_builtin_tools()
     # DOCBOT-603: wire RBAC module-level table references
     from api.rbac_service import wire_rbac
     wire_rbac(users_table, user_sessions_table, async_session_factory)
@@ -647,6 +651,48 @@ def get_personas():
             for name, data in EXPERT_PERSONAS.items()
         ]
     }
+
+
+class ToolInfo(BaseModel):
+    """DOCBOT-1514: a single entry from the tool/capability registry."""
+    key: str
+    name: str
+    description: str
+    category: str
+    input_schema: Dict[str, Any]
+    output_schema: Dict[str, Any]
+    cost_estimate: Optional[str] = None
+    icon: Optional[str] = None
+
+
+class ToolsResponse(BaseModel):
+    tools: List[ToolInfo]
+
+
+@app.get("/api/tools", response_model=ToolsResponse)
+def get_tools(category: Optional[str] = None):
+    """List all registered tools/capabilities (pipelines, autopilot tools,
+    personas, connectors) for the frontend's explicit tool picker.
+
+    DOCBOT-1514: read-only, additive — does not affect existing auto-routing.
+    """
+    from api.tools.registry import list_tools
+
+    specs = list_tools(category=category)
+    return ToolsResponse(tools=[
+        ToolInfo(
+            key=s.key,
+            name=s.name,
+            description=s.description,
+            category=s.category,
+            input_schema=s.input_schema,
+            output_schema=s.output_schema,
+            cost_estimate=s.cost_estimate,
+            icon=s.icon,
+        )
+        for s in specs
+    ])
+
 
 @app.post("/api/demo/init")
 async def init_demo(dataset: str = "quickbite"):
