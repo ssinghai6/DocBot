@@ -47,22 +47,25 @@ export function useToolRegistry(enabled: boolean) {
   useEffect(() => {
     if (!enabled) return
     let cancelled = false
-    setLoading(true)
-    setError(null)
-    fetch("/api/tools")
-      .then(async (res) => {
+
+    async function load() {
+      setLoading(true)
+      setError(null)
+      try {
+        const res = await fetch("/api/tools")
         if (!res.ok) throw new Error(`HTTP ${res.status}`)
         const data = await res.json()
         const parsed = ToolsResponseSchema.safeParse(data)
         if (!parsed.success) throw new Error("Invalid /api/tools response")
         if (!cancelled) setTools(parsed.data.tools)
-      })
-      .catch((err: unknown) => {
+      } catch (err: unknown) {
         if (!cancelled) setError(err instanceof Error ? err.message : "Failed to load tools")
-      })
-      .finally(() => {
+      } finally {
         if (!cancelled) setLoading(false)
-      })
+      }
+    }
+
+    load()
     return () => { cancelled = true }
   }, [enabled])
 
