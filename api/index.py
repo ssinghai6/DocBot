@@ -721,12 +721,13 @@ async def upload_documents(
                                 page_content=cleaned_text,
                                 metadata={"source": file.filename, "page": page_num + 1}
                             ))
+                page_count = len(doc)  # must be read before close(); len() on a closed doc raises
                 doc.close()
-                
+
                 # Store file info
                 files_info.append({
                     "filename": file.filename,
-                    "pages": len(doc),
+                    "pages": page_count,
                     "size": len(content)
                 })
             except Exception as e:
@@ -865,7 +866,8 @@ async def upload_documents(
     except HTTPException:
         raise
     except Exception as e:
-        logger.error(f"Error in upload: {e}")
+        # Full traceback + exception type: the client only ever sees the generic message.
+        logger.exception("Error in upload (%s): %s", type(e).__name__, e)
         raise HTTPException(status_code=500, detail=safe_error_message(e))
 
 @app.post("/api/chat")
