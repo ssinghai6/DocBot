@@ -8,6 +8,7 @@ what they need to run.
 | `test_discrepancy_eval.py` | Discrepancy precision / recall / F1 | No (pure code) | ✅ Yes — every push/PR (`.github/workflows/ci.yml`) |
 | `test_retrieval_eval.py` | Retrieval Recall@k on the demo 10-K | HuggingFace embeddings | ✅ Nightly (`.github/workflows/nightly-eval.yml`, DOCBOT-1503) — needs `HUGGINGFACE_API_KEY` repo secret |
 | `eval_latency.py` | TTFT + p50/p95 latency | Running backend | ❌ manual |
+| `run_eval_batch.py` | LLM-judge scoring of real `agent_traces` rows (tool/intent plausibility + evidence support) | Live `DATABASE_URL` + Groq/Gemini | ❌ manual (DOCBOT-1519) |
 
 **Nightly gate (DOCBOT-1503)**: `test_retrieval_recall` hard-asserts `recall[5] >= 0.7` — a nightly run below that baseline fails the job. Runs `pytest tests/eval -m external` on a schedule (not per-push) since it needs a live embeddings call. `eval_latency.py` stays manual — it's a script against a *running* backend, not a pytest test, and nightly CI doesn't spin the backend up.
 
@@ -53,6 +54,27 @@ DOCBOT_BASE_URL=https://<backend>.railway.app python -m tests.eval.eval_latency
 
 Reports **TTFT** (time-to-first-token — the key streaming UX metric) and total
 latency p50/p95.
+
+## 4. LLM-judge trace eval (DOCBOT-1519)
+
+Samples recent rows from the live `agent_traces` table (DOCBOT-1512) and asks
+an LLM judge whether each trace's tool/intent selection was plausible and
+whether its final answer looks supported by the retrieved evidence. Persists
+every judgment to `eval_judgments` for later reference (feeds Tier 3
+fine-tuning data labeling eventually).
+
+```bash
+# needs a live DATABASE_URL (real agent_traces data) + Groq/Gemini key
+python -m tests.eval.run_eval_batch --pipeline autopilot --limit 50
+python -m tests.eval.run_eval_batch --limit 20 --since-hours 24
+```
+
+Manual script, same category as `eval_latency.py` — requires a live external
+dependency (a populated production/staging DB) that CI can't provide, so it
+is not wired into `ci.yml` or `nightly-eval.yml`. The underlying functions
+(`api/eval_service.py`'s `sample_recent_traces` / `judge_trace` /
+`run_eval_batch`) are unit-tested with mocks in
+`tests/unit/test_eval_service.py`, which does run in CI.
 
 ## What to cite (honestly)
 
