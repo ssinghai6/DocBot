@@ -18,6 +18,7 @@ import {
   ShoppingCart,
   XCircle,
   Play,
+  AlertTriangle,
 } from "lucide-react"
 import { Button, Badge, Card } from "@/components/ui"
 
@@ -143,35 +144,55 @@ const steps = [
 ]
 
 // ── Mock chat messages ────────────────────────────────────────────────────────
+// Content mirrors the real sandbox demo fixture (api/demo_service.py,
+// "quickbite" dataset) byte-for-byte: QuickBite Inc. FY2025 10-K text chunks
+// vs. the matching SQLite tables, including the deliberately planted
+// doc-vs-database discrepancies used to showcase discrepancy detection.
+
+type MockDiscrepancy = {
+  label: string
+  dbValue: string
+  docValue: string
+}
 
 type MockMessage = {
   role: "user" | "assistant"
   text: string
   persona?: string
   citations?: number
-  loading?: boolean
+  discrepancy?: MockDiscrepancy
 }
 
 const mockMessages: MockMessage[] = [
   {
     role: "user",
-    text: "What was our Q3 revenue vs what the annual report forecasted?",
+    text: "What was Q4 net income according to the database vs. the annual report?",
   },
   {
     role: "assistant",
-    text: "Based on your database (Q3 actuals) and the uploaded annual report:\n\n**Database:** Q3 revenue = $4.2M\n**PDF Forecast:** $3.8M projected for Q3\n\nYou exceeded forecast by **10.5%**. Note: the report used conservative assumptions. Discrepancy flagged.",
+    text: "Cross-checked the `quarterly` table against the QuickBite-10K-2025.pdf filing for Q4 2025:\n\n**Database:** $325M\n**10-K filing (p.7):** $330M",
     persona: "Finance Expert",
     citations: 2,
+    discrepancy: {
+      label: "Q4 2025 Net Income",
+      dbValue: "$325M (database)",
+      docValue: "$330M (10-K, p.7)",
+    },
   },
   {
     role: "user",
-    text: "Show me a breakdown by product line",
+    text: "Are there any other discrepancies?",
   },
   {
     role: "assistant",
-    text: "Running pandas analysis on your CSV upload...",
+    text: "Yes. Restaurant Advertising revenue also differs between sources:\n\n**Database:** $885M\n**10-K filing (p.5):** $890M",
     persona: "Finance Expert",
-    loading: true,
+    citations: 2,
+    discrepancy: {
+      label: "Restaurant Advertising Revenue",
+      dbValue: "$885M (database)",
+      docValue: "$890M (10-K, p.5)",
+    },
   },
 ]
 
@@ -348,11 +369,6 @@ export default function LandingPage() {
               <div className="bg-gray-900 border border-gray-800 rounded-2xl overflow-hidden shadow-2xl shadow-black/50">
                 {/* Chat header */}
                 <div className="flex items-center gap-3 px-4 py-3 border-b border-gray-800 bg-gray-950/50">
-                  <div className="flex gap-1.5">
-                    <div className="w-3 h-3 rounded-full bg-red-500/70" />
-                    <div className="w-3 h-3 rounded-full bg-yellow-500/70" />
-                    <div className="w-3 h-3 rounded-full bg-green-500/70" />
-                  </div>
                   <div className="flex items-center gap-2 text-xs text-gray-500">
                     <Brain className="w-3.5 h-3.5 text-purple-400" />
                     Finance Expert Persona
@@ -380,17 +396,21 @@ export default function LandingPage() {
                             : "bg-gray-800 border border-gray-700 text-gray-200",
                         ].join(" ")}
                       >
-                        {msg.loading ? (
-                          <div className="flex items-center gap-2 text-gray-400">
-                            <span className="flex gap-0.5">
-                              <span className="w-1.5 h-1.5 rounded-full bg-blue-400 animate-bounce [animation-delay:-0.3s]" />
-                              <span className="w-1.5 h-1.5 rounded-full bg-blue-400 animate-bounce [animation-delay:-0.15s]" />
-                              <span className="w-1.5 h-1.5 rounded-full bg-blue-400 animate-bounce" />
-                            </span>
-                            <span className="text-xs">Analyzing...</span>
+                        <p className="whitespace-pre-line leading-relaxed">{msg.text}</p>
+                        {msg.discrepancy && (
+                          <div className="mt-2 rounded-[5px] border border-[var(--color-warning-500)]/40 bg-[var(--color-warning-500)]/5 p-2.5">
+                            <div className="flex items-center gap-1.5 mb-1.5">
+                              <AlertTriangle className="w-3.5 h-3.5 text-[var(--color-warning-500)] shrink-0" />
+                              <span className="text-[10px] font-semibold text-[var(--color-warning-500)] uppercase tracking-wider">
+                                Discrepancy Detected
+                              </span>
+                            </div>
+                            <div className="text-xs text-gray-300 font-mono">
+                              <div className="font-medium text-gray-200">{msg.discrepancy.label}</div>
+                              <div className="mt-0.5">DB: {msg.discrepancy.dbValue}</div>
+                              <div>Doc: {msg.discrepancy.docValue}</div>
+                            </div>
                           </div>
-                        ) : (
-                          <p className="whitespace-pre-line leading-relaxed">{msg.text}</p>
                         )}
                         {msg.citations && (
                           <div className="mt-1.5 flex items-center gap-1 text-xs text-gray-500">
