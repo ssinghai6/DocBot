@@ -138,6 +138,32 @@ async def _planner_node(state: AutopilotState) -> dict:
 
     tools_str = "\n".join(tools_available) if tools_available else "  - doc_search: search documents"
 
+    # DOCBOT-1517: cheap ontology nearest-neighbor pre-check — if a data
+    # ontology has already been built for this connection, bias the planner
+    # with a short "relevant tables" hint so its sql_query steps are more
+    # likely to name real tables/columns. Strictly additive: ontology_lookup()
+    # returning None (no ontology built yet) means `ontology_hint` stays "",
+    # so the prompt is byte-for-byte identical to before this ticket.
+    ontology_hint = ""
+    if state.get("has_db") and state.get("connection_id"):
+        try:
+            from api import ontology_service
+            _ontology_hits = await ontology_service.ontology_lookup(
+                state["connection_id"], state["question"], top_k=5
+            )
+        except Exception:
+            _ontology_hits = None
+        if _ontology_hits:
+            _lines = []
+            for hit in _ontology_hits:
+                _cols = ", ".join(c.get("name", "") for c in (hit.get("column_metadata") or [])[:8])
+                _lines.append(f"  - {hit['table_name']}: {_cols}")
+            ontology_hint = (
+                "\n\nRelevant tables for this question (from the connection's data ontology, "
+                "for reference only — confirm against the real schema during execution):\n"
+                + "\n".join(_lines) + "\n"
+            )
+
     # Build data-fetch guidance based on available sources
     if state.get("has_db"):
         fetch_guidance = (
@@ -166,7 +192,8 @@ async def _planner_node(state: AutopilotState) -> dict:
         "≤5 concrete investigation steps. Each step must be answerable with ONE tool:\n"
         f"{tools_str}\n\n"
         "CRITICAL RULES:\n"
-        f"{fetch_guidance}\n\n"
+        f"{fetch_guidance}\n"
+        f"{ontology_hint}\n"
         "Return ONLY a JSON array of short step strings (no keys, no explanation), e.g.:\n"
         '["Fetch total revenue by region for Q3.", "Identify top 3 products by revenue.", '
         '"Generate a bar chart of revenue trend."]'

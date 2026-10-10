@@ -305,6 +305,10 @@ llm_response_cache_table = register_llm_cache_table(metadata)
 from api.trace_service import register_agent_traces_table
 agent_traces_table = register_agent_traces_table(metadata)
 
+# ── DOCBOT-1517: persistent data ontology (table embeddings + data cards + join hints) ──
+from api.ontology_service import register_ontology_table
+data_ontology_table = register_ontology_table(metadata)
+
 # ── EPIC-06: RBAC dependencies (DOCBOT-603) ──────────────────────────────────
 # Imported here so Depends() objects can be declared at module level.
 # require_role() checks is_auth_enforcement_active() at request time — safe to import early.
@@ -410,7 +414,7 @@ async def init_db() -> None:
         "(sessions, messages, db_connections, schema_cache, query_history, "
         "query_embeddings, session_artifacts, table_embeddings, audit_log, "
         "commerce_orders, commerce_financials, marketplace_connections, "
-        "agent_traces)."
+        "agent_traces, data_ontology)."
     )
 
 
@@ -447,6 +451,11 @@ async def lifespan(app: FastAPI):
     # DOCBOT-1512: wire agent trace log persistence
     from api.trace_service import wire_trace_store
     wire_trace_store(agent_traces_table, async_session_factory)
+    # DOCBOT-1517: wire data ontology persistence
+    from api.ontology_service import wire_ontology_store
+    wire_ontology_store(
+        data_ontology_table, db_connections_table, schema_cache_table, async_session_factory
+    )
     # Clean up any expired file uploads from previous runs
     try:
         from api.file_upload_service import cleanup_expired_uploads
@@ -1703,6 +1712,13 @@ async def db_refresh_schema(connection_id: str):
             schema_cache_table,
             async_session_factory,
         )
+        # DOCBOT-1517: refresh the data ontology alongside the schema cache.
+        # Fire-and-forget — never blocks or fails this endpoint.
+        try:
+            from api.ontology_service import build_ontology
+            asyncio.ensure_future(build_ontology(connection_id))
+        except Exception:
+            pass
         return {
             "connection_id": connection_id,
             "refreshed": True,
