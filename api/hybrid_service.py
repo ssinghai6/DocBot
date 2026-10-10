@@ -475,6 +475,28 @@ async def _collect_sql_result(
 
 
 # ---------------------------------------------------------------------------
+# DOCBOT-1518: active discrepancy gate helper
+# ---------------------------------------------------------------------------
+
+
+def _answer_addresses_discrepancies(answer: str) -> bool:
+    """Cheap, deterministic check for whether an answer surfaced a discrepancy.
+
+    No LLM call — hybrid_chat's synthesis prompt explicitly instructs the
+    model to tag every known discrepancy with the literal "[DISCREPANCY]"
+    marker (see DiscrepancyReport.to_prompt_block()), so a substring check
+    for that marker (or the word "discrepan[cy/t]") is a reliable, cheap
+    signal that the model actually surfaced it rather than silently dropping
+    it. This intentionally does not try to match discrepancies one-by-one —
+    the goal is a fast yes/no gate, not another LLM call.
+    """
+    if not answer:
+        return False
+    lowered = answer.lower()
+    return "[discrepancy]" in lowered or "discrepan" in lowered
+
+
+# ---------------------------------------------------------------------------
 # DOCBOT-402: Hybrid chat async generator
 # ---------------------------------------------------------------------------
 
@@ -715,9 +737,14 @@ async def hybrid_chat(
         # The LLM receives confirmed discrepancies with exact numbers; it does NOT
         # compute deltas itself (which caused hallucination in the prompt-only stub).
         discrepancy_instruction = ""
+        # DOCBOT-1518: kept in the outer scope (not just inside the `if`
+        # below) so the active discrepancy gate after streaming can check
+        # `report.has_discrepancies` regardless of which branch set it.
+        discrepancy_report = None
         if intent == "hybrid" and doc_context and sql_metadata:
             from api.utils.discrepancy_detector import detect_discrepancies
             report = detect_discrepancies(doc_context, sql_metadata)
+            discrepancy_report = report
             for item in report.discrepancies:
                 lineage.add_discrepancy(
                     item.label, item.doc_value, item.db_value, item.delta, item.pct
@@ -783,6 +810,73 @@ async def hybrid_chat(
             logger.error("hybrid_chat synthesis failed: %s", exc)
             yield f"data: {json.dumps({'type': 'error', 'detail': 'Synthesis failed. Please try again.'})}\n\n"
             return
+
+        # DOCBOT-1518: active discrepancy gate. detect_discrepancies() above
+        # only computes deltas and *instructs* the LLM to flag them — nothing
+        # previously checked whether the streamed answer actually did. If a
+        # meaningful discrepancy was detected but the answer text never
+        # surfaced it, trigger exactly ONE corrective re-synthesis (same
+        # one-shot-retry principle as the sandbox codegen retry in
+        # api/sandbox_service.py) with an explicit instruction to address it.
+        # The cheap substring check below never makes an LLM call, so the
+        # common "no discrepancy" / "already addressed" cases add no cost.
+        if discrepancy_report is not None and discrepancy_report.has_discrepancies:
+            _synth_answer_text = "".join(_answer_parts)
+            if not _answer_addresses_discrepancies(_synth_answer_text):
+                try:
+                    from api.utils.llm_provider import chat_completion
+
+                    correction_prompt = (
+                        f"{persona_def}\n\n"
+                        "Your previous answer below did not explicitly surface a known "
+                        "discrepancy between the document and database values. Rewrite "
+                        "the FULL answer, keeping everything that was already correct, "
+                        "and add a clear note identifying each discrepancy below, tagged "
+                        "with [DISCREPANCY], with its exact numbers.\n"
+                        f"{discrepancy_report.to_prompt_block()}\n\n"
+                        f"Question: {question}\n\n"
+                        f"Previous answer:\n{_synth_answer_text}\n\n"
+                        "Rewrite the full answer including the discrepancy note:"
+                    )
+                    corrected = chat_completion(
+                        [{"role": "user", "content": correction_prompt}],
+                        temperature=0.2,
+                        max_tokens=2000,
+                        caller="hybrid_discrepancy_correction",
+                        run_id=run_id,
+                        prompt_version=PROMPT_VERSION_HYBRID_SYNTHESIS,
+                    )
+                except Exception as exc:
+                    logger.warning(
+                        "hybrid_chat discrepancy correction failed (%s) — "
+                        "keeping original answer unchanged", exc,
+                    )
+                    corrected = None
+
+                if corrected and corrected.strip():
+                    masked_corrected = mask_pii(corrected)
+                    # Appended (not replacing the already-streamed tokens) so
+                    # the SSE "token" event contract is unchanged for existing
+                    # clients; _answer_parts is updated in place so log_trace's
+                    # final_answer below reflects the corrected text too.
+                    correction_chunk = f"\n\n{masked_corrected}"
+                    _answer_parts.append(correction_chunk)
+                    yield f"data: {json.dumps({'type': 'token', 'content': correction_chunk})}\n\n"
+                    lineage.add_step(
+                        "verify_discrepancy_addressed",
+                        tool="llm",
+                        status="retried",
+                        detail="corrective re-synthesis triggered",
+                    )
+                else:
+                    lineage.add_step(
+                        "verify_discrepancy_addressed",
+                        tool="llm",
+                        status="error",
+                        detail="correction failed — original answer kept",
+                    )
+            else:
+                lineage.add_step("verify_discrepancy_addressed", tool="none", detail="already addressed")
 
         lineage.add_step(
             "synthesize",

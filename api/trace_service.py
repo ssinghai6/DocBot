@@ -113,6 +113,18 @@ def wire_trace_store(table: Table, async_session_factory: Any) -> None:
     _async_session_factory = async_session_factory
 
 
+def get_agent_traces_table() -> Optional[Table]:
+    """Read-only accessor for the live ``agent_traces`` table reference.
+
+    Added for DOCBOT-1519's eval harness (``api/eval_service.py``), which is
+    a read-only consumer of this table and needs it to build a ``select()``
+    query. Returns None if the store hasn't been wired yet (e.g. unit tests,
+    no DB configured) — callers must treat that as "no data available", not
+    an error.
+    """
+    return _agent_traces_table
+
+
 # ---------------------------------------------------------------------------
 # Write path — fire-and-forget
 # ---------------------------------------------------------------------------

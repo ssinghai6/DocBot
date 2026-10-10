@@ -1,8 +1,10 @@
-"""Unit tests for db_service helper functions — DOCBOT-201 through 205, 208, 504."""
+"""Unit tests for db_service helper functions — DOCBOT-201 through 205, 208, 504, 1517."""
 
-from unittest.mock import patch
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
+from sqlalchemy import Column, MetaData, String, Table
+
 from api.db_service import (
     DBConnectionRequest,
     DBChatRequest,
@@ -467,3 +469,127 @@ class TestSelectRelevantTables:
 
         assert mock_cc.call_count == 1  # no retry attempted
         assert result == [t["name"] for t in self._SCHEMA[:10]]
+
+
+# ---------------------------------------------------------------------------
+# DOCBOT-1517: ontology pre-filter must be a strictly additive no-op when no
+# ontology has been built for a connection — the single most important test
+# in this ticket. run_sql_pipeline's step 2 must send _select_relevant_tables
+# the exact same schema it always has, byte for byte, when
+# ontology_lookup() returns None.
+# ---------------------------------------------------------------------------
+
+
+def _fake_db_connections_table() -> Table:
+    """A real (unbound) SQLAlchemy Table so `select(table).where(table.c.id == ...)`
+    builds a valid query object — MagicMock() fails ArgumentError coercion."""
+    return Table("db_connections", MetaData(), Column("id", String, primary_key=True))
+
+
+class _FakeConnRow:
+    def __init__(self):
+        self.dialect = "sqlite"
+        self.credentials_blob = "encrypted-blob"
+        self.pii_masking_enabled = False
+
+
+def _make_conn_lookup_session_factory(conn_row):
+    """async_session_factory mock whose every execute() returns conn_row
+    from fetchone() (the only DB touches left after mocking out the
+    schema/table-selector/few-shot/embedding/history collaborators)."""
+
+    class _Result:
+        def fetchone(self):
+            return conn_row
+
+        def fetchall(self):
+            return []
+
+    async def _execute(_stmt):
+        return _Result()
+
+    session = AsyncMock()
+    session.execute = _execute
+
+    factory = MagicMock()
+    ctx = AsyncMock()
+    ctx.__aenter__ = AsyncMock(return_value=session)
+    ctx.__aexit__ = AsyncMock(return_value=False)
+    factory.return_value = ctx
+    return factory
+
+
+async def _collect(gen):
+    return [chunk async for chunk in gen]
+
+
+@pytest.mark.unit
+@pytest.mark.asyncio
+class TestOntologyPrefilterFallbackSafety:
+    _SCHEMA = [
+        {"name": "orders", "columns": [{"name": "id", "type": "INTEGER"}], "is_view": False},
+        {"name": "products", "columns": [{"name": "id", "type": "INTEGER"}], "is_view": False},
+        {"name": "customers", "columns": [{"name": "id", "type": "INTEGER"}], "is_view": False},
+    ]
+
+    async def test_llm_fallback_sees_unnarrowed_schema_when_ontology_absent(self):
+        """When no ontology has ever been built for this connection (the
+        real, out-of-the-box state for every connection today),
+        ontology_service.ontology_lookup() returns None, and
+        _select_relevant_tables must receive exactly `schema` — the same
+        list it always received before DOCBOT-1517. This is the
+        no-regression guarantee for the ontology pre-filter."""
+        import api.db_service as db_service
+        from api import ontology_service
+
+        # Belt-and-suspenders: assert the module really is unwired, matching
+        # production's state for a connection whose ontology has never been
+        # built (e.g. the background build_ontology() task hasn't run yet).
+        assert ontology_service._ontology_table is None
+        assert ontology_service._async_session_factory is None
+
+        received_schemas = []
+
+        async def _mock_select_tables(question, schema):
+            received_schemas.append(schema)
+            return ["orders"]
+
+        async def _mock_stream_answer(question, sql, result_dicts, persona_def):
+            for tok in ["Answer", " text"]:
+                yield tok
+
+        conn_row = _FakeConnRow()
+        session_factory = _make_conn_lookup_session_factory(conn_row)
+
+        with (
+            patch.object(db_service, "get_schema", AsyncMock(return_value=self._SCHEMA)),
+            patch.object(db_service, "_select_relevant_tables", side_effect=_mock_select_tables),
+            patch.object(db_service, "_retrieve_few_shot", AsyncMock(return_value=[])),
+            patch.object(db_service, "_generate_sql", AsyncMock(return_value="SELECT 1")),
+            patch.object(db_service, "validate_and_sanitize_sql", return_value="SELECT 1"),
+            patch.object(db_service, "_execute_query", AsyncMock(return_value=([], []))),
+            patch.object(db_service, "_store_query_history", AsyncMock(return_value=None)),
+            patch.object(db_service, "_stream_answer", side_effect=_mock_stream_answer),
+            patch.object(db_service, "_get_embeddings_model", return_value=MagicMock()),
+            patch.object(db_service, "_get_embedding", AsyncMock(return_value=[0.1, 0.2])),
+            patch.object(db_service, "decrypt_credentials", return_value={}),
+            patch.object(db_service, "_resolve_connection", return_value=("sqlite:///:memory:", None)),
+        ):
+            # table_embeddings_table=None forces the LLM-fallback branch
+            # (the one DOCBOT-1517 adds the ontology pre-filter in front of).
+            gen = db_service.run_sql_pipeline(
+                connection_id="conn-1",
+                question="How many orders?",
+                persona="Data Analyst",
+                db_connections_table=_fake_db_connections_table(),
+                schema_cache_table=MagicMock(),
+                query_history_table=MagicMock(),
+                query_embeddings_table=MagicMock(),
+                async_session_factory=session_factory,
+                expert_personas={"Data Analyst": {"persona_def": "You are a data analyst."}},
+                table_embeddings_table=None,
+            )
+            await _collect(gen)
+
+        assert len(received_schemas) == 1
+        assert received_schemas[0] == self._SCHEMA  # unnarrowed — identical to prior behavior

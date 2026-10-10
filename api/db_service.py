@@ -595,6 +595,15 @@ async def connect_database(
                 )
             )
 
+    # DOCBOT-1517: build the data ontology for this connection, fire-and-forget.
+    # Never blocks or fails the connect flow.
+    try:
+        import asyncio as _asyncio_ontology
+        from api.ontology_service import build_ontology
+        _asyncio_ontology.ensure_future(build_ontology(connection_id))
+    except Exception:
+        pass
+
     table_names = [t["name"] for t in schema]
     return {
         "connection_id": connection_id,
@@ -1042,7 +1051,26 @@ async def run_sql_pipeline(
         # Fall back to LLM table selector when semantic path returns nothing
         if not selected_tables:
             _selector = "llm"
-            selected_tables = await _select_relevant_tables(question, schema)
+            # DOCBOT-1517: cheap ontology nearest-neighbor pre-filter narrows the
+            # candidate set sent to the LLM-based fallback selector. This is a
+            # strictly additive pre-check — ontology_lookup() returning None
+            # (no ontology built yet for this connection) means
+            # _llm_candidate_schema stays exactly `schema`, so behavior is
+            # byte-for-byte identical to before this ticket. A non-None result
+            # only narrows/biases the candidate set; it never replaces the LLM
+            # call and never overrides the semantic-embeddings path above.
+            _llm_candidate_schema = schema
+            try:
+                from api import ontology_service
+                _ontology_hits = await ontology_service.ontology_lookup(connection_id, question, top_k=8)
+            except Exception:
+                _ontology_hits = None
+            if _ontology_hits:
+                _ontology_table_names = {hit["table_name"] for hit in _ontology_hits}
+                _narrowed_schema = [t for t in schema if t["name"] in _ontology_table_names]
+                if _narrowed_schema:
+                    _llm_candidate_schema = _narrowed_schema
+            selected_tables = await _select_relevant_tables(question, _llm_candidate_schema)
 
         schema_subset = [t for t in schema if t["name"] in set(selected_tables)]
         if not schema_subset:
@@ -1115,6 +1143,14 @@ async def run_sql_pipeline(
             schema = await get_schema(
                 connection_id, db_connections_table, schema_cache_table, async_session_factory
             )
+            # DOCBOT-1517: schema drifted, so the ontology is stale too — rebuild
+            # it fire-and-forget alongside the schema cache refresh.
+            try:
+                import asyncio as _asyncio_ontology_drift
+                from api.ontology_service import build_ontology
+                _asyncio_ontology_drift.ensure_future(build_ontology(connection_id))
+            except Exception:
+                pass
             schema_subset = [t for t in schema if t["name"] in set(selected_tables)]
             if not schema_subset:
                 schema_subset = schema[:10]
