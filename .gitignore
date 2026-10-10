@@ -75,3 +75,9 @@ DocBot_v2.txt
 DocBot_Real_Test/
 ai/
 docs/
+
+# DOCBOT-1523: fine-tuning exported datasets (real, if synthetic-seeded, usage
+# data derived from agent_traces/eval_judgments) and LoRA training outputs —
+# never committed.
+finetune/data/
+finetune/output/
