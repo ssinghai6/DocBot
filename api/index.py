@@ -305,6 +305,10 @@ llm_response_cache_table = register_llm_cache_table(metadata)
 from api.trace_service import register_agent_traces_table
 agent_traces_table = register_agent_traces_table(metadata)
 
+# ── DOCBOT-1519: LLM-judge offline eval harness — judgment persistence ───────
+from api.eval_service import register_eval_judgments_table
+eval_judgments_table = register_eval_judgments_table(metadata)
+
 # ── EPIC-06: RBAC dependencies (DOCBOT-603) ──────────────────────────────────
 # Imported here so Depends() objects can be declared at module level.
 # require_role() checks is_auth_enforcement_active() at request time — safe to import early.
@@ -410,7 +414,7 @@ async def init_db() -> None:
         "(sessions, messages, db_connections, schema_cache, query_history, "
         "query_embeddings, session_artifacts, table_embeddings, audit_log, "
         "commerce_orders, commerce_financials, marketplace_connections, "
-        "agent_traces)."
+        "agent_traces, eval_judgments)."
     )
 
 
@@ -447,6 +451,10 @@ async def lifespan(app: FastAPI):
     # DOCBOT-1512: wire agent trace log persistence
     from api.trace_service import wire_trace_store
     wire_trace_store(agent_traces_table, async_session_factory)
+    # DOCBOT-1519: wire the LLM-judge eval harness's judgment persistence —
+    # read-only consumer of agent_traces, writes only to eval_judgments.
+    from api.eval_service import wire_eval_store
+    wire_eval_store(eval_judgments_table, async_session_factory)
     # Clean up any expired file uploads from previous runs
     try:
         from api.file_upload_service import cleanup_expired_uploads
