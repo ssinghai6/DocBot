@@ -1,0 +1,22 @@
+# DOCBOT-1523 — QLoRA fine-tuning deps for the Autopilot tool-router distillation.
+#
+# Deliberately NOT in the main requirements.txt: this is offline ML tooling
+# that runs on a rented GPU box (RunPod/Modal/etc.), never on Railway's
+# FastAPI container. Keeping it separate avoids adding ~GB of CUDA-adjacent
+# dependencies (bitsandbytes, torch) to the production app's install.
+#
+# Install on the GPU box with:
+#   pip install -r finetune/requirements.txt
+#
+# `--dry-run` mode in train_qlora.py works without a GPU and without most of
+# these installed at full fidelity (it degrades gracefully — see that
+# script's docstring) but a real training run needs all of them with CUDA
+# available.
+
+torch>=2.2.0
+transformers>=4.44.0
+peft>=0.12.0
+trl>=0.10.0
+bitsandbytes>=0.43.0
+accelerate>=0.33.0
+datasets>=2.20.0
