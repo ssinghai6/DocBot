@@ -16,6 +16,10 @@ Exposes a single async generator, run_autopilot(), that:
     don't depend on each other, only on already-completed prior waves) do run
     concurrently with each other.
   - Synthesises all step findings into a final markdown answer (SynthesizerNode)
+  - DOCBOT-1518: verifies the synthesized answer against the actual retrieved
+    step data (VerifierNode) and triggers at most one corrective re-synthesis
+    if a real numeric/factual contradiction is found — the "answer" SSE event
+    and the persisted trace row both reflect this post-verification answer.
   - Yields SSE-formatted strings throughout for direct client streaming
 
 SSE event types yielded:
@@ -1159,6 +1163,151 @@ async def _synthesizer_node(state: AutopilotState) -> dict:
 
 
 # ---------------------------------------------------------------------------
+# VerifierNode — DOCBOT-1518
+# ---------------------------------------------------------------------------
+
+# DOCBOT-1507: bump manually ("v1" -> "v2") whenever either prompt below
+# changes — see PROMPT_VERSION convention in api/utils/llm_provider.py.
+PROMPT_VERSION_AUTOPILOT_VERIFIER = "v1"
+
+
+async def _verifier_node(state: AutopilotState) -> dict:
+    """DOCBOT-1518: active discrepancy gate on the synthesized answer.
+
+    Runs once, sequentially, after ``_synthesizer_node`` has already
+    produced ``final_answer`` and after the executor wave loop has fully
+    finished (see ``_build_graph`` — this node has a single inbound edge
+    from "synthesizer", no fan-out). It is never invoked concurrently with
+    itself or with any other node, unlike ``_select_tool_llm`` which runs
+    once per step inside an ``asyncio.gather`` wave. Even so, this uses the
+    async ``call_llm`` helper (LangChain ``.ainvoke``) rather than the
+    synchronous ``chat_completion`` the synthesizer uses, for consistency
+    with DOCBOT-1513/1517's async LLM call sites and so a future change that
+    moves verification earlier (e.g. per-wave) doesn't silently reintroduce
+    the event-loop-blocking bug DOCBOT-1513 hit.
+
+    Makes ONE LLM call asking whether the synthesized answer's numeric/
+    factual claims are contradicted by the data actually retrieved during
+    the investigation. If a real contradiction is flagged (not hedging or
+    missing detail), triggers exactly ONE corrective re-synthesis — mirrors
+    the single-retry pattern used for sandbox codegen failures in
+    api/sandbox_service.py (feed the failure/contradiction back to the LLM
+    once, use the corrected output if it comes back, otherwise keep the
+    original).
+
+    On ANY failure (LLM call errors, response unparseable, correction call
+    fails) — never raises, never blocks the response — passes the original
+    synthesized answer through unchanged. This is a quality gate, not a new
+    point of failure; mirrors `_select_tool_llm`'s try/except/fallback shape.
+    """
+    original_answer = state.get("final_answer", "")
+    steps = [s for s in state.get("steps_completed", []) if not s.get("error")]
+
+    if not original_answer or not steps:
+        return {"final_answer": original_answer}
+
+    steps_text = "\n\n".join(
+        f"Step {i + 1} [{s.get('tool', '')}]: {s.get('step', '')}\n"
+        f"Actual data retrieved: {s.get('result', 'N/A')}"
+        for i, s in enumerate(steps)
+    )
+
+    verifier_system_prompt = (
+        "You are a fact-checking verifier for an AI investigation agent. You are "
+        "given the ACTUAL DATA retrieved during an investigation and a DRAFT ANSWER "
+        "synthesized from it. Check whether the draft answer's numeric and factual "
+        "claims are actually supported by the retrieved data.\n\n"
+        "Only flag a REAL contradiction — a specific number, name, or fact in the "
+        "answer that directly conflicts with what the retrieved data shows. Do NOT "
+        "flag hedging, missing detail, rounding differences under 1%, or stylistic "
+        "choices as contradictions.\n\n"
+        'Respond with ONLY a JSON object: {"contradiction_found": true or false, '
+        '"explanation": "<specific description of the contradiction, or empty '
+        'string if none>"}. No markdown fences, no other text.'
+    )
+    verifier_user_content = (
+        f"Original question: {state.get('question', '')}\n\n"
+        f"Retrieved data:\n{steps_text}\n\n"
+        f"Draft answer:\n{original_answer}"
+    )
+
+    try:
+        from api.utils.llm_provider import call_llm
+
+        raw = await call_llm(
+            f"{verifier_system_prompt}\n\n{verifier_user_content}",
+            temperature=0,
+            caller="autopilot_verifier",
+            run_id=state.get("run_id"),
+            prompt_version=PROMPT_VERSION_AUTOPILOT_VERIFIER,
+        )
+        start_idx = raw.index("{")
+        end_idx = raw.rindex("}") + 1
+        parsed = json.loads(raw[start_idx:end_idx])
+        contradiction_found = bool(parsed.get("contradiction_found"))
+        explanation = str(parsed.get("explanation", "")).strip()
+    except Exception as exc:
+        logger.warning(
+            "verifier_node LLM call/parse failed (%s) — passing answer through unchanged",
+            exc,
+        )
+        return {"final_answer": original_answer}
+
+    if not contradiction_found or not explanation:
+        return {"final_answer": original_answer}
+
+    # One corrective re-synthesis — same correction prompt shape as
+    # _synthesizer_node, with the verifier's specific contradiction folded in.
+    try:
+        from api.utils.llm_provider import chat_completion
+
+        correction_system_prompt = (
+            "You are a senior data analyst and financial modeler. A previous draft "
+            "answer to the question below was found by a verifier to contain a "
+            "factual/numeric contradiction with the actual retrieved data. Rewrite "
+            "the FULL answer so it accurately reflects the retrieved data, fixing "
+            "the specific contradiction described below, while keeping everything "
+            "else that was already correct.\n"
+            "FORMAT RULES:\n"
+            "- Use markdown headers (##, ###) for each section or question part.\n"
+            "- Present numerical projections in clean markdown tables with aligned columns.\n"
+            "- Format currency as $X.XM or $X.XB. Do not write raw division expressions in table cells.\n"
+            "- Use **bold** for final values, conclusions, and key metrics.\n"
+            "- Use bullet points for qualitative analysis and risk factors."
+        )
+        correction_user_content = (
+            f"Original question: {state.get('question', '')}\n\n"
+            f"Retrieved data:\n{steps_text}\n\n"
+            f"Draft answer:\n{original_answer}\n\n"
+            f"Contradiction found by verifier:\n{explanation}\n\n"
+            "Rewrite the full answer, correcting this contradiction."
+        )
+        corrected_answer = chat_completion(
+            [
+                {"role": "system", "content": correction_system_prompt},
+                {"role": "user", "content": correction_user_content},
+            ],
+            temperature=0.3,
+            max_tokens=2000,
+            caller="autopilot_verifier_correction",
+            run_id=state.get("run_id"),
+            prompt_version=PROMPT_VERSION_AUTOPILOT_VERIFIER,
+        )
+    except Exception as exc:
+        logger.warning(
+            "verifier_node correction LLM call failed (%s) — passing original answer through unchanged",
+            exc,
+        )
+        return {"final_answer": original_answer}
+
+    if not corrected_answer or not corrected_answer.strip():
+        return {"final_answer": original_answer}
+
+    logger.info("verifier_node: corrected final answer after contradiction: %s", explanation[:200])
+    return {"final_answer": corrected_answer}
+
+
+# ---------------------------------------------------------------------------
 # Graph wiring
 # ---------------------------------------------------------------------------
 
@@ -1188,6 +1337,10 @@ def _build_graph(executor_node):
     graph.add_node("planner", _planner_node)
     graph.add_node("executor", executor_node)
     graph.add_node("synthesizer", _synthesizer_node)
+    # DOCBOT-1518: verifier runs after the synthesizer, once, sequentially —
+    # single inbound/outbound edge, never part of the executor's concurrent
+    # wave dispatch.
+    graph.add_node("verifier", _verifier_node)
 
     graph.add_edge(START, "planner")
     graph.add_edge("planner", "executor")
@@ -1196,7 +1349,8 @@ def _build_graph(executor_node):
         _should_continue,
         {"execute": "executor", "synthesize": "synthesizer"},
     )
-    graph.add_edge("synthesizer", END)
+    graph.add_edge("synthesizer", "verifier")
+    graph.add_edge("verifier", END)
     return graph.compile()
 
 
@@ -1401,6 +1555,18 @@ async def run_autopilot(
                         all_citations.extend(new_cits)
 
                 elif node_name == "synthesizer":
+                    # DOCBOT-1518: the synthesizer's output is now a draft —
+                    # _verifier_node runs next and may replace it with a
+                    # corrected answer. Record the synthesis step in the
+                    # lineage here (it's the node that actually did the
+                    # synthesis work); the user-facing "answer" SSE event,
+                    # citations, emit_lineage(), and log_trace() all moved to
+                    # the "verifier" branch below so they capture the FINAL
+                    # (possibly corrected) answer, never the pre-verification
+                    # draft.
+                    lineage.add_step("synthesize", tool="llm")
+
+                elif node_name == "verifier":
                     from api.utils.pii_masking import mask_pii
                     final_answer = mask_pii(updates.get("final_answer", ""))
                     yield _sse({"type": "answer", "content": final_answer})
@@ -1412,13 +1578,17 @@ async def run_autopilot(
                             snippet=cit.get("text"),
                             step_num=step_by_label.get(cit.get("step_label", "")),
                         )
-                    lineage.add_step("synthesize", tool="llm")
+                    lineage.add_step("verify", tool="llm")
                     from api.lineage_service import emit_lineage
                     _lin_evt = emit_lineage(lineage, session_id)
                     if _lin_evt:
                         yield _lin_evt
 
-                    # DOCBOT-1512: fire-and-forget agent trace row for this run
+                    # DOCBOT-1512: fire-and-forget agent trace row for this run.
+                    # DOCBOT-1518: `final_answer` here is the post-verification
+                    # value read from the verifier node's own state update —
+                    # see run_autopilot's docstring/report for how this was
+                    # confirmed to be the corrected (not draft) text.
                     from api.trace_service import log_trace
                     _tools_used = sorted({
                         s.get("tool", "") for s in all_step_results if s.get("tool")
