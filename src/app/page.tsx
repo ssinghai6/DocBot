@@ -18,6 +18,11 @@ import {
   ShoppingCart,
   XCircle,
   Play,
+  Lock,
+  ScrollText,
+  KeyRound,
+  EyeOff,
+  FileLock2,
 } from "lucide-react"
 import { Button, Badge, Card } from "@/components/ui"
 
@@ -111,6 +116,21 @@ const stats = [
   { label: "Expert AI Personas", value: "4" },
   { label: "Data Sources", value: "6+" },
   { label: "SQL Pipeline Steps", value: "7" },
+]
+
+// ── Trust signal data ─────────────────────────────────────────────────────────
+// Every badge here maps to a real, shipped capability (see CLAUDE.md):
+//   RBAC              -> api/rbac_service.py (viewer/analyst/admin roles)
+//   Audit Log         -> api/audit_service.py (append-only, PostgreSQL immutability trigger)
+//   SAML SSO          -> api/auth_service.py (SAML 2.0, Okta/Azure AD)
+//   PII Masking       -> PII auto-masking applied at SSE/sandbox/audit response boundaries
+//   Encrypted at Rest -> Fernet-encrypted credentials (DB_ENCRYPTION_KEY)
+const trustSignals = [
+  { icon: <Lock className="w-4 h-4" />, label: "RBAC" },
+  { icon: <ScrollText className="w-4 h-4" />, label: "Audit Log" },
+  { icon: <KeyRound className="w-4 h-4" />, label: "SAML SSO" },
+  { icon: <EyeOff className="w-4 h-4" />, label: "PII Masking" },
+  { icon: <FileLock2 className="w-4 h-4" />, label: "Encrypted at Rest" },
 ]
 
 // ── How it works steps ────────────────────────────────────────────────────────
@@ -439,6 +459,26 @@ export default function LandingPage() {
               <div className="text-sm text-gray-500 mt-1">{stat.label}</div>
             </div>
           ))}
+        </div>
+      </section>
+
+      {/* ── Trust signals ── */}
+      <section className="py-6 px-4 sm:px-6 lg:px-8 border-b border-gray-800/40">
+        <div className="max-w-5xl mx-auto">
+          <p className="text-center text-xs text-gray-500 mb-4 uppercase tracking-wider font-medium">
+            Built for Compliance Review
+          </p>
+          <div className="flex flex-wrap items-center justify-center gap-3">
+            {trustSignals.map((signal) => (
+              <div
+                key={signal.label}
+                className="flex items-center gap-1.5 px-3.5 py-1.5 rounded-full bg-emerald-900/20 border border-emerald-700/40 text-emerald-300 text-xs font-medium"
+              >
+                {signal.icon}
+                {signal.label}
+              </div>
+            ))}
+          </div>
         </div>
       </section>
 
