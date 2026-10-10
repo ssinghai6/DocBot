@@ -10,8 +10,10 @@ import {
   Sparkles, HelpCircle,
   Wand2, CheckCircle2, Hash, XCircle,
   ChevronDown, Plus, X,
+  PanelRight,
 } from "lucide-react"
 import ChatMessage from "@/components/ChatMessage"
+import { Tooltip } from "@/components/ui"
 import type { Message, AutopilotStep, Toast, PickedTool } from "@/components/types"
 
 function TypingIndicator() {
@@ -124,6 +126,11 @@ export interface ChatAreaProps {
   pickedTool?: PickedTool | null
   onOpenToolPicker?: () => void
   onClearPickedTool?: () => void
+
+  // DOCBOT-1520: persistent inspector toggle in chat header chrome
+  inspectorOpen?: boolean
+  onToggleInspector?: () => void
+  hasUnviewedLineage?: boolean
 }
 
 export default function ChatArea(props: ChatAreaProps) {
@@ -164,6 +171,9 @@ export default function ChatArea(props: ChatAreaProps) {
     pickedTool,
     onOpenToolPicker,
     onClearPickedTool,
+    inspectorOpen,
+    onToggleInspector,
+    hasUnviewedLineage,
   } = props;
 
   const copyToClipboard = (text: string) => {
@@ -262,6 +272,30 @@ export default function ChatArea(props: ChatAreaProps) {
               </button>
             </div>
           </div>
+        )}
+
+        {/* DOCBOT-1520: persistent, always-visible inspector toggle */}
+        {onToggleInspector && (
+          <Tooltip content="Inspector (⌘I)">
+            <button
+              onClick={onToggleInspector}
+              aria-label="Toggle inspector"
+              aria-pressed={!!inspectorOpen}
+              className={`relative flex items-center justify-center h-7 w-7 rounded-[5px] border transition-colors ${
+                inspectorOpen
+                  ? "bg-[var(--color-cyan-500)]/15 border-[var(--color-cyan-500)]/40 text-[var(--color-cyan-500)]"
+                  : "bg-[var(--color-bg-elevated)] border-[var(--color-border-subtle)] text-[var(--color-text-tertiary)] hover:text-[var(--color-text-primary)]"
+              }`}
+            >
+              <PanelRight className="w-3.5 h-3.5" />
+              {hasUnviewedLineage && !inspectorOpen && (
+                <span
+                  className="absolute top-0.5 right-0.5 w-1.5 h-1.5 rounded-full bg-[var(--color-cyan-500)]"
+                  aria-hidden="true"
+                />
+              )}
+            </button>
+          </Tooltip>
         )}
       </header>
 
