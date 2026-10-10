@@ -3,7 +3,7 @@
 import React, { useState, useRef, useEffect, useCallback } from "react"
 import {
   X, CheckCircle2, AlertCircle,
-  AlertTriangle, Info,
+  AlertTriangle, Info, PanelRight,
 } from "lucide-react"
 
 import Sidebar from "@/components/Sidebar"
@@ -68,6 +68,7 @@ export default function Home() {
   // UI store (cross-cutting UI state)
   const inspectorOpen = useUIStore((s) => s.inspectorOpen);
   const setInspectorOpen = useUIStore((s) => s.setInspectorOpen);
+  const selectedLineage = useUIStore((s) => s.selectedLineage);
   const bp = useBreakpoint();
 
   // Auto-collapse inspector on narrower screens
@@ -76,6 +77,16 @@ export default function Home() {
       setInspectorOpen(false);
     }
   }, [bp, setInspectorOpen]);
+
+  // DOCBOT-1520: badge the collapsed Inspector rail/toggle when new lineage
+  // (citations/SQL/discrepancies) arrives while the Inspector is collapsed.
+  const [hasUnviewedLineage, setHasUnviewedLineage] = useState(false);
+  useEffect(() => {
+    if (selectedLineage && !inspectorOpen) setHasUnviewedLineage(true);
+  }, [selectedLineage, inspectorOpen]);
+  useEffect(() => {
+    if (inspectorOpen) setHasUnviewedLineage(false);
+  }, [inspectorOpen]);
 
   // Imperative handle for the inspector panel — drives smooth collapse/expand
   const inspectorPanelRef = useRef<PanelImperativeHandle>(null);
@@ -600,6 +611,9 @@ export default function Home() {
         pickedTool={toolPicker.pickedTool}
         onOpenToolPicker={() => toolPicker.setIsOpen(true)}
         onClearPickedTool={toolPicker.clearPickedTool}
+        inspectorOpen={inspectorOpen}
+        onToggleInspector={() => setInspectorOpen(!inspectorOpen)}
+        hasUnviewedLineage={hasUnviewedLineage}
       />
       </Panel>
 
@@ -611,7 +625,7 @@ export default function Home() {
         minSize="280px"
         maxSize="640px"
         collapsible
-        collapsedSize="0px"
+        collapsedSize="36px"
         onResize={(size) => {
           const pct = typeof size === "number" ? size : size.asPercentage
           const isCollapsed = pct < 1
@@ -623,7 +637,23 @@ export default function Home() {
         {inspectorOpen ? (
           <InspectorPanel onClose={() => setInspectorOpen(false)} />
         ) : (
-          <div className="h-full w-full" aria-hidden="true" />
+          // DOCBOT-1520: thin, always-visible collapse rail (not 0px/invisible) —
+          // a single click re-expands the Inspector. Narrow viewports still get
+          // the chat width back (36px vs. the old 0px is a negligible trade).
+          <button
+            onClick={() => setInspectorOpen(true)}
+            aria-label="Open inspector"
+            title="Inspector (⌘I)"
+            className="relative h-full w-full flex flex-col items-center justify-start pt-3 bg-[var(--color-bg-surface)] border-l border-[var(--color-border-subtle)] hover:bg-[var(--color-bg-elevated)] transition-colors"
+          >
+            <PanelRight className="w-4 h-4 text-[var(--color-text-tertiary)]" />
+            {hasUnviewedLineage && (
+              <span
+                className="absolute top-2 right-2 w-1.5 h-1.5 rounded-full bg-[var(--color-cyan-500)]"
+                aria-hidden="true"
+              />
+            )}
+          </button>
         )}
       </Panel>
       </PanelGroup>
