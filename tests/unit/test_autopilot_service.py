@@ -30,6 +30,7 @@ from api.autopilot_service import (
     _should_continue,
     _sse,
     _synthesizer_node,
+    _verifier_node,
     make_executor_node,
 )
 
@@ -818,3 +819,121 @@ class TestSelectToolLlm:
         # The preference hint should appear in the prompt sent to the LLM.
         sent_prompt = mock_cl.call_args.args[0]
         assert "sql_first" in sent_prompt
+
+
+# ---------------------------------------------------------------------------
+# _verifier_node() — DOCBOT-1518 active discrepancy gate
+# ---------------------------------------------------------------------------
+
+
+def _verifier_state(**overrides) -> AutopilotState:
+    state = _make_state(
+        final_answer="Revenue grew to $330M in Q4.",
+        steps_completed=[
+            {
+                "step": "Fetch Q4 revenue",
+                "tool": "sql_query",
+                "result": "Q4 revenue was $325M per the database.",
+                "error": None,
+            }
+        ],
+    )
+    state.update(overrides)  # type: ignore[typeddict-item]
+    return state
+
+
+class TestVerifierNode:
+    def test_real_contradiction_triggers_one_resynthesis(self):
+        """A flagged contradiction causes exactly one corrective re-synthesis
+        call, and its output becomes the final answer."""
+        state = _verifier_state()
+        verify_response = json.dumps({
+            "contradiction_found": True,
+            "explanation": "Answer says $330M but retrieved data shows $325M.",
+        })
+        with patch(
+            "api.utils.llm_provider.call_llm",
+            new=AsyncMock(return_value=verify_response),
+        ) as mock_call_llm, patch(
+            "api.utils.llm_provider.chat_completion",
+            new=MagicMock(return_value="Revenue grew to $325M in Q4 (corrected)."),
+        ) as mock_chat_completion:
+            result = asyncio.run(_verifier_node(state))
+
+        mock_call_llm.assert_called_once()
+        mock_chat_completion.assert_called_once()
+        assert result["final_answer"] == "Revenue grew to $325M in Q4 (corrected)."
+
+    def test_no_contradiction_passes_through_unchanged(self):
+        """No contradiction found -> original answer unchanged, no
+        corrective re-synthesis call made."""
+        state = _verifier_state()
+        verify_response = json.dumps({"contradiction_found": False, "explanation": ""})
+        with patch(
+            "api.utils.llm_provider.call_llm",
+            new=AsyncMock(return_value=verify_response),
+        ), patch(
+            "api.utils.llm_provider.chat_completion",
+            new=MagicMock(return_value="should not be called"),
+        ) as mock_chat_completion:
+            result = asyncio.run(_verifier_node(state))
+
+        mock_chat_completion.assert_not_called()
+        assert result["final_answer"] == state["final_answer"]
+
+    def test_verifier_llm_failure_falls_back_to_original_answer(self):
+        """If the verifier's own LLM call raises, the original answer passes
+        through unchanged and no exception propagates."""
+        state = _verifier_state()
+        with patch(
+            "api.utils.llm_provider.call_llm",
+            new=AsyncMock(side_effect=RuntimeError("groq exploded")),
+        ), patch(
+            "api.utils.llm_provider.chat_completion",
+            new=MagicMock(return_value="should not be called"),
+        ) as mock_chat_completion:
+            result = asyncio.run(_verifier_node(state))
+
+        mock_chat_completion.assert_not_called()
+        assert result["final_answer"] == state["final_answer"]
+
+    def test_unparseable_verifier_response_falls_back_to_original_answer(self):
+        """A response with no JSON object at all is treated as a parse
+        failure, never raises, and keeps the original answer."""
+        state = _verifier_state()
+        with patch(
+            "api.utils.llm_provider.call_llm",
+            new=AsyncMock(return_value="not json at all"),
+        ):
+            result = asyncio.run(_verifier_node(state))
+
+        assert result["final_answer"] == state["final_answer"]
+
+    def test_correction_call_failure_falls_back_to_original_answer(self):
+        """Contradiction found, but the corrective re-synthesis call itself
+        raises -> original answer is kept, never raises."""
+        state = _verifier_state()
+        verify_response = json.dumps({
+            "contradiction_found": True,
+            "explanation": "mismatch",
+        })
+        with patch(
+            "api.utils.llm_provider.call_llm",
+            new=AsyncMock(return_value=verify_response),
+        ), patch(
+            "api.utils.llm_provider.chat_completion",
+            new=MagicMock(side_effect=RuntimeError("groq exploded")),
+        ):
+            result = asyncio.run(_verifier_node(state))
+
+        assert result["final_answer"] == state["final_answer"]
+
+    def test_no_steps_or_no_answer_short_circuits_without_llm_call(self):
+        """Nothing to verify (no final_answer, or no completed steps) means
+        the verifier never calls the LLM at all."""
+        state = _verifier_state(final_answer="", steps_completed=[])
+        with patch("api.utils.llm_provider.call_llm", new=AsyncMock()) as mock_call_llm:
+            result = asyncio.run(_verifier_node(state))
+
+        mock_call_llm.assert_not_called()
+        assert result["final_answer"] == ""
