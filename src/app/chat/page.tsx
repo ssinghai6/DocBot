@@ -34,6 +34,7 @@ import type {
   Message,
   LiveDbForm,
   ConnectorInfo,
+  AdminMetrics,
 } from "@/components/types"
 
 // Toast Component
@@ -126,6 +127,10 @@ export default function Home() {
   const [dbFileName, setDbFileName] = useState<string | null>(null);
   const [isCsvConnection, setIsCsvConnection] = useState(false);
 
+  // DOCBOT-1528: schema sync freshness — "Schema last synced" + refresh button
+  const [schemaCachedAt, setSchemaCachedAt] = useState<string | null>(null);
+  const [schemaRefreshing, setSchemaRefreshing] = useState(false);
+
   // Live DB connection form state
   const [showLiveDbForm, setShowLiveDbForm] = useState(false);
   const [liveDbForm, setLiveDbForm] = useState<LiveDbForm>({
@@ -185,12 +190,19 @@ export default function Home() {
 
   // Admin panel state
   const [adminPanelOpen, setAdminPanelOpen] = useState(false);
-  const [adminTab, setAdminTab] = useState<"users" | "audit">("users");
+  const [adminTab, setAdminTab] = useState<"users" | "audit" | "usage">("users");
   const [adminUsers, setAdminUsers] = useState<AdminUser[]>([]);
   const [adminUsersLoading, setAdminUsersLoading] = useState(false);
   const [auditEvents, setAuditEvents] = useState<AuditEvent[]>([]);
   const [auditLoading, setAuditLoading] = useState(false);
   const [auditEventTypeFilter, setAuditEventTypeFilter] = useState<string>("all");
+  // DOCBOT-1528: audit log filters — user + date range
+  const [auditUserIdFilter, setAuditUserIdFilter] = useState<string>("all");
+  const [auditStartDate, setAuditStartDate] = useState<string>("");
+  const [auditEndDate, setAuditEndDate] = useState<string>("");
+  // DOCBOT-1528: Usage tab — GET /admin/metrics
+  const [adminMetrics, setAdminMetrics] = useState<AdminMetrics | null>(null);
+  const [adminMetricsLoading, setAdminMetricsLoading] = useState(false);
 
   // Stable anonymous session ID used when no PDF session exists yet
   const anonymousSessionIdRef = useRef<string>(
@@ -262,7 +274,6 @@ export default function Home() {
     authEmail,
     authPassword,
     authName,
-    auditEventTypeFilter,
     liveDbForm,
     entraToken,
     fileInputRef,
@@ -304,8 +315,12 @@ export default function Home() {
     setAdminUsers,
     setAuditLoading,
     setAuditEvents,
+    setAdminMetrics,
+    setAdminMetricsLoading,
     setWorkspaceConnections,
     setConnectors,
+    setSchemaCachedAt,
+    setSchemaRefreshing,
 
     showToast,
   });
@@ -400,7 +415,16 @@ export default function Home() {
   useEffect(() => {
     if (!adminPanelOpen) return;
     if (adminTab === "users") handlers.loadAdminUsers();
-    else handlers.loadAuditLog(auditEventTypeFilter);
+    else if (adminTab === "audit") {
+      handlers.loadAuditLog({
+        eventType: auditEventTypeFilter,
+        userId: auditUserIdFilter,
+        startDate: auditStartDate,
+        endDate: auditEndDate,
+      });
+    } else {
+      handlers.loadAdminMetrics();
+    }
   }, [adminPanelOpen, adminTab]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const scrollToBottom = () => {
@@ -536,6 +560,10 @@ export default function Home() {
         queryHistory={queryHistory}
         historyOpen={historyOpen}
         expandedHistoryId={expandedHistoryId}
+        connectionId={connectionId}
+        schemaCachedAt={schemaCachedAt}
+        schemaRefreshing={schemaRefreshing}
+        onSchemaRefresh={handlers.refreshSchema}
         onDbUpload={handlers.handleDbUpload}
         onDbDisconnect={handlers.handleDbDisconnect}
         onToggleLiveDbForm={() => { setShowLiveDbForm(v => !v); setLiveDbError(null); }}
@@ -690,9 +718,18 @@ export default function Home() {
           auditLoading={auditLoading}
           auditEventTypeFilter={auditEventTypeFilter}
           setAuditEventTypeFilter={setAuditEventTypeFilter}
+          auditUserIdFilter={auditUserIdFilter}
+          setAuditUserIdFilter={setAuditUserIdFilter}
+          auditStartDate={auditStartDate}
+          setAuditStartDate={setAuditStartDate}
+          auditEndDate={auditEndDate}
+          setAuditEndDate={setAuditEndDate}
           loadAuditLog={handlers.loadAuditLog}
           exportAuditLogCsv={handlers.exportAuditLogCsv}
           updateUserRole={handlers.updateUserRole}
+          adminMetrics={adminMetrics}
+          adminMetricsLoading={adminMetricsLoading}
+          loadAdminMetrics={handlers.loadAdminMetrics}
           authUser={authUser}
           showToast={showToast}
           onClose={() => setAdminPanelOpen(false)}

@@ -6,6 +6,7 @@ import {
   RefreshCw, Loader2, Eye, EyeOff, AlertCircle,
 } from "lucide-react"
 import type { ConnectorInfo, ConnectorSyncResponse } from "./types"
+import { formatRelativeTime, getStalenessLevel, STALENESS_COLOR_CLASSES } from "@/lib/relativeTime"
 
 interface MarketplacePanelProps {
   connectors: ConnectorInfo[]
@@ -44,6 +45,27 @@ function ConnectorTypeLabel({ type }: { type: string }) {
     shopify: "Shopify",
   }
   return <>{labels[type] ?? type}</>
+}
+
+/** DOCBOT-1528: persisted "Last synced" badge, color-coded by staleness.
+ * Sourced from GET /api/connectors (api/connector_store.py's last_sync_at /
+ * sync_status columns) rather than the ephemeral just-clicked sync result. */
+function LastSyncedBadge({ connector }: { connector: ConnectorInfo }) {
+  const failed = connector.sync_status === "error" || connector.sync_status === "auth_failed"
+  const level = getStalenessLevel(connector.last_sync_at, failed)
+  const label = failed
+    ? `Sync failed${connector.last_sync_at ? ` · last ok ${formatRelativeTime(connector.last_sync_at)}` : ""}`
+    : connector.last_sync_at
+      ? `Last synced: ${formatRelativeTime(connector.last_sync_at)}`
+      : "Never synced"
+  return (
+    <span
+      title={connector.last_sync_at ? new Date(connector.last_sync_at).toLocaleString() : undefined}
+      className={`inline-flex items-center text-[10px] px-1.5 py-0.5 rounded-full border font-medium whitespace-nowrap ${STALENESS_COLOR_CLASSES[level]}`}
+    >
+      {label}
+    </span>
+  )
 }
 
 export default function MarketplacePanel({
@@ -153,6 +175,7 @@ export default function MarketplacePanel({
                     {conn.connector_id.slice(0, 12)}...
                   </p>
                 </div>
+                <LastSyncedBadge connector={conn} />
                 <button
                   onClick={() => setExpandedSyncId(expandedSyncId === conn.connector_id ? null : conn.connector_id)}
                   className="text-[var(--color-text-tertiary)] hover:text-[var(--color-cyan-500)] transition-colors shrink-0"
@@ -209,7 +232,9 @@ export default function MarketplacePanel({
                     )}
                   </button>
 
-                  {/* Sync result */}
+                  {/* Sync result — immediate row counts from the click that just ran,
+                      kept alongside (not instead of) the persisted LastSyncedBadge above,
+                      which is what survives a page reload (DOCBOT-1528). */}
                   {syncResult && syncResult.id === conn.connector_id && (
                     <div className="px-2 py-1.5 rounded-lg bg-[var(--color-success-500)]/10 border border-[var(--color-success-500)]/20 text-[10px] text-[var(--color-success-500)]">
                       {syncResult.result.orders_persisted != null && (
