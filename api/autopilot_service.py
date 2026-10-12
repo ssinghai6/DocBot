@@ -629,12 +629,27 @@ def make_executor_node(
                     )
 
                     if docs:
+                        # DOCBOT-1527: heuristic injection-pattern scan on
+                        # retrieved chunks before they are folded into the
+                        # investigation's step results — flag-and-continue,
+                        # see api/utils/prompt_guard.py.
+                        from api.utils.prompt_guard import scan_chunks, wrap_untrusted
+
+                        scan_chunks(
+                            [
+                                (f"{doc.metadata.get('source', 'Unknown')} p{doc.metadata.get('page', 0)}", doc.page_content)
+                                for doc in docs
+                            ],
+                            session_id=session_id,
+                            run_id=state.get("run_id"),
+                        )
+
                         context = "\n\n".join(
                             f"Source: {doc.metadata.get('source', 'Unknown')}, "
                             f"Page {doc.metadata.get('page', 0)}\n{doc.page_content}"
                             for doc in docs
                         )
-                        result_entry["result"] = context[:800]
+                        result_entry["result"] = wrap_untrusted(context[:800])
 
                         # DOCBOT-1510: keep the sub-questions deep_retrieve used
                         result_entry["sub_questions"] = list(sub_questions or [])
@@ -1120,6 +1135,8 @@ async def _synthesizer_node(state: AutopilotState) -> dict:
     if not api_key:
         return {"final_answer": f"Investigation complete.\n\n{steps_text}", "citations": []}
 
+    from api.utils.prompt_guard import PROMPT_INJECTION_DEFENSE_NOTICE
+
     system_prompt = (
         "You are a senior data analyst and financial modeler. Based on the investigation "
         "steps and results below, write a comprehensive answer to the original question. "
@@ -1127,7 +1144,8 @@ async def _synthesizer_node(state: AutopilotState) -> dict:
         "When the question asks for calculations (DCF, valuations, projections, comparisons), "
         "you MUST perform them step by step using the data and assumptions provided. "
         "Show intermediate calculations clearly. Never say 'insufficient data' when the "
-        "question or investigation results provide the necessary inputs. "
+        "question or investigation results provide the necessary inputs.\n\n"
+        f"{PROMPT_INJECTION_DEFENSE_NOTICE}\n\n"
         "FORMAT RULES:\n"
         "- Use markdown headers (##, ###) for each section or question part.\n"
         "- Present numerical projections in clean markdown tables with aligned columns.\n"
@@ -1212,6 +1230,8 @@ async def _verifier_node(state: AutopilotState) -> dict:
         for i, s in enumerate(steps)
     )
 
+    from api.utils.prompt_guard import PROMPT_INJECTION_DEFENSE_NOTICE
+
     verifier_system_prompt = (
         "You are a fact-checking verifier for an AI investigation agent. You are "
         "given the ACTUAL DATA retrieved during an investigation and a DRAFT ANSWER "
@@ -1221,6 +1241,7 @@ async def _verifier_node(state: AutopilotState) -> dict:
         "answer that directly conflicts with what the retrieved data shows. Do NOT "
         "flag hedging, missing detail, rounding differences under 1%, or stylistic "
         "choices as contradictions.\n\n"
+        f"{PROMPT_INJECTION_DEFENSE_NOTICE}\n\n"
         'Respond with ONLY a JSON object: {"contradiction_found": true or false, '
         '"explanation": "<specific description of the contradiction, or empty '
         'string if none>"}. No markdown fences, no other text.'
