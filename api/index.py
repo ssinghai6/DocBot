@@ -529,6 +529,10 @@ async def lifespan(app: FastAPI):
     scheduler = AsyncIOScheduler()
     wire_sync_scheduler(scheduler, app.state)
     registered = register_all_active_connectors()
+    # DOCBOT-1526: recurring raw_json retention cleanup for commerce data —
+    # same scheduler instance as the DOCBOT-704 background sync worker.
+    from api.commerce_service import register_retention_cleanup_job
+    register_retention_cleanup_job(scheduler)
     scheduler.start()
     if registered:
         logger.info("Startup: background sync scheduled for %d connector(s).", registered)
