@@ -13,7 +13,8 @@ import {
   PanelRight,
 } from "lucide-react"
 import ChatMessage from "@/components/ChatMessage"
-import { Tooltip } from "@/components/ui"
+import ChatEmptyState from "@/components/ChatEmptyState"
+import { Tooltip, Button } from "@/components/ui"
 import type { Message, AutopilotStep, Toast, PickedTool } from "@/components/types"
 
 function TypingIndicator() {
@@ -302,14 +303,46 @@ export default function ChatArea(props: ChatAreaProps) {
       {/* Chat Output */}
       <div ref={chatContainerRef} className="flex-1 overflow-y-auto px-5 lg:px-6 pb-4 max-w-5xl mx-auto w-full">
         {!sessionId && !isDbConnected && messages.length === 0 ? (
-          <div className="flex flex-col items-center justify-center h-full">
-            <p className="text-[22px] font-semibold text-[var(--color-text-primary)] mb-2 text-center">What do you want to analyze?</p>
-            <p className="text-[13px] text-[var(--color-text-secondary)] text-center max-w-md mb-10">
-              Upload financial documents, connect a live database, or browse SEC filings.
-            </p>
+          <ChatEmptyState
+            icon={<Sparkles className="w-5 h-5 text-[var(--color-cyan-500)]" />}
+            headline="What do you want to analyze?"
+            subcopy="Upload financial documents, connect a live database, or browse SEC filings."
+          >
+            {/* Primary CTA: one-click demo — the fastest path to seeing DocBot's
+                hybrid Docs+DB discrepancy detection, so it leads, not trails. */}
+            <div className="flex flex-col sm:flex-row items-center gap-2.5 max-w-xl w-full mb-5">
+              <Button
+                variant="amber"
+                size="lg"
+                onClick={() => onTryDemo?.("quickbite")}
+                disabled={demoLoading}
+                loading={demoLoading}
+                className="w-full sm:w-auto shadow-[var(--elev-2)]"
+              >
+                {!demoLoading && <Sparkles className="w-4 h-4" />}
+                Try Demo — QuickBite, spot discrepancies
+              </Button>
+              <Button
+                variant="secondary"
+                size="lg"
+                onClick={() => onTryDemo?.("fuel")}
+                disabled={demoLoading}
+                loading={demoLoading}
+                className="w-full sm:w-auto"
+              >
+                {!demoLoading && <Sparkles className="w-4 h-4 text-[var(--color-cyan-500)]" />}
+                Fuel Prices — forecast trends
+              </Button>
+            </div>
+
+            <div className="flex items-center gap-3 w-full max-w-xl mb-5">
+              <div className="flex-1 h-px bg-[var(--color-border-default)]" />
+              <span className="text-[10px] text-[var(--color-text-secondary)] uppercase tracking-wider font-medium">or bring your own data</span>
+              <div className="flex-1 h-px bg-[var(--color-border-default)]" />
+            </div>
 
             {/* Action cards */}
-            <div className="grid grid-cols-1 sm:grid-cols-3 gap-3 max-w-xl w-full mb-8">
+            <div className="grid grid-cols-1 sm:grid-cols-3 gap-3 max-w-xl w-full">
               <button
                 onClick={onUploadClick}
                 className="group flex flex-col items-center gap-3 p-5 bg-[var(--color-bg-surface)] rounded-[8px] border border-[var(--color-border-subtle)] hover:border-[var(--color-cyan-500)]/40 hover:-translate-y-0.5 hover:shadow-[var(--elev-2)] transition-all duration-[var(--duration-base)] ease-[var(--ease-standard)]"
@@ -349,59 +382,23 @@ export default function ChatArea(props: ChatAreaProps) {
                 </div>
               </button>
             </div>
-
-            {/* Divider + Try Demo */}
-            <div className="flex items-center gap-3 w-full max-w-xs mb-5">
-              <div className="flex-1 h-px bg-[var(--color-border-default)]" />
-              <span className="text-[10px] text-[var(--color-text-secondary)] uppercase tracking-wider font-medium">or try instantly</span>
-              <div className="flex-1 h-px bg-[var(--color-border-default)]" />
-            </div>
-
-            <div className="flex flex-col sm:flex-row items-center gap-2 mb-8">
-              <button
-                onClick={() => onTryDemo?.("quickbite")}
-                disabled={demoLoading}
-                className="flex items-center gap-2 h-9 px-4 rounded-[5px] bg-[var(--color-amber-500)]/15 border border-[var(--color-amber-500)]/40 text-[var(--color-amber-500)] text-[12px] font-medium hover:bg-[var(--color-amber-500)]/20 transition-colors disabled:opacity-60 disabled:cursor-not-allowed"
-              >
-                {demoLoading ? (
-                  <><Loader2 className="w-3.5 h-3.5 animate-spin" /> Loading…</>
-                ) : (
-                  <><Sparkles className="w-3.5 h-3.5" /> QuickBite — spot discrepancies</>
-                )}
-              </button>
-              <button
-                onClick={() => onTryDemo?.("fuel")}
-                disabled={demoLoading}
-                className="flex items-center gap-2 h-9 px-4 rounded-[5px] bg-[var(--color-cyan-500)]/15 border border-[var(--color-cyan-500)]/40 text-[var(--color-cyan-500)] text-[12px] font-medium hover:bg-[var(--color-cyan-500)]/20 transition-colors disabled:opacity-60 disabled:cursor-not-allowed"
-              >
-                {demoLoading ? (
-                  <><Loader2 className="w-3.5 h-3.5 animate-spin" /> Loading…</>
-                ) : (
-                  <><Sparkles className="w-3.5 h-3.5" /> Fuel Prices — forecast trends</>
-                )}
-              </button>
-            </div>
-          </div>
+          </ChatEmptyState>
         ) : messages.length === 0 && (sessionId || isDbConnected) ? (
-          <div className="flex flex-col items-center justify-center h-full">
-            <div className="w-12 h-12 rounded-[8px] bg-[var(--color-cyan-500)]/10 border border-[var(--color-cyan-500)]/30 flex items-center justify-center mb-4">
-              <MessageSquare className="w-5 h-5 text-[var(--color-cyan-500)]" />
-            </div>
-            <p className="text-[16px] font-semibold text-[var(--color-text-primary)] mb-1">
-              {isFuelDemo ? "Fuel Prices — Policy Report + 1970–2026 Data" : isDemo ? "QuickBite — 2025 Annual Report + Database" : isDbConnected ? "Database connected" : "Ready to analyze"}
-            </p>
-            <p className="text-[12px] text-[var(--color-text-tertiary)] max-w-lg text-center">
-              {isFuelDemo
+          <ChatEmptyState
+            icon={<MessageSquare className="w-5 h-5 text-[var(--color-cyan-500)]" />}
+            headline={isFuelDemo ? "Fuel Prices — Policy Report + 1970–2026 Data" : isDemo ? "QuickBite — 2025 Annual Report + Database" : isDbConnected ? "Database connected" : "Ready to analyze"}
+            subcopy={
+              isFuelDemo
                 ? "Two sources: a policy report on rising fuel prices (a document) and 56 years of monthly crude-oil prices (a database). DocBot reads both — ask it to forecast prices with a real model, explain the trend, or summarize what the report recommends."
                 : isDemo
                 ? "QuickBite is a made-up food-delivery company. Its “10-K” is an annual report (a document); it also has a financial database. DocBot reads both at once — ask it to compare them, explain a figure, spot mismatches, or forecast."
                 : isDbConnected
                 ? `Query financials, metrics, and trends in ${chatMode} mode`
-                : "Ask about revenue, margins, risk factors, or any financial metric"}
-            </p>
-
+                : "Ask about revenue, margins, risk factors, or any financial metric"
+            }
+          >
             {/* Suggested questions */}
-            <div className="mt-6 grid gap-1.5 max-w-lg w-full">
+            <div className="grid gap-1.5 max-w-lg w-full">
               <p className="text-[10px] text-[var(--color-text-quaternary)] uppercase tracking-wider text-center mb-1">Try asking</p>
               {(isFuelDemo
                 ? [
@@ -441,7 +438,7 @@ export default function ChatArea(props: ChatAreaProps) {
                 </button>
               ))}
             </div>
-          </div>
+          </ChatEmptyState>
         ) : (
           <div className="space-y-4 max-w-5xl mx-auto pb-20 pt-4">
             {messages.map((msg, idx) => (
