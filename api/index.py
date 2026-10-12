@@ -294,6 +294,10 @@ commerce_orders_table, commerce_financials_table = register_commerce_tables(meta
 from api.org_service import register_organizations_table, ORG_ID_COLUMN_MIGRATIONS, backfill_default_organization
 organizations_table = register_organizations_table(metadata)
 
+# ── DOCBOT-1529: per-org envelope encryption (wrapped DEK per org) ────────────
+from api.utils.envelope_encryption import register_org_encryption_keys_table
+org_encryption_keys_table = register_org_encryption_keys_table(metadata)
+
 # ── DOCBOT-706: Connector Persistence ─────────────────────────────────────────
 from api.connector_store import register_connector_tables, register_edgar_cache_table
 marketplace_connections_table = register_connector_tables(metadata)
@@ -460,6 +464,11 @@ async def lifespan(app: FastAPI):
     from api.connector_store import wire_connector_store, wire_edgar_cache, load_all_active_connectors
     wire_connector_store(marketplace_connections_table, async_session_factory)
     wire_edgar_cache(edgar_filings_cache_table)
+    # DOCBOT-1529: wire per-org envelope encryption (db_service + connector_store)
+    from api.db_service import wire_envelope_encryption as _wire_db_envelope
+    from api.connector_store import wire_envelope_encryption as _wire_connector_envelope
+    _wire_db_envelope(org_encryption_keys_table)
+    _wire_connector_envelope(org_encryption_keys_table)
     # DOCBOT-1501: wire LLM call log persistence — background writer drains a
     # thread-safe queue that llm_provider.py's trace sink feeds synchronously.
     from api.llm_trace_service import wire_llm_trace_store, start_writer, enqueue_call
@@ -1689,11 +1698,15 @@ async def db_connect(raw_request: Request, request: DBConnectionRequest, _user=_
             ),
         )
     try:
+        # DOCBOT-1529: scope the stored credential blob's encryption to the
+        # requesting user's org (None in open/demo mode — falls back to the
+        # legacy scheme, which self-migrates once an org is known).
         result = await connect_database(
             request,
             db_connections_table,
             schema_cache_table,
             async_session_factory,
+            org_id=get_user_org_id(_user),
         )
         # Persistent Workspace: stamp connection row with user_id if logged in
         _conn_owner = await get_optional_user(raw_request)
