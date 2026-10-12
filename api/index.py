@@ -533,6 +533,18 @@ async def lifespan(app: FastAPI):
     if registered:
         logger.info("Startup: background sync scheduled for %d connector(s).", registered)
 
+    # DOCBOT-1525: delete vector stores for sessions past the retention
+    # window (default 30 days of inactivity, VECTOR_STORE_RETENTION_DAYS)
+    # BEFORE warming VECTOR_STORES below, so an expired store is never
+    # loaded back into memory.
+    try:
+        from api.utils.vector_store import cleanup_expired_vector_stores
+        vs_removed = await cleanup_expired_vector_stores(sessions_table, async_session_factory)
+        if vs_removed:
+            logger.info("Startup cleanup: removed %d expired vector store(s).", vs_removed)
+    except Exception as exc:
+        logger.warning("Startup vector store cleanup failed (non-fatal): %s", exc)
+
     # DOCBOT-1001: warm VECTOR_STORES from Chroma disk — recovers sessions after restart
     try:
         from api.utils.vector_store import list_stored_sessions, load_store
@@ -546,6 +558,28 @@ async def lifespan(app: FastAPI):
             logger.info("Startup: warmed %d vector store(s) from Chroma disk.", len(stored))
     except Exception as exc:
         logger.warning("Startup Chroma warm-up failed (non-fatal): %s", exc)
+
+    # DOCBOT-1525: also run vector store retention cleanup periodically (daily)
+    # via the same APScheduler instance DOCBOT-704 wired above — a long-running
+    # Railway deployment may not redeploy/restart often enough for the
+    # startup-only cleanup above to matter.
+    async def _periodic_vector_store_cleanup() -> None:
+        from api.utils.vector_store import cleanup_expired_vector_stores
+        try:
+            removed = await cleanup_expired_vector_stores(sessions_table, async_session_factory)
+            if removed:
+                logger.info("Periodic cleanup: removed %d expired vector store(s).", removed)
+        except Exception as exc:
+            logger.warning("Periodic vector store cleanup failed (non-fatal): %s", exc)
+
+    scheduler.add_job(
+        _periodic_vector_store_cleanup,
+        "interval",
+        days=1,
+        id="vector_store_retention_cleanup",
+        replace_existing=True,
+        max_instances=1,
+    )
 
     yield
     # DOCBOT-704: shut down background sync scheduler
