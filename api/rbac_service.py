@@ -57,6 +57,12 @@ def require_role(min_role: UserRole):
     - Raises HTTP 403 if the user's role is below min_role
 
     Inject as: user = Depends(require_role(UserRole.admin))
+
+    DOCBOT-1524: the returned user is the full `users` table row, which
+    carries `org_id` alongside `role` — route handlers that must scope a
+    query to the requesting user's organization read `user.org_id`
+    directly (see `get_user_org_id()` below for the None-safe accessor
+    used when auth enforcement may be off).
     """
     async def _dependency(
         docbot_session: Optional[str] = Cookie(default=None),
@@ -91,6 +97,20 @@ def require_role(min_role: UserRole):
         return user
 
     return _dependency
+
+
+def get_user_org_id(user: Optional[Any]) -> Optional[str]:
+    """None-safe accessor for the requesting user's org_id — DOCBOT-1524.
+
+    `user` is whatever `require_role()` returned: `None` when auth
+    enforcement is off (open/demo mode, unscoped by design), or the full
+    `users` row otherwise. Route handlers scoping an admin query to the
+    requesting user's organization should use this instead of reading
+    `user.org_id` directly, so callers never need their own None check.
+    """
+    if user is None:
+        return None
+    return getattr(user, "org_id", None)
 
 
 # ---------------------------------------------------------------------------
