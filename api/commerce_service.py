@@ -10,14 +10,51 @@ Tables:
 
 Every read/write function requires a connection_id parameter — this is
 the RLS boundary.  There is no way to query across connections.
+
+---------------------------------------------------------------------------
+Data retention policy (DOCBOT-1526)
+---------------------------------------------------------------------------
+DocBot persists two kinds of data per synced order/financial record:
+
+  1. Normalized fields (amounts, dates, status, currency, customer_id) —
+     this is DocBot's actual analytical product. It is retained
+     INDEFINITELY for the lifetime of the connection, because read-only
+     history (trend analysis, period comparisons, discrepancy detection
+     against documents) is the point of the feature.
+
+  2. ``raw_json`` — the full, unmodified original API response from the
+     marketplace connector (Amazon SP-API, Shopify Admin API, etc.). This
+     blob has no ongoing analytical purpose once its fields have been
+     normalized into the columns above — it exists only as a short-lived
+     audit/debug aid for post-sync verification. It is PURGED (set to
+     NULL, row otherwise untouched) once it is older than
+     ``COMMERCE_RAW_JSON_RETENTION_DAYS`` (default 90 days). This caps how
+     long DocBot holds a full replica of a customer's raw commerce
+     payloads, without touching the normalized data customers actually
+     query against.
+
+Cleanup is performed by ``cleanup_stale_raw_json()``, registered as a
+recurring APScheduler job (see ``register_retention_cleanup_job()``) next
+to the DOCBOT-704 background sync worker, so it runs continuously — not
+just once at process startup.
+
+Future consideration (not built here): an on-demand, "sync and discard
+after answering" model — closer to the live-query model the SQL pipeline
+uses — was evaluated as a more aggressive alternative that would avoid
+persisting commerce data at all. It was deferred because it requires
+reworking how the SQL/hybrid pipelines query ``commerce_orders`` /
+``commerce_financials`` (today they query persisted rows, not a live
+connector call), which is a larger architectural change out of scope for
+this ticket.
 """
 
 from __future__ import annotations
 
 import json
 import logging
+import os
 import uuid
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from typing import Any, Optional
 
 from pydantic import BaseModel
@@ -35,8 +72,22 @@ from sqlalchemy import (
     text,
 )
 from sqlalchemy import insert as sa_insert
+from sqlalchemy import update as sa_update
 
 logger = logging.getLogger(__name__)
+
+# ---------------------------------------------------------------------------
+# Retention config — DOCBOT-1526
+# ---------------------------------------------------------------------------
+
+# Days to retain the raw_json API payload after a row is created. After this
+# window, raw_json is nulled out but the normalized row is kept forever.
+COMMERCE_RAW_JSON_RETENTION_DAYS = int(
+    os.getenv("COMMERCE_RAW_JSON_RETENTION_DAYS", "90")
+)
+
+# How often the cleanup job runs once registered with the scheduler.
+RAW_JSON_CLEANUP_INTERVAL_SECONDS = 24 * 3600  # once a day
 
 
 # ---------------------------------------------------------------------------
@@ -374,3 +425,113 @@ async def sync_connector_data(
         "financials_persisted": financials_written,
         "period": {"start": start_date, "end": end_date},
     }
+
+
+# ---------------------------------------------------------------------------
+# Retention cleanup — DOCBOT-1526
+#
+# Normalized order/financial rows are never deleted or modified here — only
+# the raw_json payload column is nulled once a row is older than the
+# retention window. See the module docstring for the full policy statement.
+# ---------------------------------------------------------------------------
+
+
+async def _null_raw_json_older_than(table: Table, cutoff: datetime) -> int:
+    """Null ``raw_json`` for rows in ``table`` older than ``cutoff``.
+
+    Only rows that still have a non-NULL raw_json and were created before
+    the cutoff are touched. Each row is updated in its own transaction so a
+    failure on one row (e.g. a transient DB error) is logged and skipped
+    without blocking cleanup of the remaining rows.
+    """
+    if table is None or _async_session_factory is None:
+        return 0
+
+    async with _async_session_factory() as session:
+        result = await session.execute(
+            select(table.c.id).where(
+                table.c.created_at < cutoff,
+                table.c.raw_json.isnot(None),
+            )
+        )
+        stale_ids = [row[0] for row in result.all()]
+
+    cleaned = 0
+    for row_id in stale_ids:
+        try:
+            async with _async_session_factory() as session:
+                async with session.begin():
+                    await session.execute(
+                        sa_update(table)
+                        .where(table.c.id == row_id)
+                        .values(raw_json=None)
+                    )
+            cleaned += 1
+        except Exception as exc:
+            logger.warning(
+                "cleanup_stale_raw_json: failed to null raw_json for row %s in %s: %s",
+                row_id, table.name, exc,
+            )
+
+    return cleaned
+
+
+async def cleanup_stale_raw_json(retention_days: Optional[int] = None) -> int:
+    """Null ``raw_json`` on commerce rows older than the retention window.
+
+    Normalized fields (amounts, dates, status, etc.) are never touched —
+    only the raw_json payload column is cleared. Returns the total number
+    of rows (orders + financials) that had raw_json nulled.
+
+    ``retention_days`` defaults to ``COMMERCE_RAW_JSON_RETENTION_DAYS``
+    (env var ``COMMERCE_RAW_JSON_RETENTION_DAYS``, default 90) but can be
+    passed explicitly — e.g. for tests or an admin-triggered run with a
+    different window.
+    """
+    if _orders_table is None or _financials_table is None or _async_session_factory is None:
+        return 0
+
+    if retention_days is None:
+        retention_days = COMMERCE_RAW_JSON_RETENTION_DAYS
+
+    cutoff = datetime.now(timezone.utc) - timedelta(days=retention_days)
+
+    cleaned_orders = await _null_raw_json_older_than(_orders_table, cutoff)
+    cleaned_financials = await _null_raw_json_older_than(_financials_table, cutoff)
+    total = cleaned_orders + cleaned_financials
+
+    if total:
+        logger.info(
+            "cleanup_stale_raw_json: nulled raw_json on %d order row(s) and %d "
+            "financial row(s) older than %d day(s).",
+            cleaned_orders, cleaned_financials, retention_days,
+        )
+    return total
+
+
+def register_retention_cleanup_job(scheduler: Any) -> None:
+    """Register the recurring raw_json retention cleanup job.
+
+    Wired into the same APScheduler instance the DOCBOT-704 background sync
+    worker uses, so this runs continuously (daily) rather than only once at
+    process startup.
+    """
+    if scheduler is None:
+        logger.warning("register_retention_cleanup_job: no scheduler provided")
+        return
+
+    job_id = "commerce_raw_json_retention_cleanup"
+    if scheduler.get_job(job_id) is None:
+        scheduler.add_job(
+            cleanup_stale_raw_json,
+            "interval",
+            seconds=RAW_JSON_CLEANUP_INTERVAL_SECONDS,
+            id=job_id,
+            replace_existing=True,
+            max_instances=1,
+        )
+        logger.info(
+            "Registered commerce raw_json retention cleanup job (every %ds, "
+            "retention=%dd).",
+            RAW_JSON_CLEANUP_INTERVAL_SECONDS, COMMERCE_RAW_JSON_RETENTION_DAYS,
+        )
