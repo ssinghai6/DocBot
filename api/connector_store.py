@@ -31,6 +31,11 @@ from sqlalchemy import (
 from sqlalchemy import insert as sa_insert
 
 from api.utils.encryption import decrypt_credentials, encrypt_credentials
+from api.utils.envelope_encryption import (
+    encrypt_credentials_for_org,
+    decrypt_credentials_with_migration,
+    write_back_blob,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -107,6 +112,10 @@ def register_connector_tables(metadata):
 
 _connections_table: Optional[Table] = None
 _async_session_factory: Any = None
+# DOCBOT-1529: org_encryption_keys table ref, wired once from index.py.
+# `None` in tests that don't wire it — every credential path below falls
+# back to the pre-ticket legacy encryption scheme whenever it is `None`.
+_org_encryption_keys_table: Optional[Table] = None
 
 
 def wire_connector_store(connections_table, async_session_factory):
@@ -114,6 +123,13 @@ def wire_connector_store(connections_table, async_session_factory):
     global _connections_table, _async_session_factory
     _connections_table = connections_table
     _async_session_factory = async_session_factory
+
+
+def wire_envelope_encryption(org_encryption_keys_table: Table) -> None:
+    """Inject the org_encryption_keys table reference — DOCBOT-1529.
+    Called once from api/index.py after tables are created."""
+    global _org_encryption_keys_table
+    _org_encryption_keys_table = org_encryption_keys_table
 
 
 # ---------------------------------------------------------------------------
@@ -124,14 +140,40 @@ async def save_connector(
     connector_id: str,
     connector_type: str,
     credentials: dict[str, str],
+    org_id: Optional[str] = None,
 ) -> None:
-    """Encrypt credentials and upsert a connector row."""
+    """Encrypt credentials and upsert a connector row.
+
+    DOCBOT-1529: when `org_id` is known and envelope encryption has been
+    wired, credentials are encrypted with that org's own DEK (per-org
+    envelope scheme) instead of the shared flat key — the same
+    backward-compatible fallback as `db_service.connect_database`. Existing
+    callers that don't pass `org_id` are unaffected (legacy scheme, exactly
+    as before this ticket).
+    """
     if _connections_table is None or _async_session_factory is None:
         logger.warning("connector_store not wired — skipping save")
         return
 
-    encrypted = encrypt_credentials(credentials)
+    if org_id and _org_encryption_keys_table is not None:
+        encrypted = await encrypt_credentials_for_org(
+            credentials, org_id, _async_session_factory, _org_encryption_keys_table
+        )
+    else:
+        encrypted = encrypt_credentials(credentials)
     now = datetime.now(timezone.utc)
+
+    # Only touch org_id on conflict when a caller actually supplied one —
+    # never overwrite a pre-existing org_id (e.g. from DOCBOT-1524 backfill
+    # or an earlier save_connector call) with NULL on a re-save/token refresh.
+    _conflict_set: dict[str, Any] = {
+        "connector_type": connector_type,
+        "encrypted_credentials": encrypted,
+        "is_active": True,
+        "updated_at": now,
+    }
+    if org_id is not None:
+        _conflict_set["org_id"] = org_id
 
     async with _async_session_factory() as session:
         async with session.begin():
@@ -145,14 +187,10 @@ async def save_connector(
                     encrypted_credentials=encrypted,
                     is_active=True,
                     updated_at=now,
+                    org_id=org_id,
                 ).on_conflict_do_update(
                     index_elements=["id"],
-                    set_={
-                        "connector_type": connector_type,
-                        "encrypted_credentials": encrypted,
-                        "is_active": True,
-                        "updated_at": now,
-                    },
+                    set_=_conflict_set,
                 )
                 await session.execute(stmt)
             except Exception:
@@ -165,19 +203,15 @@ async def save_connector(
                             encrypted_credentials=encrypted,
                             is_active=True,
                             updated_at=now,
+                            org_id=org_id,
                         )
                     )
                 except Exception:
-                    # Row already exists — update it
+                    # Row already exists — update it (never clobber org_id).
                     await session.execute(
                         update(_connections_table)
                         .where(_connections_table.c.id == connector_id)
-                        .values(
-                            connector_type=connector_type,
-                            encrypted_credentials=encrypted,
-                            is_active=True,
-                            updated_at=now,
-                        )
+                        .values(**_conflict_set)
                     )
 
     logger.info("Saved connector %s (type=%s)", connector_id, connector_type)
@@ -187,18 +221,25 @@ async def load_all_active_connectors() -> list[dict[str, Any]]:
     """Load all active connectors with decrypted credentials.
 
     Returns list of ``{"connector_id", "connector_type", "credentials"}``.
+
+    DOCBOT-1529: transparently handles both the legacy flat-key scheme and
+    the new per-org envelope scheme, and lazily re-encrypts (write-back) a
+    legacy blob to the envelope scheme once its org_id is known.
     """
     if _connections_table is None or _async_session_factory is None:
         return []
 
-    stmt = (
-        select(
-            _connections_table.c.id,
-            _connections_table.c.connector_type,
-            _connections_table.c.encrypted_credentials,
-        )
-        .where(_connections_table.c.is_active == True)  # noqa: E712
-    )
+    _has_org_id = "org_id" in _connections_table.c
+
+    cols = [
+        _connections_table.c.id,
+        _connections_table.c.connector_type,
+        _connections_table.c.encrypted_credentials,
+    ]
+    if _has_org_id:
+        cols.append(_connections_table.c.org_id)
+
+    stmt = select(*cols).where(_connections_table.c.is_active == True)  # noqa: E712
 
     async with _async_session_factory() as session:
         result = await session.execute(stmt)
@@ -206,8 +247,21 @@ async def load_all_active_connectors() -> list[dict[str, Any]]:
 
     connectors: list[dict[str, Any]] = []
     for row in rows:
+        org_id = getattr(row, "org_id", None) if _has_org_id else None
         try:
-            creds = decrypt_credentials(row.encrypted_credentials)
+            if _org_encryption_keys_table is not None:
+                creds, new_blob = await decrypt_credentials_with_migration(
+                    row.encrypted_credentials, org_id, _async_session_factory,
+                    _org_encryption_keys_table,
+                )
+                if new_blob is not None:
+                    await write_back_blob(
+                        _connections_table, "id", row.id,
+                        "encrypted_credentials", new_blob, _async_session_factory,
+                    )
+            else:
+                # Envelope encryption not wired — exact pre-ticket behavior.
+                creds = decrypt_credentials(row.encrypted_credentials)
             connectors.append({
                 "connector_id": row.id,
                 "connector_type": row.connector_type,
