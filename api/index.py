@@ -161,6 +161,8 @@ sessions_table = Table(
     Column("user_id", String, index=True),
     # ── EDGAR: distinguish upload vs edgar-fetched sessions ────────────────
     Column("source", String, server_default="upload"),  # upload | edgar
+    # ── DOCBOT-1524: org/workspace scoping (nullable FK → organizations.id) ──
+    Column("org_id", String, index=True),
 )
 
 messages_table = Table(
@@ -185,6 +187,8 @@ audit_log_table = Table(
     Column("metadata_json", Text),                             # extra structured JSON
     Column("occurred_at", DateTime(timezone=True), nullable=False, index=True,
            server_default=func.now()),
+    # ── DOCBOT-1524: org/workspace scoping (nullable FK → organizations.id) ──
+    Column("org_id", String, index=True),
 )
 
 # ── EPIC-06: SSO / Auth tables (DOCBOT-601) ──────────────────────────────────
@@ -200,6 +204,8 @@ users_table = Table(
     Column("role", String, server_default="analyst", nullable=False),  # viewer | analyst | admin
     Column("last_login_at", DateTime(timezone=True)),
     Column("created_at", DateTime(timezone=True), server_default=func.now(), nullable=False),
+    # ── DOCBOT-1524: org/workspace scoping (nullable FK → organizations.id) ──
+    Column("org_id", String, index=True),
 )
 
 user_sessions_table = Table(
@@ -226,6 +232,8 @@ db_connections_table = Table(
     Column("created_at", DateTime(timezone=True), server_default=func.now(), nullable=False),
     # ── Persistent Workspace: link connection to logged-in user ──────────────
     Column("user_id", String, index=True),
+    # ── DOCBOT-1524: org/workspace scoping (nullable FK → organizations.id) ──
+    Column("org_id", String, index=True),
 )
 
 schema_cache_table = Table(
@@ -282,6 +290,10 @@ session_artifacts_table = Table(
 from api.commerce_service import register_commerce_tables
 commerce_orders_table, commerce_financials_table = register_commerce_tables(metadata)
 
+# ── DOCBOT-1524: Organization/workspace data model ────────────────────────────
+from api.org_service import register_organizations_table, ORG_ID_COLUMN_MIGRATIONS, backfill_default_organization
+organizations_table = register_organizations_table(metadata)
+
 # ── DOCBOT-706: Connector Persistence ─────────────────────────────────────────
 from api.connector_store import register_connector_tables, register_edgar_cache_table
 marketplace_connections_table = register_connector_tables(metadata)
@@ -316,7 +328,7 @@ eval_judgments_table = register_eval_judgments_table(metadata)
 # ── EPIC-06: RBAC dependencies (DOCBOT-603) ──────────────────────────────────
 # Imported here so Depends() objects can be declared at module level.
 # require_role() checks is_auth_enforcement_active() at request time — safe to import early.
-from api.rbac_service import require_role, UserRole  # noqa: E402
+from api.rbac_service import require_role, UserRole, get_user_org_id  # noqa: E402
 
 _rbac_viewer  = Depends(require_role(UserRole.viewer))
 _rbac_analyst = Depends(require_role(UserRole.analyst))
@@ -413,12 +425,21 @@ async def init_db() -> None:
         await conn.execute(text(
             "ALTER TABLE sessions ADD COLUMN IF NOT EXISTS source TEXT DEFAULT 'upload'"
         ))
+        # DOCBOT-1524: org_id columns on pre-existing tables (no-op on a fresh
+        # DB, where the Table definitions above already declare org_id).
+        for col_ddl in ORG_ID_COLUMN_MIGRATIONS:
+            await conn.execute(text(col_ddl))
+        # DOCBOT-1524: idempotent — creates the default org only if none
+        # exists yet, and backfills org_id on rows that still lack one.
+        default_org_id = await backfill_default_organization(conn)
     logger.info(
         "Database tables verified / created "
         "(sessions, messages, db_connections, schema_cache, query_history, "
         "query_embeddings, session_artifacts, table_embeddings, audit_log, "
         "commerce_orders, commerce_financials, marketplace_connections, "
-        "agent_traces, data_ontology, eval_judgments)."
+        "agent_traces, data_ontology, eval_judgments, organizations). "
+        "Default organization: %s",
+        default_org_id,
     )
 
 
@@ -2735,6 +2756,12 @@ async def get_audit_log(
     limit = min(limit, 5000)
 
     stmt = select(audit_log_table).order_by(audit_log_table.c.occurred_at.desc()).limit(limit)
+    # DOCBOT-1524: scope to the requesting admin's org. get_user_org_id()
+    # returns None when AUTH_REQUIRED is off (open/demo mode) — unscoped
+    # there, same as before this ticket.
+    org_id = get_user_org_id(_user)
+    if org_id is not None:
+        stmt = stmt.where(audit_log_table.c.org_id == org_id)
     if event_type:
         stmt = stmt.where(audit_log_table.c.event_type == event_type)
     if session_id:
@@ -2789,11 +2816,20 @@ class RoleUpdateRequest(BaseModel):
 
 @app.get("/admin/users")
 async def list_users(_user=_rbac_admin):
-    """Return all users with their roles. Requires admin role."""
+    """Return all users with their roles, scoped to the requesting admin's org.
+
+    Requires admin role. DOCBOT-1524: when auth enforcement is active, only
+    users sharing the requesting admin's org_id are returned — an admin from
+    one organization cannot see another organization's users. _user is None
+    only when AUTH_REQUIRED is off (open/demo mode), where the listing stays
+    unscoped as before this ticket.
+    """
+    stmt = select(users_table).order_by(users_table.c.created_at.desc())
+    org_id = get_user_org_id(_user)
+    if org_id is not None:
+        stmt = stmt.where(users_table.c.org_id == org_id)
     async with async_session_factory() as db:
-        result = await db.execute(
-            select(users_table).order_by(users_table.c.created_at.desc())
-        )
+        result = await db.execute(stmt)
         rows = result.fetchall()
     return {
         "count": len(rows),

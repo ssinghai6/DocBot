@@ -64,8 +64,17 @@ async def _write_event(
     metadata_json: Optional[str],
     audit_log_table: Any,
     async_session_factory: Any,
+    org_id: Optional[str] = None,
 ) -> None:
-    """Persist one audit event. Called via asyncio.create_task — never awaited directly."""
+    """Persist one audit event. Called via asyncio.create_task — never awaited directly.
+
+    DOCBOT-1524: org_id is set only at INSERT time (an append, so it never
+    touches the audit_log_no_mutate immutability trigger). It defaults to
+    None — existing callers that don't know the acting user's org_id are
+    unaffected; such rows are picked up by `org_service.backfill_default_organization`
+    only if they land in a table other than audit_log (audit_log rows that
+    were written without org_id stay that way — see org_service.py for why).
+    """
     from sqlalchemy import insert as sa_insert
     try:
         async with async_session_factory() as session:
@@ -79,6 +88,7 @@ async def _write_event(
                         detail=detail,
                         metadata_json=metadata_json,
                         occurred_at=datetime.now(timezone.utc),
+                        org_id=org_id,
                     )
                 )
     except Exception as exc:
@@ -95,6 +105,7 @@ def log_event(
     user_id: Optional[str] = None,
     detail: str = "",
     metadata: Optional[dict] = None,
+    org_id: Optional[str] = None,
 ) -> None:
     """Fire-and-forget audit log write.
 
@@ -118,6 +129,9 @@ def log_event(
     metadata:
         Optional dict of extra structured data (dialect, row_count, pii_detected, etc.).
         Stored as JSON string.
+    org_id:
+        DOCBOT-1524: the acting user's org_id, if known. Optional and
+        defaults to None — existing callers are unaffected.
     """
     import json
     from api.utils.pii_masking import mask_pii
@@ -130,6 +144,7 @@ def log_event(
             _write_event(
                 event_type, session_id, user_id, detail,
                 metadata_json, audit_log_table, async_session_factory,
+                org_id=org_id,
             )
         )
     except RuntimeError:

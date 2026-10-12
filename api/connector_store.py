@@ -95,6 +95,8 @@ def register_connector_tables(metadata):
             server_default=func.now(),
             nullable=False,
         ),
+        # ── DOCBOT-1524: org/workspace scoping (nullable FK → organizations.id) ──
+        Column("org_id", String, index=True),
     )
     return marketplace_connections
 
