@@ -5,12 +5,14 @@ import {
   Brain, X, Menu, Trash2, Keyboard,
   Database, LogOut, ShieldCheck, Shield,
   ChevronDown, Sparkles, Wrench, Settings,
+  FileText,
 } from "lucide-react"
 import FileUploadZone from "@/components/FileUploadZone"
 import ConnectionPanel from "@/components/ConnectionPanel"
 import MarketplacePanel from "@/components/MarketplacePanel"
 import EdgarPanel from "@/components/EdgarPanel"
 import PersonaSelector from "@/components/PersonaSelector"
+import DataHandlingPanel from "@/components/DataHandlingPanel"
 import { useToolRegistry } from "@/components/ToolPicker"
 import type {
   AuthUser,
@@ -65,6 +67,10 @@ export interface SidebarProps {
   queryHistory: QueryHistoryItem[]
   historyOpen: boolean
   expandedHistoryId: string | null
+  connectionId: string | null
+  schemaCachedAt: string | null
+  schemaRefreshing: boolean
+  onSchemaRefresh: (connId: string) => void
   onDbUpload: (file: File, type: "csv" | "sqlite") => void
   onDbDisconnect: () => void
   onToggleLiveDbForm: () => void
@@ -136,6 +142,10 @@ export default function Sidebar(props: SidebarProps) {
     queryHistory,
     historyOpen,
     expandedHistoryId,
+    connectionId,
+    schemaCachedAt,
+    schemaRefreshing,
+    onSchemaRefresh,
     onDbUpload,
     onDbDisconnect,
     onToggleLiveDbForm,
@@ -163,6 +173,8 @@ export default function Sidebar(props: SidebarProps) {
 
   const [marketplaceOpen, setMarketplaceOpen] = useState(false);
   const [personaOpen, setPersonaOpen] = useState(false);
+  // DOCBOT-1528: "Data & Model Handling" disclosure panel
+  const [dataHandlingOpen, setDataHandlingOpen] = useState(false);
 
   // DOCBOT-1514: unified Connectors + Personas list, driven by the backend
   // tool registry (GET /api/tools) instead of two independently hardcoded
@@ -378,6 +390,10 @@ export default function Sidebar(props: SidebarProps) {
                 queryHistory={queryHistory}
                 historyOpen={historyOpen}
                 expandedHistoryId={expandedHistoryId}
+                connectionId={connectionId}
+                schemaCachedAt={schemaCachedAt}
+                schemaRefreshing={schemaRefreshing}
+                onSchemaRefresh={onSchemaRefresh}
                 onDbUpload={onDbUpload}
                 onDbDisconnect={onDbDisconnect}
                 onToggleLiveDbForm={onToggleLiveDbForm}
@@ -500,6 +516,15 @@ export default function Sidebar(props: SidebarProps) {
                   </div>
                 </div>
               </div>
+
+              {/* DOCBOT-1528: Data & Model Handling disclosure */}
+              <button
+                onClick={() => setDataHandlingOpen(true)}
+                className="w-full flex items-center gap-2 h-8 px-2.5 rounded-[5px] bg-[var(--color-bg-elevated)] border border-[var(--color-border-subtle)] text-[var(--color-text-secondary)] hover:text-[var(--color-text-primary)] hover:bg-[var(--color-bg-overlay)] transition-colors text-[11px] font-medium"
+              >
+                <FileText className="w-3.5 h-3.5 text-[var(--color-cyan-500)]" />
+                Data &amp; model handling
+              </button>
             </div>
           )}
         </div>
@@ -511,6 +536,10 @@ export default function Sidebar(props: SidebarProps) {
           <p>Built by <a href="https://sanshrit-singhai.vercel.app" className="text-[var(--color-cyan-500)] hover:underline" target="_blank" rel="noopener noreferrer">Sanshrit Singhai</a></p>
         </div>
       </aside>
+
+      {dataHandlingOpen && (
+        <DataHandlingPanel onClose={() => setDataHandlingOpen(false)} />
+      )}
     </>
   );
 }

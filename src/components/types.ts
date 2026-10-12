@@ -46,6 +46,60 @@ export const AuditLogResponseSchema = z.object({
   events: z.array(AuditEventSchema),
 })
 
+// ── Admin metrics (DOCBOT-1528 Usage tab) ───────────────────────────────────
+// Mirrors api/metrics_service.py's GET /admin/metrics response shape.
+
+export const DailyLlmSpendSchema = z.object({
+  date: z.string(),
+  calls: z.number(),
+  total_tokens: z.number(),
+  cost_usd: z.number(),
+})
+
+export const CallerLlmSpendSchema = z.object({
+  caller: z.string(),
+  calls: z.number(),
+  cost_usd: z.number(),
+  p50_latency_ms: z.number().nullish(),
+  p95_latency_ms: z.number().nullish(),
+})
+
+export const LlmCostMetricsSchema = z.object({
+  window_days: z.number(),
+  total_calls: z.number(),
+  total_cost_usd: z.number(),
+  total_input_tokens: z.number(),
+  total_output_tokens: z.number(),
+  success_rate: z.number().nullish(),
+  fallback_rate: z.number().nullish(),
+  p50_latency_ms: z.number().nullish(),
+  p95_latency_ms: z.number().nullish(),
+  by_day: z.array(DailyLlmSpendSchema).default([]),
+  by_caller: z.array(CallerLlmSpendSchema).default([]),
+})
+
+export const LlmCacheMetricsSchema = z.object({
+  hits: z.number(),
+  misses: z.number(),
+  sets: z.number(),
+  errors: z.number(),
+  hit_rate: z.number().nullish(),
+})
+
+export const AdminMetricsSchema = z.object({
+  total_sessions: z.number(),
+  total_queries: z.number(),
+  queries_by_type: z.record(z.string(), z.number()).default({}),
+  total_documents_uploaded: z.number(),
+  active_db_connections: z.number(),
+  avg_response_time_ms: z.number().nullish(),
+  uptime_seconds: z.number(),
+  uptime_since: z.string().nullish(),
+  llm_metrics: LlmCostMetricsSchema.nullish(),
+  llm_cache_metrics: LlmCacheMetricsSchema.nullish(),
+})
+export type AdminMetrics = z.infer<typeof AdminMetricsSchema>
+
 // ── Workspace schemas ─────────────────────────────────────────────────────
 
 export const WorkspaceSessionSchema = z.object({
@@ -69,6 +123,16 @@ export const WorkspaceSchema = z.object({
   sessions: z.array(WorkspaceSessionSchema),
   db_connections: z.array(WorkspaceConnectionSchema),
 })
+
+// DOCBOT-1528: GET /api/db/schema/{connection_id} response — adds
+// schema_cached_at / schema_expires_at for the "Schema last synced" UI.
+export const DbSchemaResponseSchema = z.object({
+  connection_id: z.string(),
+  tables: z.array(z.record(z.string(), z.unknown())).default([]),
+  schema_cached_at: z.string().nullish(),
+  schema_expires_at: z.string().nullish(),
+})
+export type DbSchemaResponse = z.infer<typeof DbSchemaResponseSchema>
 
 // ── Domain types ──────────────────────────────────────────────────────────
 
@@ -225,6 +289,14 @@ export type TraceFeedbackResponse = z.infer<typeof TraceFeedbackResponseSchema>
 export const ConnectorInfoSchema = z.object({
   connector_id: z.string(),
   connector_type: z.string(),
+  // DOCBOT-1528: sync freshness, already returned by GET /api/connectors
+  // (api/connector_store.py::list_active_connectors) but previously unused.
+  is_active: z.boolean().nullish(),
+  sync_status: z.string().nullish(),
+  sync_cursor: z.string().nullish(),
+  last_sync_at: z.string().nullish(),
+  created_at: z.string().nullish(),
+  updated_at: z.string().nullish(),
 })
 export type ConnectorInfo = z.infer<typeof ConnectorInfoSchema>
 
