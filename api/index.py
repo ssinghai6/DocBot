@@ -329,6 +329,10 @@ data_ontology_table = register_ontology_table(metadata)
 from api.eval_service import register_eval_judgments_table
 eval_judgments_table = register_eval_judgments_table(metadata)
 
+# ── DOCBOT-1530: Developer API — org-scoped API key management ──────────────
+from api.api_key_service import register_api_keys_table
+api_keys_table = register_api_keys_table(metadata)
+
 # ── EPIC-06: RBAC dependencies (DOCBOT-603) ──────────────────────────────────
 # Imported here so Depends() objects can be declared at module level.
 # require_role() checks is_auth_enforcement_active() at request time — safe to import early.
@@ -441,7 +445,7 @@ async def init_db() -> None:
         "(sessions, messages, db_connections, schema_cache, query_history, "
         "query_embeddings, session_artifacts, table_embeddings, audit_log, "
         "commerce_orders, commerce_financials, marketplace_connections, "
-        "agent_traces, data_ontology, eval_judgments, organizations). "
+        "agent_traces, data_ontology, eval_judgments, organizations, api_keys). "
         "Default organization: %s",
         default_org_id,
     )
@@ -494,6 +498,10 @@ async def lifespan(app: FastAPI):
     # read-only consumer of agent_traces, writes only to eval_judgments.
     from api.eval_service import wire_eval_store
     wire_eval_store(eval_judgments_table, async_session_factory)
+    # DOCBOT-1530: wire the developer API key store (org-scoped key CRUD +
+    # the require_api_key() dependency's audit-log side effect)
+    from api.api_key_service import wire_api_key_store
+    wire_api_key_store(api_keys_table, async_session_factory, audit_log_table)
     # Clean up any expired file uploads from previous runs
     try:
         from api.file_upload_service import cleanup_expired_uploads
@@ -2991,6 +2999,81 @@ async def update_user_role(
 
 
 # ---------------------------------------------------------------------------
+# DOCBOT-1530: Developer API key management (session-cookie admin UI, not
+# the /v1/* key itself) — the minimal "API Keys" admin surface: list issued
+# keys (prefix + name + created + last used + revoke), and a create flow
+# that returns the raw key exactly once.
+# ---------------------------------------------------------------------------
+
+
+async def _resolve_org_id_for_admin(user: Optional[Any]) -> str:
+    """Resolve the org_id a newly-created API key should belong to.
+
+    Mirrors ``get_user_org_id()`` but never returns None: when auth
+    enforcement is off (open/demo mode, `user` is None) there is no admin
+    user to read org_id from, so this falls back to the earliest-created
+    organization — the same default org `backfill_default_organization`
+    guarantees exists. Raises 500 only in the pathological case where
+    `init_db()` has not run yet.
+    """
+    org_id = get_user_org_id(user)
+    if org_id is not None:
+        return org_id
+    async with async_session_factory() as db:
+        result = await db.execute(
+            select(organizations_table.c.id).order_by(organizations_table.c.created_at.asc()).limit(1)
+        )
+        row = result.first()
+    if row is None:
+        raise HTTPException(status_code=500, detail="No organization exists yet — restart the app to run startup backfill.")
+    return row.id
+
+
+class APIKeyCreateRequest(BaseModel):
+    name: str
+    scopes: List[str]
+
+
+@app.get("/admin/api-keys")
+async def list_admin_api_keys(_user=_rbac_admin):
+    """List issued developer API keys for the requesting admin's org.
+
+    Never returns the raw key or its hash — only prefix/name/timestamps/scopes.
+    """
+    from api.api_key_service import list_api_keys
+    org_id = await _resolve_org_id_for_admin(_user)
+    keys = await list_api_keys(org_id)
+    return {"org_id": org_id, "keys": [k.to_dict() for k in keys]}
+
+
+@app.post("/admin/api-keys")
+async def create_admin_api_key(body: APIKeyCreateRequest, _user=_rbac_admin):
+    """Issue a new developer API key. The raw key is returned exactly once.
+
+    `scopes` must be a non-empty subset of API_KEY_SCOPES
+    (hybrid:read, lineage:read, autopilot:run, connectors:manage).
+    """
+    from api.api_key_service import create_api_key
+    org_id = await _resolve_org_id_for_admin(_user)
+    try:
+        record, raw_key = await create_api_key(org_id=org_id, scopes=body.scopes, name=body.name)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+    return {"key": record.to_dict(), "raw_key": raw_key}
+
+
+@app.delete("/admin/api-keys/{key_id}")
+async def revoke_admin_api_key(key_id: str, _user=_rbac_admin):
+    """Revoke a developer API key. Scoped to the requesting admin's org."""
+    from api.api_key_service import revoke_api_key
+    org_id = await _resolve_org_id_for_admin(_user)
+    found = await revoke_api_key(key_id, org_id=org_id)
+    if not found:
+        raise HTTPException(status_code=404, detail="API key not found.")
+    return {"status": "revoked", "key_id": key_id}
+
+
+# ---------------------------------------------------------------------------
 # Admin Metrics endpoint — Investor Readiness Sprint
 # ---------------------------------------------------------------------------
 
@@ -3372,3 +3455,344 @@ async def edgar_list_cached(ticker: Optional[str] = None, cik: Optional[str] = N
 
     filings = await list_cached_filings(ticker=ticker, cik=cik)
     return {"filings": filings, "count": len(filings)}
+
+
+# ---------------------------------------------------------------------------
+# DOCBOT-1530: Developer API — versioned /v1/* programmatic routes
+# ---------------------------------------------------------------------------
+#
+# Auth: API-key (`Authorization: Bearer dk_live_...`), via require_api_key(),
+# never the session cookie — a programmatic caller has no browser. Each
+# route delegates to the exact same underlying service function the
+# session-cookie-authenticated frontend route already calls; only the auth
+# dependency and (for hybrid/autopilot) the response shape differ.
+#
+# Streaming vs buffered: the frontend routes (/api/hybrid/chat,
+# /api/autopilot/run) return `text/event-stream` because the chat UI renders
+# tokens as they arrive. A programmatic integration (a backend service
+# calling DocBot, a script, a notebook) almost always wants one JSON object
+# it can parse once — SSE buys nothing there and adds a client-side SSE
+# parser to every integration's dependency list for no benefit. The /v1/
+# equivalents therefore buffer the same event stream internally and return a
+# single JSON response. The LLM call itself still runs once; this trades a
+# slightly later time-to-first-byte for a plain `httpx.post(...).json()`
+# integration surface, which is the right trade for a developer API.
+from api.api_key_service import require_api_key
+
+_v1_hybrid_read = Depends(require_api_key("hybrid:read"))
+_v1_autopilot_run = Depends(require_api_key("autopilot:run"))
+_v1_lineage_read = Depends(require_api_key("lineage:read"))
+_v1_connectors_manage = Depends(require_api_key("connectors:manage"))
+
+
+def _parse_sse_event(chunk: str) -> Optional[dict]:
+    """Parse one `data: {...}\\n\\n` SSE line back into its dict payload."""
+    if not chunk.startswith("data: "):
+        return None
+    try:
+        return json.loads(chunk[len("data: "):].strip())
+    except json.JSONDecodeError:
+        return None
+
+
+class V1HybridChatRequest(BaseModel):
+    question: str
+    session_id: str
+    connection_id: Optional[str] = None
+    persona: str = "Data Analyst"
+    has_docs: bool = True
+    history: List[ChatMessage] = []
+    chart_type: str = "auto"
+
+
+@app.post(
+    "/v1/hybrid/chat",
+    tags=["v1-developer-api"],
+    summary="Hybrid Docs+DB chat (buffered)",
+    description=(
+        "Runs the same intent-classification → SQL + RAG → synthesis pipeline as "
+        "/api/hybrid/chat, buffered into a single JSON response instead of SSE. "
+        "Requires an API key with the `hybrid:read` scope."
+    ),
+)
+async def v1_hybrid_chat(raw_request: Request, request: V1HybridChatRequest, _key=_v1_hybrid_read):
+    from api.hybrid_service import hybrid_chat
+    from api.audit_service import log_event, AuditEventType, get_client_ip
+
+    await charge_budget(raw_request, request.session_id, "hybrid")
+
+    log_event(
+        AuditEventType.query,
+        audit_log_table,
+        async_session_factory,
+        session_id=request.session_id,
+        detail=request.question[:500],
+        metadata={
+            "source": "v1_hybrid_chat",
+            "connection_id": request.connection_id,
+            "persona": request.persona,
+            "api_key_id": _key.id,
+            "ip_address": get_client_ip(raw_request),
+        },
+        org_id=_key.org_id,
+    )
+
+    _hybrid_history = [{"role": m.role, "content": m.content} for m in (request.history or [])]
+    answer_parts: list[str] = []
+    citations: list[dict] = []
+    metadata_evt: dict = {}
+    run_id: Optional[str] = None
+    trace_id: Optional[str] = None
+    error_detail: Optional[str] = None
+
+    try:
+        async for chunk in hybrid_chat(
+            question=request.question,
+            session_id=request.session_id,
+            connection_id=request.connection_id,
+            persona=request.persona,
+            has_docs=request.has_docs,
+            messages_table=messages_table,
+            sessions_table=sessions_table,
+            db_connections_table=db_connections_table,
+            schema_cache_table=schema_cache_table,
+            query_history_table=query_history_table,
+            query_embeddings_table=query_embeddings_table,
+            async_session_factory=async_session_factory,
+            expert_personas=EXPERT_PERSONAS,
+            vector_stores=VECTOR_STORES,
+            extracted_fields=EXTRACTED_FIELDS.get(request.session_id),
+            chat_history=_hybrid_history if _hybrid_history else None,
+            chart_type=request.chart_type,
+        ):
+            evt = _parse_sse_event(chunk)
+            if not evt:
+                continue
+            etype = evt.get("type")
+            if etype == "metadata":
+                metadata_evt = evt
+            elif etype == "token":
+                answer_parts.append(evt.get("content", ""))
+            elif etype == "done":
+                citations = evt.get("citations", [])
+                run_id = evt.get("run_id")
+                trace_id = evt.get("trace_id")
+            elif etype == "error":
+                error_detail = evt.get("detail") or evt.get("content") or "An internal error occurred."
+    except Exception as exc:
+        logger.error("v1_hybrid_chat error: %s", type(exc).__name__)
+        raise HTTPException(status_code=502, detail="An internal error occurred.") from exc
+
+    if error_detail:
+        raise HTTPException(status_code=502, detail=error_detail)
+
+    return {
+        "answer": "".join(answer_parts),
+        "citations": citations,
+        "intent": metadata_evt.get("intent"),
+        "has_sql": metadata_evt.get("has_sql"),
+        "has_docs": metadata_evt.get("has_docs"),
+        "run_id": run_id,
+        "trace_id": trace_id,
+    }
+
+
+class V1AutopilotRequest(BaseModel):
+    session_id: str
+    connection_id: Optional[str] = None
+    question: str
+    persona: str = "Generalist"
+    has_docs: bool = False
+    has_db: bool = False
+    has_csv: bool = False
+    history: List[ChatMessage] = []
+
+
+@app.post(
+    "/v1/autopilot/run",
+    tags=["v1-developer-api"],
+    summary="Analytical Autopilot run (buffered)",
+    description=(
+        "Runs the same plan → execute (≤5 steps) → synthesize Autopilot pipeline as "
+        "/api/autopilot/run, buffered into a single JSON response instead of SSE. "
+        "Requires an API key with the `autopilot:run` scope."
+    ),
+)
+async def v1_autopilot_run(raw_request: Request, request: V1AutopilotRequest, _key=_v1_autopilot_run):
+    from api.autopilot_service import run_autopilot
+    from api.audit_service import log_event, AuditEventType, get_client_ip
+
+    await charge_budget(raw_request, request.session_id, "autopilot")
+
+    log_event(
+        AuditEventType.query,
+        audit_log_table,
+        async_session_factory,
+        session_id=request.session_id,
+        detail=request.question[:500],
+        metadata={
+            "source": "v1_autopilot",
+            "connection_id": request.connection_id or "",
+            "persona": request.persona,
+            "api_key_id": _key.id,
+            "ip_address": get_client_ip(raw_request),
+        },
+        org_id=_key.org_id,
+    )
+
+    _autopilot_history = [{"role": m.role, "content": m.content} for m in (request.history or [])]
+    plan_steps: list[dict] = []
+    steps: list[dict] = []
+    answer = ""
+    citations: list[dict] = []
+    warnings: list[str] = []
+    error_detail: Optional[str] = None
+
+    try:
+        async for chunk in run_autopilot(
+            question=request.question,
+            session_id=request.session_id,
+            connection_id=request.connection_id or "",
+            persona=request.persona,
+            db_connections_table=db_connections_table,
+            schema_cache_table=schema_cache_table,
+            query_history_table=query_history_table,
+            query_embeddings_table=query_embeddings_table,
+            session_artifacts_table=session_artifacts_table,
+            table_embeddings_table=table_embeddings_table,
+            async_session_factory=async_session_factory,
+            expert_personas=EXPERT_PERSONAS,
+            vector_stores=VECTOR_STORES,
+            has_docs=request.has_docs,
+            has_db=request.has_db,
+            has_csv=request.has_csv,
+            chat_history=_autopilot_history if _autopilot_history else None,
+        ):
+            evt = _parse_sse_event(chunk)
+            if not evt:
+                continue
+            etype = evt.get("type")
+            if etype == "plan":
+                plan_steps = evt.get("steps", [])
+            elif etype == "step":
+                steps.append(evt)
+            elif etype == "answer":
+                answer = evt.get("content", "")
+            elif etype == "done":
+                citations = evt.get("citations", [])
+            elif etype == "warning":
+                warnings.append(evt.get("content", ""))
+            elif etype == "error":
+                error_detail = evt.get("content") or "An internal error occurred."
+    except Exception as exc:
+        logger.error("v1_autopilot_run error: %s", type(exc).__name__)
+        raise HTTPException(status_code=502, detail="An internal error occurred.") from exc
+
+    if error_detail:
+        raise HTTPException(status_code=502, detail=error_detail)
+
+    return {
+        "plan": plan_steps,
+        "steps": steps,
+        "answer": answer,
+        "citations": citations,
+        "warnings": warnings,
+    }
+
+
+@app.get(
+    "/v1/lineage/{run_id}",
+    tags=["v1-developer-api"],
+    summary="Read answer lineage",
+    description="Returns the persisted lineage for one answer, joined with its LLM calls. Requires `lineage:read`.",
+)
+async def v1_get_lineage(run_id: str, _key=_v1_lineage_read):
+    from api.lineage_service import get_lineage
+    lineage = await get_lineage(run_id)
+    if lineage is None:
+        raise HTTPException(status_code=404, detail="Lineage not found.")
+    return lineage.model_dump(mode="json")
+
+
+class V1ConnectorRegisterRequest(BaseModel):
+    connector_type: str
+    credentials: Dict[str, str]
+
+
+@app.get(
+    "/v1/connectors",
+    tags=["v1-developer-api"],
+    summary="List marketplace connectors",
+    description="List all active marketplace connectors (metadata only, no credentials). Requires `connectors:manage`.",
+)
+async def v1_list_connectors(_key=_v1_connectors_manage):
+    from api.connector_store import list_active_connectors
+    connectors = await list_active_connectors()
+    return {"connectors": connectors}
+
+
+@app.post(
+    "/v1/connectors",
+    tags=["v1-developer-api"],
+    summary="Register a marketplace connector",
+    description=(
+        "Registers and tests a commerce connector (Amazon SP-API, Shopify, ...). "
+        "Requires `connectors:manage`. NOTE: the underlying connector store does not "
+        "yet filter by organization (a pre-existing gap from DOCBOT-1524, not introduced "
+        "here) — see DOCBOT-1530's final report for the follow-up this implies."
+    ),
+)
+async def v1_register_connector(body: V1ConnectorRegisterRequest, _key=_v1_connectors_manage):
+    from api.connectors.registry import get_connector_class
+    from api.connectors.base import ConnectorCredentials
+
+    try:
+        cls = get_connector_class(body.connector_type)
+    except KeyError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+
+    creds = ConnectorCredentials(connector_type=body.connector_type, credentials=body.credentials)
+    connector = cls(creds)
+
+    try:
+        ok = await connector.test_connection()
+    except Exception as exc:
+        logger.warning("v1 connector test_connection failed: %s", exc)
+        raise HTTPException(status_code=502, detail=f"Connection test failed: {exc}")
+    if not ok:
+        raise HTTPException(status_code=502, detail="Connector test_connection returned False — check credentials.")
+
+    connector_id = str(uuid.uuid4())
+    if not hasattr(app.state, "connectors"):
+        app.state.connectors = {}
+    app.state.connectors[connector_id] = connector
+
+    from api.connector_store import save_connector
+    await save_connector(connector_id, body.connector_type, body.credentials)
+
+    from api.connectors.sync_jobs import register_sync_schedules
+    register_sync_schedules(connector_id)
+
+    logger.info("v1 registered %s connector: %s (api_key=%s)", body.connector_type, connector_id, _key.id)
+    return {"connector_id": connector_id, "connector_type": body.connector_type, "status": "connected"}
+
+
+@app.post(
+    "/v1/connectors/{connector_id}/sync",
+    tags=["v1-developer-api"],
+    summary="Sync a marketplace connector",
+    description="Fetches orders + financials and persists them to the commerce tables. Requires `connectors:manage`.",
+)
+async def v1_sync_connector(connector_id: str, body: ConnectorDateRangeRequest, _key=_v1_connectors_manage):
+    from api.commerce_service import sync_connector_data
+    from api.connector_store import update_last_sync
+
+    connector = _get_connector(connector_id)
+    try:
+        summary = await sync_connector_data(connector_id, connector, body.start_date, body.end_date)
+    except Exception as exc:
+        logger.error("v1 sync failed for %s: %s", connector_id, exc)
+        raise HTTPException(status_code=502, detail=f"Sync failed: {exc}")
+
+    await update_last_sync(connector_id)
+    return summary

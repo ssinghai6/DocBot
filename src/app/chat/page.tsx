@@ -35,6 +35,8 @@ import type {
   LiveDbForm,
   ConnectorInfo,
   AdminMetrics,
+  ApiKey,
+  ApiKeyCreateResponse,
 } from "@/components/types"
 
 // Toast Component
@@ -190,7 +192,7 @@ export default function Home() {
 
   // Admin panel state
   const [adminPanelOpen, setAdminPanelOpen] = useState(false);
-  const [adminTab, setAdminTab] = useState<"users" | "audit" | "usage">("users");
+  const [adminTab, setAdminTab] = useState<"users" | "audit" | "usage" | "keys">("users");
   const [adminUsers, setAdminUsers] = useState<AdminUser[]>([]);
   const [adminUsersLoading, setAdminUsersLoading] = useState(false);
   const [auditEvents, setAuditEvents] = useState<AuditEvent[]>([]);
@@ -203,6 +205,10 @@ export default function Home() {
   // DOCBOT-1528: Usage tab — GET /admin/metrics
   const [adminMetrics, setAdminMetrics] = useState<AdminMetrics | null>(null);
   const [adminMetricsLoading, setAdminMetricsLoading] = useState(false);
+  // DOCBOT-1530: Keys tab — developer API key management
+  const [apiKeys, setApiKeys] = useState<ApiKey[]>([]);
+  const [apiKeysLoading, setApiKeysLoading] = useState(false);
+  const [newlyCreatedApiKey, setNewlyCreatedApiKey] = useState<ApiKeyCreateResponse | null>(null);
 
   // Stable anonymous session ID used when no PDF session exists yet
   const anonymousSessionIdRef = useRef<string>(
@@ -317,6 +323,9 @@ export default function Home() {
     setAuditEvents,
     setAdminMetrics,
     setAdminMetricsLoading,
+    setApiKeys,
+    setApiKeysLoading,
+    setNewlyCreatedApiKey,
     setWorkspaceConnections,
     setConnectors,
     setSchemaCachedAt,
@@ -422,8 +431,10 @@ export default function Home() {
         startDate: auditStartDate,
         endDate: auditEndDate,
       });
-    } else {
+    } else if (adminTab === "usage") {
       handlers.loadAdminMetrics();
+    } else {
+      handlers.loadApiKeys();
     }
   }, [adminPanelOpen, adminTab]); // eslint-disable-line react-hooks/exhaustive-deps
 
@@ -730,6 +741,13 @@ export default function Home() {
           adminMetrics={adminMetrics}
           adminMetricsLoading={adminMetricsLoading}
           loadAdminMetrics={handlers.loadAdminMetrics}
+          apiKeys={apiKeys}
+          apiKeysLoading={apiKeysLoading}
+          newlyCreatedApiKey={newlyCreatedApiKey}
+          loadApiKeys={handlers.loadApiKeys}
+          createApiKey={handlers.createApiKey}
+          revokeApiKey={handlers.revokeApiKey}
+          dismissNewlyCreatedApiKey={() => setNewlyCreatedApiKey(null)}
           authUser={authUser}
           showToast={showToast}
           onClose={() => setAdminPanelOpen(false)}

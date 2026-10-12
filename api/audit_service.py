@@ -54,6 +54,7 @@ class AuditEventType(str, Enum):
     upload = "upload"
     login = "login"
     logout = "logout"
+    api_key_use = "api_key_use"  # DOCBOT-1530: developer API key used to call a /v1/* route
 
 
 async def _write_event(
