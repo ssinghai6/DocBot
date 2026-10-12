@@ -33,8 +33,83 @@ from api.utils.encryption import encrypt_credentials, decrypt_credentials
 from api.utils.sql_validator import validate_and_sanitize_sql, QueryValidationError
 from api.utils.embeddings import find_similar_queries, embedding_to_json
 from api.utils.exceptions import TokenExpiredError
+from api.utils.envelope_encryption import (
+    is_envelope_blob,
+    encrypt_credentials_for_org,
+    decrypt_credentials_with_migration,
+    write_back_blob,
+)
 
 logger = logging.getLogger(__name__)
+
+# ---------------------------------------------------------------------------
+# DOCBOT-1529: per-org envelope encryption — module-level table reference,
+# wired once at startup from api/index.py (mirrors connector_store.py's
+# wire_connector_store() pattern). Left `None` in tests that don't wire it —
+# every call site below falls back to the pre-ticket legacy encryption path
+# whenever it is `None`, so existing tests/behavior are unaffected.
+# ---------------------------------------------------------------------------
+_org_encryption_keys_table: Optional[Table] = None
+
+
+def wire_envelope_encryption(org_encryption_keys_table: Table) -> None:
+    """Inject the org_encryption_keys table reference. Called once from
+    api/index.py after tables are created."""
+    global _org_encryption_keys_table
+    _org_encryption_keys_table = org_encryption_keys_table
+
+
+async def _decrypt_conn_credentials_lazy(
+    conn_row: Any,
+    connection_id: str,
+    db_connections_table: Table,
+    async_session_factory: Any,
+) -> Dict[str, Any]:
+    """Decrypt `conn_row.credentials_blob`, transparently handling both the
+    legacy flat-key scheme and the new per-org envelope scheme, and lazily
+    re-encrypting (write-back) a legacy blob to the envelope scheme once its
+    org is known — DOCBOT-1529.
+
+    Falls back to the exact pre-ticket behavior (a single synchronous
+    `decrypt_credentials()` call, patchable by existing tests) whenever the
+    blob is not envelope-tagged and envelope encryption has not been wired
+    or the row's org_id is unknown — i.e. this is a pure additive wrapper,
+    never a behavior change for legacy-only / unwired call paths.
+    """
+    blob = conn_row.credentials_blob
+    org_id = getattr(conn_row, "org_id", None)
+
+    if not is_envelope_blob(blob):
+        creds = decrypt_credentials(blob)
+        if org_id and _org_encryption_keys_table is not None:
+            try:
+                new_blob = await encrypt_credentials_for_org(
+                    creds, org_id, async_session_factory, _org_encryption_keys_table
+                )
+            except Exception:
+                logger.warning(
+                    "Lazy envelope migration failed for connection %s (org %s)",
+                    connection_id, org_id, exc_info=True,
+                )
+            else:
+                await write_back_blob(
+                    db_connections_table, "id", connection_id,
+                    "credentials_blob", new_blob, async_session_factory,
+                )
+        return creds
+
+    # Already on the envelope scheme — needs the DB-backed migration path
+    # (org DEK lookup), which requires envelope encryption to be wired.
+    if _org_encryption_keys_table is None:
+        raise RuntimeError(
+            "Encountered an envelope-encrypted credential blob but "
+            "envelope encryption has not been wired (wire_envelope_encryption() "
+            "was never called)."
+        )
+    creds, _ = await decrypt_credentials_with_migration(
+        blob, org_id, async_session_factory, _org_encryption_keys_table
+    )
+    return creds
 
 
 # ---------------------------------------------------------------------------
@@ -498,11 +573,34 @@ def _get_embeddings_model():
 # ---------------------------------------------------------------------------
 
 
+async def _encrypt_creds_for_connection(
+    data: Dict[str, Any],
+    org_id: Optional[str],
+    async_session_factory,
+) -> str:
+    """Encrypt a credentials dict for storage — DOCBOT-1529.
+
+    Uses the per-org envelope scheme when an org_id is known AND envelope
+    encryption has been wired (`wire_envelope_encryption()`); otherwise
+    falls back to the exact pre-ticket legacy scheme (`encrypt_credentials`),
+    which self-migrates to the envelope scheme the next time this row is
+    read (see `_decrypt_conn_credentials_lazy`). This keeps every caller
+    that doesn't yet have an org_id (e.g. open/demo mode, tests) on
+    identical behavior to before this ticket.
+    """
+    if org_id and _org_encryption_keys_table is not None:
+        return await encrypt_credentials_for_org(
+            data, org_id, async_session_factory, _org_encryption_keys_table
+        )
+    return encrypt_credentials(data)
+
+
 async def connect_database(
     req: DBConnectionRequest,
     db_connections_table: Table,
     schema_cache_table: Table,
     async_session_factory,
+    org_id: Optional[str] = None,
 ) -> Dict[str, Any]:
     """
     Validate credentials, encrypt, store, and return connection_id + schema summary.
@@ -510,7 +608,8 @@ async def connect_database(
     Steps:
       1. SSRF already validated by Pydantic field_validator on host.
       2. Test connection with a lightweight SELECT 1.
-      3. Fernet-encrypt credentials.
+      3. Encrypt credentials — per-org envelope scheme when `org_id` is
+         known and wired (DOCBOT-1529), else the legacy flat-key scheme.
       4. Insert into db_connections.
       5. Introspect schema → populate schema_cache with 24h TTL.
       6. Return connection_id + schema summary.
@@ -543,28 +642,28 @@ async def connect_database(
 
     if req.dialect == "azure_sql":
         if req.auth_type == "entra_interactive":
-            creds_blob = encrypt_credentials({
+            creds_blob = await _encrypt_creds_for_connection({
                 "dialect": req.dialect, "host": req.host, "port": req.port,
                 "dbname": req.dbname, "auth_type": "entra_interactive",
                 "access_token": req.access_token,
                 "token_expires_at": token_expires_at.isoformat(),  # type: ignore[possibly-undefined]
-            })
+            }, org_id, async_session_factory)
         else:
-            creds_blob = encrypt_credentials({
+            creds_blob = await _encrypt_creds_for_connection({
                 "dialect": req.dialect, "host": req.host, "port": req.port,
                 "dbname": req.dbname, "auth_type": "entra_sp",
                 "tenant_id": req.tenant_id, "client_id": req.client_id,
                 "client_secret": req.client_secret,
-            })
+            }, org_id, async_session_factory)
     else:
-        creds_blob = encrypt_credentials({
+        creds_blob = await _encrypt_creds_for_connection({
             "dialect": req.dialect,
             "host": req.host,
             "port": req.port,
             "dbname": req.dbname,
             "user": req.user,
             "password": req.password,
-        })
+        }, org_id, async_session_factory)
 
     async with async_session_factory() as session:
         async with session.begin():
@@ -578,6 +677,7 @@ async def connect_database(
                     dbname=req.dbname,
                     credentials_blob=creds_blob,
                     pii_masking_enabled=req.pii_masking_enabled,
+                    org_id=org_id,
                 )
             )
 
@@ -687,7 +787,9 @@ async def get_schema(
     if not conn_row:
         raise ConnectionNotFoundError(f"Connection '{connection_id}' not found.")
 
-    creds = decrypt_credentials(conn_row.credentials_blob)
+    creds = await _decrypt_conn_credentials_lazy(
+        conn_row, connection_id, db_connections_table, async_session_factory
+    )
 
     # CSV uploads go via E2B pandas — schema is always rebuilt from stored column metadata.
     if creds.get("dialect") == "csv":
@@ -951,7 +1053,9 @@ async def run_sql_pipeline(
             lin.set_mode("csv")
             lin.set_pii(True)
             _csv_t0 = time.perf_counter()
-            _creds = decrypt_credentials(_conn_row.credentials_blob)
+            _creds = await _decrypt_conn_credentials_lazy(
+                _conn_row, connection_id, db_connections_table, async_session_factory
+            )
             # Build data profile string from credentials blob (stored during upload)
             _data_profile = _creds.get("data_profile")
             _data_profile_str: Optional[str] = None
@@ -1114,7 +1218,9 @@ async def run_sql_pipeline(
         # ── Step 6: Execute (with schema drift retry) ──────────────────────
         _drift_retry = False
         _t = time.perf_counter()
-        creds = decrypt_credentials(conn_row.credentials_blob)
+        creds = await _decrypt_conn_credentials_lazy(
+            conn_row, connection_id, db_connections_table, async_session_factory
+        )
         import asyncio as _asyncio
         sync_url, entra_connect_args = await _asyncio.get_running_loop().run_in_executor(
             None, _resolve_connection, creds
@@ -1642,7 +1748,9 @@ async def fetch_full_series(
     safe_sql = validate_and_sanitize_sql(sql, dialect=dialect)
     ml_sql = _raise_sql_limit(safe_sql, dialect, row_cap)
 
-    creds = decrypt_credentials(conn_row.credentials_blob)
+    creds = await _decrypt_conn_credentials_lazy(
+        conn_row, connection_id, db_connections_table, async_session_factory
+    )
     import asyncio as _asyncio
     sync_url, entra_connect_args = await _asyncio.get_running_loop().run_in_executor(
         None, _resolve_connection, creds
