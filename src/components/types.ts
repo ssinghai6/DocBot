@@ -100,6 +100,39 @@ export const AdminMetricsSchema = z.object({
 })
 export type AdminMetrics = z.infer<typeof AdminMetricsSchema>
 
+// ── DOCBOT-1530: Developer API key schemas ──────────────────────────────────
+
+export const ApiKeyScope = z.enum([
+  "hybrid:read",
+  "lineage:read",
+  "autopilot:run",
+  "connectors:manage",
+])
+export type ApiKeyScopeValue = z.infer<typeof ApiKeyScope>
+
+export const ApiKeySchema = z.object({
+  id: z.string(),
+  org_id: z.string(),
+  key_prefix: z.string(),
+  name: z.string(),
+  scopes: z.array(z.string()),
+  created_at: z.string().nullable(),
+  last_used_at: z.string().nullable(),
+  revoked_at: z.string().nullable(),
+})
+export type ApiKey = z.infer<typeof ApiKeySchema>
+
+export const ApiKeysListResponseSchema = z.object({
+  org_id: z.string(),
+  keys: z.array(ApiKeySchema),
+})
+
+export const ApiKeyCreateResponseSchema = z.object({
+  key: ApiKeySchema,
+  raw_key: z.string(),
+})
+export type ApiKeyCreateResponse = z.infer<typeof ApiKeyCreateResponseSchema>
+
 // ── Workspace schemas ─────────────────────────────────────────────────────
 
 export const WorkspaceSessionSchema = z.object({

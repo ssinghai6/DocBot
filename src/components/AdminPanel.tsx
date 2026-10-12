@@ -4,14 +4,14 @@ import React, { useMemo, useState } from "react"
 import {
   X, Loader2, Users, ClipboardList, Shield,
   Filter, RefreshCw, Download, ChevronDown, ChevronRight,
-  BarChart3,
+  BarChart3, KeyRound, Copy, Check, Trash2, Plus,
 } from "lucide-react"
-import type { AdminUser, AuditEvent, AuthUser, AdminMetrics } from "@/components/types"
+import type { AdminUser, AuditEvent, AuthUser, AdminMetrics, ApiKey, ApiKeyCreateResponse } from "@/components/types"
 import type { AuditLogFilters } from "@/hooks/useChatHandlers"
 
 interface AdminPanelProps {
-  adminTab: "users" | "audit" | "usage"
-  setAdminTab: (tab: "users" | "audit" | "usage") => void
+  adminTab: "users" | "audit" | "usage" | "keys"
+  setAdminTab: (tab: "users" | "audit" | "usage" | "keys") => void
   adminUsers: AdminUser[]
   adminUsersLoading: boolean
   loadAdminUsers: () => void
@@ -33,6 +33,14 @@ interface AdminPanelProps {
   adminMetrics: AdminMetrics | null
   adminMetricsLoading: boolean
   loadAdminMetrics: () => void
+  // DOCBOT-1530: Keys tab — developer API key management
+  apiKeys: ApiKey[]
+  apiKeysLoading: boolean
+  newlyCreatedApiKey: ApiKeyCreateResponse | null
+  loadApiKeys: () => void
+  createApiKey: (name: string, scopes: string[]) => void
+  revokeApiKey: (keyId: string) => void
+  dismissNewlyCreatedApiKey: () => void
   authUser: AuthUser | null
   showToast: (type: "success" | "error" | "warning" | "info", message: string) => void
   onClose: () => void
@@ -60,6 +68,13 @@ export default function AdminPanel({
   adminMetrics,
   adminMetricsLoading,
   loadAdminMetrics,
+  apiKeys,
+  apiKeysLoading,
+  newlyCreatedApiKey,
+  loadApiKeys,
+  createApiKey,
+  revokeApiKey,
+  dismissNewlyCreatedApiKey,
   authUser,
   showToast,
   onClose,
@@ -76,6 +91,30 @@ export default function AdminPanel({
   // DOCBOT-1528: click-to-expand full row detail (metadata_json is often
   // truncated by the Detail column's `truncate` class — this surfaces it in full).
   const [expandedAuditId, setExpandedAuditId] = useState<string | null>(null);
+
+  // DOCBOT-1530: Keys tab — create-key form state (local to this panel; the
+  // issued key itself lives in `newlyCreatedApiKey`, owned by the parent so
+  // it survives a tab switch until explicitly dismissed).
+  const ALL_SCOPES = ["hybrid:read", "lineage:read", "autopilot:run", "connectors:manage"] as const;
+  const [showCreateKeyForm, setShowCreateKeyForm] = useState(false);
+  const [newKeyName, setNewKeyName] = useState("");
+  const [newKeyScopes, setNewKeyScopes] = useState<string[]>([]);
+  const [copiedKey, setCopiedKey] = useState(false);
+
+  const toggleScope = (scope: string) => {
+    setNewKeyScopes(prev => prev.includes(scope) ? prev.filter(s => s !== scope) : [...prev, scope]);
+  };
+
+  const submitCreateKey = () => {
+    if (!newKeyName.trim() || newKeyScopes.length === 0) {
+      showToast("warning", "Name and at least one scope are required.");
+      return;
+    }
+    createApiKey(newKeyName.trim(), newKeyScopes);
+    setShowCreateKeyForm(false);
+    setNewKeyName("");
+    setNewKeyScopes([]);
+  };
 
   const currentAuditFilters = (): AuditLogFilters => ({
     eventType: auditEventTypeFilter,
@@ -153,6 +192,17 @@ export default function AdminPanel({
               >
                 <BarChart3 className="w-3 h-3" />
                 Usage
+              </button>
+              <button
+                onClick={() => { setAdminTab("keys"); loadApiKeys(); }}
+                className={`flex items-center gap-1.5 px-3 py-1.5 rounded-md text-xs font-medium transition-all ${
+                  adminTab === "keys"
+                    ? "bg-[var(--color-cyan-500)]/20 text-[var(--color-cyan-500)] border border-[var(--color-cyan-500)]/30"
+                    : "text-[var(--color-text-secondary)] hover:text-gray-200 hover:bg-[var(--color-bg-overlay)]"
+                }`}
+              >
+                <KeyRound className="w-3 h-3" />
+                Keys
               </button>
             </div>
             <button
@@ -583,6 +633,186 @@ export default function AdminPanel({
                       </div>
                     </div>
                   )}
+                </div>
+              )}
+            </div>
+          )}
+
+          {adminTab === "keys" && (
+            <div className="p-5">
+              {/* DOCBOT-1530: raw key is shown exactly once, right after creation */}
+              {newlyCreatedApiKey && (
+                <div className="mb-4 rounded-lg border border-[var(--color-success-500)]/30 bg-[var(--color-success-500)]/10 p-3">
+                  <div className="flex items-start justify-between gap-2">
+                    <div className="min-w-0">
+                      <p className="text-xs font-semibold text-[#34d399] mb-1">
+                        Key created — copy it now, it won&apos;t be shown again
+                      </p>
+                      <code className="block text-xs text-gray-200 bg-black/30 rounded px-2 py-1.5 break-all">
+                        {newlyCreatedApiKey.raw_key}
+                      </code>
+                    </div>
+                    <button
+                      onClick={dismissNewlyCreatedApiKey}
+                      className="shrink-0 p-1 rounded text-[var(--color-text-tertiary)] hover:text-gray-200"
+                      aria-label="Dismiss"
+                    >
+                      <X className="w-3.5 h-3.5" />
+                    </button>
+                  </div>
+                  <button
+                    onClick={async () => {
+                      try {
+                        await navigator.clipboard.writeText(newlyCreatedApiKey.raw_key);
+                        setCopiedKey(true);
+                        setTimeout(() => setCopiedKey(false), 2000);
+                      } catch {
+                        showToast("error", "Copy failed — select and copy manually.");
+                      }
+                    }}
+                    className="mt-2 flex items-center gap-1.5 px-2.5 py-1 rounded-lg text-xs text-[#34d399] bg-[var(--color-success-500)]/10 border border-[var(--color-success-500)]/30 hover:bg-[var(--color-success-500)]/20 transition-all"
+                  >
+                    {copiedKey ? <Check className="w-3 h-3" /> : <Copy className="w-3 h-3" />}
+                    {copiedKey ? "Copied" : "Copy key"}
+                  </button>
+                </div>
+              )}
+
+              <div className="flex items-center justify-between mb-4">
+                <p className="text-xs text-[var(--color-text-secondary)]">
+                  {apiKeysLoading ? "Loading…" : `${apiKeys.length} key${apiKeys.length !== 1 ? "s" : ""}`}
+                </p>
+                <div className="flex items-center gap-2">
+                  <button
+                    onClick={() => setShowCreateKeyForm(v => !v)}
+                    className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs text-[var(--color-cyan-500)] hover:text-gray-200 bg-[var(--color-cyan-500)]/10 border border-[var(--color-cyan-500)]/30 hover:border-[var(--color-cyan-500)]/50 transition-all"
+                  >
+                    <Plus className="w-3 h-3" />
+                    New key
+                  </button>
+                  <button
+                    onClick={loadApiKeys}
+                    disabled={apiKeysLoading}
+                    className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs text-[var(--color-text-secondary)] hover:text-gray-200 bg-[var(--color-bg-elevated)] border border-[var(--color-border-subtle)] hover:border-[var(--color-border-default)] transition-all disabled:opacity-50"
+                  >
+                    <RefreshCw className={`w-3 h-3 ${apiKeysLoading ? "animate-spin" : ""}`} />
+                    Refresh
+                  </button>
+                </div>
+              </div>
+
+              {showCreateKeyForm && (
+                <div className="mb-4 rounded-lg bg-[var(--color-bg-elevated)] border border-[var(--color-border-subtle)] p-3 space-y-3">
+                  <div>
+                    <label className="block text-[10px] text-[var(--color-text-tertiary)] uppercase tracking-wider mb-1">Name</label>
+                    <input
+                      type="text"
+                      value={newKeyName}
+                      onChange={(e) => setNewKeyName(e.target.value)}
+                      placeholder="e.g. Production backend"
+                      className="w-full text-xs px-2.5 py-1.5 rounded-lg bg-[var(--color-bg-surface)] border border-[var(--color-border-default)] text-gray-200 placeholder-gray-500 focus:outline-none focus:border-[var(--color-cyan-500)]/40"
+                    />
+                  </div>
+                  <div>
+                    <label className="block text-[10px] text-[var(--color-text-tertiary)] uppercase tracking-wider mb-1.5">Scopes</label>
+                    <div className="flex flex-wrap gap-2">
+                      {ALL_SCOPES.map((scope) => (
+                        <label
+                          key={scope}
+                          className={`flex items-center gap-1.5 text-xs px-2.5 py-1 rounded-lg border cursor-pointer transition-all ${
+                            newKeyScopes.includes(scope)
+                              ? "bg-[var(--color-cyan-500)]/20 text-[var(--color-cyan-500)] border-[var(--color-cyan-500)]/30"
+                              : "bg-[var(--color-bg-surface)] text-[var(--color-text-secondary)] border-[var(--color-border-subtle)]"
+                          }`}
+                        >
+                          <input
+                            type="checkbox"
+                            checked={newKeyScopes.includes(scope)}
+                            onChange={() => toggleScope(scope)}
+                            className="sr-only"
+                          />
+                          {scope}
+                        </label>
+                      ))}
+                    </div>
+                  </div>
+                  <div className="flex items-center gap-2">
+                    <button
+                      onClick={submitCreateKey}
+                      className="px-3 py-1.5 rounded-lg text-xs font-medium text-white bg-[var(--color-cyan-500)] hover:opacity-90 transition-opacity"
+                    >
+                      Create key
+                    </button>
+                    <button
+                      onClick={() => { setShowCreateKeyForm(false); setNewKeyName(""); setNewKeyScopes([]); }}
+                      className="px-3 py-1.5 rounded-lg text-xs text-[var(--color-text-secondary)] hover:text-gray-200"
+                    >
+                      Cancel
+                    </button>
+                  </div>
+                </div>
+              )}
+
+              {apiKeysLoading ? (
+                <div className="flex items-center justify-center py-12">
+                  <Loader2 className="w-6 h-6 text-[var(--color-cyan-500)] animate-spin" />
+                </div>
+              ) : apiKeys.length === 0 ? (
+                <div className="flex flex-col items-center justify-center py-12 text-[var(--color-text-tertiary)]">
+                  <KeyRound className="w-8 h-8 mb-3 opacity-40" />
+                  <p className="text-sm">No API keys issued yet</p>
+                </div>
+              ) : (
+                <div className="overflow-x-auto">
+                  <table className="w-full text-sm">
+                    <thead>
+                      <tr className="border-b border-[var(--color-border-subtle)]">
+                        <th className="text-left text-xs font-semibold text-[var(--color-text-tertiary)] uppercase tracking-wider pb-2 pr-4">Key</th>
+                        <th className="text-left text-xs font-semibold text-[var(--color-text-tertiary)] uppercase tracking-wider pb-2 pr-4">Scopes</th>
+                        <th className="text-left text-xs font-semibold text-[var(--color-text-tertiary)] uppercase tracking-wider pb-2 pr-4">Created</th>
+                        <th className="text-left text-xs font-semibold text-[var(--color-text-tertiary)] uppercase tracking-wider pb-2 pr-4">Last used</th>
+                        <th className="text-left text-xs font-semibold text-[var(--color-text-tertiary)] uppercase tracking-wider pb-2">Status</th>
+                      </tr>
+                    </thead>
+                    <tbody className="divide-y divide-[#ffffff06]">
+                      {apiKeys.map((key) => (
+                        <tr key={key.id} className="hover:bg-[#ffffff03] transition-colors">
+                          <td className="py-3 pr-4">
+                            <p className="text-xs font-medium text-gray-200">{key.name}</p>
+                            <code className="text-[10px] text-[var(--color-text-tertiary)]">{key.key_prefix}…</code>
+                          </td>
+                          <td className="py-3 pr-4">
+                            <div className="flex flex-wrap gap-1">
+                              {key.scopes.map((s) => (
+                                <span key={s} className="text-[10px] px-1.5 py-0.5 rounded bg-[var(--color-bg-elevated)] border border-[var(--color-border-subtle)] text-[var(--color-text-secondary)]">
+                                  {s}
+                                </span>
+                              ))}
+                            </div>
+                          </td>
+                          <td className="py-3 pr-4 text-xs text-[var(--color-text-tertiary)]">
+                            {key.created_at ? new Date(key.created_at).toLocaleDateString([], { month: "short", day: "numeric", year: "numeric" }) : "—"}
+                          </td>
+                          <td className="py-3 pr-4 text-xs text-[var(--color-text-tertiary)]">
+                            {key.last_used_at ? new Date(key.last_used_at).toLocaleDateString([], { month: "short", day: "numeric", year: "numeric" }) : "Never"}
+                          </td>
+                          <td className="py-3">
+                            {key.revoked_at ? (
+                              <span className="text-[10px] px-1.5 py-0.5 rounded bg-[var(--color-danger-500)]/20 text-[var(--color-danger-500)]">Revoked</span>
+                            ) : (
+                              <button
+                                onClick={() => revokeApiKey(key.id)}
+                                className="flex items-center gap-1 text-[10px] px-1.5 py-0.5 rounded bg-[var(--color-danger-500)]/10 text-[var(--color-danger-500)] border border-[var(--color-danger-500)]/30 hover:bg-[var(--color-danger-500)]/20 transition-all"
+                              >
+                                <Trash2 className="w-2.5 h-2.5" />
+                                Revoke
+                              </button>
+                            )}
+                          </td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
                 </div>
               )}
             </div>

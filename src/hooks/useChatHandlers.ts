@@ -8,6 +8,8 @@ import {
   WorkspaceSchema,
   DbSchemaResponseSchema,
   AdminMetricsSchema,
+  ApiKeysListResponseSchema,
+  ApiKeyCreateResponseSchema,
 } from "@/components/types"
 import type {
   AuthUser,
@@ -21,6 +23,8 @@ import type {
   ConnectorInfo,
   ConnectorSyncResponse,
   AdminMetrics,
+  ApiKey,
+  ApiKeyCreateResponse,
 } from "@/components/types"
 
 // DOCBOT-1528: shared shape for GET /admin/audit-log's filter query params.
@@ -81,6 +85,10 @@ interface UseChatHandlersParams {
   setAuditEvents: React.Dispatch<React.SetStateAction<AuditEvent[]>>
   setAdminMetrics: React.Dispatch<React.SetStateAction<AdminMetrics | null>>
   setAdminMetricsLoading: React.Dispatch<React.SetStateAction<boolean>>
+  // DOCBOT-1530: Developer API key management (Admin Panel "Keys" tab)
+  setApiKeys: React.Dispatch<React.SetStateAction<ApiKey[]>>
+  setApiKeysLoading: React.Dispatch<React.SetStateAction<boolean>>
+  setNewlyCreatedApiKey: React.Dispatch<React.SetStateAction<ApiKeyCreateResponse | null>>
   setWorkspaceConnections: React.Dispatch<React.SetStateAction<WorkspaceConnection[]>>
   setConnectors: React.Dispatch<React.SetStateAction<ConnectorInfo[]>>
   setSchemaCachedAt: React.Dispatch<React.SetStateAction<string | null>>
@@ -139,6 +147,9 @@ export function useChatHandlers(params: UseChatHandlersParams) {
     setAuditEvents,
     setAdminMetrics,
     setAdminMetricsLoading,
+    setApiKeys,
+    setApiKeysLoading,
+    setNewlyCreatedApiKey,
     setWorkspaceConnections,
     setConnectors,
     setSchemaCachedAt,
@@ -484,6 +495,66 @@ export function useChatHandlers(params: UseChatHandlersParams) {
     }
   }, [showToast, setAdminUsers]);
 
+  // DOCBOT-1530: Developer API key management (Admin Panel "Keys" tab).
+  const loadApiKeys = useCallback(async () => {
+    setApiKeysLoading(true);
+    try {
+      const res = await fetch("/admin/api-keys", { credentials: "include" });
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+      const data = await res.json();
+      const parsed = ApiKeysListResponseSchema.safeParse(data);
+      if (parsed.success) setApiKeys(parsed.data.keys);
+      else console.warn("ApiKeysListResponseSchema parse failed", parsed.error);
+    } catch (err) {
+      showToast("error", `Failed to load API keys: ${err instanceof Error ? err.message : String(err)}`);
+    } finally {
+      setApiKeysLoading(false);
+    }
+  }, [showToast, setApiKeysLoading, setApiKeys]);
+
+  const createApiKey = useCallback(async (name: string, scopes: string[]) => {
+    try {
+      const res = await fetch("/admin/api-keys", {
+        method: "POST",
+        credentials: "include",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ name, scopes }),
+      });
+      if (!res.ok) {
+        const err = await res.json().catch(() => ({}));
+        throw new Error(err.detail || `HTTP ${res.status}`);
+      }
+      const data = await res.json();
+      const parsed = ApiKeyCreateResponseSchema.safeParse(data);
+      if (!parsed.success) {
+        showToast("error", "Key created but the response could not be parsed.");
+        return;
+      }
+      setNewlyCreatedApiKey(parsed.data);
+      setApiKeys(prev => [parsed.data.key, ...prev]);
+      showToast("success", "API key created — copy it now, it won't be shown again.");
+    } catch (err) {
+      showToast("error", `Failed to create API key: ${err instanceof Error ? err.message : String(err)}`);
+    }
+  }, [showToast, setApiKeys, setNewlyCreatedApiKey]);
+
+  const revokeApiKey = useCallback(async (keyId: string) => {
+    try {
+      const res = await fetch(`/admin/api-keys/${keyId}`, {
+        method: "DELETE",
+        credentials: "include",
+      });
+      if (!res.ok) {
+        const err = await res.json().catch(() => ({}));
+        throw new Error(err.detail || `HTTP ${res.status}`);
+      }
+      setApiKeys(prev => prev.map(k => k.id === keyId ? { ...k, revoked_at: new Date().toISOString() } : k));
+      showToast("success", "API key revoked");
+    } catch (err) {
+      showToast("error", `Failed to revoke API key: ${err instanceof Error ? err.message : String(err)}`);
+    }
+  }, [showToast, setApiKeys]);
+
   const exportAuditLogCsv = useCallback(async (filters?: AuditLogFilters) => {
     try {
       const params = new URLSearchParams({ format: "csv", limit: "5000" });
@@ -737,6 +808,9 @@ export function useChatHandlers(params: UseChatHandlersParams) {
     loadAuditLog,
     loadAdminMetrics,
     updateUserRole,
+    loadApiKeys,
+    createApiKey,
+    revokeApiKey,
     exportAuditLogCsv,
     handleFileUpload,
     handleDragOver,
