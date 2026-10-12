@@ -1,15 +1,17 @@
 "use client"
 
-import React from "react"
+import React, { useMemo, useState } from "react"
 import {
   X, Loader2, Users, ClipboardList, Shield,
-  Filter, RefreshCw, Download,
+  Filter, RefreshCw, Download, ChevronDown, ChevronRight,
+  BarChart3,
 } from "lucide-react"
-import type { AdminUser, AuditEvent, AuthUser } from "@/components/types"
+import type { AdminUser, AuditEvent, AuthUser, AdminMetrics } from "@/components/types"
+import type { AuditLogFilters } from "@/hooks/useChatHandlers"
 
 interface AdminPanelProps {
-  adminTab: "users" | "audit"
-  setAdminTab: (tab: "users" | "audit") => void
+  adminTab: "users" | "audit" | "usage"
+  setAdminTab: (tab: "users" | "audit" | "usage") => void
   adminUsers: AdminUser[]
   adminUsersLoading: boolean
   loadAdminUsers: () => void
@@ -17,9 +19,20 @@ interface AdminPanelProps {
   auditLoading: boolean
   auditEventTypeFilter: string
   setAuditEventTypeFilter: (v: string) => void
-  loadAuditLog: (eventType: string) => void
-  exportAuditLogCsv: () => void
+  // DOCBOT-1528: audit log filters — user + date range
+  auditUserIdFilter: string
+  setAuditUserIdFilter: (v: string) => void
+  auditStartDate: string
+  setAuditStartDate: (v: string) => void
+  auditEndDate: string
+  setAuditEndDate: (v: string) => void
+  loadAuditLog: (filters?: AuditLogFilters) => void
+  exportAuditLogCsv: (filters?: AuditLogFilters) => void
   updateUserRole: (userId: string, role: string) => void
+  // DOCBOT-1528: Usage tab (GET /admin/metrics)
+  adminMetrics: AdminMetrics | null
+  adminMetricsLoading: boolean
+  loadAdminMetrics: () => void
   authUser: AuthUser | null
   showToast: (type: "success" | "error" | "warning" | "info", message: string) => void
   onClose: () => void
@@ -35,9 +48,18 @@ export default function AdminPanel({
   auditLoading,
   auditEventTypeFilter,
   setAuditEventTypeFilter,
+  auditUserIdFilter,
+  setAuditUserIdFilter,
+  auditStartDate,
+  setAuditStartDate,
+  auditEndDate,
+  setAuditEndDate,
   loadAuditLog,
   exportAuditLogCsv,
   updateUserRole,
+  adminMetrics,
+  adminMetricsLoading,
+  loadAdminMetrics,
   authUser,
   showToast,
   onClose,
@@ -50,6 +72,33 @@ export default function AdminPanel({
     db_connect: "bg-[var(--color-amber-500)]/20 text-[#fbbf24]",
     db_disconnect: "bg-[var(--color-danger-500)]/20 text-[var(--color-danger-500)]",
   }
+
+  // DOCBOT-1528: click-to-expand full row detail (metadata_json is often
+  // truncated by the Detail column's `truncate` class — this surfaces it in full).
+  const [expandedAuditId, setExpandedAuditId] = useState<string | null>(null);
+
+  const currentAuditFilters = (): AuditLogFilters => ({
+    eventType: auditEventTypeFilter,
+    userId: auditUserIdFilter,
+    startDate: auditStartDate,
+    endDate: auditEndDate,
+  });
+
+  // DOCBOT-1528: user-email filter dropdown, sourced from the admin users
+  // list already loaded for the Users tab — no new backend call needed.
+  const userOptions = useMemo(
+    () => adminUsers.map(u => ({ id: u.id, email: u.email })).sort((a, b) => a.email.localeCompare(b.email)),
+    [adminUsers]
+  );
+
+  const prettyMetadata = (metadataJson: string | null): string => {
+    if (!metadataJson) return "";
+    try {
+      return JSON.stringify(JSON.parse(metadataJson), null, 2);
+    } catch {
+      return metadataJson;
+    }
+  };
 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center p-4">
@@ -67,7 +116,7 @@ export default function AdminPanel({
           </div>
           <div>
             <h2 className="text-sm font-semibold text-[var(--color-text-primary)]">Admin Panel</h2>
-            <p className="text-xs text-[var(--color-text-tertiary)]">User management &amp; audit log</p>
+            <p className="text-xs text-[var(--color-text-tertiary)]">User management, audit log &amp; usage</p>
           </div>
           <div className="ml-auto flex items-center gap-2">
             {/* Tab switcher */}
@@ -84,7 +133,7 @@ export default function AdminPanel({
                 Users
               </button>
               <button
-                onClick={() => { setAdminTab("audit"); loadAuditLog(auditEventTypeFilter); }}
+                onClick={() => { setAdminTab("audit"); loadAuditLog(currentAuditFilters()); }}
                 className={`flex items-center gap-1.5 px-3 py-1.5 rounded-md text-xs font-medium transition-all ${
                   adminTab === "audit"
                     ? "bg-[var(--color-cyan-500)]/20 text-[var(--color-cyan-500)] border border-[var(--color-cyan-500)]/30"
@@ -93,6 +142,17 @@ export default function AdminPanel({
               >
                 <ClipboardList className="w-3 h-3" />
                 Audit Log
+              </button>
+              <button
+                onClick={() => { setAdminTab("usage"); loadAdminMetrics(); }}
+                className={`flex items-center gap-1.5 px-3 py-1.5 rounded-md text-xs font-medium transition-all ${
+                  adminTab === "usage"
+                    ? "bg-[var(--color-cyan-500)]/20 text-[var(--color-cyan-500)] border border-[var(--color-cyan-500)]/30"
+                    : "text-[var(--color-text-secondary)] hover:text-gray-200 hover:bg-[var(--color-bg-overlay)]"
+                }`}
+              >
+                <BarChart3 className="w-3 h-3" />
+                Usage
               </button>
             </div>
             <button
@@ -110,7 +170,7 @@ export default function AdminPanel({
             <div className="p-5">
               <div className="flex items-center justify-between mb-4">
                 <p className="text-xs text-[var(--color-text-secondary)]">
-                  {adminUsersLoading ? "Loading\u2026" : `${adminUsers.length} user${adminUsers.length !== 1 ? "s" : ""}`}
+                  {adminUsersLoading ? "Loading…" : `${adminUsers.length} user${adminUsers.length !== 1 ? "s" : ""}`}
                 </p>
                 <button
                   onClick={loadAdminUsers}
@@ -196,7 +256,7 @@ export default function AdminPanel({
                     value={auditEventTypeFilter}
                     onChange={(e) => {
                       setAuditEventTypeFilter(e.target.value);
-                      loadAuditLog(e.target.value);
+                      loadAuditLog({ ...currentAuditFilters(), eventType: e.target.value });
                     }}
                     className="text-xs px-2.5 py-1.5 rounded-lg bg-[var(--color-bg-elevated)] border border-[var(--color-border-default)] text-gray-300 focus:outline-none focus:border-[var(--color-cyan-500)]/40"
                   >
@@ -209,18 +269,72 @@ export default function AdminPanel({
                     <option value="db_disconnect">db_disconnect</option>
                   </select>
                 </div>
-                <p className="text-xs text-[var(--color-text-tertiary)] flex-1">
-                  {auditLoading ? "Loading\u2026" : `${auditEvents.length} event${auditEvents.length !== 1 ? "s" : ""}`}
+
+                {/* DOCBOT-1528: user-email filter, sourced from the Users tab's list */}
+                <select
+                  value={auditUserIdFilter}
+                  onChange={(e) => {
+                    setAuditUserIdFilter(e.target.value);
+                    loadAuditLog({ ...currentAuditFilters(), userId: e.target.value });
+                  }}
+                  className="text-xs px-2.5 py-1.5 rounded-lg bg-[var(--color-bg-elevated)] border border-[var(--color-border-default)] text-gray-300 focus:outline-none focus:border-[var(--color-cyan-500)]/40"
+                  title="Filter by user"
+                >
+                  <option value="all">All users</option>
+                  {userOptions.map(u => (
+                    <option key={u.id} value={u.id}>{u.email}</option>
+                  ))}
+                </select>
+
+                {/* DOCBOT-1528: date range filter */}
+                <div className="flex items-center gap-1.5">
+                  <input
+                    type="date"
+                    value={auditStartDate}
+                    onChange={(e) => {
+                      setAuditStartDate(e.target.value);
+                      loadAuditLog({ ...currentAuditFilters(), startDate: e.target.value });
+                    }}
+                    className="text-xs px-2 py-1.5 rounded-lg bg-[var(--color-bg-elevated)] border border-[var(--color-border-default)] text-gray-300 focus:outline-none focus:border-[var(--color-cyan-500)]/40"
+                    title="From date"
+                  />
+                  <span className="text-[10px] text-[var(--color-text-tertiary)]">to</span>
+                  <input
+                    type="date"
+                    value={auditEndDate}
+                    onChange={(e) => {
+                      setAuditEndDate(e.target.value);
+                      loadAuditLog({ ...currentAuditFilters(), endDate: e.target.value });
+                    }}
+                    className="text-xs px-2 py-1.5 rounded-lg bg-[var(--color-bg-elevated)] border border-[var(--color-border-default)] text-gray-300 focus:outline-none focus:border-[var(--color-cyan-500)]/40"
+                    title="To date"
+                  />
+                  {(auditStartDate || auditEndDate) && (
+                    <button
+                      onClick={() => {
+                        setAuditStartDate("");
+                        setAuditEndDate("");
+                        loadAuditLog({ ...currentAuditFilters(), startDate: "", endDate: "" });
+                      }}
+                      className="text-[10px] text-[var(--color-text-tertiary)] hover:text-gray-200 underline"
+                    >
+                      clear
+                    </button>
+                  )}
+                </div>
+
+                <p className="text-xs text-[var(--color-text-tertiary)] flex-1 text-right">
+                  {auditLoading ? "Loading…" : `${auditEvents.length} event${auditEvents.length !== 1 ? "s" : ""}`}
                 </p>
                 <button
-                  onClick={exportAuditLogCsv}
+                  onClick={() => exportAuditLogCsv(currentAuditFilters())}
                   className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs text-[var(--color-text-secondary)] hover:text-gray-200 bg-[var(--color-bg-elevated)] border border-[var(--color-border-subtle)] hover:border-[var(--color-border-default)] transition-all"
                 >
                   <Download className="w-3 h-3" />
                   Export CSV
                 </button>
                 <button
-                  onClick={() => loadAuditLog(auditEventTypeFilter)}
+                  onClick={() => loadAuditLog(currentAuditFilters())}
                   disabled={auditLoading}
                   className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs text-[var(--color-text-secondary)] hover:text-gray-200 bg-[var(--color-bg-elevated)] border border-[var(--color-border-subtle)] hover:border-[var(--color-border-default)] transition-all disabled:opacity-50"
                 >
@@ -242,6 +356,7 @@ export default function AdminPanel({
                   <table className="w-full text-sm">
                     <thead>
                       <tr className="border-b border-[var(--color-border-subtle)]">
+                        <th className="w-5 pb-2" />
                         <th className="text-left text-xs font-semibold text-[var(--color-text-tertiary)] uppercase tracking-wider pb-2 pr-3">Time</th>
                         <th className="text-left text-xs font-semibold text-[var(--color-text-tertiary)] uppercase tracking-wider pb-2 pr-3">Event</th>
                         <th className="text-left text-xs font-semibold text-[var(--color-text-tertiary)] uppercase tracking-wider pb-2 pr-3">Detail</th>
@@ -251,35 +366,223 @@ export default function AdminPanel({
                     <tbody className="divide-y divide-[#ffffff06]">
                       {auditEvents.map((ev) => {
                         const colorClass = eventColors[ev.event_type] ?? "bg-[#ffffff10] text-[var(--color-text-secondary)]";
+                        const isExpanded = expandedAuditId === ev.id;
                         return (
-                          <tr key={ev.id} className="hover:bg-[#ffffff03] transition-colors">
-                            <td className="py-2.5 pr-3 whitespace-nowrap">
-                              <span className="text-xs text-[var(--color-text-tertiary)]">
-                                {ev.occurred_at
-                                  ? new Date(ev.occurred_at).toLocaleString([], { month: "short", day: "numeric", hour: "2-digit", minute: "2-digit" })
-                                  : "\u2014"}
-                              </span>
-                            </td>
-                            <td className="py-2.5 pr-3">
-                              <span className={`text-[10px] px-2 py-0.5 rounded-full font-semibold uppercase tracking-wide ${colorClass}`}>
-                                {ev.event_type}
-                              </span>
-                            </td>
-                            <td className="py-2.5 pr-3 max-w-[220px]">
-                              <p className="text-xs text-[var(--color-text-secondary)] truncate" title={ev.detail ?? ""}>
-                                {ev.detail || "\u2014"}
-                              </p>
-                            </td>
-                            <td className="py-2.5">
-                              <span className="text-[10px] text-[var(--color-text-quaternary)] font-mono">
-                                {ev.session_id ? ev.session_id.slice(0, 8) + "\u2026" : "\u2014"}
-                              </span>
-                            </td>
-                          </tr>
+                          <React.Fragment key={ev.id}>
+                            <tr
+                              className="hover:bg-[#ffffff03] transition-colors cursor-pointer"
+                              onClick={() => setExpandedAuditId(isExpanded ? null : ev.id)}
+                            >
+                              <td className="py-2.5 pl-1 text-[var(--color-text-tertiary)]">
+                                {isExpanded ? <ChevronDown className="w-3 h-3" /> : <ChevronRight className="w-3 h-3" />}
+                              </td>
+                              <td className="py-2.5 pr-3 whitespace-nowrap">
+                                <span className="text-xs text-[var(--color-text-tertiary)]">
+                                  {ev.occurred_at
+                                    ? new Date(ev.occurred_at).toLocaleString([], { month: "short", day: "numeric", hour: "2-digit", minute: "2-digit" })
+                                    : "—"}
+                                </span>
+                              </td>
+                              <td className="py-2.5 pr-3">
+                                <span className={`text-[10px] px-2 py-0.5 rounded-full font-semibold uppercase tracking-wide ${colorClass}`}>
+                                  {ev.event_type}
+                                </span>
+                              </td>
+                              <td className="py-2.5 pr-3 max-w-[220px]">
+                                <p className="text-xs text-[var(--color-text-secondary)] truncate" title={ev.detail ?? ""}>
+                                  {ev.detail || "—"}
+                                </p>
+                              </td>
+                              <td className="py-2.5">
+                                <span className="text-[10px] text-[var(--color-text-quaternary)] font-mono">
+                                  {ev.session_id ? ev.session_id.slice(0, 8) + "…" : "—"}
+                                </span>
+                              </td>
+                            </tr>
+                            {/* DOCBOT-1528: click-to-expand full row detail */}
+                            {isExpanded && (
+                              <tr>
+                                <td colSpan={5} className="pb-3 pl-6 pr-3">
+                                  <div className="rounded-lg bg-[var(--color-bg-inset)] border border-[var(--color-border-subtle)] p-3 space-y-2">
+                                    <div className="grid grid-cols-2 gap-2 text-[11px]">
+                                      <div>
+                                        <span className="text-[var(--color-text-tertiary)]">Event ID: </span>
+                                        <span className="text-gray-300 font-mono">{ev.id}</span>
+                                      </div>
+                                      <div>
+                                        <span className="text-[var(--color-text-tertiary)]">User ID: </span>
+                                        <span className="text-gray-300 font-mono">{ev.user_id || "—"}</span>
+                                      </div>
+                                      <div>
+                                        <span className="text-[var(--color-text-tertiary)]">Session: </span>
+                                        <span className="text-gray-300 font-mono">{ev.session_id || "—"}</span>
+                                      </div>
+                                      <div>
+                                        <span className="text-[var(--color-text-tertiary)]">Occurred: </span>
+                                        <span className="text-gray-300">
+                                          {ev.occurred_at ? new Date(ev.occurred_at).toLocaleString() : "—"}
+                                        </span>
+                                      </div>
+                                    </div>
+                                    <div>
+                                      <p className="text-[var(--color-text-tertiary)] text-[11px] mb-1">Detail</p>
+                                      <p className="text-xs text-gray-300 whitespace-pre-wrap break-all">{ev.detail || "—"}</p>
+                                    </div>
+                                    {ev.metadata_json && (
+                                      <div>
+                                        <p className="text-[var(--color-text-tertiary)] text-[11px] mb-1">Metadata</p>
+                                        <pre className="text-[10px] text-[var(--color-text-secondary)] bg-[var(--color-bg-base)] rounded-lg p-2 overflow-x-auto whitespace-pre-wrap break-all leading-relaxed">
+                                          {prettyMetadata(ev.metadata_json)}
+                                        </pre>
+                                      </div>
+                                    )}
+                                  </div>
+                                </td>
+                              </tr>
+                            )}
+                          </React.Fragment>
                         );
                       })}
                     </tbody>
                   </table>
+                </div>
+              )}
+            </div>
+          )}
+
+          {adminTab === "usage" && (
+            <div className="p-5">
+              <div className="flex items-center justify-between mb-4">
+                <p className="text-xs text-[var(--color-text-secondary)]">
+                  Platform usage &amp; LLM cost/latency (GET /admin/metrics)
+                </p>
+                <button
+                  onClick={loadAdminMetrics}
+                  disabled={adminMetricsLoading}
+                  className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs text-[var(--color-text-secondary)] hover:text-gray-200 bg-[var(--color-bg-elevated)] border border-[var(--color-border-subtle)] hover:border-[var(--color-border-default)] transition-all disabled:opacity-50"
+                >
+                  <RefreshCw className={`w-3 h-3 ${adminMetricsLoading ? "animate-spin" : ""}`} />
+                  Refresh
+                </button>
+              </div>
+
+              {adminMetricsLoading ? (
+                <div className="flex items-center justify-center py-12">
+                  <Loader2 className="w-6 h-6 text-[var(--color-cyan-500)] animate-spin" />
+                </div>
+              ) : !adminMetrics ? (
+                <div className="flex flex-col items-center justify-center py-12 text-[var(--color-text-tertiary)]">
+                  <BarChart3 className="w-8 h-8 mb-3 opacity-40" />
+                  <p className="text-sm">No metrics loaded</p>
+                </div>
+              ) : (
+                <div className="space-y-4">
+                  {/* Top-line stat tiles */}
+                  <div className="grid grid-cols-2 sm:grid-cols-3 gap-3">
+                    {[
+                      { label: "Total sessions", value: adminMetrics.total_sessions },
+                      { label: "Total queries", value: adminMetrics.total_queries },
+                      { label: "Documents uploaded", value: adminMetrics.total_documents_uploaded },
+                      { label: "Active DB connections", value: adminMetrics.active_db_connections },
+                      { label: "Avg response time", value: adminMetrics.avg_response_time_ms != null ? `${Math.round(adminMetrics.avg_response_time_ms)}ms` : "—" },
+                      { label: "Uptime", value: `${Math.floor(adminMetrics.uptime_seconds / 3600)}h` },
+                    ].map((tile) => (
+                      <div key={tile.label} className="rounded-lg bg-[var(--color-bg-elevated)] border border-[var(--color-border-subtle)] p-3">
+                        <p className="text-[10px] text-[var(--color-text-tertiary)] uppercase tracking-wider mb-1">{tile.label}</p>
+                        <p className="text-lg font-semibold text-gray-200">{tile.value}</p>
+                      </div>
+                    ))}
+                  </div>
+
+                  {/* Queries by type */}
+                  <div>
+                    <p className="text-[11px] font-semibold text-[var(--color-text-tertiary)] uppercase tracking-wider mb-2">Queries by type</p>
+                    <div className="flex flex-wrap gap-2">
+                      {Object.entries(adminMetrics.queries_by_type).map(([type, count]) => (
+                        <span key={type} className="text-xs px-2.5 py-1 rounded-lg bg-[var(--color-bg-elevated)] border border-[var(--color-border-subtle)] text-gray-300">
+                          {type}: <span className="font-semibold">{count}</span>
+                        </span>
+                      ))}
+                    </div>
+                  </div>
+
+                  {/* LLM cost/latency */}
+                  {adminMetrics.llm_metrics && (
+                    <div>
+                      <p className="text-[11px] font-semibold text-[var(--color-text-tertiary)] uppercase tracking-wider mb-2">
+                        LLM spend ({adminMetrics.llm_metrics.window_days}-day window)
+                      </p>
+                      <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 mb-3">
+                        <div className="rounded-lg bg-[var(--color-bg-elevated)] border border-[var(--color-border-subtle)] p-3">
+                          <p className="text-[10px] text-[var(--color-text-tertiary)] uppercase tracking-wider mb-1">Total calls</p>
+                          <p className="text-base font-semibold text-gray-200">{adminMetrics.llm_metrics.total_calls}</p>
+                        </div>
+                        <div className="rounded-lg bg-[var(--color-bg-elevated)] border border-[var(--color-border-subtle)] p-3">
+                          <p className="text-[10px] text-[var(--color-text-tertiary)] uppercase tracking-wider mb-1">Total cost</p>
+                          <p className="text-base font-semibold text-gray-200">${adminMetrics.llm_metrics.total_cost_usd.toFixed(4)}</p>
+                        </div>
+                        <div className="rounded-lg bg-[var(--color-bg-elevated)] border border-[var(--color-border-subtle)] p-3">
+                          <p className="text-[10px] text-[var(--color-text-tertiary)] uppercase tracking-wider mb-1">Fallback rate</p>
+                          <p className="text-base font-semibold text-gray-200">
+                            {adminMetrics.llm_metrics.fallback_rate != null ? `${(adminMetrics.llm_metrics.fallback_rate * 100).toFixed(1)}%` : "—"}
+                          </p>
+                        </div>
+                        <div className="rounded-lg bg-[var(--color-bg-elevated)] border border-[var(--color-border-subtle)] p-3">
+                          <p className="text-[10px] text-[var(--color-text-tertiary)] uppercase tracking-wider mb-1">p95 latency</p>
+                          <p className="text-base font-semibold text-gray-200">
+                            {adminMetrics.llm_metrics.p95_latency_ms != null ? `${Math.round(adminMetrics.llm_metrics.p95_latency_ms)}ms` : "—"}
+                          </p>
+                        </div>
+                      </div>
+
+                      {adminMetrics.llm_metrics.by_caller.length > 0 && (
+                        <div className="overflow-x-auto">
+                          <table className="w-full text-sm">
+                            <thead>
+                              <tr className="border-b border-[var(--color-border-subtle)]">
+                                <th className="text-left text-xs font-semibold text-[var(--color-text-tertiary)] uppercase tracking-wider pb-2 pr-3">Caller</th>
+                                <th className="text-left text-xs font-semibold text-[var(--color-text-tertiary)] uppercase tracking-wider pb-2 pr-3">Calls</th>
+                                <th className="text-left text-xs font-semibold text-[var(--color-text-tertiary)] uppercase tracking-wider pb-2 pr-3">Cost</th>
+                                <th className="text-left text-xs font-semibold text-[var(--color-text-tertiary)] uppercase tracking-wider pb-2">p50 / p95</th>
+                              </tr>
+                            </thead>
+                            <tbody className="divide-y divide-[#ffffff06]">
+                              {adminMetrics.llm_metrics.by_caller.map((c) => (
+                                <tr key={c.caller}>
+                                  <td className="py-2 pr-3 text-xs text-gray-300 font-mono">{c.caller}</td>
+                                  <td className="py-2 pr-3 text-xs text-gray-300">{c.calls}</td>
+                                  <td className="py-2 pr-3 text-xs text-gray-300">${c.cost_usd.toFixed(4)}</td>
+                                  <td className="py-2 text-xs text-gray-300">
+                                    {c.p50_latency_ms != null ? Math.round(c.p50_latency_ms) : "—"}ms / {c.p95_latency_ms != null ? Math.round(c.p95_latency_ms) : "—"}ms
+                                  </td>
+                                </tr>
+                              ))}
+                            </tbody>
+                          </table>
+                        </div>
+                      )}
+                    </div>
+                  )}
+
+                  {/* LLM response cache */}
+                  {adminMetrics.llm_cache_metrics && (
+                    <div>
+                      <p className="text-[11px] font-semibold text-[var(--color-text-tertiary)] uppercase tracking-wider mb-2">LLM response cache</p>
+                      <div className="flex flex-wrap gap-2">
+                        <span className="text-xs px-2.5 py-1 rounded-lg bg-[var(--color-bg-elevated)] border border-[var(--color-border-subtle)] text-gray-300">
+                          Hits: <span className="font-semibold">{adminMetrics.llm_cache_metrics.hits}</span>
+                        </span>
+                        <span className="text-xs px-2.5 py-1 rounded-lg bg-[var(--color-bg-elevated)] border border-[var(--color-border-subtle)] text-gray-300">
+                          Misses: <span className="font-semibold">{adminMetrics.llm_cache_metrics.misses}</span>
+                        </span>
+                        <span className="text-xs px-2.5 py-1 rounded-lg bg-[var(--color-bg-elevated)] border border-[var(--color-border-subtle)] text-gray-300">
+                          Hit rate: <span className="font-semibold">
+                            {adminMetrics.llm_cache_metrics.hit_rate != null ? `${(adminMetrics.llm_cache_metrics.hit_rate * 100).toFixed(1)}%` : "—"}
+                          </span>
+                        </span>
+                      </div>
+                    </div>
+                  )}
                 </div>
               )}
             </div>

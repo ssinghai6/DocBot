@@ -95,6 +95,8 @@ def _build_schema() -> tuple[MetaData, dict[str, Table]]:
         Column("event_type", String, nullable=False),
         Column("user_id", String),
         Column("org_id", String, index=True),
+        # DOCBOT-1528: occurred_at, for the audit-log date-range filter test below.
+        Column("occurred_at", DateTime(timezone=True)),
     )
 
     return metadata, {
@@ -408,6 +410,69 @@ class TestCrossOrgIsolation:
             rows = result.fetchall()
 
         assert {row.id for row in rows} == {"u_a", "u_b"}
+
+    @pytest.mark.asyncio
+    async def test_date_range_filter_composes_with_org_scoping(self, db):
+        """DOCBOT-1528: GET /admin/audit-log's new start_date/end_date params
+        must compose with (not bypass) DOCBOT-1524's org_id scoping — an
+        admin's date-range query must still never surface another org's
+        rows, and the date bounds must correctly include/exclude rows at
+        the boundary (inclusive start, inclusive end via a < next-day bound,
+        matching api/index.py's get_audit_log implementation)."""
+        from datetime import datetime, timedelta, timezone
+
+        engine, session_factory, tables = db
+        org_a, org_b = str(uuid.uuid4()), str(uuid.uuid4())
+
+        day1 = datetime(2026, 1, 2, tzinfo=timezone.utc)
+        day5 = datetime(2026, 1, 6, tzinfo=timezone.utc)
+
+        async with session_factory() as session:
+            async with session.begin():
+                await session.execute(tables["organizations"].insert().values(id=org_a, name="Org A"))
+                await session.execute(tables["organizations"].insert().values(id=org_b, name="Org B"))
+                await session.execute(
+                    tables["audit_log"].insert().values(
+                        id="in_range_a", event_type="login", user_id="admin_a",
+                        org_id=org_a, occurred_at=day1,
+                    )
+                )
+                await session.execute(
+                    tables["audit_log"].insert().values(
+                        id="out_of_range_a", event_type="login", user_id="admin_a",
+                        org_id=org_a, occurred_at=day5,
+                    )
+                )
+                await session.execute(
+                    tables["audit_log"].insert().values(
+                        id="in_range_b", event_type="login", user_id="admin_b",
+                        org_id=org_b, occurred_at=day1,
+                    )
+                )
+
+        admin_a = _FakeUser(org_id=org_a)
+
+        # Mirrors api/index.py's get_audit_log: org scoping, then start_date
+        # (inclusive, >=) and end_date (inclusive, via < end + 1 day).
+        start_date, end_date = "2026-01-01", "2026-01-03"
+        stmt = select(tables["audit_log"]).order_by(tables["audit_log"].c.id)
+        org_id = get_user_org_id(admin_a)
+        if org_id is not None:
+            stmt = stmt.where(tables["audit_log"].c.org_id == org_id)
+        start_dt = datetime.fromisoformat(start_date).replace(tzinfo=timezone.utc)
+        stmt = stmt.where(tables["audit_log"].c.occurred_at >= start_dt)
+        end_dt = datetime.fromisoformat(end_date).replace(tzinfo=timezone.utc) + timedelta(days=1)
+        stmt = stmt.where(tables["audit_log"].c.occurred_at < end_dt)
+
+        async with session_factory() as session:
+            result = await session.execute(stmt)
+            rows = result.fetchall()
+
+        seen_ids = {row.id for row in rows}
+        assert seen_ids == {"in_range_a"}, (
+            "date range + org scoping must isolate org A's in-range row only — "
+            f"got {seen_ids}"
+        )
 
 
 # ---------------------------------------------------------------------------

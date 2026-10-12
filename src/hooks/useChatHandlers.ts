@@ -6,6 +6,8 @@ import {
   AdminUsersResponseSchema,
   AuditLogResponseSchema,
   WorkspaceSchema,
+  DbSchemaResponseSchema,
+  AdminMetricsSchema,
 } from "@/components/types"
 import type {
   AuthUser,
@@ -18,7 +20,16 @@ import type {
   QueryHistoryItem,
   ConnectorInfo,
   ConnectorSyncResponse,
+  AdminMetrics,
 } from "@/components/types"
+
+// DOCBOT-1528: shared shape for GET /admin/audit-log's filter query params.
+export interface AuditLogFilters {
+  eventType?: string
+  userId?: string
+  startDate?: string
+  endDate?: string
+}
 
 interface UseChatHandlersParams {
   sessionId: string | null
@@ -27,7 +38,6 @@ interface UseChatHandlersParams {
   authEmail: string
   authPassword: string
   authName: string
-  auditEventTypeFilter: string
   liveDbForm: LiveDbForm
   entraToken: string | null
   fileInputRef: React.RefObject<HTMLInputElement | null>
@@ -69,8 +79,12 @@ interface UseChatHandlersParams {
   setAdminUsers: React.Dispatch<React.SetStateAction<AdminUser[]>>
   setAuditLoading: React.Dispatch<React.SetStateAction<boolean>>
   setAuditEvents: React.Dispatch<React.SetStateAction<AuditEvent[]>>
+  setAdminMetrics: React.Dispatch<React.SetStateAction<AdminMetrics | null>>
+  setAdminMetricsLoading: React.Dispatch<React.SetStateAction<boolean>>
   setWorkspaceConnections: React.Dispatch<React.SetStateAction<WorkspaceConnection[]>>
   setConnectors: React.Dispatch<React.SetStateAction<ConnectorInfo[]>>
+  setSchemaCachedAt: React.Dispatch<React.SetStateAction<string | null>>
+  setSchemaRefreshing: React.Dispatch<React.SetStateAction<boolean>>
 
   showToast: (type: Toast['type'], message: string) => void
 }
@@ -83,7 +97,6 @@ export function useChatHandlers(params: UseChatHandlersParams) {
     authEmail,
     authPassword,
     authName,
-    auditEventTypeFilter,
     liveDbForm,
     entraToken,
     fileInputRef,
@@ -124,8 +137,12 @@ export function useChatHandlers(params: UseChatHandlersParams) {
     setAdminUsers,
     setAuditLoading,
     setAuditEvents,
+    setAdminMetrics,
+    setAdminMetricsLoading,
     setWorkspaceConnections,
     setConnectors,
+    setSchemaCachedAt,
+    setSchemaRefreshing,
 
     showToast,
   } = params;
@@ -141,13 +158,46 @@ export function useChatHandlers(params: UseChatHandlersParams) {
     }
   }, [setQueryHistory]);
 
+  // DOCBOT-1528: schema sync freshness — wires the existing (previously
+  // frontend-unused) GET /api/db/schema/{id} schema_cached_at field and
+  // POST /api/db/refresh-schema/{id} endpoint into the Sources tab.
+  const loadSchemaCacheInfo = useCallback(async (connId: string) => {
+    try {
+      const res = await fetch(`/api/db/schema/${connId}`);
+      if (!res.ok) return;
+      const data = await res.json();
+      const parsed = DbSchemaResponseSchema.safeParse(data);
+      if (parsed.success) setSchemaCachedAt(parsed.data.schema_cached_at ?? null);
+    } catch {
+      // non-fatal — "Schema last synced" line just stays hidden
+    }
+  }, [setSchemaCachedAt]);
+
+  const refreshSchema = useCallback(async (connId: string) => {
+    setSchemaRefreshing(true);
+    try {
+      const res = await fetch(`/api/db/refresh-schema/${connId}`, { method: "POST" });
+      if (!res.ok) {
+        const err = await res.json().catch(() => ({}));
+        throw new Error(err.detail || `HTTP ${res.status}`);
+      }
+      await loadSchemaCacheInfo(connId);
+      showToast("success", "Schema refreshed");
+    } catch (err) {
+      showToast("error", `Schema refresh failed: ${err instanceof Error ? err.message : String(err)}`);
+    } finally {
+      setSchemaRefreshing(false);
+    }
+  }, [loadSchemaCacheInfo, showToast, setSchemaRefreshing]);
+
   const handleDbConnected = useCallback((connId: string) => {
     setIsDbConnected(true);
     setConnectionId(connId);
     setChatMode(sessionId ? "hybrid" : "database");
     setSelectedPersona(prev => (prev === "Generalist" ? "Data Analyst" : prev));
     loadQueryHistory(connId);
-  }, [loadQueryHistory, sessionId, setIsDbConnected, setConnectionId, setChatMode, setSelectedPersona]);
+    loadSchemaCacheInfo(connId);
+  }, [loadQueryHistory, loadSchemaCacheInfo, sessionId, setIsDbConnected, setConnectionId, setChatMode, setSelectedPersona]);
 
   const handleDbDisconnect = useCallback(() => {
     setIsDbConnected(false);
@@ -370,11 +420,37 @@ export function useChatHandlers(params: UseChatHandlersParams) {
     }
   }, [showToast, setAdminUsersLoading, setAdminUsers]);
 
-  const loadAuditLog = useCallback(async (eventType?: string) => {
+  // DOCBOT-1528: Usage tab — surfaces the existing admin-only GET
+  // /admin/metrics endpoint (api/metrics_service.py), previously unused by
+  // any frontend UI. Read-only; no new backend aggregation.
+  const loadAdminMetrics = useCallback(async () => {
+    setAdminMetricsLoading(true);
+    try {
+      const res = await fetch("/admin/metrics", { credentials: "include" });
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+      const data = await res.json();
+      const parsed = AdminMetricsSchema.safeParse(data);
+      if (parsed.success) setAdminMetrics(parsed.data);
+      else console.warn("AdminMetricsSchema parse failed", parsed.error);
+    } catch (err) {
+      showToast("error", `Failed to load usage metrics: ${err instanceof Error ? err.message : String(err)}`);
+    } finally {
+      setAdminMetricsLoading(false);
+    }
+  }, [showToast, setAdminMetricsLoading, setAdminMetrics]);
+
+  // DOCBOT-1528: accepts a full filters object (event type + user + date
+  // range) rather than a single eventType string, so AdminPanel's audit
+  // filters compose instead of clobbering each other. All fields optional —
+  // {} / undefined reproduces the old "all events, no range" behavior.
+  const loadAuditLog = useCallback(async (filters?: AuditLogFilters) => {
     setAuditLoading(true);
     try {
       const params = new URLSearchParams({ limit: "200" });
-      if (eventType && eventType !== "all") params.set("event_type", eventType);
+      if (filters?.eventType && filters.eventType !== "all") params.set("event_type", filters.eventType);
+      if (filters?.userId && filters.userId !== "all") params.set("user_id", filters.userId);
+      if (filters?.startDate) params.set("start_date", filters.startDate);
+      if (filters?.endDate) params.set("end_date", filters.endDate);
       const res = await fetch(`/admin/audit-log?${params.toString()}`, { credentials: "include" });
       if (!res.ok) throw new Error(`HTTP ${res.status}`);
       const data = await res.json();
@@ -408,10 +484,13 @@ export function useChatHandlers(params: UseChatHandlersParams) {
     }
   }, [showToast, setAdminUsers]);
 
-  const exportAuditLogCsv = useCallback(async () => {
+  const exportAuditLogCsv = useCallback(async (filters?: AuditLogFilters) => {
     try {
       const params = new URLSearchParams({ format: "csv", limit: "5000" });
-      if (auditEventTypeFilter !== "all") params.set("event_type", auditEventTypeFilter);
+      if (filters?.eventType && filters.eventType !== "all") params.set("event_type", filters.eventType);
+      if (filters?.userId && filters.userId !== "all") params.set("user_id", filters.userId);
+      if (filters?.startDate) params.set("start_date", filters.startDate);
+      if (filters?.endDate) params.set("end_date", filters.endDate);
       const res = await fetch(`/admin/audit-log?${params.toString()}`, { credentials: "include" });
       if (!res.ok) throw new Error(`HTTP ${res.status}`);
       const blob = await res.blob();
@@ -427,7 +506,7 @@ export function useChatHandlers(params: UseChatHandlersParams) {
     } catch (err) {
       showToast("error", `Export failed: ${err instanceof Error ? err.message : String(err)}`);
     }
-  }, [auditEventTypeFilter, showToast]);
+  }, [showToast]);
 
   const handleFileUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
     if (!e.target.files || e.target.files.length === 0) return;
@@ -621,8 +700,12 @@ export function useChatHandlers(params: UseChatHandlersParams) {
     }
     const data = await res.json();
     showToast("success", "Data synced successfully");
+    // DOCBOT-1528: refresh the connector list so the persisted
+    // "Last synced" badge (sourced from last_sync_at / sync_status) reflects
+    // this sync immediately instead of only showing on next manual refresh.
+    loadConnectors();
     return data as ConnectorSyncResponse;
-  }, [showToast]);
+  }, [showToast, loadConnectors]);
 
   const handleConnectorDisconnect = useCallback(async (connectorId: string) => {
     try {
@@ -640,6 +723,8 @@ export function useChatHandlers(params: UseChatHandlersParams) {
 
   return {
     loadQueryHistory,
+    loadSchemaCacheInfo,
+    refreshSchema,
     handleDbConnected,
     handleDbDisconnect,
     handleDbUpload,
@@ -650,6 +735,7 @@ export function useChatHandlers(params: UseChatHandlersParams) {
     handleEmailAuth,
     loadAdminUsers,
     loadAuditLog,
+    loadAdminMetrics,
     updateUserRole,
     exportAuditLogCsv,
     handleFileUpload,

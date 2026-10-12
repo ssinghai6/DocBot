@@ -6,6 +6,7 @@ import {
   XCircle, Wand2, Clock, ArrowRight, Eye, EyeOff,
 } from "lucide-react"
 import type { LiveDbForm, QueryHistoryItem } from "./types"
+import { formatRelativeTime } from "@/lib/relativeTime"
 
 interface ConnectionPanelProps {
   // Connection state
@@ -33,6 +34,12 @@ interface ConnectionPanelProps {
   queryHistory: QueryHistoryItem[]
   historyOpen: boolean
   expandedHistoryId: string | null
+
+  // DOCBOT-1528: schema sync freshness
+  connectionId: string | null
+  schemaCachedAt: string | null
+  schemaRefreshing: boolean
+  onSchemaRefresh: (connId: string) => void
 
   // Callbacks
   onDbUpload: (file: File, type: "csv" | "sqlite") => void
@@ -66,6 +73,10 @@ export default function ConnectionPanel({
   queryHistory,
   historyOpen,
   expandedHistoryId,
+  connectionId,
+  schemaCachedAt,
+  schemaRefreshing,
+  onSchemaRefresh,
   onDbUpload,
   onDbDisconnect,
   onToggleLiveDbForm,
@@ -106,6 +117,25 @@ export default function ConnectionPanel({
               <XCircle className="w-3.5 h-3.5" />
             </button>
           </div>
+
+          {/* DOCBOT-1528: schema sync freshness + manual refresh.
+              Wires the previously-unwired POST /api/db/refresh-schema/{id}. */}
+          {connectionId && (
+            <div className="flex items-center gap-2 px-3 py-1.5 text-[10px] text-[var(--color-text-tertiary)]">
+              <span className="flex-1 truncate">
+                Schema last synced: {formatRelativeTime(schemaCachedAt)}
+              </span>
+              <button
+                onClick={() => onSchemaRefresh(connectionId)}
+                disabled={schemaRefreshing}
+                className="flex items-center gap-1 text-[var(--color-amber-500)] hover:text-[var(--color-amber-500)]/80 disabled:opacity-50 disabled:cursor-not-allowed shrink-0"
+                title="Re-introspect the database schema now"
+              >
+                <RefreshCw className={`w-3 h-3 ${schemaRefreshing ? "animate-spin" : ""}`} />
+                Refresh now
+              </button>
+            </div>
+          )}
 
           {/* DOCBOT-504: Query History Panel */}
           <div className="rounded-xl border border-[var(--color-border-default)] overflow-hidden">
