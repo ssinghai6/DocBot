@@ -888,7 +888,9 @@ async def upload_documents(
         full_text = " ".join(d.page_content for d in all_content)
         from api.utils.chunker import chunk_document, detect_doc_type
         _detected_type = detect_doc_type(full_text)
+        _chunk_start = time.time()
         splits = chunk_document(full_text, doc_type=_detected_type)
+        logger.info("upload: chunked %d chars into %d chunks in %.1fs", len(full_text), len(splits), time.time() - _chunk_start)
 
         # Restore per-page metadata: map each split back to the nearest source
         # document by matching content prefix, falling back to the first doc.
@@ -914,6 +916,7 @@ async def upload_documents(
         start_time = time.time()
         db = create_store(session_id, splits, embeddings)
         index_time = time.time() - start_time
+        logger.info("upload: indexed %d chunks in %.1fs", len(splits), index_time)
         VECTOR_STORES[session_id] = db
 
         # SCRUM-391: run structured extraction for any extractable document type

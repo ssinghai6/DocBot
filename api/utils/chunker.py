@@ -15,6 +15,8 @@ intact and aligns with the "HuggingFace API only" claim in CLAUDE.md.
 from __future__ import annotations
 
 import logging
+import os
+import time
 
 from langchain_core.documents import Document
 from langchain_text_splitters import RecursiveCharacterTextSplitter
@@ -33,6 +35,11 @@ from api.utils.embeddings_provider import get_embeddings
 # Document types that benefit from semantic chunking (boundary-aware splitting
 # rather than fixed character windows).
 _SEMANTIC_DOC_TYPES = {"financial", "legal", "annual_report", "10k", "sec_filing", "contract"}
+
+# SemanticChunker embeds every sentence, so cost grows linearly with length.
+# Above this many characters, fall back to the recursive splitter (instant).
+# Override with SEMANTIC_CHUNK_MAX_CHARS; 0 or negative disables the cap.
+_SEMANTIC_MAX_CHARS = int(os.getenv("SEMANTIC_CHUNK_MAX_CHARS", "60000"))
 
 # Keywords used for lightweight doc-type detection from the first 500 characters
 # of a document when the caller cannot provide an explicit type.
@@ -92,7 +99,14 @@ def chunk_document(
     list[Document]
         List of LangChain Document objects with ``page_content`` set.
     """
-    if doc_type in _SEMANTIC_DOC_TYPES and SemanticChunker is not None:
+    _too_long = 0 < _SEMANTIC_MAX_CHARS < len(text)
+    if _too_long and doc_type in _SEMANTIC_DOC_TYPES:
+        logger.info(
+            "chunker: %d chars exceeds semantic cap %d — using recursive splitter",
+            len(text), _SEMANTIC_MAX_CHARS,
+        )
+    if doc_type in _SEMANTIC_DOC_TYPES and SemanticChunker is not None and not _too_long:
+        _start = time.monotonic()
         try:
             embeddings = get_embeddings()
             chunker = SemanticChunker(
@@ -102,9 +116,10 @@ def chunk_document(
             )
             chunks = chunker.create_documents([text])
             logger.info(
-                "chunker: SemanticChunker produced %d chunks for doc_type=%s",
+                "chunker: SemanticChunker produced %d chunks for doc_type=%s in %.1fs",
                 len(chunks),
                 doc_type,
+                time.monotonic() - _start,
             )
             return chunks
         except Exception as exc:
