@@ -205,3 +205,24 @@ class TestSemanticChunkerFallback:
 
         assert len(result) > 0
         assert all(isinstance(d, Document) for d in result)
+
+
+class TestSemanticSizeCap:
+    @patch("api.utils.chunker.get_embeddings")
+    @patch("api.utils.chunker.SemanticChunker")
+    def test_long_legal_doc_skips_semantic_chunker(self, mock_chunker_cls, mock_emb_cls):
+        long_text = "This agreement binds the parties. " * 5000
+        with patch("api.utils.chunker._SEMANTIC_MAX_CHARS", 1000):
+            result = chunk_document(long_text, doc_type="legal")
+
+        mock_chunker_cls.assert_not_called()
+        assert len(result) > 1
+
+    @patch("api.utils.chunker.get_embeddings")
+    @patch("api.utils.chunker.SemanticChunker")
+    def test_cap_disabled_when_zero(self, mock_chunker_cls, mock_emb_cls):
+        mock_chunker_cls.return_value.create_documents.return_value = [Document(page_content="c")]
+        with patch("api.utils.chunker._SEMANTIC_MAX_CHARS", 0):
+            chunk_document("x" * 100000, doc_type="legal")
+
+        mock_chunker_cls.assert_called_once()
