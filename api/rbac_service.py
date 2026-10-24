@@ -16,8 +16,10 @@ When auth enforcement is not active (AUTH_REQUIRED env var is not set to
 "true"), viewer/analyst role checks pass automatically so the app remains
 usable without login — ideal for demos and local development.
 
-Exception enforced in EVERY mode (DOCBOT-1610):
+Exceptions that are enforced in EVERY mode (DOCBOT-1610 / DOCBOT-1612):
     require_admin()        — admin routes always need a logged-in admin
+    require_sandbox_user() — raw code execution needs a logged-in analyst+
+                             unless ALLOW_ANONYMOUS_SANDBOX=true (dev only)
 
 Startup guard: assert_safe_auth_config() refuses to boot when
 MULTI_TENANT=true without AUTH_REQUIRED=true.
@@ -131,6 +133,39 @@ def require_admin():
     return require_role(UserRole.admin, enforce_in_open_mode=True)
 
 
+def anonymous_sandbox_allowed() -> bool:
+    """True only when ALLOW_ANONYMOUS_SANDBOX is explicitly enabled — DOCBOT-1612.
+
+    Read at request time so the flag can be toggled per-environment (and in
+    tests) without re-importing. Default: deny.
+    """
+    return os.getenv("ALLOW_ANONYMOUS_SANDBOX", "").strip().lower() in ("1", "true", "yes", "on")
+
+
+def require_sandbox_user():
+    """Dependency for raw code execution (POST /api/sandbox/execute) — DOCBOT-1612.
+
+    Arbitrary Python in an E2B VM is the most expensive and most abusable
+    surface, so it requires a logged-in analyst+ in EVERY mode by default:
+
+    - AUTH_REQUIRED=true                       → analyst+ session required
+    - open mode, ALLOW_ANONYMOUS_SANDBOX unset → analyst+ session required
+    - open mode, ALLOW_ANONYMOUS_SANDBOX=true  → anonymous allowed (local dev only)
+
+    Returns the user row, or None only in the explicit anonymous-dev case.
+    """
+    async def _dependency(
+        docbot_session: Optional[str] = Cookie(default=None),
+    ) -> Optional[Any]:
+        from api.auth_service import is_auth_enforcement_active
+
+        if not is_auth_enforcement_active() and anonymous_sandbox_allowed():
+            return None
+        return await _resolve_user_with_role(docbot_session, UserRole.analyst)
+
+    return _dependency
+
+
 class UnsafeAuthConfigError(RuntimeError):
     """Raised at startup when the auth configuration is unsafe to serve."""
 
@@ -145,6 +180,7 @@ def assert_safe_auth_config() -> None:
     A multi-tenant deployment (MULTI_TENANT=true) must never run in open
     mode: open mode skips every non-admin role check and leaves session data
     unscoped, which is a cross-tenant data leak. Refuse to boot instead.
+    Anonymous sandbox execution is also refused in multi-tenant mode.
 
     Raises:
         UnsafeAuthConfigError: with an actionable message.
@@ -159,6 +195,11 @@ def assert_safe_auth_config() -> None:
             "Refusing to start: MULTI_TENANT=true requires AUTH_REQUIRED=true. "
             "Open/demo mode skips role checks and cannot isolate tenants. "
             "Set AUTH_REQUIRED=true or unset MULTI_TENANT."
+        )
+    if anonymous_sandbox_allowed():
+        raise UnsafeAuthConfigError(
+            "Refusing to start: ALLOW_ANONYMOUS_SANDBOX=true is not permitted "
+            "when MULTI_TENANT=true. Unset ALLOW_ANONYMOUS_SANDBOX."
         )
 
 

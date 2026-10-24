@@ -336,7 +336,7 @@ api_keys_table = register_api_keys_table(metadata)
 # ── EPIC-06: RBAC dependencies (DOCBOT-603) ──────────────────────────────────
 # Imported here so Depends() objects can be declared at module level.
 # require_role() checks is_auth_enforcement_active() at request time — safe to import early.
-from api.rbac_service import require_role, require_admin, UserRole, get_user_org_id  # noqa: E402
+from api.rbac_service import require_role, require_admin, require_sandbox_user, UserRole, get_user_org_id  # noqa: E402
 
 _rbac_viewer  = Depends(require_role(UserRole.viewer))
 _rbac_analyst = Depends(require_role(UserRole.analyst))
@@ -799,7 +799,8 @@ def get_tools(category: Optional[str] = None):
     ])
 
 
-@app.post("/api/demo/init")
+# DOCBOT-1612: IP-limited (per-IP + global sliding hour, owner bypass).
+@app.post("/api/demo/init", dependencies=[Depends(request_guard.check_demo_init_limit)])
 async def init_demo(dataset: str = "quickbite"):
     """Initialize a sandbox demo session with pre-loaded data.
 
@@ -2098,7 +2099,13 @@ class SandboxExecuteRequest(BaseModel):
     session_id: Optional[str] = None
 
 
-@app.post("/api/sandbox/execute", response_model=SandboxResult)
+# DOCBOT-1612: raw code execution requires a logged-in analyst+ in every mode
+# unless ALLOW_ANONYMOUS_SANDBOX=true (local dev only; refused with MULTI_TENANT).
+@app.post(
+    "/api/sandbox/execute",
+    response_model=SandboxResult,
+    dependencies=[Depends(require_sandbox_user())],
+)
 async def execute_sandbox(request: SandboxExecuteRequest, raw_request: Request) -> SandboxResult:
     """Execute Python code in an isolated E2B sandbox.
 
