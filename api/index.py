@@ -336,11 +336,12 @@ api_keys_table = register_api_keys_table(metadata)
 # ── EPIC-06: RBAC dependencies (DOCBOT-603) ──────────────────────────────────
 # Imported here so Depends() objects can be declared at module level.
 # require_role() checks is_auth_enforcement_active() at request time — safe to import early.
-from api.rbac_service import require_role, UserRole, get_user_org_id  # noqa: E402
+from api.rbac_service import require_role, require_admin, UserRole, get_user_org_id  # noqa: E402
 
 _rbac_viewer  = Depends(require_role(UserRole.viewer))
 _rbac_analyst = Depends(require_role(UserRole.analyst))
-_rbac_admin   = Depends(require_role(UserRole.admin))
+# DOCBOT-1610: admin routes require a logged-in admin in EVERY mode (incl. open/demo).
+_rbac_admin   = Depends(require_admin())
 
 
 async def get_optional_user(request: Request) -> Optional[Any]:
@@ -453,6 +454,9 @@ async def init_db() -> None:
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
+    # DOCBOT-1610: refuse to boot a multi-tenant deploy in open mode.
+    from api.rbac_service import assert_safe_auth_config
+    assert_safe_auth_config()
     await init_db()
     # DOCBOT-1514: populate the tool/capability registry (pipelines,
     # autopilot tools, personas, connectors) for the frontend tool picker.
