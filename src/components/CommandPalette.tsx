@@ -172,9 +172,13 @@ export function buildCommands(actions: {
 export default function CommandPalette({ isOpen, onClose, commands }: CommandPaletteProps) {
   const [value, setValue] = useState("")
 
-  useEffect(() => {
+  // Reset the query each time the palette opens. Adjusting state during render
+  // (instead of in an effect) avoids a cascading re-render.
+  const [wasOpen, setWasOpen] = useState(isOpen)
+  if (isOpen !== wasOpen) {
+    setWasOpen(isOpen)
     if (isOpen) setValue("")
-  }, [isOpen])
+  }
 
   if (!isOpen) return null
 
