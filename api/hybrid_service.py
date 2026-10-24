@@ -809,11 +809,12 @@ async def hybrid_chat(
         # ── Step 4: stream synthesis (Groq → Gemini fallback) ───────────────
         try:
             from api.utils.llm_provider import chat_completion_stream
-            from api.utils.pii_masking import mask_pii
+            from api.utils.pii_masking import StreamingPIIMasker, mask_pii
 
             lineage.set_pii(True)
             _synth_start = time.perf_counter()
             _answer_parts: list[str] = []
+            _masker = StreamingPIIMasker()  # DOCBOT-2003: line-buffered masking
             for token in chat_completion_stream(
                 [{"role": "user", "content": prompt}],
                 temperature=0.2,
@@ -822,7 +823,12 @@ async def hybrid_chat(
                 run_id=run_id,
                 prompt_version=PROMPT_VERSION_HYBRID_SYNTHESIS,
             ):
-                masked_token = mask_pii(token)
+                masked_token = _masker.feed(token)
+                if masked_token:
+                    _answer_parts.append(masked_token)
+                    yield f"data: {json.dumps({'type': 'token', 'content': masked_token})}\n\n"
+            masked_token = _masker.flush()
+            if masked_token:
                 _answer_parts.append(masked_token)
                 yield f"data: {json.dumps({'type': 'token', 'content': masked_token})}\n\n"
         except Exception as exc:
