@@ -215,6 +215,8 @@ users_table = Table(
     Column("provider", String, nullable=False),            # github | google | email | okta | azure_ad | saml
     Column("provider_id", String),                         # GitHub/Google user ID (nullable for email/saml)
     Column("password_hash", Text),                         # bcrypt hash (nullable for OAuth users)
+    # DOCBOT-1617: True only once a provider/IdP proved ownership of `email`
+    Column("email_verified", Boolean, server_default="false", nullable=False),
     Column("role", String, server_default="analyst", nullable=False),  # viewer | analyst | admin
     Column("last_login_at", DateTime(timezone=True)),
     Column("created_at", DateTime(timezone=True), server_default=func.now(), nullable=False),
@@ -308,6 +310,12 @@ commerce_orders_table, commerce_financials_table = register_commerce_tables(meta
 from api.org_service import register_organizations_table, ORG_ID_COLUMN_MIGRATIONS, backfill_default_organization
 organizations_table = register_organizations_table(metadata)
 
+# ── DOCBOT-1617: provider identity linking (closes SEC-09) ───────────────────
+from api.identity_service import (
+    register_user_identities_table, USER_IDENTITY_COLUMN_MIGRATIONS, backfill_legacy_identities,
+)
+user_identities_table = register_user_identities_table(metadata)
+
 # ── DOCBOT-1529: per-org envelope encryption (wrapped DEK per org) ────────────
 from api.utils.envelope_encryption import register_org_encryption_keys_table
 org_encryption_keys_table = register_org_encryption_keys_table(metadata)
@@ -322,6 +330,10 @@ edgar_filings_cache_table = register_edgar_cache_table(metadata)
 # ── DOCBOT-1501: LLM call log (tracing/observability) ────────────────────────
 from api.llm_trace_service import register_llm_calls_table
 llm_calls_table = register_llm_calls_table(metadata)
+
+# ── DOCBOT-1801: usage ledger (per-org metering) ──────────────────────────────
+from api.usage_service import register_usage_events_table, bind_billing_stream, meter_upload
+usage_events_table = register_usage_events_table(metadata)
 
 # ── DOCBOT-1510: per-answer lineage (Inspector lineage trace) ────────────────
 from api.lineage_service import register_lineage_table
@@ -439,6 +451,10 @@ async def init_db() -> None:
             "ALTER TABLE users ADD COLUMN IF NOT EXISTS password_hash TEXT",
         ]:
             await conn.execute(text(col_ddl))
+        # DOCBOT-1617: users.email_verified + legacy identity backfill
+        for col_ddl in USER_IDENTITY_COLUMN_MIGRATIONS:
+            await conn.execute(text(col_ddl))
+        await backfill_legacy_identities(conn)
         # DOCBOT-604: pii_masking_enabled column (added after initial deploy)
         await conn.execute(text(
             "ALTER TABLE db_connections ADD COLUMN IF NOT EXISTS pii_masking_enabled BOOLEAN DEFAULT false"
@@ -463,6 +479,10 @@ async def init_db() -> None:
         # DOCBOT-1524: idempotent — creates the default org only if none
         # exists yet, and backfills org_id on rows that still lack one.
         default_org_id = await backfill_default_organization(conn)
+        # DOCBOT-1801: billing attribution columns on llm_calls (idempotent)
+        from api.usage_service import LLM_CALLS_BILLING_MIGRATIONS
+        for col_ddl in LLM_CALLS_BILLING_MIGRATIONS:
+            await conn.execute(text(col_ddl))
     logger.info(
         "Database tables verified / created "
         "(sessions, messages, db_connections, schema_cache, query_history, "
@@ -506,6 +526,10 @@ async def lifespan(app: FastAPI):
     wire_llm_trace_store(llm_calls_table, async_session_factory)
     set_trace_sink(enqueue_call)
     start_writer()
+    # DOCBOT-1801: usage_events ledger writer
+    from api.usage_service import wire_usage_store, start_writer as start_usage_writer
+    wire_usage_store(usage_events_table, async_session_factory)
+    start_usage_writer()
     from api.lineage_service import wire_lineage_store
     wire_lineage_store(answer_lineage_table, async_session_factory)
     # DOCBOT-1506: wire the exact-match LLM response cache (SQL gen + intent
@@ -635,6 +659,8 @@ async def lifespan(app: FastAPI):
     # DOCBOT-1501: drain and stop the LLM call log writer before closing the pool
     from api.llm_trace_service import stop_writer
     await stop_writer()
+    from api.usage_service import stop_writer as stop_usage_writer
+    await stop_usage_writer()
     # DOCBOT-1509: flush queued LangSmith runs on SIGTERM, bounded to 3s.
     # Off the event loop, and never joins the executor, so shutdown cannot hang.
     from api.utils.langsmith_tracing import shutdown as shutdown_langsmith
@@ -902,6 +928,7 @@ async def upload_documents(
                     "pages": page_count,
                     "size": len(content)
                 })
+                meter_upload(len(content), pages=page_count, session_id=session_id)  # DOCBOT-1801
             except Exception as e:
                 logger.error(f"Error processing PDF {file.filename}: {e}")
                 continue
@@ -1239,16 +1266,27 @@ async def chat(raw_request: Request, request: ChatRequest, _user=_rbac_viewer):
                 )
                 return wrap_untrusted(joined)
 
+            # DOCBOT-2001: single shared format contract (citations per source).
+            from api.utils.response_format import (
+                build_format_block,
+                doc_sources_from_metadata,
+                normalize_markdown,
+                unclosed_fence_suffix,
+            )
+            format_block = build_format_block(
+                doc_sources_from_metadata(doc.metadata for doc in retrieved_docs)
+            ).replace("{", "{{").replace("}", "}}")
+
             qa_prompt = ChatPromptTemplate.from_messages([
                 ("system", (
                     f"{effective_persona_def}\n\n"
                     "Answer using the provided context as your primary source. "
-                    "Always cite your sources using the format [Source: filename, Page X]. "
                     "When the user provides explicit numerical parameters, assumptions, or "
                     "scenarios in their question, you MUST perform the requested calculations "
                     "step by step using those values. Show your work with intermediate steps. "
                     "Do not say data is insufficient when the user has provided the inputs."
                     f"{disclaimer_note}\n\n"
+                    f"{format_block}\n\n"
                     "RETRIEVAL ACCURACY RULES:\n"
                     "- Read EVERY chunk in the context carefully before concluding any field is absent.\n"
                     "- Structured forms (government forms, legal documents) store fields as labelled rows "
@@ -1290,7 +1328,13 @@ async def chat(raw_request: Request, request: ChatRequest, _user=_rbac_viewer):
                 full_answer.append(masked_chunk)
                 yield f"data: {json.dumps({'type': 'token', 'content': masked_chunk})}\n\n"
 
-            answer_text = "".join(full_answer)
+            # DOCBOT-2001: append-only fix for a dangling code fence (tokens
+            # already sent are never rewritten), then normalize the stored copy.
+            fence_tail = unclosed_fence_suffix("".join(full_answer))
+            if fence_tail:
+                full_answer.append(fence_tail)
+                yield f"data: {json.dumps({'type': 'token', 'content': fence_tail})}\n\n"
+            answer_text = normalize_markdown("".join(full_answer))
 
             # ── Emit citations after stream ends ──────────────────────────────
             from api.utils.lineage import safe_snippet
@@ -1384,7 +1428,7 @@ async def chat(raw_request: Request, request: ChatRequest, _user=_rbac_viewer):
             logger.exception("Error in chat stream:")
             yield f"data: {json.dumps({'type': 'error', 'detail': safe_error_message(e)})}\n\n"
 
-    return StreamingResponse(event_stream(), media_type="text/event-stream")
+    return StreamingResponse(bind_billing_stream(event_stream()), media_type="text/event-stream")
 
 # ===== Phase 1 Features: Session History & Export =====
 # DOCBOT-1601 (SEC-02): every route is scoped to the caller (owner + org).
@@ -1848,7 +1892,7 @@ async def db_chat(
             logger.error("db_chat pipeline error: %s — %s", type(exc).__name__, exc, exc_info=True)
             yield f"data: {json.dumps({'type': 'error', 'error_type': 'InternalError', 'detail': 'An internal error occurred.'})}\n\n"
 
-    return StreamingResponse(event_stream(), media_type="text/event-stream")
+    return StreamingResponse(bind_billing_stream(event_stream()), media_type="text/event-stream")
 
 
 @app.get("/api/db/sessions")
@@ -2180,7 +2224,7 @@ async def hybrid_chat_route(
             logger.error("hybrid_chat_route error: %s", type(exc).__name__)
             yield f"data: {json.dumps({'type': 'error', 'detail': 'An internal error occurred.'})}\n\n"
 
-    return StreamingResponse(event_stream(), media_type="text/event-stream")
+    return StreamingResponse(bind_billing_stream(event_stream()), media_type="text/event-stream")
 
 
 # ---------------------------------------------------------------------------
@@ -2264,7 +2308,7 @@ async def autopilot_run(
             logger.error("autopilot_run error: %s", type(exc).__name__)
             yield f"data: {json.dumps({'type': 'error', 'content': 'An internal error occurred.'})}\n\n"
 
-    return StreamingResponse(event_stream(), media_type="text/event-stream")
+    return StreamingResponse(bind_billing_stream(event_stream()), media_type="text/event-stream")
 
 
 # ── EPIC-06: SSO / SAML Auth routes (DOCBOT-601) ─────────────────────────────
@@ -2326,10 +2370,8 @@ async def saml_acs(request: Request, response: Response):
     On success: creates session, sets HttpOnly cookie, redirects to frontend.
     On failure: returns 401.
     """
-    from api.auth_service import (
-        build_saml_auth, process_acs, jit_provision_user,
-        create_user_session, is_saml_configured,
-    )
+    from api.auth_service import build_saml_auth, process_acs, create_user_session, is_saml_configured
+    from api.identity_service import IdentityLinkError, identity_from_saml_attrs, resolve_provider_login
     if not is_saml_configured():
         raise HTTPException(status_code=503, detail="SAML is not configured.")
 
@@ -2347,7 +2389,17 @@ async def saml_acs(request: Request, response: Response):
         raise HTTPException(status_code=500, detail="SSO processing error.")
 
     try:
-        user_id = await jit_provision_user(attrs, users_table, async_session_factory)
+        user_id = await resolve_provider_login(
+            identity_from_saml_attrs(attrs), users_table, user_identities_table,
+            user_sessions_table, async_session_factory,
+        )
+    except IdentityLinkError as exc:
+        logger.warning("SSO login refused (%s): %s", attrs["provider"], exc.reason)
+        raise HTTPException(status_code=401, detail="Sign-in failed.")
+    except ValueError:
+        logger.warning("SSO login refused (%s): incomplete assertion", attrs["provider"])
+        raise HTTPException(status_code=401, detail="Sign-in failed.")
+    try:
         token = await create_user_session(user_id, user_sessions_table, async_session_factory)
     except Exception as exc:
         logger.error("Session creation failed after SSO: %s", exc)
@@ -2441,10 +2493,10 @@ async def github_login():
 async def github_callback(code: str, state: str, response: Response):
     """Handle GitHub OAuth callback: exchange code → provision user → set cookie."""
     from api.oauth_service import github_exchange_code, validate_oauth_state, oauth_success_redirect
-    from api.auth_service import jit_provision_user, create_user_session
+    from api.auth_service import create_user_session
+    from api.identity_service import IdentityLinkError, identity_from_oauth_attrs, resolve_provider_login
     from api.audit_service import log_event, AuditEventType
     from fastapi.responses import RedirectResponse
-    from urllib.parse import urlencode
 
     frontend_url = oauth_success_redirect("")
 
@@ -2458,7 +2510,14 @@ async def github_callback(code: str, state: str, response: Response):
         return RedirectResponse(url=f"{frontend_url.split('?')[0]}?auth_error=github_failed")
 
     try:
-        user_id = await jit_provision_user(attrs, users_table, async_session_factory)
+        user_id = await resolve_provider_login(
+            identity_from_oauth_attrs(attrs), users_table, user_identities_table,
+            user_sessions_table, async_session_factory,
+        )
+    except ValueError as exc:  # IdentityLinkError or invalid identity
+        logger.warning("GitHub login refused: %s", getattr(exc, "reason", "invalid identity"))
+        return RedirectResponse(url=f"{frontend_url.split('?')[0]}?auth_error=signin_failed")
+    try:
         token = await create_user_session(user_id, user_sessions_table, async_session_factory)
     except Exception as exc:
         logger.error("GitHub user provisioning failed: %s", exc)
@@ -2492,7 +2551,8 @@ async def google_login():
 async def google_callback(code: str, state: str, response: Response):
     """Handle Google OAuth callback: exchange code → provision user → set cookie."""
     from api.oauth_service import google_exchange_code, validate_oauth_state, _frontend_url
-    from api.auth_service import jit_provision_user, create_user_session
+    from api.auth_service import create_user_session
+    from api.identity_service import identity_from_oauth_attrs, resolve_provider_login
     from api.audit_service import log_event, AuditEventType
     from fastapi.responses import RedirectResponse
 
@@ -2506,7 +2566,14 @@ async def google_callback(code: str, state: str, response: Response):
         return RedirectResponse(url=f"{_frontend_url()}/chat?auth_error=google_failed")
 
     try:
-        user_id = await jit_provision_user(attrs, users_table, async_session_factory)
+        user_id = await resolve_provider_login(
+            identity_from_oauth_attrs(attrs), users_table, user_identities_table,
+            user_sessions_table, async_session_factory,
+        )
+    except ValueError as exc:  # IdentityLinkError or invalid identity
+        logger.warning("Google login refused: %s", getattr(exc, "reason", "invalid identity"))
+        return RedirectResponse(url=f"{_frontend_url()}/chat?auth_error=signin_failed")
+    try:
         token = await create_user_session(user_id, user_sessions_table, async_session_factory)
     except Exception as exc:
         logger.error("Google user provisioning failed: %s", exc)
@@ -2540,7 +2607,8 @@ class LoginRequest(BaseModel):
 async def auth_register(body: RegisterRequest, response: Response):
     """Register a new user with email + password."""
     from api.oauth_service import hash_password, validate_password_strength
-    from api.auth_service import jit_provision_user, create_user_session
+    from api.auth_service import create_user_session
+    from api.identity_service import EmailAlreadyRegistered, register_password_user
     from api.audit_service import log_event, AuditEventType
     import re
 
@@ -2552,23 +2620,17 @@ async def auth_register(body: RegisterRequest, response: Response):
     if err:
         raise HTTPException(status_code=422, detail=err)
 
-    # Check if email already exists
-    async with async_session_factory() as session:
-        result = await session.execute(
-            select(users_table).where(users_table.c.email == email)
+    # DOCBOT-1617: insert-only — never returns or attaches to an existing
+    # (OAuth, SAML or password) account, even under a concurrent race.
+    try:
+        user_id = await register_password_user(
+            email, body.name or email.split("@")[0], hash_password(body.password),
+            users_table, async_session_factory,
         )
-        if result.fetchone():
-            raise HTTPException(status_code=409, detail="An account with this email already exists.")
-
-    attrs = {
-        "email": email,
-        "name": body.name or email.split("@")[0],
-        "provider": "email",
-        "password_hash": hash_password(body.password),
-    }
+    except EmailAlreadyRegistered:
+        raise HTTPException(status_code=409, detail="An account with this email already exists.")
 
     try:
-        user_id = await jit_provision_user(attrs, users_table, async_session_factory)
         token = await create_user_session(user_id, user_sessions_table, async_session_factory)
     except Exception as exc:
         logger.error("Registration failed: %s", exc)

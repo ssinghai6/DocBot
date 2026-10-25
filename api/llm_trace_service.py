@@ -91,6 +91,11 @@ def register_llm_calls_table(metadata) -> Table:
         Column("success", Boolean, nullable=False),
         Column("fallback_triggered", Boolean, nullable=False, server_default="false"),
         Column("error_message", Text),                        # sanitized, truncated — no payload/creds
+        # DOCBOT-1801: billing attribution (ContextVars). key_source is
+        # 'platform' | 'byok' — the key itself is never persisted.
+        Column("org_id", String, index=True),
+        Column("user_id", String),
+        Column("key_source", String),
         Column(
             "created_at",
             DateTime(timezone=True),
@@ -165,6 +170,9 @@ async def _persist_one(payload: dict) -> None:
             payload.get("llm_fallback_triggered", payload.get("fallback_triggered", False))
         ),
         "error_message": _sanitize_error(payload.get("error_message")),
+        "org_id": payload.get("org_id"),
+        "user_id": payload.get("user_id"),
+        "key_source": payload.get("key_source"),
     }
 
     async with _async_session_factory() as session:

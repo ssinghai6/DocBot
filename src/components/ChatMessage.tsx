@@ -1,10 +1,6 @@
 "use client"
 
 import React, { useState, useId } from "react"
-import ReactMarkdown, { type Options as MarkdownOptions } from "react-markdown"
-import remarkGfm from "remark-gfm"
-import remarkMath from "remark-math"
-import rehypeKatex from "rehype-katex"
 import {
   Brain, Clock, Maximize2, Download,
   ChevronDown, BookOpen, WandSparkles, TriangleAlert,
@@ -14,7 +10,7 @@ import {
 import type { Message, ChartMeta, AutopilotStep, Citation, Lineage } from "./types"
 import { TraceFeedbackResponseSchema } from "./types"
 import { useUIStore } from "@/store/uiStore"
-import { normalizeLatexDelimiters } from "@/lib/latex"
+import MarkdownRenderer from "./MarkdownRenderer"
 
 // ── Expert personas accent colors ─────────────────────────────────────────
 // cyan = data/interactive, amber = AI/finance/analytical, info = other
@@ -177,7 +173,7 @@ function AutopilotStepsList({ steps }: { steps: AutopilotStep[] }) {
             <span className="text-[var(--color-text-tertiary)] truncate flex-1">{step.step_label}</span>
           </div>
           {step.content && (
-            <p className="text-[var(--color-text-tertiary)] leading-relaxed">{step.content}</p>
+            <MarkdownRenderer content={step.content} variant="compact" />
           )}
           {step.code && (
             <details className="mt-2 group">
@@ -326,37 +322,21 @@ function FeedbackButtons({ traceId }: { traceId: string }) {
 
 // ── Agent formatting helpers ──────────────────────────────────────────────────
 
-const markdownPlugins: Pick<MarkdownOptions, "remarkPlugins" | "rehypePlugins"> = {
-  remarkPlugins: [
-    remarkGfm,
-    [remarkMath, { singleDollarTextMath: false }],
-  ],
-  rehypePlugins: [rehypeKatex],
-}
-
 function renderMessageContent(content: string): React.ReactNode[] | null {
   const parts = content.split(/\[DISCREPANCY\]([\s\S]*?)\[\/DISCREPANCY\]/g)
   if (parts.length === 1) return null
   return parts.map((part, i) =>
     i % 2 === 0
       ? part.trim()
-        ? <ReactMarkdown key={i} {...markdownPlugins}>{normalizeLatexDelimiters(part)}</ReactMarkdown>
+        ? <MarkdownRenderer key={i} content={part} />
         : null
       : <DiscrepancyBlock key={i} content={part} />
   ).filter(Boolean) as React.ReactNode[]
 }
 
 function AgentMessageContent({ msg }: { msg: Message }) {
-  // Use globals.css .prose token styling; no more inline prose-* utilities
-  return (
-    <div className="prose max-w-none">
-      {renderMessageContent(msg.content) ?? (
-        <ReactMarkdown {...markdownPlugins}>
-          {normalizeLatexDelimiters(msg.content)}
-        </ReactMarkdown>
-      )}
-    </div>
-  )
+  const split = renderMessageContent(msg.content)
+  return split ? <div>{split}</div> : <MarkdownRenderer content={msg.content} />
 }
 
 // ── Props ─────────────────────────────────────────────────────────────────────

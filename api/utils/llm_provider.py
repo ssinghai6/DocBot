@@ -52,6 +52,8 @@ from typing import Callable, Iterator, List, Optional
 
 from langchain_core.language_models import BaseChatModel
 
+from api.usage_service import billing_attribution, meter_llm_call
+
 logger = logging.getLogger(__name__)
 
 # ---------------------------------------------------------------------------
@@ -318,7 +320,28 @@ def _log_llm_call(
         # (which may contain request content) is not.
         "error_class": error_class,
     }
+    # DOCBOT-1801: billing attribution from the ContextVars (Principal +
+    # KeyContext.key_source). Only the key *source* is read — never the key.
+    attribution = billing_attribution()
+    payload["org_id"] = attribution["org_id"]
+    payload["user_id"] = attribution["user_id"]
+    payload["key_source"] = attribution["key_source"]
     logger.info(json.dumps(payload), extra=payload)
+
+    # DOCBOT-1801: request meter + usage_events ledger. Failed calls that
+    # report no tokens are not billable.
+    if success or input_tokens or output_tokens:
+        try:
+            meter_llm_call(
+                provider=provider,
+                model=model,
+                input_tokens=input_tokens,
+                output_tokens=output_tokens,
+                estimated_cost_usd=estimated_cost,
+                run_id=resolved_run_id,
+            )
+        except (ValueError, TypeError) as exc:  # metering must never break the LLM path
+            logger.warning("llm_provider: usage metering failed (%s)", type(exc).__name__)
 
     # DOCBOT-1508: accumulate toward this run_id's soft session cost ceiling.
     _accumulate_session_cost(resolved_run_id, estimated_cost)

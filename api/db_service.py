@@ -2026,16 +2026,18 @@ async def _stream_answer(
     persona_def: str,
 ) -> AsyncGenerator[str, None]:
     """LLM call #3: stream a plain-English answer in persona voice."""
+    from api.utils.response_format import SOURCE_DB, build_format_block, unclosed_fence_suffix
+
     preview = json.dumps(result_dicts[:20], default=str, indent=2)
     prompt = (
         f"{persona_def}\n\n"
         "A user asked a question about their database. Answer using the query result below as your primary data source.\n"
         "Rules:\n"
         "- Do not reveal the raw SQL unless explicitly asked.\n"
-        "- Cite the data source as [DB: <table names>] at the end.\n"
         "- When the user provides explicit parameters or assumptions in their question, "
         "perform the requested calculations step by step using those values combined with the query results.\n"
         "- Use the persona's voice.\n\n"
+        f"{build_format_block({SOURCE_DB})}\n\n"
         f"Question: {question}\n\n"
         f"Query result ({len(result_dicts)} rows):\n{preview}\n\n"
         "Answer:"
@@ -2045,6 +2047,7 @@ async def _stream_answer(
     from api.utils.pii_masking import StreamingPIIMasker
     # DOCBOT-2003: line-buffered masking so PII split across tokens is caught.
     masker = StreamingPIIMasker()
+    emitted: list[str] = []
     for token in chat_completion_stream(
         [{"role": "user", "content": prompt}],
         temperature=0.2,
@@ -2054,10 +2057,16 @@ async def _stream_answer(
     ):
         masked = masker.feed(token)
         if masked:
+            emitted.append(masked)
             yield masked
     tail = masker.flush()
     if tail:
+        emitted.append(tail)
         yield tail
+    # DOCBOT-2001: append-only close of a dangling code fence.
+    fence_tail = unclosed_fence_suffix("".join(emitted))
+    if fence_tail:
+        yield fence_tail
 
 
 # ---------------------------------------------------------------------------
