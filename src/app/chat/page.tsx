@@ -18,6 +18,7 @@ import { useChatSubmit } from "@/hooks/useChatSubmit"
 import { PanelGroup, Panel, ResizeHandle, type PanelImperativeHandle } from "@/components/ui"
 import { useUIStore } from "@/store/uiStore"
 import { useBreakpoint } from "@/lib/useBreakpoint"
+import { resolveChatMode, createAnonymousSessionId, type ChatMode } from "@/lib/chatSession"
 
 import {
   AuthMeSchema,
@@ -83,13 +84,14 @@ export default function Home() {
 
   // DOCBOT-1520: badge the collapsed Inspector rail/toggle when new lineage
   // (citations/SQL/discrepancies) arrives while the Inspector is collapsed.
-  const [hasUnviewedLineage, setHasUnviewedLineage] = useState(false);
-  useEffect(() => {
-    if (selectedLineage && !inspectorOpen) setHasUnviewedLineage(true);
-  }, [selectedLineage, inspectorOpen]);
-  useEffect(() => {
-    if (inspectorOpen) setHasUnviewedLineage(false);
-  }, [inspectorOpen]);
+  // Derived during render: remember the last lineage seen with the Inspector open
+  // (state adjusted during render, not in an effect, to avoid a cascading re-render).
+  const [seenLineage, setSeenLineage] = useState(selectedLineage);
+  if (inspectorOpen && seenLineage !== selectedLineage) {
+    setSeenLineage(selectedLineage);
+  }
+  const hasUnviewedLineage =
+    !inspectorOpen && selectedLineage !== null && selectedLineage !== seenLineage;
 
   // Imperative handle for the inspector panel — drives smooth collapse/expand
   const inspectorPanelRef = useRef<PanelImperativeHandle>(null);
@@ -169,7 +171,7 @@ export default function Home() {
   const [autopilotPlan, setAutopilotPlan] = useState<string[]>([]);
 
   // Chat mode
-  const [chatMode, setChatMode] = useState<"docs" | "database" | "hybrid">("docs");
+  const [chatMode, setChatMode] = useState<ChatMode>("docs");
 
   // Auth state
   const [authUser, setAuthUser] = useState<AuthUser | null>(null);
@@ -210,10 +212,9 @@ export default function Home() {
   const [apiKeysLoading, setApiKeysLoading] = useState(false);
   const [newlyCreatedApiKey, setNewlyCreatedApiKey] = useState<ApiKeyCreateResponse | null>(null);
 
-  // Stable anonymous session ID used when no PDF session exists yet
-  const anonymousSessionIdRef = useRef<string>(
-    typeof crypto !== "undefined" ? crypto.randomUUID() : Math.random().toString(36).substring(2)
-  );
+  // Stable anonymous session ID used when no PDF session exists yet.
+  // Lazy initializer runs once on mount, so the impure ID generator never runs during re-renders.
+  const [anonymousSessionId] = useState(createAnonymousSessionId);
 
   // File Upload State
   const [fileUploadState, setFileUploadState] = useState<FileUploadState>("idle");
@@ -275,7 +276,7 @@ export default function Home() {
 
   const handlers = useChatHandlers({
     sessionId,
-    anonymousSessionIdRef,
+    anonymousSessionId,
     authModalTab,
     authEmail,
     authPassword,
@@ -460,18 +461,14 @@ export default function Home() {
     }
   }, [input]);
 
-  // Fall back to "docs" mode when the active mode's required source becomes unavailable
-  useEffect(() => {
-    if (connectionId && sessionId) {
-      // Both doc session and DB/CSV connection exist — promote to hybrid
-      if (chatMode !== "hybrid") setChatMode("hybrid");
-    } else if (chatMode === "database" && !connectionId) {
-      setChatMode("docs");
-    } else if (chatMode === "hybrid" && (!connectionId || !sessionId)) {
-      // Lost one source — fall back
-      setChatMode(connectionId ? "database" : "docs");
-    }
-  }, [connectionId, sessionId, chatMode]);
+  // Promote to hybrid when both sources exist; fall back when the active mode's
+  // required source becomes unavailable. Adjusted during render (guarded, and
+  // resolveChatMode is idempotent) instead of in an effect, so there is no
+  // extra commit with a stale mode.
+  const resolvedChatMode = resolveChatMode(chatMode, connectionId, sessionId);
+  if (resolvedChatMode !== chatMode) {
+    setChatMode(resolvedChatMode);
+  }
 
   // Keyboard shortcuts
   useEffect(() => {
