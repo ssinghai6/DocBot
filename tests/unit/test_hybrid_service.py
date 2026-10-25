@@ -353,7 +353,9 @@ async def _drain_hybrid_chat(**overrides) -> list[dict]:
         query_embeddings_table=MagicMock(),
         async_session_factory=MagicMock(),
         expert_personas={"Generalist": {"persona_def": "You are a helpful data analyst."}},
-        vector_stores={},
+        # DOCBOT-2311: has_docs=True requires the session's store to exist,
+        # else hybrid_chat emits documents_expired. rag_retrieve is mocked.
+        vector_stores={"sess-disc": MagicMock()},
     )
     kwargs.update(overrides)
 

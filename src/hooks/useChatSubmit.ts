@@ -1,7 +1,7 @@
 "use client"
 
 import { EXPERT_PERSONAS, routeQuestion } from "@/components/personas"
-import { LineageSchema } from "@/components/types"
+import { DocumentsExpiredEventSchema, LineageSchema } from "@/components/types"
 import type {
   Message,
   AutopilotStep,
@@ -28,6 +28,21 @@ function applyLineageEvent(
     i === prev.length - 1 && m.role === "assistant" ? { ...m, lineage } : m
   ))
   useUIStore.getState().selectLineage(lineage)
+}
+
+/**
+ * DOCBOT-2311: validate a `documents_expired` SSE event and flag the session
+ * so ChatArea shows the "re-upload" banner. Returns true when handled.
+ */
+function applyDocumentsExpiredEvent(
+  raw: unknown,
+  showToast: (type: Toast['type'], message: string) => void,
+): boolean {
+  const parsed = DocumentsExpiredEventSchema.safeParse(raw)
+  if (!parsed.success) return false
+  useUIStore.getState().setExpiredSessionId(parsed.data.session_id)
+  showToast("error", "Your documents expired. Please re-upload them.")
+  return true
 }
 
 interface UseChatSubmitParams {
@@ -272,7 +287,10 @@ export function useChatSubmit(params: UseChatSubmitParams) {
             try {
               const data = JSON.parse(line.slice(6));
 
-              if (data.type === "plan") {
+              if (data.type === "documents_expired") {
+                applyDocumentsExpiredEvent(data, showToast);
+
+              } else if (data.type === "plan") {
                 setAutopilotPlan(data.steps ?? []);
 
               } else if (data.type === "step") {
@@ -512,7 +530,9 @@ export function useChatSubmit(params: UseChatSubmitParams) {
             if (!jsonStr) continue;
             try {
               const chunk = JSON.parse(jsonStr);
-              if (chunk.type === "token") {
+              if (chunk.type === "documents_expired") {
+                applyDocumentsExpiredEvent(chunk, showToast);
+              } else if (chunk.type === "token") {
                 setMessages(prev => prev.map((m, i) =>
                   i === prev.length - 1 ? { ...m, content: m.content + chunk.content } : m
                 ));
@@ -621,7 +641,9 @@ export function useChatSubmit(params: UseChatSubmitParams) {
           if (!jsonStr) continue;
           try {
             const chunk = JSON.parse(jsonStr);
-            if (chunk.type === "token") {
+            if (chunk.type === "documents_expired") {
+              applyDocumentsExpiredEvent(chunk, showToast);
+            } else if (chunk.type === "token") {
               setMessages(prev => prev.map((m, i) =>
                 i === prev.length - 1 ? { ...m, content: m.content + chunk.content } : m
               ));

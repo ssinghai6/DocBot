@@ -1,4 +1,5 @@
 import type { NextConfig } from "next";
+import { securityHeaders } from "./security-headers.mjs";
 
 const rawUrl = process.env.RAILWAY_BACKEND_URL?.trim();
 const railwayBackendUrl = rawUrl && !rawUrl.startsWith("http") ? `https://${rawUrl}` : rawUrl;
@@ -16,6 +17,20 @@ if (process.env.NODE_ENV === "production" && !railwayBackendUrl) {
 const nextConfig: NextConfig = {
   // Required for Docker standalone build (DOCBOT-605)
   output: process.env.DOCKER_BUILD ? "standalone" : undefined,
+  // DOCBOT-1619: CSP + HSTS + framing/nosniff/referrer/permissions headers.
+  // Policy and rationale live in security-headers.mjs.
+  async headers() {
+    return [
+      {
+        source: "/:path*",
+        headers: securityHeaders({
+          isDev: process.env.NODE_ENV === "development",
+          isPreview: process.env.VERCEL_ENV === "preview",
+          backendUrl: railwayBackendUrl,
+        }),
+      },
+    ];
+  },
   async rewrites() {
     return [
       {

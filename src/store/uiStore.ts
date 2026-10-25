@@ -52,6 +52,11 @@ interface UIState {
   /** One-shot per-turn tool pick — cleared after the next message is sent. */
   pickedTool: PickedTool | null;
   setPickedTool: (tool: PickedTool | null) => void;
+
+  // DOCBOT-2311: session whose documents expired server-side (banner shown
+  // while it is the active session; not persisted).
+  expiredSessionId: string | null;
+  setExpiredSessionId: (sessionId: string | null) => void;
 }
 
 export const useUIStore = create<UIState>()(
@@ -103,6 +108,9 @@ export const useUIStore = create<UIState>()(
       toggleToolPicker: () => set((s) => ({ toolPickerOpen: !s.toolPickerOpen })),
       pickedTool: null,
       setPickedTool: (tool) => set({ pickedTool: tool }),
+
+      expiredSessionId: null,
+      setExpiredSessionId: (sessionId) => set({ expiredSessionId: sessionId }),
     }),
     {
       name: "docbot-ui-store",

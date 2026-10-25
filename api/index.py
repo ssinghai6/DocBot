@@ -124,6 +124,15 @@ async def abuse_guard(request: Request, call_next):
 
     return response
 
+
+# DOCBOT-1619: security headers (CSP, HSTS, frame/nosniff/referrer/permissions).
+# Registered after abuse_guard so it is the outermost layer and also covers the
+# guard's own 403/429 short-circuit responses and CORS preflights.
+from api.utils.security_headers import SecurityHeadersMiddleware  # noqa: E402
+
+app.add_middleware(SecurityHeadersMiddleware)
+
+
 def safe_error_message(error: Exception) -> str:
     """Sanitize error messages for client responses"""
     return "An internal error occurred. Please try again later."
@@ -250,6 +259,8 @@ db_connections_table = Table(
     Column("user_id", String, index=True),
     # ── DOCBOT-1524: org/workspace scoping (nullable FK → organizations.id) ──
     Column("org_id", String, index=True),
+    # ── DOCBOT-1635: sha256 of the anonymous owner cookie (anon connections) ──
+    Column("anon_owner", String, index=True),
 )
 
 schema_cache_table = Table(
@@ -427,6 +438,31 @@ async def charge_budget(request: Request, session_id: str, endpoint: str) -> Non
 
 
 _gate_uploads = Depends(gate_uploads)
+_caller_scope = Depends(get_caller_scope)
+_SESSION_NOT_FOUND = "Session not found"
+
+
+async def _require_session(session_id: str, scope: CallerScope, *, allow_unbound: bool = False) -> None:
+    """DOCBOT-1611 (SEC-02): 404 unless ``scope`` owns ``session_id``.
+
+    Call before any budget, LLM or vector-store work. ``allow_unbound`` also
+    accepts an id with no ``sessions`` row and no loaded vector store (the
+    frontend's ``"anonymous"`` placeholder for CSV/DB-only turns); a session
+    owned by someone else is refused either way. A foreign id is
+    indistinguishable from a missing one.
+    """
+    from api import session_service as _sessions
+
+    if allow_unbound and session_id not in VECTOR_STORES:
+        ok = await _sessions.is_session_bindable(
+            session_id, scope, sessions_table, async_session_factory
+        )
+    else:
+        ok = await _sessions.is_session_owned(
+            session_id, scope, sessions_table, async_session_factory
+        )
+    if not ok:
+        raise HTTPException(status_code=404, detail=_SESSION_NOT_FOUND)
 
 
 async def init_db() -> None:
@@ -473,7 +509,7 @@ async def init_db() -> None:
         # DB, where the Table definitions above already declare org_id).
         for col_ddl in ORG_ID_COLUMN_MIGRATIONS:
             await conn.execute(text(col_ddl))
-        # DOCBOT-1601: anonymous owner column on sessions.
+        # DOCBOT-1601 / DOCBOT-1635: anonymous owner column on sessions + db_connections.
         for col_ddl in caller_scope.ANON_OWNER_COLUMN_MIGRATIONS:
             await conn.execute(text(col_ddl))
         # DOCBOT-1524: idempotent — creates the default org only if none
@@ -619,7 +655,8 @@ async def lifespan(app: FastAPI):
     # DOCBOT-1001: warm VECTOR_STORES from Chroma disk — recovers sessions after restart
     try:
         from api.utils.vector_store import list_stored_sessions, load_store
-        stored = list_stored_sessions()
+        # DOCBOT-2311: warm at most the LRU cap; the rest lazy-load on demand.
+        stored = list_stored_sessions()[: VECTOR_STORES.maxsize]
         if stored:
             embeddings = get_embeddings()
             for sid in stored:
@@ -692,7 +729,9 @@ class Citation(BaseModel):
     page: int
     text: str
 
-VECTOR_STORES = {}
+# DOCBOT-2311: LRU-capped; misses lazy-load from CHROMA_DIR (get_or_load_store).
+from api.utils.vector_store import SessionStoreCache
+VECTOR_STORES = SessionStoreCache()
 
 # SCRUM-391: in-memory store of span-verified extracted fields per session (any doc type)
 # { session_id: list[ExtractedField] }
@@ -1073,7 +1112,12 @@ async def upload_documents(
         raise HTTPException(status_code=500, detail=safe_error_message(e))
 
 @app.post("/api/chat")
-async def chat(raw_request: Request, request: ChatRequest, _user=_rbac_viewer):
+async def chat(
+    raw_request: Request,
+    request: ChatRequest,
+    _user=_rbac_viewer,
+    scope: CallerScope = _caller_scope,
+):
     """SSE streaming document chat.
 
     Emits newline-delimited JSON events:
@@ -1081,17 +1125,15 @@ async def chat(raw_request: Request, request: ChatRequest, _user=_rbac_viewer):
       {"type": "citations","citations": [...]}
       {"type": "error",    "detail": "<msg>"}
     """
+    # DOCBOT-1611: ownership before budget / vector-store / LLM work.
+    await _require_session(request.session_id, scope)
     await charge_budget(raw_request, request.session_id, "chat")
 
-    if request.session_id not in VECTOR_STORES:
-        # DOCBOT-1001: try to lazy-load from Chroma disk before giving up
-        from api.utils.vector_store import load_store
-        recovered = load_store(request.session_id, get_embeddings())
-        if recovered is not None:
-            VECTOR_STORES[request.session_id] = recovered
-            logger.info("chat: lazy-loaded vector store for session %s from disk", request.session_id)
-        else:
-            raise HTTPException(status_code=404, detail="Session not found. Please upload documents again.")
+    # DOCBOT-1001/2311: lazy-load from CHROMA_DIR on cache miss; if the vectors
+    # are gone, stream an explicit documents_expired event (never a silent 404).
+    from api.utils.vector_store import documents_expired_stream, get_or_load_store
+    if await asyncio.to_thread(get_or_load_store, request.session_id, VECTOR_STORES, get_embeddings) is None:
+        return StreamingResponse(documents_expired_stream(request.session_id), media_type="text/event-stream")
 
     # ── BUG #4 fix: plot/chart intent detection for doc-only mode ───────────
     # /api/chat is a pure RAG → LLM text pipeline; there is no sandbox or
@@ -1439,10 +1481,6 @@ from api.session_models import (  # noqa: E402
     SessionDeleteResponse, SessionDetailResponse, SessionListResponse,
 )
 
-_caller_scope = Depends(get_caller_scope)
-_SESSION_NOT_FOUND = "Session not found"
-
-
 def _drop_vector_store(session_id: str) -> None:
     VECTOR_STORES.pop(session_id, None)
     # DOCBOT-1001: remove persisted Chroma collection
@@ -1502,8 +1540,9 @@ async def export_session(session_id: str, format: str = "txt", scope: CallerScop
     )
 
 @app.post("/api/session/{session_id}/update-persona")
-async def update_session_persona(session_id: str, persona: str):
-    """Update session persona"""
+async def update_session_persona(session_id: str, persona: str, scope: CallerScope = _caller_scope):
+    """Update the persona of one of the caller's sessions (foreign -> 404)."""
+    await _require_session(session_id, scope)
     try:
         if persona not in EXPERT_PERSONAS:
             raise HTTPException(
@@ -1536,13 +1575,14 @@ class PersonaTestRequest(BaseModel):
 _DEV_ROUTES_ENABLED = os.getenv("ENV", "").lower() == "dev"
 
 @app.post("/api/test-persona-switch")
-async def test_persona_switch(request: PersonaTestRequest):
+async def test_persona_switch(raw_request: Request, request: PersonaTestRequest):
     """Test persona switching by getting the persona prompt without making an LLM call.
 
     Dev-only — returns 404 unless ``ENV=dev``.
     """
     if not _DEV_ROUTES_ENABLED:
         raise HTTPException(status_code=404, detail="Not found")
+    await _require_session(request.session_id, await resolve_caller_scope(raw_request))
     try:
         # Get session info
         async with engine.connect() as conn:
@@ -1696,6 +1736,8 @@ async def db_connect(
             org_id=get_user_org_id(_user) or scope.org_id,
             # Persistent Workspace / DOCBOT-1603: stamp the owning user.
             user_id=scope.user_id,
+            # DOCBOT-1635: anonymous callers own the row via their cookie digest.
+            anon_owner=scope.anon_token if scope.is_anonymous else None,
         )
         # DOCBOT-602: audit connection event (never log password — only host/dialect)
         from api.audit_service import log_event, AuditEventType
@@ -1840,6 +1882,8 @@ async def db_chat(
       3. done chunk      {type: "done"}
     """
     await _require_connection(request.connection_id, scope)
+    # DOCBOT-1611: artifacts are saved under session_id, never into a foreign session.
+    await _require_session(request.session_id, scope, allow_unbound=True)
 
     async def event_stream():
         # DOCBOT-602: audit query event (fire before stream so it's captured even if stream errors)
@@ -2028,17 +2072,19 @@ class SandboxExecuteRequest(BaseModel):
     session_id: Optional[str] = None
 
 
-# DOCBOT-1612: raw code execution requires a logged-in analyst+ in every mode
-# unless ALLOW_ANONYMOUS_SANDBOX=true (local dev only; refused with MULTI_TENANT).
-@app.post(
-    "/api/sandbox/execute",
-    response_model=SandboxResult,
-    dependencies=[Depends(require_sandbox_user())],
-)
-async def execute_sandbox(request: SandboxExecuteRequest, raw_request: Request) -> SandboxResult:
+# DOCBOT-1612/1607: raw code execution requires a logged-in analyst+ in every
+# mode. ALLOW_ANONYMOUS_SANDBOX=true is honored only in local dev (ignored on
+# Railway/production; refused with MULTI_TENANT). Metered per org/user.
+@app.post("/api/sandbox/execute", response_model=SandboxResult)
+async def execute_sandbox(
+    request: SandboxExecuteRequest,
+    raw_request: Request,
+    user: Optional[Any] = Depends(require_sandbox_user()),
+) -> SandboxResult:
     """Execute Python code in an isolated E2B sandbox.
 
-    The code runs in a fully isolated cloud container with no access to the
+    The code runs in a fully isolated cloud container with no internet access
+    (DOCBOT-1607) and no access to the
     host server or internal network resources. Execution is capped at 25 s.
     Charts produced by matplotlib are returned as base64 PNGs.
 
@@ -2055,7 +2101,7 @@ async def execute_sandbox(request: SandboxExecuteRequest, raw_request: Request) 
     error            : Human-readable error message, or null on success
     execution_time_ms: Wall-clock time for the sandbox run
     """
-    await charge_budget(raw_request, request.session_id or "", "sandbox")
+    request_guard.enforce_sandbox_quota(raw_request, user)
 
     log_prefix = f"[session={request.session_id}]" if request.session_id else "[anonymous]"
     logger.info(
@@ -2065,7 +2111,7 @@ async def execute_sandbox(request: SandboxExecuteRequest, raw_request: Request) 
     )
 
     try:
-        result = await sandbox_service.run_python(code=request.code)
+        result = await sandbox_service.run_python(code=request.code, allow_pip_egress=False)
     except EnvironmentError as env_err:
         # E2B_API_KEY not configured — surface clearly to the caller
         logger.error("%s Sandbox environment error: %s", log_prefix, env_err)
@@ -2095,19 +2141,24 @@ async def execute_sandbox(request: SandboxExecuteRequest, raw_request: Request) 
 
 
 @app.get("/api/artifacts/{session_id}")
-async def list_session_artifacts(session_id: str):
-    """List all artifacts saved for a session (no data_json/chart_b64 — summaries only)."""
+async def list_session_artifacts(session_id: str, scope: CallerScope = _caller_scope):
+    """List artifacts of one of the caller's sessions (summaries only; foreign -> 404)."""
     from api.artifact_service import list_artifacts
+    await _require_session(session_id, scope)
     summaries = await list_artifacts(session_id, session_artifacts_table, async_session_factory)
     return {"artifacts": [s.model_dump() for s in summaries]}
 
 
 @app.get("/api/artifacts/item/{artifact_id}")
-async def get_artifact_detail(artifact_id: str):
-    """Fetch a single artifact by ID, including full data_json and chart_b64."""
+async def get_artifact_detail(artifact_id: str, scope: CallerScope = _caller_scope):
+    """Fetch one artifact (full data_json + chart_b64) from a session the caller owns."""
     from api.artifact_service import get_artifact
+    from api import session_service as _sessions
     detail = await get_artifact(artifact_id, session_artifacts_table, async_session_factory)
-    if detail is None:
+    # DOCBOT-1611: an artifact in a foreign session is indistinguishable from a missing one.
+    if detail is None or not await _sessions.is_session_owned(
+        detail.session_id, scope, sessions_table, async_session_factory
+    ):
         raise HTTPException(status_code=404, detail="Artifact not found.")
     return detail.model_dump()
 
@@ -2177,6 +2228,7 @@ async def hybrid_chat_route(
     """
     from api.hybrid_service import hybrid_chat
 
+    await _require_session(request.session_id, scope)  # DOCBOT-1611
     await _require_connection(request.connection_id, scope)
 
     await charge_budget(raw_request, request.session_id, "hybrid")
@@ -2237,6 +2289,7 @@ class AutopilotRequest(BaseModel):
     connection_id: Optional[str] = None
     question: str
     persona: str = "Generalist"
+    # Client hints only — resolved server-side in resolve_autopilot_sources().
     has_docs: bool = False
     has_db: bool = False
     has_csv: bool = False
@@ -2262,6 +2315,9 @@ async def autopilot_run(
     """
     from api.autopilot_service import run_autopilot
 
+    # DOCBOT-1611: doc turns need an owned session; CSV/DB-only turns may use
+    # an unbound placeholder id, never someone else's session.
+    await _require_session(request.session_id, scope, allow_unbound=not request.has_docs)
     await _require_connection(request.connection_id, scope)
     await charge_budget(raw_request, request.session_id, "autopilot")
 
@@ -2284,6 +2340,23 @@ async def autopilot_run(
         try:
             _autopilot_history = [{"role": m.role, "content": m.content} for m in (request.history or [])]
 
+            # Resolve data sources from persisted state — client-sent flags
+            # are fallback hints only (see api/utils/autopilot_sources.py).
+            from api.utils.autopilot_sources import SourceFlags, resolve_autopilot_sources
+            sources = await resolve_autopilot_sources(
+                session_id=request.session_id,
+                connection_id=request.connection_id,
+                db_connections_table=db_connections_table,
+                async_session_factory=async_session_factory,
+                vector_stores=VECTOR_STORES,
+                org_encryption_keys_table=org_encryption_keys_table,
+                fallback=SourceFlags(
+                    has_docs=request.has_docs,
+                    has_db=request.has_db,
+                    has_csv=request.has_csv,
+                ),
+            )
+
             async for chunk in run_autopilot(
                 question=request.question,
                 session_id=request.session_id,
@@ -2298,9 +2371,9 @@ async def autopilot_run(
                 async_session_factory=async_session_factory,
                 expert_personas=EXPERT_PERSONAS,
                 vector_stores=VECTOR_STORES,
-                has_docs=request.has_docs,
-                has_db=request.has_db,
-                has_csv=request.has_csv,
+                has_docs=sources.has_docs,
+                has_db=sources.has_db,
+                has_csv=sources.has_csv,
                 chat_history=_autopilot_history if _autopilot_history else None,
             ):
                 yield chunk
@@ -3178,7 +3251,10 @@ async def edgar_list_cached(ticker: Optional[str] = None, cik: Optional[str] = N
     from api.connector_store import list_cached_filings
 
     filings = await list_cached_filings(ticker=ticker, cik=cik)
-    return {"filings": filings, "count": len(filings)}
+    # DOCBOT-1611: the cached session_id belongs to whoever first ingested the
+    # filing; never disclose it. Ingest gives each caller their own session.
+    public = [{k: v for k, v in f.items() if k != "session_id"} for f in filings]
+    return {"filings": public, "count": len(public)}
 
 
 # ---------------------------------------------------------------------------
@@ -3342,6 +3418,7 @@ class V1AutopilotRequest(BaseModel):
     connection_id: Optional[str] = None
     question: str
     persona: str = "Generalist"
+    # Client hints only — resolved server-side in resolve_autopilot_sources().
     has_docs: bool = False
     has_db: bool = False
     has_csv: bool = False
@@ -3390,6 +3467,23 @@ async def v1_autopilot_run(raw_request: Request, request: V1AutopilotRequest, _k
     error_detail: Optional[str] = None
 
     try:
+        # Resolve data sources from persisted state — client-sent flags
+        # are fallback hints only (see api/utils/autopilot_sources.py).
+        from api.utils.autopilot_sources import SourceFlags, resolve_autopilot_sources
+        sources = await resolve_autopilot_sources(
+            session_id=request.session_id,
+            connection_id=request.connection_id,
+            db_connections_table=db_connections_table,
+            async_session_factory=async_session_factory,
+            vector_stores=VECTOR_STORES,
+            org_encryption_keys_table=org_encryption_keys_table,
+            fallback=SourceFlags(
+                has_docs=request.has_docs,
+                has_db=request.has_db,
+                has_csv=request.has_csv,
+            ),
+        )
+
         async for chunk in run_autopilot(
             question=request.question,
             session_id=request.session_id,
@@ -3404,9 +3498,9 @@ async def v1_autopilot_run(raw_request: Request, request: V1AutopilotRequest, _k
             async_session_factory=async_session_factory,
             expert_personas=EXPERT_PERSONAS,
             vector_stores=VECTOR_STORES,
-            has_docs=request.has_docs,
-            has_db=request.has_db,
-            has_csv=request.has_csv,
+            has_docs=sources.has_docs,
+            has_db=sources.has_db,
+            has_csv=sources.has_csv,
             chat_history=_autopilot_history if _autopilot_history else None,
         ):
             evt = _parse_sse_event(chunk)

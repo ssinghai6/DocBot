@@ -577,6 +577,29 @@ async def hybrid_chat(
     lineage = LineageCollector(run_id, "hybrid", question=question)
     lineage.set_persona(persona)
     try:
+        # ── DOCBOT-2311: never answer silently without the session's docs ─────
+        # Lazy-load the session's vectors from CHROMA_DIR on a cache miss. If
+        # they are gone (redeploy on ephemeral disk, retention cleanup), tell
+        # the user explicitly; with a DB attached, continue DB-only.
+        if has_docs:
+            from api.utils.vector_store import (
+                DOCUMENTS_EXPIRED_MESSAGE,
+                documents_expired_sse,
+                get_or_load_store,
+            )
+
+            store = await asyncio.to_thread(get_or_load_store, session_id, vector_stores)
+            if store is None:
+                logger.info("hybrid_chat: documents expired for session %s", session_id)
+                yield documents_expired_sse(session_id)
+                has_docs = False
+                if not has_db:
+                    yield f"data: {json.dumps({'type': 'token', 'content': DOCUMENTS_EXPIRED_MESSAGE})}\n\n"
+                    yield f"data: {json.dumps({'type': 'done', 'citations': [], 'run_id': run_id})}\n\n"
+                    return
+                notice = f"> **Note:** {DOCUMENTS_EXPIRED_MESSAGE} This answer uses only your connected data.\n\n"
+                yield f"data: {json.dumps({'type': 'token', 'content': notice})}\n\n"
+
         # Rephrase follow-up questions using chat history
         if chat_history:
             from api.db_service import _rephrase_with_history
