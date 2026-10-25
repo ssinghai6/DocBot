@@ -250,6 +250,8 @@ db_connections_table = Table(
     Column("user_id", String, index=True),
     # ── DOCBOT-1524: org/workspace scoping (nullable FK → organizations.id) ──
     Column("org_id", String, index=True),
+    # ── DOCBOT-1635: sha256 of the anonymous owner cookie (anon connections) ──
+    Column("anon_owner", String, index=True),
 )
 
 schema_cache_table = Table(
@@ -473,7 +475,7 @@ async def init_db() -> None:
         # DB, where the Table definitions above already declare org_id).
         for col_ddl in ORG_ID_COLUMN_MIGRATIONS:
             await conn.execute(text(col_ddl))
-        # DOCBOT-1601: anonymous owner column on sessions.
+        # DOCBOT-1601 / DOCBOT-1635: anonymous owner column on sessions + db_connections.
         for col_ddl in caller_scope.ANON_OWNER_COLUMN_MIGRATIONS:
             await conn.execute(text(col_ddl))
         # DOCBOT-1524: idempotent — creates the default org only if none
@@ -1696,6 +1698,8 @@ async def db_connect(
             org_id=get_user_org_id(_user) or scope.org_id,
             # Persistent Workspace / DOCBOT-1603: stamp the owning user.
             user_id=scope.user_id,
+            # DOCBOT-1635: anonymous callers own the row via their cookie digest.
+            anon_owner=scope.anon_token if scope.is_anonymous else None,
         )
         # DOCBOT-602: audit connection event (never log password — only host/dialect)
         from api.audit_service import log_event, AuditEventType

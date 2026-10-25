@@ -22,7 +22,13 @@ async def session_in_org(
     sessions_table: Table,
     async_session_factory,
 ) -> bool:
-    """True iff the session row exists and is stamped with ``org_id``."""
+    """True iff the session row exists, is stamped with ``org_id`` and has an owning user.
+
+    DOCBOT-1635: the DOCBOT-1524 startup backfill stamps the default org on
+    anonymous rows (``user_id IS NULL``); matching on ``org_id`` alone would
+    let default-org API keys reach every anonymous / demo session. No ``/v1``
+    route creates sessions, so only user-owned rows of the org qualify.
+    """
     if not org_id or not session_id:
         return False
     async with async_session_factory() as session:
@@ -30,6 +36,7 @@ async def session_in_org(
             select(sessions_table.c.session_id).where(
                 sessions_table.c.session_id == session_id,
                 sessions_table.c.org_id == org_id,
+                sessions_table.c.user_id.is_not(None),
             )
         )
         return result.fetchone() is not None
