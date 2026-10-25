@@ -12,7 +12,6 @@ import asyncio
 import pytest
 from sqlalchemy import MetaData, select
 from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
-from sqlalchemy.pool import StaticPool
 
 from api import eval_service, trace_service
 
@@ -20,12 +19,7 @@ from api import eval_service, trace_service
 @pytest.fixture
 async def wired_stores():
     """Wire both agent_traces and eval_judgments against one in-memory engine."""
-    engine = create_async_engine(
-        "sqlite+aiosqlite:///:memory:",
-        # One shared connection: each pooled connection to :memory: is a separate
-        # empty DB, so concurrent fire-and-forget inserts could vanish.
-        poolclass=StaticPool,
-    )
+    engine = create_async_engine("sqlite+aiosqlite:///:memory:")
     metadata = MetaData()
     traces_table = trace_service.register_agent_traces_table(metadata)
     judgments_table = eval_service.register_eval_judgments_table(metadata)
