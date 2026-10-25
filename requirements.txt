@@ -1,58 +1,70 @@
-numpy<2.0.0
-fastapi
-uvicorn
-apscheduler>=3.10
-groq
-pydantic>=2.0.0
-langchain>=0.3.0
-langchain-core>=0.3.0
-langchain-community>=0.3.0
-langchain-text-splitters>=0.3.0
-langchain-groq
-python-dotenv
-pymupdf
-python-multipart
-langchain-huggingface
+# DOCBOT-1629: direct dependencies are pinned to exact versions.
+#
+# Unpinned ranges let CI and Railway silently pull whatever was newest at build
+# time (e.g. SQLAlchemy 2.1.6 slipped into prod unannounced). These pins are
+# the versions CI installed and tested green on main (run 40163628889,
+# 2026-10-25). Transitive deps are still resolved by pip at install time.
+#
+# To bump: edit the pin (or merge the weekly Dependabot minor/patch group PR),
+# `pip install -r requirements-dev.txt` in a fresh Python 3.12 venv, then run
+# `pytest tests/ -m "not external and not postgres"`. Majors are ignored by
+# Dependabot (DOCBOT-1630) and must be upgraded deliberately.
+# numpy stays on 1.x (was `numpy<2.0.0`).
+numpy==1.26.4
+fastapi==0.162.0
+uvicorn==0.54.0
+apscheduler==3.11.3
+groq==0.37.1
+pydantic==2.14.1
+langchain==1.4.6
+langchain-core==1.6.10
+langchain-community==0.4.2
+langchain-text-splitters==1.1.3
+langchain-groq==1.1.3
+python-dotenv==1.2.4
+pymupdf==2.0
+python-multipart==0.0.32
+langchain-huggingface==1.2.3
 asyncpg==0.30.0
-sqlalchemy[asyncio]>=2.0.0,<3.0.0
+sqlalchemy[asyncio]==2.1.6
 psycopg2-binary==2.9.10
-e2b-code-interpreter>=1.0.0
+e2b-code-interpreter==2.11.3
 # DOCBOT-201: credential encryption
-cryptography>=41.0.0
+cryptography==50.0.2
 # DOCBOT-203: AST-based SQL validation
-sqlglot>=23.0.0
+sqlglot==30.24.0
 # DOCBOT-205: MySQL connector (not mysqlclient — build issues on Railway)
-pymysql>=1.1.0
+pymysql==1.2.3
 # DOCBOT-207: CSV parsing and type inference
-pandas>=2.0.0
+pandas==3.0.6
 # df.to_markdown() requires tabulate
-tabulate>=0.9.0
+tabulate==0.10.0
 # DOCBOT-301: Python code generation via openai/gpt-oss-120b on Groq (uses existing groq package)
 # DOCBOT-406: LangExtract for structured financial document extraction (Google, Gemini-backed)
-langextract
+langextract==1.7.1
 # DOCBOT-208: Azure SQL / Microsoft Entra Service Principal auth
-pyodbc>=5.0.0
-azure-identity>=1.17.0
+pyodbc==5.3.0
+azure-identity==1.26.0
 # DOCBOT-405: Analytical Autopilot — LangGraph state machine
-langgraph>=0.2.0
+langgraph==1.2.17
 # DOCBOT-601: SAML 2.0 SSO (Okta, Azure AD)
-python3-saml>=1.16.0
+python3-saml==1.16.0
 # DOCBOT-701: Consumer OAuth (GitHub, Google) + email/password auth
-httpx>=0.27.0
-bcrypt>=4.0.0
+httpx==0.28.1
+bcrypt==5.0.0
 # DOCBOT-1001: Chroma persistent vector store (replaces InMemoryVectorStore)
-chromadb>=0.5.0
-langchain-chroma>=0.1.0
+chromadb==1.5.9
+langchain-chroma==1.1.0
 # DOCBOT-1511: free local ONNX reranker (cross-encoder). Embeddings use chromadb's bundled ONNX MiniLM.
-fastembed>=0.4.0
+fastembed==0.9.1
 # DOCBOT-1003: SemanticChunker for financial/legal document splitting
-langchain-experimental>=0.0.50
+langchain-experimental==0.4.2
 # LLM Fallback: Gemini as fallback provider (direct SDK, avoids langchain-google-genai pydantic_v1 bug)
-google-generativeai>=0.8.0
+google-generativeai==0.8.6
 # EDGAR connector: HTML parsing for SEC filing extraction
-beautifulsoup4>=4.12.0
-lxml>=5.0.0
+beautifulsoup4==4.15.0
+lxml==6.1.3
 # DOCBOT-1401: thin observability — Sentry error tracking (no APM/tracing)
-sentry-sdk[fastapi]>=2.0.0
+sentry-sdk[fastapi]==2.73.0
 # DOCBOT-1509: LangSmith tracing (metadata only; OFF unless both vars are set)
 langsmith==0.7.17
