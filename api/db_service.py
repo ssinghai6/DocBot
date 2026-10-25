@@ -1789,7 +1789,9 @@ async def _stream_answer(
     )
 
     from api.utils.llm_provider import chat_completion_stream
-    from api.utils.pii_masking import mask_pii
+    from api.utils.pii_masking import StreamingPIIMasker
+    # DOCBOT-2003: line-buffered masking so PII split across tokens is caught.
+    masker = StreamingPIIMasker()
     for token in chat_completion_stream(
         [{"role": "user", "content": prompt}],
         temperature=0.2,
@@ -1797,7 +1799,12 @@ async def _stream_answer(
         caller="sql_answer_gen",
         prompt_version=PROMPT_VERSION_SQL_ANSWER_GEN,
     ):
-        yield mask_pii(token)
+        masked = masker.feed(token)
+        if masked:
+            yield masked
+    tail = masker.flush()
+    if tail:
+        yield tail
 
 
 # ---------------------------------------------------------------------------
