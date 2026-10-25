@@ -133,8 +133,10 @@ PUBLIC_ROUTES: dict[RouteKey, str] = {
     ("POST", "/api/auth/register"): "Email/password sign-up (abuse controls: DOCBOT-1622, 1701).",
     ("POST", "/api/auth/login"): "Email/password login (throttling: DOCBOT-1622).",
     ("POST", "/api/auth/logout"): "Clears the caller's own session cookie; no-op when anonymous.",
-    ("POST", "/api/marketplace/webhook/shopify"): "Shopify server-to-server webhook; authenticated by "
-                                                  "HMAC-SHA256 in the handler (fix: DOCBOT-1627).",
+    ("POST", "/api/marketplace/webhook/shopify"): "Shopify server-to-server webhook; no browser session. "
+                                                  "Authenticated by HMAC-SHA256 over the raw body with the "
+                                                  "connector's webhook_secret; shop domain header validated "
+                                                  "against *.myshopify.com (DOCBOT-1602; further: DOCBOT-1627).",
 }
 
 # Handler rejects anonymous callers itself (no Depends guard). Verified by
@@ -160,16 +162,6 @@ KNOWN_UNGUARDED: dict[RouteKey, str] = {
     ("POST", "/api/session/{session_id}/update-persona"): "DOCBOT-1611",
     ("GET", "/api/artifacts/{session_id}"): "DOCBOT-1611",
     ("GET", "/api/artifacts/item/{artifact_id}"): "DOCBOT-1611",
-    # Connector + commerce RBAC (SEC-03).
-    ("POST", "/api/connectors/register"): "DOCBOT-1602",
-    ("GET", "/api/connectors"): "DOCBOT-1602",
-    ("DELETE", "/api/connectors/{connector_id}"): "DOCBOT-1602",
-    ("POST", "/api/connectors/{connector_id}/orders"): "DOCBOT-1602",
-    ("POST", "/api/connectors/{connector_id}/financials"): "DOCBOT-1602",
-    ("GET", "/api/connectors/types"): "DOCBOT-1602",
-    ("POST", "/api/connectors/{connector_id}/sync"): "DOCBOT-1602",
-    ("GET", "/api/commerce/{connector_id}/orders"): "DOCBOT-1602",
-    ("GET", "/api/commerce/{connector_id}/financials"): "DOCBOT-1602",
     # EDGAR: outbound SEC calls + embedding cost, unmetered (SEC-21).
     ("POST", "/api/edgar/search"): "DOCBOT-1623",
     ("POST", "/api/edgar/filings"): "DOCBOT-1623",
