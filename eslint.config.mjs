@@ -12,6 +12,16 @@ const eslintConfig = defineConfig([
     "out/**",
     "build/**",
     "next-env.d.ts",
+    // Non-source trees (DOCBOT-2302): Python venvs ship vendored JS that
+    // crashes the linter; agent worktrees/tooling dirs duplicate src/.
+    ".venv/**",
+    "venv/**",
+    ".claude/**",
+    ".opencode/**",
+    ".vercel/**",
+    "coverage/**",
+    "finetune/**",
+    "DocBot_Real_Test/**",
   ]),
 ]);
 

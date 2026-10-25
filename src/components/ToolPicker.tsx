@@ -92,9 +92,13 @@ export default function ToolPicker({ isOpen, onClose, onPick }: ToolPickerProps)
   const [value, setValue] = useState("")
   const { tools, loading, error } = useToolRegistry(isOpen)
 
-  useEffect(() => {
+  // Reset the query each time the palette opens. Adjusting state during render
+  // (instead of in an effect) avoids a cascading re-render.
+  const [wasOpen, setWasOpen] = useState(isOpen)
+  if (isOpen !== wasOpen) {
+    setWasOpen(isOpen)
     if (isOpen) setValue("")
-  }, [isOpen])
+  }
 
   if (!isOpen) return null
 
