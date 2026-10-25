@@ -2,8 +2,8 @@
 
 import React, { useState } from "react"
 import {
-  FileText, Search, ChevronDown, Loader2,
-  AlertCircle, Download, CheckCircle2,
+  FileText, Search, ChevronDown, LoaderCircle,
+  CircleAlert, Download, CircleCheck,
 } from "lucide-react"
 
 type CompanyResult = {
@@ -262,13 +262,13 @@ export default function EdgarPanel({ onFilingIngested, showToast }: EdgarPanelPr
               disabled={searching || !searchQuery.trim()}
               className="px-3 py-2 rounded-lg bg-[var(--color-success-500)]/20 hover:bg-[var(--color-success-500)]/30 border border-[var(--color-success-500)]/30 text-[var(--color-success-500)] text-xs font-medium transition-all disabled:opacity-50 disabled:cursor-not-allowed"
             >
-              {searching ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Search className="w-3.5 h-3.5" />}
+              {searching ? <LoaderCircle className="w-3.5 h-3.5 animate-spin" /> : <Search className="w-3.5 h-3.5" />}
             </button>
           </div>
 
           {searchError && (
             <p className="text-[10px] text-red-400 px-1 flex items-center gap-1">
-              <AlertCircle className="w-3 h-3 shrink-0" />
+              <CircleAlert className="w-3 h-3 shrink-0" />
               {searchError}
             </p>
           )}
@@ -340,7 +340,7 @@ export default function EdgarPanel({ onFilingIngested, showToast }: EdgarPanelPr
                   className="px-2 py-1.5 rounded-lg bg-[var(--color-success-500)]/20 hover:bg-[var(--color-success-500)]/30 border border-[var(--color-success-500)]/30 text-[var(--color-success-500)] text-xs transition-all disabled:opacity-50"
                   title="Refresh filings"
                 >
-                  {loadingFilings ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Search className="w-3.5 h-3.5" />}
+                  {loadingFilings ? <LoaderCircle className="w-3.5 h-3.5 animate-spin" /> : <Search className="w-3.5 h-3.5" />}
                 </button>
               </div>
 
@@ -351,7 +351,7 @@ export default function EdgarPanel({ onFilingIngested, showToast }: EdgarPanelPr
                 className="w-full flex items-center justify-center gap-2 px-3 py-2 rounded-lg bg-[var(--color-success-500)]/20 hover:bg-[var(--color-success-500)]/30 border border-[var(--color-success-500)]/30 text-[var(--color-success-500)] text-xs font-medium transition-all disabled:opacity-50 disabled:cursor-not-allowed"
               >
                 {batchIngesting ? (
-                  <><Loader2 className="w-3.5 h-3.5 animate-spin" /> Ingesting filings...</>
+                  <><LoaderCircle className="w-3.5 h-3.5 animate-spin" /> Ingesting filings...</>
                 ) : (
                   <><Download className="w-3.5 h-3.5" /> Ingest All {filingCount} {filingType}s</>
                 )}
@@ -360,7 +360,7 @@ export default function EdgarPanel({ onFilingIngested, showToast }: EdgarPanelPr
               {/* Filing list */}
               {loadingFilings && (
                 <div className="flex items-center justify-center py-4 text-xs text-[var(--color-text-tertiary)]">
-                  <Loader2 className="w-4 h-4 animate-spin mr-2" /> Loading filings...
+                  <LoaderCircle className="w-4 h-4 animate-spin mr-2" /> Loading filings...
                 </div>
               )}
 
@@ -395,9 +395,9 @@ export default function EdgarPanel({ onFilingIngested, showToast }: EdgarPanelPr
                           </div>
 
                           {isIngested ? (
-                            <CheckCircle2 className="w-3.5 h-3.5 text-[var(--color-success-500)] shrink-0" />
+                            <CircleCheck className="w-3.5 h-3.5 text-[var(--color-success-500)] shrink-0" />
                           ) : hasError ? (
-                            <AlertCircle className="w-3.5 h-3.5 text-red-400 shrink-0" />
+                            <CircleAlert className="w-3.5 h-3.5 text-red-400 shrink-0" />
                           ) : (
                             <button
                               onClick={() => handleIngestSingle(filing)}
@@ -406,7 +406,7 @@ export default function EdgarPanel({ onFilingIngested, showToast }: EdgarPanelPr
                               title="Ingest this filing"
                             >
                               {isIngesting ? (
-                                <Loader2 className="w-3.5 h-3.5 animate-spin" />
+                                <LoaderCircle className="w-3.5 h-3.5 animate-spin" />
                               ) : (
                                 <Download className="w-3.5 h-3.5" />
                               )}

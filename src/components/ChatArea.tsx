@@ -2,13 +2,13 @@
 
 import React, { useState } from "react"
 import {
-  Send, Upload, Loader2,
+  Send, Upload, LoaderCircle,
   FileText, MessageSquare,
   Layers,
   Database, BookOpen,
-  Download, FileJson, FileText as FileTxt,
-  Sparkles, HelpCircle,
-  Wand2, CheckCircle2, Hash, XCircle,
+  Download, FileBraces, FileText as FileTxt,
+  Sparkles, CircleQuestionMark,
+  WandSparkles, CircleCheck, Hash, CircleX,
   ChevronDown, Plus, X,
   PanelRight,
 } from "lucide-react"
@@ -69,14 +69,14 @@ function SessionInfo({ sessionId, fileCount, persona, onClear }: {
         className="ml-0.5 p-0.5 hover:bg-[var(--color-bg-overlay)] rounded-[3px] transition-colors"
         title="Copy session ID"
       >
-        {copied ? <CheckCircle2 className="w-3 h-3 text-[var(--color-success-500)]" /> : <Hash className="w-3 h-3 text-[var(--color-text-tertiary)]" />}
+        {copied ? <CircleCheck className="w-3 h-3 text-[var(--color-success-500)]" /> : <Hash className="w-3 h-3 text-[var(--color-text-tertiary)]" />}
       </button>
       <button
         onClick={onClear}
         className="p-0.5 hover:bg-[var(--color-danger-500)]/10 rounded-[3px] transition-colors"
         title="Clear session"
       >
-        <XCircle className="w-3 h-3 text-[var(--color-text-tertiary)] hover:text-[var(--color-danger-500)]" />
+        <CircleX className="w-3 h-3 text-[var(--color-text-tertiary)] hover:text-[var(--color-danger-500)]" />
       </button>
     </div>
   )
@@ -268,7 +268,7 @@ export default function ChatArea(props: ChatAreaProps) {
                 onClick={() => exportChat('json')}
                 className="w-full flex items-center gap-2 px-2.5 py-1.5 text-[11px] text-[var(--color-text-secondary)] hover:bg-[var(--color-bg-overlay)] hover:text-[var(--color-text-primary)] transition-colors"
               >
-                <FileJson className="w-3 h-3" />
+                <FileBraces className="w-3 h-3" />
                 JSON (.json)
               </button>
             </div>
@@ -459,7 +459,7 @@ export default function ChatArea(props: ChatAreaProps) {
               <div className="flex justify-start">
                 <div className="max-w-[85%] lg:max-w-[80%] rounded-[8px] p-3 bg-[var(--color-bg-surface)] border border-[var(--color-amber-500)]/30 border-l-2 border-l-[var(--color-amber-500)] text-[var(--color-text-secondary)]">
                   <div className="flex items-center gap-2 mb-2 pb-2 border-b border-[var(--color-border-subtle)]">
-                    <Wand2 className="w-3.5 h-3.5 text-[var(--color-amber-500)]" />
+                    <WandSparkles className="w-3.5 h-3.5 text-[var(--color-amber-500)]" />
                     <span className="text-[10px] font-semibold text-[var(--color-amber-500)] uppercase tracking-wider">Autopilot Investigation</span>
                     <span className="ml-auto text-[10px] text-[var(--color-text-tertiary)] tabular-nums">{autopilotSteps.length}/{autopilotPlan.length} steps</span>
                   </div>
@@ -623,12 +623,12 @@ export default function ChatArea(props: ChatAreaProps) {
               disabled={!input.trim() || (!sessionId && !isDbConnected) || isLoading}
               className="m-2 h-8 w-8 flex items-center justify-center rounded-[5px] bg-[var(--color-cyan-500)] text-[var(--color-bg-base)] disabled:opacity-40 disabled:cursor-not-allowed hover:bg-[var(--color-cyan-600)] transition-colors"
             >
-              {isLoading ? <Loader2 className="w-4 h-4 animate-spin" /> : <Send className="w-4 h-4" />}
+              {isLoading ? <LoaderCircle className="w-4 h-4 animate-spin" /> : <Send className="w-4 h-4" />}
             </button>
           </div>
         </form>
         <div className="text-center mt-2 text-[10px] text-[var(--color-text-quaternary)] flex items-center justify-center gap-1.5">
-          <HelpCircle className="w-3 h-3" />
+          <CircleQuestionMark className="w-3 h-3" />
           AI-generated analysis. Always verify against source documents.
         </div>
       </div>

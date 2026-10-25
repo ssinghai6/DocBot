@@ -2,8 +2,8 @@
 
 import React, { useState, useRef, useEffect, useCallback } from "react"
 import {
-  X, CheckCircle2, AlertCircle,
-  AlertTriangle, Info, PanelRight,
+  X, CircleCheck, CircleAlert,
+  TriangleAlert, Info, PanelRight,
 } from "lucide-react"
 
 import Sidebar from "@/components/Sidebar"
@@ -54,9 +54,9 @@ function ToastContainer({ toasts, onDismiss }: { toasts: Toast[]; onDismiss: (id
             "border-[var(--color-cyan-500)]/40 text-[var(--color-cyan-500)]"
           }`}
         >
-          {toast.type === "success" && <CheckCircle2 className="w-5 h-5 shrink-0 mt-0.5" />}
-          {toast.type === "error" && <AlertCircle className="w-5 h-5 shrink-0 mt-0.5" />}
-          {toast.type === "warning" && <AlertTriangle className="w-5 h-5 shrink-0 mt-0.5" />}
+          {toast.type === "success" && <CircleCheck className="w-5 h-5 shrink-0 mt-0.5" />}
+          {toast.type === "error" && <CircleAlert className="w-5 h-5 shrink-0 mt-0.5" />}
+          {toast.type === "warning" && <TriangleAlert className="w-5 h-5 shrink-0 mt-0.5" />}
           {toast.type === "info" && <Info className="w-5 h-5 shrink-0 mt-0.5" />}
           <p className="text-[12px] font-medium flex-1 text-[var(--color-text-primary)]">{toast.message}</p>
           <button onClick={() => onDismiss(toast.id)} className="shrink-0 hover:opacity-70 transition-opacity">

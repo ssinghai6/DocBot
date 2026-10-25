@@ -4,7 +4,7 @@ import React, { useState, useEffect } from "react"
 import { Command } from "cmdk"
 import {
   Search, Database, Sparkles, ShoppingCart,
-  Trash2, Download, BookOpen, Wand2,
+  Trash, Download, BookOpen, WandSparkles,
 } from "lucide-react"
 import { useUIStore } from "@/store/uiStore"
 
@@ -112,7 +112,7 @@ export function buildCommands(actions: {
       id: "persona-auto",
       label: "Auto-routing",
       description: "Let AI pick the best expert",
-      icon: <Wand2 className="w-3.5 h-3.5 text-[var(--color-amber-500)]" />,
+      icon: <WandSparkles className="w-3.5 h-3.5 text-[var(--color-amber-500)]" />,
       action: () => setAuto(true),
       keywords: ["auto", "routing", "persona"],
       group: "Personas",
@@ -159,7 +159,7 @@ export function buildCommands(actions: {
       id: "clear-chat",
       label: "Clear Chat",
       description: "Remove all messages",
-      icon: <Trash2 className="w-3.5 h-3.5 text-[var(--color-danger-500)]" />,
+      icon: <Trash className="w-3.5 h-3.5 text-[var(--color-danger-500)]" />,
       action: actions.onClearChat,
       keywords: ["clear", "chat", "reset"],
       group: "Actions",

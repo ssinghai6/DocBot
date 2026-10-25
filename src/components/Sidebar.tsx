@@ -2,7 +2,7 @@
 
 import React, { useState } from "react"
 import {
-  Brain, X, Menu, Trash2, Keyboard,
+  Brain, X, Menu, Trash, Keyboard,
   Database, LogOut, ShieldCheck, Shield,
   ChevronDown, Sparkles, Wrench, Settings,
   FileText,
@@ -487,7 +487,7 @@ export default function Sidebar(props: SidebarProps) {
                 disabled={messagesLength === 0}
                 className="w-full flex items-center justify-center h-8 rounded-[5px] bg-[var(--color-bg-elevated)] border border-[var(--color-border-subtle)] text-[var(--color-text-secondary)] hover:bg-[var(--color-danger-500)]/10 hover:border-[var(--color-danger-500)]/30 hover:text-[var(--color-danger-500)] transition-colors text-[11px] font-medium disabled:opacity-40 disabled:cursor-not-allowed disabled:hover:bg-[var(--color-bg-elevated)] disabled:hover:border-[var(--color-border-subtle)] disabled:hover:text-[var(--color-text-secondary)] mb-4"
               >
-                <Trash2 className="w-3.5 h-3.5 mr-1.5" />
+                <Trash className="w-3.5 h-3.5 mr-1.5" />
                 Clear chat
               </button>
 

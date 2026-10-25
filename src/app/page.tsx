@@ -11,22 +11,22 @@ import {
   Layers,
   Brain,
   ShieldCheck,
-  BarChart2,
+  ChartNoAxesColumn,
   ArrowRight,
-  CheckCircle2,
+  CircleCheck,
   MessageSquare,
   Upload,
   Zap,
-  Wand2,
+  WandSparkles,
   ShoppingCart,
-  XCircle,
+  CircleX,
   Play,
   Lock,
   ScrollText,
   KeyRound,
   EyeOff,
-  FileLock2,
-  AlertTriangle,
+  FileLock,
+  TriangleAlert,
   Volume2,
   VolumeX,
 } from "lucide-react"
@@ -66,7 +66,7 @@ const features = [
     iconBg: "bg-[var(--color-success-900)]",
   },
   {
-    icon: <BarChart2 className="w-6 h-6" />,
+    icon: <ChartNoAxesColumn className="w-6 h-6" />,
     title: "CSV Intelligence",
     description:
       "Upload spreadsheets and get instant pandas-powered analysis via E2B sandboxes. Charts, aggregations, and trend analysis, all from natural language.",
@@ -76,7 +76,7 @@ const features = [
     iconBg: "bg-[var(--color-amber-900)]",
   },
   {
-    icon: <Wand2 className="w-6 h-6" />,
+    icon: <WandSparkles className="w-6 h-6" />,
     title: "Autopilot",
     description:
       "Auto-triggers multi-step investigations when it detects complex questions. Plans steps, queries databases, searches documents, runs Python analysis, and synthesizes findings.",
@@ -139,7 +139,7 @@ const trustSignals = [
   { icon: <ScrollText className="w-4 h-4" />, label: "Audit Log" },
   { icon: <KeyRound className="w-4 h-4" />, label: "SAML SSO" },
   { icon: <EyeOff className="w-4 h-4" />, label: "PII Masking" },
-  { icon: <FileLock2 className="w-4 h-4" />, label: "Encrypted at Rest" },
+  { icon: <FileLock className="w-4 h-4" />, label: "Encrypted at Rest" },
 ]
 
 // ── How it works steps ────────────────────────────────────────────────────────
@@ -430,7 +430,7 @@ export default function LandingPage() {
 
               <div className="flex items-center gap-4 mt-8 text-sm text-[var(--color-text-tertiary)]">
                 <span className="flex items-center gap-1.5">
-                  <CheckCircle2 className="w-4 h-4 text-[var(--color-success-500)]" />
+                  <CircleCheck className="w-4 h-4 text-[var(--color-success-500)]" />
                   No SQL knowledge required
                 </span>
               </div>
@@ -472,7 +472,7 @@ export default function LandingPage() {
                         {msg.discrepancy && (
                           <div className="mt-2 rounded-[5px] border border-[var(--color-warning-500)]/40 bg-[var(--color-warning-500)]/5 p-2.5">
                             <div className="flex items-center gap-1.5 mb-1.5">
-                              <AlertTriangle className="w-3.5 h-3.5 text-[var(--color-warning-500)] shrink-0" />
+                              <TriangleAlert className="w-3.5 h-3.5 text-[var(--color-warning-500)] shrink-0" />
                               <span className="text-[10px] font-semibold text-[var(--color-warning-500)] uppercase tracking-wider">
                                 Discrepancy Detected
                               </span>
@@ -567,7 +567,7 @@ export default function LandingPage() {
               { icon: <Cloud className="w-5 h-5" />, label: "Azure SQL" },
               { icon: <HardDrive className="w-5 h-5" />, label: "SQLite" },
               { icon: <ShoppingCart className="w-5 h-5" />, label: "Amazon SP-API" },
-              { icon: <BarChart2 className="w-5 h-5" />, label: "E2B Sandbox" },
+              { icon: <ChartNoAxesColumn className="w-5 h-5" />, label: "E2B Sandbox" },
             ].map((item) => (
               <div key={item.label} className="flex items-center gap-2 text-[var(--color-text-tertiary)] hover:text-[var(--color-text-secondary)] transition-colors">
                 {item.icon}
@@ -653,7 +653,7 @@ export default function LandingPage() {
                     <td className="py-3 px-4 text-[var(--color-text-secondary)]">{label as string}</td>
                     {(values as boolean[]).map((v, j) => (
                       <td key={j} className={`py-3 px-4 text-center ${j === 3 ? "bg-gradient-to-r from-[var(--color-cyan-900)]/40 to-[var(--color-info-900)]/40" : ""}`}>
-                        {v ? <CheckCircle2 className="w-5 h-5 text-[var(--color-success-500)] mx-auto" /> : <XCircle className="w-5 h-5 text-[var(--color-text-quaternary)] mx-auto" />}
+                        {v ? <CircleCheck className="w-5 h-5 text-[var(--color-success-500)] mx-auto" /> : <CircleX className="w-5 h-5 text-[var(--color-text-quaternary)] mx-auto" />}
                       </td>
                     ))}
                   </tr>
@@ -749,11 +749,11 @@ export default function LandingPage() {
 
           <div className="mt-8 flex flex-col sm:flex-row items-center justify-center gap-4 sm:gap-8 text-sm text-[var(--color-text-tertiary)]">
             <span className="flex items-center gap-2">
-              <CheckCircle2 className="w-4 h-4 text-[var(--color-success-500)]" />
+              <CircleCheck className="w-4 h-4 text-[var(--color-success-500)]" />
               Free to start
             </span>
             <span className="flex items-center gap-2">
-              <CheckCircle2 className="w-4 h-4 text-[var(--color-success-500)]" />
+              <CircleCheck className="w-4 h-4 text-[var(--color-success-500)]" />
               Enterprise-ready from day one
             </span>
           </div>

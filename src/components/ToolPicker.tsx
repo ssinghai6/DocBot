@@ -4,7 +4,7 @@ import React, { useEffect, useState } from "react"
 import { Command } from "cmdk"
 import {
   Search, Database, Sparkles, ShoppingCart,
-  Wand2, Layers, FileText, Wrench,
+  WandSparkles, Layers, FileText, Wrench,
 } from "lucide-react"
 import { useUIStore } from "@/store/uiStore"
 import { ToolsResponseSchema } from "@/components/types"
@@ -27,7 +27,7 @@ const CATEGORY_ORDER = ["pipeline", "tool", "persona", "connector"]
 
 function iconFor(tool: ToolInfo): React.ReactNode {
   switch (tool.icon) {
-    case "wand": return <Wand2 className="w-3.5 h-3.5 text-[var(--color-amber-500)]" />
+    case "wand": return <WandSparkles className="w-3.5 h-3.5 text-[var(--color-amber-500)]" />
     case "database": return <Database className="w-3.5 h-3.5 text-[var(--color-cyan-500)]" />
     case "layers": return <Layers className="w-3.5 h-3.5 text-[var(--color-cyan-500)]" />
     case "file-text": return <FileText className="w-3.5 h-3.5 text-[var(--color-cyan-500)]" />

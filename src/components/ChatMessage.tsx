@@ -5,8 +5,8 @@ import ReactMarkdown from "react-markdown"
 import remarkGfm from "remark-gfm"
 import {
   Brain, Clock, Maximize2, Download,
-  ChevronDown, BookOpen, Wand2, AlertTriangle,
-  Copy, Code2, Sparkles, GitBranch, ThumbsUp, ThumbsDown,
+  ChevronDown, BookOpen, WandSparkles, TriangleAlert,
+  Copy, CodeXml, Sparkles, GitBranch, ThumbsUp, ThumbsDown,
 } from "lucide-react"
 
 import type { Message, ChartMeta, AutopilotStep, Citation, Lineage } from "./types"
@@ -34,7 +34,7 @@ function DiscrepancyBlock({ content }: { content: string }) {
   return (
     <div className="mt-3 p-3 rounded-[5px] border border-[var(--color-warning-500)]/40 bg-[var(--color-warning-500)]/5">
       <div className="flex items-center gap-1.5 mb-1.5">
-        <AlertTriangle className="w-3.5 h-3.5 text-[var(--color-warning-500)] shrink-0" />
+        <TriangleAlert className="w-3.5 h-3.5 text-[var(--color-warning-500)] shrink-0" />
         <span className="text-[10px] font-semibold text-[var(--color-warning-500)] uppercase tracking-wider">Discrepancy Detected</span>
       </div>
       <div className="text-[11px] text-[var(--color-text-secondary)] whitespace-pre-line leading-relaxed font-mono">
@@ -114,7 +114,7 @@ function SqlCard({ sql, explanation, messageId }: { sql: string; explanation?: s
     >
       <div className="flex items-center justify-between px-3 h-7 bg-[var(--color-bg-surface)] border-b border-[var(--color-border-subtle)]">
         <div className="flex items-center gap-1.5">
-          <Code2 className="w-3 h-3 text-[var(--color-cyan-500)]" />
+          <CodeXml className="w-3 h-3 text-[var(--color-cyan-500)]" />
           <span className="text-[10px] font-semibold uppercase tracking-wider text-[var(--color-cyan-500)]">SQL</span>
         </div>
         <span className="text-[10px] text-[var(--color-text-tertiary)] group-hover:text-[var(--color-cyan-500)] transition-colors">Open in inspector →</span>
@@ -135,7 +135,7 @@ function CollapsibleCode({ code }: { code: string }) {
         onClick={() => setOpen(o => !o)}
       >
         <span className="flex items-center gap-1.5">
-          <Code2 className="w-3 h-3" />
+          <CodeXml className="w-3 h-3" />
           Analysis code
         </span>
         <ChevronDown className={`w-3 h-3 transition-transform ${open ? "rotate-180" : ""}`} />
@@ -153,7 +153,7 @@ function AutopilotStepsList({ steps }: { steps: AutopilotStep[] }) {
   return (
     <div className="mt-3 pt-3 border-t border-[var(--color-border-subtle)] space-y-1.5">
       <div className="flex items-center gap-1.5 mb-1.5">
-        <Wand2 className="w-3 h-3 text-[var(--color-amber-500)]" />
+        <WandSparkles className="w-3 h-3 text-[var(--color-amber-500)]" />
         <span className="text-[10px] font-semibold text-[var(--color-amber-500)] uppercase tracking-wider">
           Investigation Steps
         </span>
