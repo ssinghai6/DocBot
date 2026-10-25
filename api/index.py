@@ -438,6 +438,31 @@ async def charge_budget(request: Request, session_id: str, endpoint: str) -> Non
 
 
 _gate_uploads = Depends(gate_uploads)
+_caller_scope = Depends(get_caller_scope)
+_SESSION_NOT_FOUND = "Session not found"
+
+
+async def _require_session(session_id: str, scope: CallerScope, *, allow_unbound: bool = False) -> None:
+    """DOCBOT-1611 (SEC-02): 404 unless ``scope`` owns ``session_id``.
+
+    Call before any budget, LLM or vector-store work. ``allow_unbound`` also
+    accepts an id with no ``sessions`` row and no loaded vector store (the
+    frontend's ``"anonymous"`` placeholder for CSV/DB-only turns); a session
+    owned by someone else is refused either way. A foreign id is
+    indistinguishable from a missing one.
+    """
+    from api import session_service as _sessions
+
+    if allow_unbound and session_id not in VECTOR_STORES:
+        ok = await _sessions.is_session_bindable(
+            session_id, scope, sessions_table, async_session_factory
+        )
+    else:
+        ok = await _sessions.is_session_owned(
+            session_id, scope, sessions_table, async_session_factory
+        )
+    if not ok:
+        raise HTTPException(status_code=404, detail=_SESSION_NOT_FOUND)
 
 
 async def init_db() -> None:
@@ -1084,7 +1109,12 @@ async def upload_documents(
         raise HTTPException(status_code=500, detail=safe_error_message(e))
 
 @app.post("/api/chat")
-async def chat(raw_request: Request, request: ChatRequest, _user=_rbac_viewer):
+async def chat(
+    raw_request: Request,
+    request: ChatRequest,
+    _user=_rbac_viewer,
+    scope: CallerScope = _caller_scope,
+):
     """SSE streaming document chat.
 
     Emits newline-delimited JSON events:
@@ -1092,6 +1122,8 @@ async def chat(raw_request: Request, request: ChatRequest, _user=_rbac_viewer):
       {"type": "citations","citations": [...]}
       {"type": "error",    "detail": "<msg>"}
     """
+    # DOCBOT-1611: ownership before budget / vector-store / LLM work.
+    await _require_session(request.session_id, scope)
     await charge_budget(raw_request, request.session_id, "chat")
 
     if request.session_id not in VECTOR_STORES:
@@ -1450,10 +1482,6 @@ from api.session_models import (  # noqa: E402
     SessionDeleteResponse, SessionDetailResponse, SessionListResponse,
 )
 
-_caller_scope = Depends(get_caller_scope)
-_SESSION_NOT_FOUND = "Session not found"
-
-
 def _drop_vector_store(session_id: str) -> None:
     VECTOR_STORES.pop(session_id, None)
     # DOCBOT-1001: remove persisted Chroma collection
@@ -1513,8 +1541,9 @@ async def export_session(session_id: str, format: str = "txt", scope: CallerScop
     )
 
 @app.post("/api/session/{session_id}/update-persona")
-async def update_session_persona(session_id: str, persona: str):
-    """Update session persona"""
+async def update_session_persona(session_id: str, persona: str, scope: CallerScope = _caller_scope):
+    """Update the persona of one of the caller's sessions (foreign -> 404)."""
+    await _require_session(session_id, scope)
     try:
         if persona not in EXPERT_PERSONAS:
             raise HTTPException(
@@ -1547,13 +1576,14 @@ class PersonaTestRequest(BaseModel):
 _DEV_ROUTES_ENABLED = os.getenv("ENV", "").lower() == "dev"
 
 @app.post("/api/test-persona-switch")
-async def test_persona_switch(request: PersonaTestRequest):
+async def test_persona_switch(raw_request: Request, request: PersonaTestRequest):
     """Test persona switching by getting the persona prompt without making an LLM call.
 
     Dev-only — returns 404 unless ``ENV=dev``.
     """
     if not _DEV_ROUTES_ENABLED:
         raise HTTPException(status_code=404, detail="Not found")
+    await _require_session(request.session_id, await resolve_caller_scope(raw_request))
     try:
         # Get session info
         async with engine.connect() as conn:
@@ -1853,6 +1883,8 @@ async def db_chat(
       3. done chunk      {type: "done"}
     """
     await _require_connection(request.connection_id, scope)
+    # DOCBOT-1611: artifacts are saved under session_id, never into a foreign session.
+    await _require_session(request.session_id, scope, allow_unbound=True)
 
     async def event_stream():
         # DOCBOT-602: audit query event (fire before stream so it's captured even if stream errors)
@@ -2108,19 +2140,24 @@ async def execute_sandbox(request: SandboxExecuteRequest, raw_request: Request) 
 
 
 @app.get("/api/artifacts/{session_id}")
-async def list_session_artifacts(session_id: str):
-    """List all artifacts saved for a session (no data_json/chart_b64 — summaries only)."""
+async def list_session_artifacts(session_id: str, scope: CallerScope = _caller_scope):
+    """List artifacts of one of the caller's sessions (summaries only; foreign -> 404)."""
     from api.artifact_service import list_artifacts
+    await _require_session(session_id, scope)
     summaries = await list_artifacts(session_id, session_artifacts_table, async_session_factory)
     return {"artifacts": [s.model_dump() for s in summaries]}
 
 
 @app.get("/api/artifacts/item/{artifact_id}")
-async def get_artifact_detail(artifact_id: str):
-    """Fetch a single artifact by ID, including full data_json and chart_b64."""
+async def get_artifact_detail(artifact_id: str, scope: CallerScope = _caller_scope):
+    """Fetch one artifact (full data_json + chart_b64) from a session the caller owns."""
     from api.artifact_service import get_artifact
+    from api import session_service as _sessions
     detail = await get_artifact(artifact_id, session_artifacts_table, async_session_factory)
-    if detail is None:
+    # DOCBOT-1611: an artifact in a foreign session is indistinguishable from a missing one.
+    if detail is None or not await _sessions.is_session_owned(
+        detail.session_id, scope, sessions_table, async_session_factory
+    ):
         raise HTTPException(status_code=404, detail="Artifact not found.")
     return detail.model_dump()
 
@@ -2190,6 +2227,7 @@ async def hybrid_chat_route(
     """
     from api.hybrid_service import hybrid_chat
 
+    await _require_session(request.session_id, scope)  # DOCBOT-1611
     await _require_connection(request.connection_id, scope)
 
     await charge_budget(raw_request, request.session_id, "hybrid")
@@ -2276,6 +2314,9 @@ async def autopilot_run(
     """
     from api.autopilot_service import run_autopilot
 
+    # DOCBOT-1611: doc turns need an owned session; CSV/DB-only turns may use
+    # an unbound placeholder id, never someone else's session.
+    await _require_session(request.session_id, scope, allow_unbound=not request.has_docs)
     await _require_connection(request.connection_id, scope)
     await charge_budget(raw_request, request.session_id, "autopilot")
 
@@ -3430,7 +3471,10 @@ async def edgar_list_cached(ticker: Optional[str] = None, cik: Optional[str] = N
     from api.connector_store import list_cached_filings
 
     filings = await list_cached_filings(ticker=ticker, cik=cik)
-    return {"filings": filings, "count": len(filings)}
+    # DOCBOT-1611: the cached session_id belongs to whoever first ingested the
+    # filing; never disclose it. Ingest gives each caller their own session.
+    public = [{k: v for k, v in f.items() if k != "session_id"} for f in filings]
+    return {"filings": public, "count": len(public)}
 
 
 # ---------------------------------------------------------------------------

@@ -129,6 +129,48 @@ def load_store(session_id: str, embeddings: Any) -> Any | None:
     return store
 
 
+def clone_store(src_session_id: str, dst_session_id: str, embeddings: Any) -> tuple[Any, int] | None:
+    """Copy ``src_session_id``'s persisted collection into a new one for ``dst_session_id``.
+
+    DOCBOT-1611: an EDGAR cache hit gives every caller their own session (and
+    so their own collection) instead of the first ingester's session id.
+    Stored vectors are copied as-is, so nothing is re-embedded. Each copy is
+    independent: deleting one session never breaks another caller's copy.
+
+    Returns ``(store, chunk_count)`` or None when the source collection is
+    gone (deleted or reaped by retention), so the caller can re-ingest.
+    """
+    from langchain_chroma import Chroma
+
+    src_name = _collection_name(src_session_id)
+    dst_name = _collection_name(dst_session_id)
+    if not _collection_exists(src_name):
+        return None
+
+    client = _get_chroma_client()
+    src = client.get_collection(src_name)
+    data = src.get(include=["documents", "metadatas", "embeddings"])
+    ids = list(data.get("ids") or [])
+    if not ids:
+        return None
+
+    _delete_collection_if_exists(dst_name)
+    dst = client.create_collection(dst_name, metadata=src.metadata or None)
+    dst.add(
+        ids=ids,
+        documents=data.get("documents"),
+        metadatas=data.get("metadatas"),
+        embeddings=data.get("embeddings"),
+    )
+    store = Chroma(
+        collection_name=dst_name,
+        embedding_function=embeddings,
+        persist_directory=str(_PERSIST_DIR),
+    )
+    logger.info("vector_store: cloned collection %s -> %s (%d docs)", src_name, dst_name, len(ids))
+    return store, len(ids)
+
+
 def delete_store(session_id: str) -> None:
     """
     Delete the Chroma collection for session_id from disk.

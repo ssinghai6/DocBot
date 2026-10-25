@@ -94,6 +94,30 @@ async def is_session_owned(
     return True
 
 
+async def session_exists(session_id: str, sessions_table: Any, async_session_factory: Any) -> bool:
+    """True when a ``sessions`` row with this id exists, whoever owns it."""
+    async with async_session_factory() as db:
+        result = await db.execute(
+            select(sessions_table.c.session_id).where(sessions_table.c.session_id == session_id)
+        )
+        return result.fetchone() is not None
+
+
+async def is_session_bindable(
+    session_id: str, scope: CallerScope, sessions_table: Any, async_session_factory: Any
+) -> bool:
+    """DOCBOT-1611: may ``scope`` attach work to ``session_id``?
+
+    True when the caller owns the session, or when no session with that id
+    exists at all (an unbound label such as the frontend's ``"anonymous"``
+    placeholder for CSV/DB-only turns). A session owned by someone else is
+    always refused, so a caller can never read from or write into it.
+    """
+    if await is_session_owned(session_id, scope, sessions_table, async_session_factory):
+        return True
+    return not await session_exists(session_id, sessions_table, async_session_factory)
+
+
 async def get_session_detail(
     session_id: str,
     scope: CallerScope,
