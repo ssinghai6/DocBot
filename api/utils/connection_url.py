@@ -108,7 +108,16 @@ def build_connection_url(
         raise ValueError("Unsupported dialect.")
 
     if dialect == "sqlite":
-        url = URL.create("sqlite", database=validate_sqlite_path(dbname))
+        clean_path = validate_sqlite_path(dbname)
+        if clean_path == ":memory:":
+            # URL.create() percent-encodes the colons ("%3Amemory%3A") and
+            # make_url() does NOT decode the database name back, so the engine
+            # would treat it as a literal on-disk filename instead of the
+            # in-memory database. ":memory:" is a fixed SQLite literal, so the
+            # canonical URL string is safe to return directly (no user input
+            # is interpolated — the input equals the literal by construction).
+            return "sqlite:///:memory:"
+        url = URL.create("sqlite", database=clean_path)
         return url.render_as_string(hide_password=False)
 
     clean_host = validate_hostname(host)
