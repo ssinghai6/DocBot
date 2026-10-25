@@ -289,9 +289,15 @@ async def test_v1_own_ids_pass_scope_check(db, v1_key_org_a):
 
 # --- predicate unit checks ----------------------------------------------------
 
-def test_scope_filter_anonymous_only_unowned():
-    clause = str(scope_filter(idx.db_connections_table, CallerScope(user_id=None, org_id=None, anon_token=None)))
-    assert "user_id IS NULL" in clause and "org_id IS NULL" in clause
+def test_anonymous_access_only_unowned_rows():
+    anon = CallerScope(user_id=None, org_id=None, anon_token="d" * 64)
+    clause = str(connection_access_clause(idx.db_connections_table, anon))
+    assert clause == "db_connections.user_id IS NULL"
+
+
+def test_anonymous_never_lists_via_scope_filter():
+    anon = CallerScope(user_id=None, org_id=None, anon_token=None)
+    assert str(scope_filter(idx.db_connections_table, anon)) == "false"
 
 
 def test_api_key_scope_is_strict_org():

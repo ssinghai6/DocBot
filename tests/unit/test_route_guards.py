@@ -65,6 +65,7 @@ GUARD_CALLABLE_NAMES: frozenset[str] = frozenset({
     "require_auth",
     "get_current_user",
     "require_api_key",     # api/api_key_service.py — /v1 Bearer key + scope
+    "get_caller_scope",    # DOCBOT-1601 — 401 under AUTH_REQUIRED; open mode scopes rows to the anon owner cookie
 })
 
 # Dependencies that look auth-ish but are NOT guards: they only gate when an
@@ -155,20 +156,10 @@ DEV_ONLY: dict[RouteKey, str] = {
 KNOWN_UNGUARDED: dict[RouteKey, str] = {
     # Uploads: gate_uploads only enforces when GATE_UPLOADS=true.
     ("POST", "/api/upload"): "DOCBOT-1711",
-    # Chat-session list/read/export/delete IDOR (SEC-02).
-    ("GET", "/api/sessions"): "DOCBOT-1601",
-    ("GET", "/api/session/{session_id}"): "DOCBOT-1601",
-    ("DELETE", "/api/session/{session_id}"): "DOCBOT-1601",
-    ("GET", "/api/export/{session_id}"): "DOCBOT-1601",
     # Session-bound routes accepting foreign session_id (SEC-02).
     ("POST", "/api/session/{session_id}/update-persona"): "DOCBOT-1611",
     ("GET", "/api/artifacts/{session_id}"): "DOCBOT-1611",
     ("GET", "/api/artifacts/item/{artifact_id}"): "DOCBOT-1611",
-    # Connection / schema-cache / history scoping (SEC-06).
-    ("GET", "/api/db/schema/{connection_id}"): "DOCBOT-1603",
-    ("POST", "/api/db/refresh-schema/{connection_id}"): "DOCBOT-1603",
-    ("GET", "/api/db/sessions"): "DOCBOT-1603",
-    ("GET", "/api/db/history/{connection_id}"): "DOCBOT-1603",
     # Connector + commerce RBAC (SEC-03).
     ("POST", "/api/connectors/register"): "DOCBOT-1602",
     ("GET", "/api/connectors"): "DOCBOT-1602",

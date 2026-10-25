@@ -329,6 +329,26 @@ def get_user_org_id(user: Optional[Any]) -> Optional[str]:
     return getattr(user, "org_id", None)
 
 
+async def resolve_session_user(docbot_session: Optional[str]) -> Optional[Any]:
+    """Return the user row for a session cookie value, or None — DOCBOT-1601.
+
+    Never raises for a missing/expired/unknown token (callers treat None as
+    anonymous). Returns None when RBAC has not been wired yet (e.g. a test
+    client built without the app lifespan). Database errors propagate so a
+    broken auth backend fails closed instead of silently downgrading a
+    logged-in caller to anonymous.
+    """
+    if not docbot_session or _user_sessions_table is None or _users_table is None:
+        return None
+    from api.auth_service import get_user_from_session
+    return await get_user_from_session(
+        docbot_session,
+        _user_sessions_table,
+        _users_table,
+        _async_session_factory,
+    )
+
+
 # ---------------------------------------------------------------------------
 # Wire-up — called once from index.py after tables are created
 # ---------------------------------------------------------------------------

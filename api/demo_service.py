@@ -20,7 +20,7 @@ import tempfile
 import uuid
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
-from typing import Any, Dict
+from typing import Any, Dict, Optional
 
 from langchain_core.documents import Document
 from sqlalchemy import Table, insert
@@ -408,6 +408,7 @@ async def init_demo_session(
     schema_cache_table: Table,
     async_session_factory,
     dataset: str = "quickbite",
+    owner: Optional[Dict[str, Any]] = None,
 ) -> Dict[str, Any]:
     """
     Initialize a fresh demo session with a sample document + database.
@@ -447,6 +448,8 @@ async def init_demo_session(
                     file_count=1,
                     files_info=files_info,
                     source="demo",
+                    # DOCBOT-1601: owner columns from caller_scope.owner_values()
+                    **(owner or {}),
                 )
             )
 
