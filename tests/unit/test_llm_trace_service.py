@@ -67,6 +67,8 @@ class TestRegisterTable:
             "id", "run_id", "provider", "model", "caller", "prompt_version",
             "latency_ms", "input_tokens", "output_tokens", "estimated_cost_usd",
             "success", "fallback_triggered", "error_message", "created_at",
+            # DOCBOT-1801: billing attribution
+            "org_id", "user_id", "key_source",
         }
 
     def test_table_name(self):
