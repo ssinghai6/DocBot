@@ -13,9 +13,9 @@ python-dotenv
 pymupdf
 python-multipart
 langchain-huggingface
-asyncpg==0.30.0
+asyncpg==0.32.0
 sqlalchemy[asyncio]>=2.0.0,<3.0.0
-psycopg2-binary==2.9.10
+psycopg2-binary==2.9.13
 e2b-code-interpreter>=1.0.0
 # DOCBOT-201: credential encryption
 cryptography>=41.0.0
@@ -55,4 +55,4 @@ lxml>=5.0.0
 # DOCBOT-1401: thin observability — Sentry error tracking (no APM/tracing)
 sentry-sdk[fastapi]>=2.0.0
 # DOCBOT-1509: LangSmith tracing (metadata only; OFF unless both vars are set)
-langsmith==0.7.17
+langsmith==0.14.12
