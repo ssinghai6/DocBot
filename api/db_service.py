@@ -24,8 +24,9 @@ from typing import Any, AsyncGenerator, Dict, List, Optional
 from pydantic import BaseModel, RootModel, ValidationError, field_validator, model_validator
 from sqlalchemy import (
     Column, DateTime, Integer, MetaData, String, Table, Text,
-    func, insert, select, text, update, delete,
+    and_, func, insert, or_, select, text, true, update, delete,
 )
+from sqlalchemy.sql.elements import ColumnElement
 from sqlalchemy.ext.asyncio import AsyncSession, create_async_engine
 
 from api.utils.ssrf_validator import validate_ssrf
@@ -33,6 +34,7 @@ from api.utils.encryption import encrypt_credentials, decrypt_credentials
 from api.utils.sql_validator import validate_and_sanitize_sql, QueryValidationError
 from api.utils.embeddings import find_similar_queries, embedding_to_json
 from api.utils.exceptions import TokenExpiredError
+from api.utils.caller_scope import CallerScope, scope_filter
 from api.utils.envelope_encryption import (
     is_envelope_blob,
     encrypt_credentials_for_org,
@@ -221,6 +223,234 @@ _DIALECT_DRIVER = {
 
 class ConnectionNotFoundError(Exception):
     """Raised when a connection_id does not exist or belongs to a different session."""
+
+
+# ---------------------------------------------------------------------------
+# DOCBOT-1603 (SEC-06): connection / schema-cache / query-history scoping
+# ---------------------------------------------------------------------------
+# Every read or write keyed by connection_id first resolves the connection
+# row under the caller's org+owner predicate. schema_cache and query_history
+# have no owner columns of their own — they are reachable only through a
+# connection the caller may access. ``scope=None`` means an internal,
+# already-authorised caller (back-compat for service-to-service calls);
+# every HTTP route passes an explicit CallerScope.
+
+
+def _unowned_clause(db_connections_table: Table) -> ColumnElement[bool]:
+    """Rows with no owner at all (anonymous/demo connections)."""
+    cols = db_connections_table.c
+    parts = []
+    if "user_id" in cols:
+        parts.append(cols.user_id.is_(None))
+    if "org_id" in cols:
+        parts.append(cols.org_id.is_(None))
+    return and_(*parts) if parts else true()
+
+
+def connection_access_clause(
+    db_connections_table: Table, scope: Optional[CallerScope]
+) -> ColumnElement[bool]:
+    """Predicate for connections the caller may USE (query, schema, history).
+
+    - ``scope is None``              → internal caller, no restriction.
+    - API-key scope (org, no user)   → strictly the key's org.
+    - browser caller (user or anon)  → rows it owns, plus unowned
+      (anonymous/demo) rows, whose UUID id is the capability. A user-owned
+      or org-owned row is never reachable by anyone outside that owner/org.
+    """
+    if scope is None:
+        return true()
+    if scope.user_id is None and scope.org_id:
+        return scope_filter(db_connections_table, scope)
+    if scope.is_anonymous:
+        return _unowned_clause(db_connections_table)
+    return or_(scope_filter(db_connections_table, scope), _unowned_clause(db_connections_table))
+
+
+async def get_connection_row(
+    connection_id: str,
+    db_connections_table: Table,
+    async_session_factory,
+    scope: Optional[CallerScope] = None,
+) -> Optional[Any]:
+    """Return the connection row if it exists AND the caller may access it."""
+    async with async_session_factory() as session:
+        result = await session.execute(
+            select(db_connections_table).where(
+                db_connections_table.c.id == connection_id,
+                connection_access_clause(db_connections_table, scope),
+            )
+        )
+        return result.fetchone()
+
+
+async def assert_connection_access(
+    connection_id: str,
+    db_connections_table: Table,
+    async_session_factory,
+    scope: Optional[CallerScope],
+) -> Any:
+    """Raise ConnectionNotFoundError (→ 404) unless the caller may access it.
+
+    A foreign id and a non-existent id are indistinguishable to the caller.
+    """
+    row = await get_connection_row(
+        connection_id, db_connections_table, async_session_factory, scope
+    )
+    if row is None:
+        raise ConnectionNotFoundError(f"Connection '{connection_id}' not found.")
+    return row
+
+
+async def list_connections_for_scope(
+    scope: CallerScope,
+    db_connections_table: Table,
+    async_session_factory,
+) -> List[Dict[str, Any]]:
+    """List connections OWNED by the caller (never credentials).
+
+    Anonymous callers get an empty list — unowned connections are reachable
+    by id only, never enumerable.
+    """
+    if scope.is_anonymous:
+        return []
+    cols = db_connections_table.c
+    async with async_session_factory() as session:
+        result = await session.execute(
+            select(
+                cols.id, cols.session_id, cols.dialect, cols.host,
+                cols.port, cols.dbname, cols.created_at,
+            )
+            .where(scope_filter(db_connections_table, scope))
+            .order_by(cols.created_at.desc())
+        )
+        rows = result.fetchall()
+    return [
+        {
+            "connection_id": row.id,
+            "session_id": row.session_id,
+            "dialect": row.dialect,
+            "host": row.host,
+            "port": row.port,
+            "dbname": row.dbname,
+            "created_at": row.created_at.isoformat() if row.created_at else None,
+        }
+        for row in rows
+    ]
+
+
+def _parse_row_count(summary: Optional[str]) -> Optional[int]:
+    """Extract integer from e.g. '15 rows'."""
+    if not summary:
+        return None
+    try:
+        return int(summary.split()[0])
+    except (ValueError, IndexError):
+        return None
+
+
+async def get_query_history_for_scope(
+    connection_id: str,
+    scope: Optional[CallerScope],
+    query_history_table: Table,
+    db_connections_table: Table,
+    async_session_factory,
+    limit: int = 20,
+) -> List[Dict[str, Any]]:
+    """Recent query history for a connection the caller may access."""
+    await assert_connection_access(
+        connection_id, db_connections_table, async_session_factory, scope
+    )
+    qh = query_history_table.c
+    async with async_session_factory() as session:
+        result = await session.execute(
+            select(qh.id, qh.nl_question, qh.sql_query, qh.result_summary, qh.created_at)
+            .where(qh.connection_id == connection_id)
+            .order_by(qh.created_at.desc())
+            .limit(max(1, min(limit, 100)))
+        )
+        rows = result.fetchall()
+    return [
+        {
+            "id": row.id,
+            "question": row.nl_question,
+            "sql": row.sql_query,
+            "executed_at": row.created_at.isoformat() if row.created_at else None,
+            "row_count": _parse_row_count(row.result_summary),
+        }
+        for row in rows
+    ]
+
+
+async def get_schema_cache_times(
+    connection_id: str,
+    schema_cache_table: Table,
+    async_session_factory,
+) -> tuple[Optional[datetime], Optional[datetime]]:
+    """Return (cached_at, expires_at) for a connection's schema cache row.
+
+    Callers must have checked access first (``get_schema(..., scope=)``).
+    cached_at is derived as ``expires_at - 24h`` (the cache TTL).
+    """
+    async with async_session_factory() as session:
+        result = await session.execute(
+            select(schema_cache_table.c.expires_at).where(
+                schema_cache_table.c.connection_id == connection_id
+            )
+        )
+        row = result.fetchone()
+    if not row or not row.expires_at:
+        return None, None
+    expires_at = row.expires_at
+    if expires_at.tzinfo is None:
+        expires_at = expires_at.replace(tzinfo=timezone.utc)
+    return expires_at - timedelta(hours=24), expires_at
+
+
+async def stamp_connection_owner(
+    connection_id: str,
+    user_id: Optional[str],
+    db_connections_table: Table,
+    async_session_factory,
+) -> None:
+    """Record the owning user on a freshly created connection row.
+
+    No-op for anonymous callers or tables without a ``user_id`` column.
+    Used by file-upload paths that do not go through ``connect_database``.
+    """
+    if not user_id or "user_id" not in db_connections_table.c:
+        return
+    async with async_session_factory() as session:
+        async with session.begin():
+            await session.execute(
+                update(db_connections_table)
+                .where(db_connections_table.c.id == connection_id)
+                .values(user_id=user_id)
+            )
+
+
+async def refresh_schema(
+    connection_id: str,
+    db_connections_table: Table,
+    schema_cache_table: Table,
+    async_session_factory,
+    scope: Optional[CallerScope] = None,
+) -> List[Dict[str, Any]]:
+    """Invalidate and re-introspect a connection's schema (access-checked first)."""
+    await assert_connection_access(
+        connection_id, db_connections_table, async_session_factory, scope
+    )
+    async with async_session_factory() as session:
+        async with session.begin():
+            await session.execute(
+                delete(schema_cache_table).where(
+                    schema_cache_table.c.connection_id == connection_id
+                )
+            )
+    return await get_schema(
+        connection_id, db_connections_table, schema_cache_table,
+        async_session_factory, scope=scope,
+    )
 
 
 class ExecutionTimeoutError(Exception):
@@ -601,9 +831,12 @@ async def connect_database(
     schema_cache_table: Table,
     async_session_factory,
     org_id: Optional[str] = None,
+    user_id: Optional[str] = None,
 ) -> Dict[str, Any]:
     """
     Validate credentials, encrypt, store, and return connection_id + schema summary.
+
+    ``user_id`` / ``org_id`` stamp ownership on the row (DOCBOT-1603).
 
     Steps:
       1. SSRF already validated by Pydantic field_validator on host.
@@ -678,6 +911,7 @@ async def connect_database(
                     credentials_blob=creds_blob,
                     pii_masking_enabled=req.pii_masking_enabled,
                     org_id=org_id,
+                    **({"user_id": user_id} if "user_id" in db_connections_table.c else {}),
                 )
             )
 
@@ -720,6 +954,7 @@ async def disconnect_database(
     db_connections_table: Table,
     schema_cache_table: Table,
     async_session_factory,
+    scope: Optional[CallerScope] = None,
 ) -> None:
     """Remove the connection record and invalidate its schema cache."""
     async with async_session_factory() as session:
@@ -728,6 +963,7 @@ async def disconnect_database(
                 select(db_connections_table).where(
                     db_connections_table.c.id == connection_id,
                     db_connections_table.c.session_id == session_id,
+                    connection_access_clause(db_connections_table, scope),
                 )
             )
             row = result.fetchone()
@@ -756,10 +992,18 @@ async def get_schema(
     db_connections_table: Table,
     schema_cache_table: Table,
     async_session_factory,
+    scope: Optional[CallerScope] = None,
 ) -> List[Dict[str, Any]]:
     """
     Return cached schema or re-introspect if cache has expired (24h TTL).
+
+    DOCBOT-1603: when ``scope`` is given, ownership is checked BEFORE the
+    schema cache is read, so a foreign connection's cached schema never leaks.
     """
+    if scope is not None:
+        await assert_connection_access(
+            connection_id, db_connections_table, async_session_factory, scope
+        )
     async with async_session_factory() as session:
         cache_result = await session.execute(
             select(schema_cache_table).where(
@@ -1003,6 +1247,7 @@ async def run_sql_pipeline(
     chart_type: str = "auto",
     chat_history: Optional[List[Dict[str, str]]] = None,
     emit_lineage_event: bool = False,
+    scope: Optional[CallerScope] = None,
 ) -> AsyncGenerator[str, None]:
     """
     Execute the 7-step bounded SQL pipeline and yield SSE-formatted strings.
@@ -1042,7 +1287,10 @@ async def run_sql_pipeline(
         # ── CSV fast-path: bypass SQL pipeline, run pandas on E2B ────────────
         async with async_session_factory() as _sess:
             _conn_result = await _sess.execute(
-                select(db_connections_table).where(db_connections_table.c.id == connection_id)
+                select(db_connections_table).where(
+                    db_connections_table.c.id == connection_id,
+                    connection_access_clause(db_connections_table, scope),
+                )
             )
             _conn_row = _conn_result.fetchone()
 
@@ -1204,7 +1452,10 @@ async def run_sql_pipeline(
         # ── Step 5: SQL validation (deterministic, no LLM) ───────────────────
         async with async_session_factory() as session:
             conn_result = await session.execute(
-                select(db_connections_table).where(db_connections_table.c.id == connection_id)
+                select(db_connections_table).where(
+                    db_connections_table.c.id == connection_id,
+                    connection_access_clause(db_connections_table, scope),
+                )
             )
             conn_row = conn_result.fetchone()
 
@@ -1716,6 +1967,7 @@ async def fetch_full_series(
     db_connections_table: Table,
     async_session_factory,
     row_cap: int = 100_000,
+    scope: Optional[CallerScope] = None,
 ) -> List[Dict[str, Any]]:
     """Re-run a previously generated SELECT with a raised row cap for ML/forecasting.
 
@@ -1730,12 +1982,9 @@ async def fetch_full_series(
 
     Returns a list of row dicts (possibly empty). Never mutates the database.
     """
-    async with async_session_factory() as session:
-        conn_result = await session.execute(
-            select(db_connections_table).where(db_connections_table.c.id == connection_id)
-        )
-        conn_row = conn_result.fetchone()
-
+    conn_row = await get_connection_row(
+        connection_id, db_connections_table, async_session_factory, scope
+    )
     if not conn_row:
         raise ConnectionNotFoundError(f"Connection '{connection_id}' not found.")
 
