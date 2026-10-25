@@ -1626,11 +1626,33 @@ from api.db_service import (
     ConnectionNotFoundError,
     ExecutionTimeoutError,
     TokenExpiredError,
+    assert_connection_access,
     connect_database,
     disconnect_database,
+    get_query_history_for_scope,
     get_schema,
+    get_schema_cache_times,
+    list_connections_for_scope,
+    refresh_schema,
     run_sql_pipeline,
+    stamp_connection_owner,
 )
+
+# DOCBOT-1603 (SEC-06): every connection-keyed route resolves the caller's
+# org+owner scope (``_caller_scope``, defined with the session routes);
+# foreign connection ids are reported as 404.
+
+
+async def _require_connection(connection_id: Optional[str], scope: CallerScope) -> None:
+    """404 unless the caller may access ``connection_id`` (no-op when unset)."""
+    if not connection_id:
+        return
+    try:
+        await assert_connection_access(
+            connection_id, db_connections_table, async_session_factory, scope
+        )
+    except ConnectionNotFoundError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
 
 
 class DisconnectRequest(BaseModel):
@@ -1638,7 +1660,13 @@ class DisconnectRequest(BaseModel):
 
 
 @app.post("/api/db/connect")
-async def db_connect(raw_request: Request, request: DBConnectionRequest, _user=_rbac_analyst, _gate=_gate_uploads):
+async def db_connect(
+    raw_request: Request,
+    request: DBConnectionRequest,
+    _user=_rbac_analyst,
+    _gate=_gate_uploads,
+    scope: CallerScope = _caller_scope,
+):
     """
     DOCBOT-201 — Validate credentials, encrypt, store, and return connection_id.
     SSRF prevention and dialect validation are enforced by the Pydantic model.
@@ -1658,25 +1686,17 @@ async def db_connect(raw_request: Request, request: DBConnectionRequest, _user=_
         )
     try:
         # DOCBOT-1529: scope the stored credential blob's encryption to the
-        # requesting user's org (None in open/demo mode — falls back to the
-        # legacy scheme, which self-migrates once an org is known).
+        # requesting user's org (from the caller scope even in open mode, so the
+        # row is visible under the org+owner predicate; None for anonymous).
         result = await connect_database(
             request,
             db_connections_table,
             schema_cache_table,
             async_session_factory,
-            org_id=get_user_org_id(_user),
+            org_id=get_user_org_id(_user) or scope.org_id,
+            # Persistent Workspace / DOCBOT-1603: stamp the owning user.
+            user_id=scope.user_id,
         )
-        # Persistent Workspace: stamp connection row with user_id if logged in
-        _conn_owner = await get_optional_user(raw_request)
-        if _conn_owner and result.get("connection_id"):
-            async with async_session_factory() as _db:
-                async with _db.begin():
-                    await _db.execute(
-                        update(db_connections_table)
-                        .where(db_connections_table.c.id == result["connection_id"])
-                        .values(user_id=_conn_owner.id)
-                    )
         # DOCBOT-602: audit connection event (never log password — only host/dialect)
         from api.audit_service import log_event, AuditEventType
         log_event(
@@ -1697,7 +1717,12 @@ async def db_connect(raw_request: Request, request: DBConnectionRequest, _user=_
 
 
 @app.delete("/api/db/disconnect/{connection_id}")
-async def db_disconnect(connection_id: str, request: DisconnectRequest, _user=_rbac_analyst):
+async def db_disconnect(
+    connection_id: str,
+    request: DisconnectRequest,
+    _user=_rbac_analyst,
+    scope: CallerScope = _caller_scope,
+):
     """
     DOCBOT-201 — Remove a DB connection and invalidate its schema cache.
     Requires analyst role or above (DOCBOT-603).
@@ -1709,6 +1734,7 @@ async def db_disconnect(connection_id: str, request: DisconnectRequest, _user=_r
             db_connections_table,
             schema_cache_table,
             async_session_factory,
+            scope=scope,
         )
         # DOCBOT-602: audit disconnect event
         from api.audit_service import log_event, AuditEventType
@@ -1728,7 +1754,7 @@ async def db_disconnect(connection_id: str, request: DisconnectRequest, _user=_r
 
 
 @app.get("/api/db/schema/{connection_id}")
-async def db_schema(connection_id: str):
+async def db_schema(connection_id: str, scope: CallerScope = _caller_scope):
     """
     DOCBOT-202 — Return the cached (or freshly introspected) schema for a connection.
 
@@ -1744,21 +1770,11 @@ async def db_schema(connection_id: str):
             db_connections_table,
             schema_cache_table,
             async_session_factory,
+            scope=scope,
         )
-        cached_at = None
-        expires_at = None
-        async with async_session_factory() as session:
-            result = await session.execute(
-                select(schema_cache_table.c.expires_at).where(
-                    schema_cache_table.c.connection_id == connection_id
-                )
-            )
-            row = result.fetchone()
-            if row and row.expires_at:
-                expires_at = row.expires_at
-                if expires_at.tzinfo is None:
-                    expires_at = expires_at.replace(tzinfo=timezone.utc)
-                cached_at = expires_at - timedelta(hours=24)
+        cached_at, expires_at = await get_schema_cache_times(
+            connection_id, schema_cache_table, async_session_factory
+        )
         return {
             "connection_id": connection_id,
             "tables": schema,
@@ -1773,27 +1789,21 @@ async def db_schema(connection_id: str):
 
 
 @app.post("/api/db/refresh-schema/{connection_id}")
-async def db_refresh_schema(connection_id: str):
+async def db_refresh_schema(connection_id: str, scope: CallerScope = _caller_scope):
     """
     Force-refresh the schema cache for a connection.
 
     Invalidates the cached schema and re-introspects the database,
     useful when the user knows the schema has changed (new tables,
-    altered columns, etc.).
+    altered columns, etc.). Ownership is checked before invalidation.
     """
     try:
-        async with async_session_factory() as session:
-            async with session.begin():
-                await session.execute(
-                    delete(schema_cache_table).where(
-                        schema_cache_table.c.connection_id == connection_id
-                    )
-                )
-        schema = await get_schema(
+        schema = await refresh_schema(
             connection_id,
             db_connections_table,
             schema_cache_table,
             async_session_factory,
+            scope=scope,
         )
         # DOCBOT-1517: refresh the data ontology alongside the schema cache.
         # Fire-and-forget — never blocks or fails this endpoint.
@@ -1816,7 +1826,12 @@ async def db_refresh_schema(connection_id: str):
 
 
 @app.post("/api/db/chat")
-async def db_chat(raw_request: Request, request: DBChatRequest, _user=_rbac_viewer):
+async def db_chat(
+    raw_request: Request,
+    request: DBChatRequest,
+    _user=_rbac_viewer,
+    scope: CallerScope = _caller_scope,
+):
     """
     DOCBOT-204 — Natural language → SQL → execute → streamed answer.
     Returns a StreamingResponse (text/event-stream) with SSE chunks:
@@ -1824,6 +1839,8 @@ async def db_chat(raw_request: Request, request: DBChatRequest, _user=_rbac_view
       2. N token chunks  {type: "token", content: "..."}
       3. done chunk      {type: "done"}
     """
+    await _require_connection(request.connection_id, scope)
+
     async def event_stream():
         # DOCBOT-602: audit query event (fire before stream so it's captured even if stream errors)
         from api.audit_service import log_event, AuditEventType, get_client_ip
@@ -1860,6 +1877,7 @@ async def db_chat(raw_request: Request, request: DBChatRequest, _user=_rbac_view
                 chart_type=request.chart_type,
                 chat_history=_chat_history if _chat_history else None,
                 emit_lineage_event=True,
+                scope=scope,
             ):
                 yield chunk
         except ConnectionNotFoundError as exc:
@@ -1878,36 +1896,17 @@ async def db_chat(raw_request: Request, request: DBChatRequest, _user=_rbac_view
 
 
 @app.get("/api/db/sessions")
-async def db_sessions():
-    """List all active DB connections (no credentials returned)."""
-    try:
-        async with engine.connect() as conn:
-            result = await conn.execute(
-                select(
-                    db_connections_table.c.id,
-                    db_connections_table.c.session_id,
-                    db_connections_table.c.dialect,
-                    db_connections_table.c.host,
-                    db_connections_table.c.port,
-                    db_connections_table.c.dbname,
-                    db_connections_table.c.created_at,
-                ).order_by(db_connections_table.c.created_at.desc())
-            )
-            rows = result.fetchall()
+async def db_sessions(scope: CallerScope = _caller_scope):
+    """List the CALLER's DB connections only (no credentials returned).
 
+    DOCBOT-1603: previously listed every tenant's connections. Now scoped to
+    the caller (org admins see their org); anonymous callers get [].
+    """
+    try:
         return {
-            "connections": [
-                {
-                    "connection_id": row.id,
-                    "session_id": row.session_id,
-                    "dialect": row.dialect,
-                    "host": row.host,
-                    "port": row.port,
-                    "dbname": row.dbname,
-                    "created_at": row.created_at.isoformat() if row.created_at else None,
-                }
-                for row in rows
-            ]
+            "connections": await list_connections_for_scope(
+                scope, db_connections_table, async_session_factory
+            )
         }
     except Exception as exc:
         logger.error("db_sessions error: %s", type(exc).__name__)
@@ -1916,49 +1915,28 @@ async def db_sessions():
 # ── DOCBOT-504: Query History Panel ──────────────────────────────────────────
 
 @app.get("/api/db/history/{connection_id}")
-async def db_query_history(connection_id: str, limit: int = 20):
-    """Return the most recent queries for a DB connection.
+async def db_query_history(
+    connection_id: str, limit: int = 20, scope: CallerScope = _caller_scope
+):
+    """Return the most recent queries for a DB connection the caller may access.
 
     Response shape (list):
       { id, question, sql, executed_at, row_count }
+    Foreign / unknown connection_id → 404 (DOCBOT-1603).
     """
     try:
-        async with engine.connect() as conn:
-            result = await conn.execute(
-                select(
-                    query_history_table.c.id,
-                    query_history_table.c.nl_question,
-                    query_history_table.c.sql_query,
-                    query_history_table.c.result_summary,
-                    query_history_table.c.created_at,
-                )
-                .where(query_history_table.c.connection_id == connection_id)
-                .order_by(query_history_table.c.created_at.desc())
-                .limit(max(1, min(limit, 100)))
-            )
-            rows = result.fetchall()
-
-        def _parse_row_count(summary: str | None) -> int | None:
-            """Extract integer from e.g. '15 rows'."""
-            if not summary:
-                return None
-            try:
-                return int(summary.split()[0])
-            except (ValueError, IndexError):
-                return None
-
         return {
-            "history": [
-                {
-                    "id": row.id,
-                    "question": row.nl_question,
-                    "sql": row.sql_query,
-                    "executed_at": row.created_at.isoformat() if row.created_at else None,
-                    "row_count": _parse_row_count(row.result_summary),
-                }
-                for row in rows
-            ]
+            "history": await get_query_history_for_scope(
+                connection_id,
+                scope,
+                query_history_table,
+                db_connections_table,
+                async_session_factory,
+                limit=limit,
+            )
         }
+    except ConnectionNotFoundError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
     except Exception as exc:
         logger.error("db_query_history error: %s", type(exc).__name__)
         return {"history": [], "error": safe_error_message(exc)}
@@ -1979,6 +1957,7 @@ async def db_upload_sqlite(
     session_id: str = Form(...),
     _user=_rbac_analyst,
     _gate=_gate_uploads,
+    scope: CallerScope = _caller_scope,
 ):
     """
     DOCBOT-206 — Upload a .sqlite/.db file as a credential-free data source.
@@ -1995,6 +1974,9 @@ async def db_upload_sqlite(
             schema_cache_table=schema_cache_table,
             async_session_factory=async_session_factory,
         )
+        await stamp_connection_owner(
+            result["connection_id"], scope, db_connections_table, async_session_factory
+        )
         return result
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc))
@@ -2009,6 +1991,7 @@ async def db_upload_csv(
     session_id: str = Form(...),
     _user=_rbac_analyst,
     _gate=_gate_uploads,
+    scope: CallerScope = _caller_scope,
 ):
     """
     DOCBOT-207 — Upload a .csv file as a queryable data source.
@@ -2024,6 +2007,9 @@ async def db_upload_csv(
             db_connections_table=db_connections_table,
             schema_cache_table=schema_cache_table,
             async_session_factory=async_session_factory,
+        )
+        await stamp_connection_owner(
+            result["connection_id"], scope, db_connections_table, async_session_factory
         )
         return result
     except ValueError as exc:
@@ -2176,7 +2162,12 @@ class HybridChatRequest(BaseModel):
 
 
 @app.post("/api/hybrid/chat")
-async def hybrid_chat_route(raw_request: Request, request: HybridChatRequest, _user=_rbac_viewer):
+async def hybrid_chat_route(
+    raw_request: Request,
+    request: HybridChatRequest,
+    _user=_rbac_viewer,
+    scope: CallerScope = _caller_scope,
+):
     """DOCBOT-402 — Hybrid chat pipeline: intent classification → SQL + RAG → synthesis.
 
     Returns a StreamingResponse (text/event-stream) with SSE chunks:
@@ -2185,6 +2176,8 @@ async def hybrid_chat_route(raw_request: Request, request: HybridChatRequest, _u
       3. done chunk      {type: "done", citations: [...]}
     """
     from api.hybrid_service import hybrid_chat
+
+    await _require_connection(request.connection_id, scope)
 
     await charge_budget(raw_request, request.session_id, "hybrid")
 
@@ -2251,7 +2244,12 @@ class AutopilotRequest(BaseModel):
 
 
 @app.post("/api/autopilot/run")
-async def autopilot_run(raw_request: Request, request: AutopilotRequest, _user=_rbac_viewer):
+async def autopilot_run(
+    raw_request: Request,
+    request: AutopilotRequest,
+    _user=_rbac_viewer,
+    scope: CallerScope = _caller_scope,
+):
     """DOCBOT-405 — Analytical Autopilot: plan → execute (≤5 steps) → synthesise.
 
     Returns a StreamingResponse (text/event-stream) with SSE chunks:
@@ -2264,6 +2262,7 @@ async def autopilot_run(raw_request: Request, request: AutopilotRequest, _user=_
     """
     from api.autopilot_service import run_autopilot
 
+    await _require_connection(request.connection_id, scope)
     await charge_budget(raw_request, request.session_id, "autopilot")
 
     async def event_stream():
@@ -3431,6 +3430,21 @@ _v1_lineage_read = Depends(require_api_key("lineage:read"))
 _v1_connectors_manage = Depends(require_api_key("connectors:manage"))
 
 
+async def _require_v1_resources(key: Any, session_id: str, connection_id: Optional[str]) -> None:
+    """DOCBOT-1603: body-supplied session/connection ids must be in the key's org → else 404."""
+    from api.resource_scope_service import v1_resources_in_org
+    ok = await v1_resources_in_org(
+        getattr(key, "org_id", None),
+        session_id,
+        connection_id,
+        sessions_table,
+        db_connections_table,
+        async_session_factory,
+    )
+    if not ok:
+        raise HTTPException(status_code=404, detail="Session or connection not found.")
+
+
 def _parse_sse_event(chunk: str) -> Optional[dict]:
     """Parse one `data: {...}\\n\\n` SSE line back into its dict payload."""
     if not chunk.startswith("data: "):
@@ -3465,6 +3479,7 @@ async def v1_hybrid_chat(raw_request: Request, request: V1HybridChatRequest, _ke
     from api.hybrid_service import hybrid_chat
     from api.audit_service import log_event, AuditEventType, get_client_ip
 
+    await _require_v1_resources(_key, request.session_id, request.connection_id)
     await charge_budget(raw_request, request.session_id, "hybrid")
 
     log_event(
@@ -3568,6 +3583,7 @@ async def v1_autopilot_run(raw_request: Request, request: V1AutopilotRequest, _k
     from api.autopilot_service import run_autopilot
     from api.audit_service import log_event, AuditEventType, get_client_ip
 
+    await _require_v1_resources(_key, request.session_id, request.connection_id)
     await charge_budget(raw_request, request.session_id, "autopilot")
 
     log_event(
