@@ -386,6 +386,90 @@ textarea, input {
   margin: 0.625rem 0;
 }
 
+/* ---- MarkdownRenderer (DOCBOT-2006) ---- */
+.prose-compact {
+  font-size: 11px;
+  line-height: 1.55;
+  color: var(--color-text-tertiary);
+}
+.prose-compact > :first-child { margin-top: 0; }
+.prose-compact > :last-child { margin-bottom: 0; }
+.prose-compact p, .prose-compact ul, .prose-compact ol { margin-top: 0.375rem; margin-bottom: 0.375rem; }
+.prose-compact h1, .prose-compact h2, .prose-compact h3, .prose-compact h4 { font-size: 12px; margin-top: 0.5rem; margin-bottom: 0.25rem; }
+
+/* Tables: horizontal scroll region, header + zebra rows */
+.md-table-wrap {
+  overflow-x: auto;
+  margin: 0.875rem 0;
+  border: 1px solid var(--color-border-subtle);
+  border-radius: var(--radius-sm);
+}
+.md-table-wrap:focus-visible {
+  outline: none;
+  box-shadow: var(--glow-cyan);
+}
+.prose .md-table-wrap table {
+  margin: 0;
+  min-width: 100%;
+  width: max-content;
+  max-width: none;
+}
+.prose .md-table-wrap th { white-space: nowrap; }
+.prose .md-table-wrap tr:last-child td { border-bottom: none; }
+.prose tbody tr:nth-child(even) td {
+  background: var(--color-bg-surface);
+}
+.prose tbody tr:hover td {
+  background: var(--color-bg-overlay);
+}
+
+/* Code blocks: header (lang + copy), highlighted body */
+.md-code {
+  margin: 0.875rem 0;
+  border: 1px solid var(--color-border-subtle);
+  border-radius: var(--radius-md);
+  background: var(--color-bg-inset);
+  overflow: hidden;
+}
+.md-code-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  height: 1.75rem;
+  padding: 0 0.5rem 0 0.75rem;
+  background: var(--color-bg-surface);
+  border-bottom: 1px solid var(--color-border-subtle);
+}
+.md-code-lang {
+  font-family: var(--font-mono);
+  font-size: 10px;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: var(--color-text-tertiary);
+}
+.md-code-copy {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.25rem;
+  height: 1.25rem;
+  padding: 0 0.375rem;
+  border-radius: var(--radius-xs);
+  font-size: 10px;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: var(--color-text-tertiary);
+  transition: color var(--duration-fast) var(--ease-standard), background var(--duration-fast) var(--ease-standard);
+}
+.md-code-copy:hover { color: var(--color-text-primary); background: var(--color-bg-elevated); }
+.md-code-copy:focus-visible { outline: none; box-shadow: var(--glow-cyan); }
+.prose .md-code pre {
+  margin: 0;
+  border: none;
+  border-radius: 0;
+  font-family: var(--font-mono);
+}
+.prose-compact .md-code pre { font-size: 10px; padding: 0.5rem 0.75rem; }
+
 /* ---- Print ---- */
 @media print {
   body {

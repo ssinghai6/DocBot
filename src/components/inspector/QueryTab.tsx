@@ -3,6 +3,7 @@
 import { Highlight, themes } from "prism-react-renderer"
 import type { Lineage } from "@/components/types"
 import { useUIStore } from "@/store/uiStore"
+import MarkdownRenderer from "@/components/MarkdownRenderer"
 import { Chip, CopyButton, EmptyTab, SectionLabel, fmtMs, fmtNum } from "./shared"
 
 export default function QueryTab({ lineage }: { lineage: Lineage | null }) {
@@ -73,7 +74,7 @@ export default function QueryTab({ lineage }: { lineage: Lineage | null }) {
       {explanation && (
         <>
           <SectionLabel>Explanation</SectionLabel>
-          <p className="text-[12px] leading-relaxed text-[var(--color-text-secondary)] whitespace-pre-wrap">{explanation}</p>
+          <MarkdownRenderer content={explanation} variant="compact" />
         </>
       )}
 
