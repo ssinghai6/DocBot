@@ -336,11 +336,17 @@ api_keys_table = register_api_keys_table(metadata)
 # ── EPIC-06: RBAC dependencies (DOCBOT-603) ──────────────────────────────────
 # Imported here so Depends() objects can be declared at module level.
 # require_role() checks is_auth_enforcement_active() at request time — safe to import early.
-from api.rbac_service import require_role, UserRole, get_user_org_id  # noqa: E402
+from api.rbac_service import (  # noqa: E402
+    require_role, require_admin, require_platform_admin, require_sandbox_user,
+    require_admin_org_id, update_user_role_in_org, UserRole, get_user_org_id,
+)
 
 _rbac_viewer  = Depends(require_role(UserRole.viewer))
 _rbac_analyst = Depends(require_role(UserRole.analyst))
-_rbac_admin   = Depends(require_role(UserRole.admin))
+# DOCBOT-1610: admin routes require a logged-in admin in EVERY mode (incl. open/demo).
+_rbac_admin   = Depends(require_admin())
+# DOCBOT-1610: cross-org platform data — admin AND users.id in PLATFORM_ADMIN_USER_IDS.
+_rbac_platform_admin = Depends(require_platform_admin())
 
 
 async def get_optional_user(request: Request) -> Optional[Any]:
@@ -453,6 +459,9 @@ async def init_db() -> None:
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
+    # DOCBOT-1610: refuse to boot a multi-tenant deploy in open mode.
+    from api.rbac_service import assert_safe_auth_config
+    assert_safe_auth_config()
     await init_db()
     # DOCBOT-1514: populate the tool/capability registry (pipelines,
     # autopilot tools, personas, connectors) for the frontend tool picker.
@@ -795,7 +804,8 @@ def get_tools(category: Optional[str] = None):
     ])
 
 
-@app.post("/api/demo/init")
+# DOCBOT-1612: IP-limited (per-IP + global sliding hour, owner bypass).
+@app.post("/api/demo/init", dependencies=[Depends(request_guard.check_demo_init_limit)])
 async def init_demo(dataset: str = "quickbite"):
     """Initialize a sandbox demo session with pre-loaded data.
 
@@ -2094,7 +2104,13 @@ class SandboxExecuteRequest(BaseModel):
     session_id: Optional[str] = None
 
 
-@app.post("/api/sandbox/execute", response_model=SandboxResult)
+# DOCBOT-1612: raw code execution requires a logged-in analyst+ in every mode
+# unless ALLOW_ANONYMOUS_SANDBOX=true (local dev only; refused with MULTI_TENANT).
+@app.post(
+    "/api/sandbox/execute",
+    response_model=SandboxResult,
+    dependencies=[Depends(require_sandbox_user())],
+)
 async def execute_sandbox(request: SandboxExecuteRequest, raw_request: Request) -> SandboxResult:
     """Execute Python code in an isolated E2B sandbox.
 
@@ -2865,13 +2881,15 @@ async def get_audit_log(
 
     limit = min(limit, 5000)
 
-    stmt = select(audit_log_table).order_by(audit_log_table.c.occurred_at.desc()).limit(limit)
-    # DOCBOT-1524: scope to the requesting admin's org. get_user_org_id()
-    # returns None when AUTH_REQUIRED is off (open/demo mode) — unscoped
-    # there, same as before this ticket.
-    org_id = get_user_org_id(_user)
-    if org_id is not None:
-        stmt = stmt.where(audit_log_table.c.org_id == org_id)
+    # DOCBOT-1610: always scoped to the caller's org (fails closed with 403
+    # if the admin has no org) — every signup is now admin of its own org.
+    org_id = require_admin_org_id(_user)
+    stmt = (
+        select(audit_log_table)
+        .where(audit_log_table.c.org_id == org_id)
+        .order_by(audit_log_table.c.occurred_at.desc())
+        .limit(limit)
+    )
     if event_type:
         stmt = stmt.where(audit_log_table.c.event_type == event_type)
     if session_id:
@@ -2941,16 +2959,16 @@ class RoleUpdateRequest(BaseModel):
 async def list_users(_user=_rbac_admin):
     """Return all users with their roles, scoped to the requesting admin's org.
 
-    Requires admin role. DOCBOT-1524: when auth enforcement is active, only
-    users sharing the requesting admin's org_id are returned — an admin from
-    one organization cannot see another organization's users. _user is None
-    only when AUTH_REQUIRED is off (open/demo mode), where the listing stays
-    unscoped as before this ticket.
+    Requires admin role. DOCBOT-1524/1610: always scoped to the caller's
+    org_id (403 if the admin has no org) — an admin from one organization
+    cannot see another organization's users.
     """
-    stmt = select(users_table).order_by(users_table.c.created_at.desc())
-    org_id = get_user_org_id(_user)
-    if org_id is not None:
-        stmt = stmt.where(users_table.c.org_id == org_id)
+    org_id = require_admin_org_id(_user)
+    stmt = (
+        select(users_table)
+        .where(users_table.c.org_id == org_id)
+        .order_by(users_table.c.created_at.desc())
+    )
     async with async_session_factory() as db:
         result = await db.execute(stmt)
         rows = result.fetchall()
@@ -2977,28 +2995,14 @@ async def update_user_role(
     body: RoleUpdateRequest,
     _user=_rbac_admin,
 ):
-    """Assign a new role to a user. Requires admin role."""
-    valid_roles = {r.name for r in UserRole}
-    if body.role not in valid_roles:
-        raise HTTPException(
-            status_code=400,
-            detail=f"Invalid role '{body.role}'. Must be one of: {', '.join(sorted(valid_roles))}",
-        )
-    async with async_session_factory() as db:
-        result = await db.execute(select(users_table).where(users_table.c.id == user_id))
-        target = result.fetchone()
-    if not target:
-        raise HTTPException(status_code=404, detail="User not found.")
+    """Assign a new role to a user in the caller's org. Requires admin role.
 
-    async with async_session_factory() as db:
-        async with db.begin():
-            await db.execute(
-                update(users_table)
-                .where(users_table.c.id == user_id)
-                .values(role=body.role)
-            )
-    logger.info("Admin role update: user %s → %s", target.email, body.role)
-    return {"user_id": user_id, "email": target.email, "new_role": body.role}
+    DOCBOT-1610: 404 for users outside the caller's org; 409 when it would
+    remove the org's last admin.
+    """
+    result = await update_user_role_in_org(_user, user_id, body.role)
+    logger.info("Admin role update: user %s → %s", result.user_id, result.new_role)
+    return {"user_id": result.user_id, "email": result.email, "new_role": result.new_role}
 
 
 # ---------------------------------------------------------------------------
@@ -3009,27 +3013,9 @@ async def update_user_role(
 # ---------------------------------------------------------------------------
 
 
-async def _resolve_org_id_for_admin(user: Optional[Any]) -> str:
-    """Resolve the org_id a newly-created API key should belong to.
-
-    Mirrors ``get_user_org_id()`` but never returns None: when auth
-    enforcement is off (open/demo mode, `user` is None) there is no admin
-    user to read org_id from, so this falls back to the earliest-created
-    organization — the same default org `backfill_default_organization`
-    guarantees exists. Raises 500 only in the pathological case where
-    `init_db()` has not run yet.
-    """
-    org_id = get_user_org_id(user)
-    if org_id is not None:
-        return org_id
-    async with async_session_factory() as db:
-        result = await db.execute(
-            select(organizations_table.c.id).order_by(organizations_table.c.created_at.asc()).limit(1)
-        )
-        row = result.first()
-    if row is None:
-        raise HTTPException(status_code=500, detail="No organization exists yet — restart the app to run startup backfill.")
-    return row.id
+# DOCBOT-1610: the old _resolve_org_id_for_admin() default-org fallback is
+# gone — require_admin() never yields None, and require_admin_org_id() fails
+# closed (403) instead of silently using the shared default org.
 
 
 class APIKeyCreateRequest(BaseModel):
@@ -3044,7 +3030,7 @@ async def list_admin_api_keys(_user=_rbac_admin):
     Never returns the raw key or its hash — only prefix/name/timestamps/scopes.
     """
     from api.api_key_service import list_api_keys
-    org_id = await _resolve_org_id_for_admin(_user)
+    org_id = require_admin_org_id(_user)
     keys = await list_api_keys(org_id)
     return {"org_id": org_id, "keys": [k.to_dict() for k in keys]}
 
@@ -3057,7 +3043,7 @@ async def create_admin_api_key(body: APIKeyCreateRequest, _user=_rbac_admin):
     (hybrid:read, lineage:read, autopilot:run, connectors:manage).
     """
     from api.api_key_service import create_api_key
-    org_id = await _resolve_org_id_for_admin(_user)
+    org_id = require_admin_org_id(_user)
     try:
         record, raw_key = await create_api_key(org_id=org_id, scopes=body.scopes, name=body.name)
     except ValueError as exc:
@@ -3069,7 +3055,7 @@ async def create_admin_api_key(body: APIKeyCreateRequest, _user=_rbac_admin):
 async def revoke_admin_api_key(key_id: str, _user=_rbac_admin):
     """Revoke a developer API key. Scoped to the requesting admin's org."""
     from api.api_key_service import revoke_api_key
-    org_id = await _resolve_org_id_for_admin(_user)
+    org_id = require_admin_org_id(_user)
     found = await revoke_api_key(key_id, org_id=org_id)
     if not found:
         raise HTTPException(status_code=404, detail="API key not found.")
@@ -3081,8 +3067,11 @@ async def revoke_admin_api_key(key_id: str, _user=_rbac_admin):
 # ---------------------------------------------------------------------------
 
 @app.get("/admin/metrics")
-async def get_admin_metrics(llm_days: int = 7, _user=_rbac_admin):
-    """Return aggregate platform metrics. Requires admin role.
+async def get_admin_metrics(llm_days: int = 7, _user=_rbac_platform_admin):
+    """Return aggregate PLATFORM-WIDE metrics. Platform operators only.
+
+    DOCBOT-1610: cross-org data, so org admins get 403 — requires admin role
+    AND the caller's users.id in PLATFORM_ADMIN_USER_IDS (default: nobody).
 
     Returns total sessions, query counts by type, document uploads,
     active DB connections, average response time, uptime, and (DOCBOT-1502)

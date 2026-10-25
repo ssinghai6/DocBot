@@ -20,6 +20,20 @@ All limits are OFF by default (open/dev mode). Enable per-env:
     PUBLIC_DEMO_MODE=true          # block uploads / live-DB / ingestion
     RATE_LIMIT_PER_MIN=30          # 0 disables the per-IP limit
     SESSION_BUDGET=40              # 0 disables the per-session budget
+
+Exception — ON by default (DOCBOT-1612): POST /api/demo/init is IP-limited
+because every call builds a vector store + SQLite DB in memory:
+
+    DEMO_INIT_PER_IP_PER_HOUR=10   # per client IP, sliding 1h window; 0 disables
+    DEMO_INIT_GLOBAL_PER_HOUR=300  # all clients combined; 0 disables. Bounds
+                                   # total cost even if X-Forwarded-For is spoofed.
+
+Client IP (DOCBOT-1612, groundwork for DOCBOT-1606):
+
+    TRUSTED_PROXY_HOPS=0           # 0 = legacy: left-most X-Forwarded-For entry
+                                   #     (client-controlled — spoofable)
+                                   # N = take the entry appended by the N-th
+                                   #     trusted proxy from the right
 """
 
 from __future__ import annotations
@@ -52,6 +66,15 @@ PUBLIC_DEMO_MODE: bool = _env_bool("PUBLIC_DEMO_MODE")
 RATE_LIMIT_PER_MIN: int = _env_int("RATE_LIMIT_PER_MIN", 0)
 RATE_LIMIT_WINDOW_SEC: int = 60
 SESSION_BUDGET: int = _env_int("SESSION_BUDGET", 0)
+
+# DOCBOT-1612: /api/demo/init limits — non-zero by default (safe default).
+DEMO_INIT_WINDOW_SEC: int = 3600
+DEMO_INIT_PER_IP_PER_HOUR: int = _env_int("DEMO_INIT_PER_IP_PER_HOUR", 10)
+DEMO_INIT_GLOBAL_PER_HOUR: int = _env_int("DEMO_INIT_GLOBAL_PER_HOUR", 300)
+
+# Number of trusted reverse proxies that APPEND to X-Forwarded-For in front of
+# the app. 0 keeps the legacy left-most behaviour (see client_ip()).
+TRUSTED_PROXY_HOPS: int = _env_int("TRUSTED_PROXY_HOPS", 0)
 
 # Sign-in gate: when on, upload / live-DB routes require a logged-in user (or
 # owner). Anonymous visitors keep demo + chat access but must sign in (free
@@ -97,17 +120,35 @@ _ip_hits: Dict[str, Deque[float]] = defaultdict(deque)
 _session_spend: Dict[str, int] = defaultdict(int)
 # user_id -> (utc_date_str, spent_today)
 _user_spend: Dict[str, Tuple[str, int]] = {}
+# DOCBOT-1612: /api/demo/init sliding windows (per-IP and global).
+_demo_init_ip_hits: Dict[str, Deque[float]] = defaultdict(deque)
+_demo_init_global_hits: Deque[float] = deque()
+# Upper bound on tracked IPs before expired entries are swept (memory guard).
+_MAX_TRACKED_IPS = 10_000
 
 
 def client_ip(request: Request) -> str:
     """Best-effort client IP, honouring the proxy hop Railway/Vercel add.
 
-    X-Forwarded-For is a comma-separated list; the left-most entry is the
-    original client. Falls back to the socket peer.
+    X-Forwarded-For is a comma-separated list. Each proxy APPENDS the address
+    it received the request from, so only the right-most entries are written
+    by infrastructure we trust; anything to their left is client-supplied.
+
+    - TRUSTED_PROXY_HOPS=0 (default, legacy): left-most entry. Spoofable — a
+      client can send its own X-Forwarded-For. Kept so existing behaviour does
+      not change until the proxy chain is verified (DOCBOT-1606).
+    - TRUSTED_PROXY_HOPS=N: the entry appended by the outermost of N trusted
+      proxies, i.e. ``parts[-N]`` (clamped to the left-most entry).
+
+    Falls back to the socket peer when the header is absent or empty.
     """
     fwd = request.headers.get("x-forwarded-for")
     if fwd:
-        return fwd.split(",")[0].strip()
+        parts = [p.strip() for p in fwd.split(",") if p.strip()]
+        if parts:
+            if TRUSTED_PROXY_HOPS > 0:
+                return parts[max(len(parts) - TRUSTED_PROXY_HOPS, 0)]
+            return parts[0]
     return request.client.host if request.client else "unknown"
 
 
@@ -160,6 +201,66 @@ def check_ip_rate_limit(request: Request) -> None:
         )
 
     hits.append(now)
+
+
+def _prune_window(hits: Deque[float], window_start: float) -> None:
+    while hits and hits[0] < window_start:
+        hits.popleft()
+
+
+def _sweep_expired_ips(table: Dict[str, Deque[float]], window_start: float) -> None:
+    """Drop IPs whose hits have all expired once the table grows too large."""
+    if len(table) <= _MAX_TRACKED_IPS:
+        return
+    for ip in list(table.keys()):
+        _prune_window(table[ip], window_start)
+        if not table[ip]:
+            del table[ip]
+
+
+def _too_many(limit: int, hits: Deque[float], now: float, scope: str) -> HTTPException:
+    retry_after = max(int(hits[0] + DEMO_INIT_WINDOW_SEC - now) + 1, 1)
+    return HTTPException(
+        status_code=429,
+        detail=(
+            f"Demo limit reached ({limit}/hour {scope}). "
+            f"Retry in {retry_after}s, or sign in to upload your own data."
+        ),
+        headers={"Retry-After": str(retry_after)},
+    )
+
+
+def check_demo_init_limit(request: Request) -> None:
+    """IP-based limit for POST /api/demo/init — DOCBOT-1612.
+
+    Two sliding 1-hour windows: per client IP (``DEMO_INIT_PER_IP_PER_HOUR``)
+    and global (``DEMO_INIT_GLOBAL_PER_HOUR``). The global cap bounds total
+    cost even when a client rotates spoofed X-Forwarded-For values. Owner
+    requests bypass. Either limit set to 0 disables that window. Raises 429
+    with Retry-After. A rejected call does not consume quota.
+    """
+    if is_owner(request):
+        return
+
+    now = time.monotonic()
+    window_start = now - DEMO_INIT_WINDOW_SEC
+
+    ip_hits = None
+    if DEMO_INIT_PER_IP_PER_HOUR > 0:
+        _sweep_expired_ips(_demo_init_ip_hits, window_start)
+        ip_hits = _demo_init_ip_hits[client_ip(request)]
+        _prune_window(ip_hits, window_start)
+        if len(ip_hits) >= DEMO_INIT_PER_IP_PER_HOUR:
+            raise _too_many(DEMO_INIT_PER_IP_PER_HOUR, ip_hits, now, "per client")
+
+    if DEMO_INIT_GLOBAL_PER_HOUR > 0:
+        _prune_window(_demo_init_global_hits, window_start)
+        if len(_demo_init_global_hits) >= DEMO_INIT_GLOBAL_PER_HOUR:
+            raise _too_many(DEMO_INIT_GLOBAL_PER_HOUR, _demo_init_global_hits, now, "across all visitors")
+        _demo_init_global_hits.append(now)
+
+    if ip_hits is not None:
+        ip_hits.append(now)
 
 
 def enforce_session_budget(session_id: str, endpoint: str) -> None:
@@ -220,3 +321,5 @@ def reset_state() -> None:
     _ip_hits.clear()
     _session_spend.clear()
     _user_spend.clear()
+    _demo_init_ip_hits.clear()
+    _demo_init_global_hits.clear()
