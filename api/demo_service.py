@@ -478,6 +478,9 @@ async def init_demo_session(
                     port=0,
                     dbname=str(db_path),
                     credentials_blob=creds_blob,
+                    # DOCBOT-1635: the demo connection belongs to its creator
+                    # (user/org, or the anonymous owner cookie digest).
+                    **{k: v for k, v in (owner or {}).items() if k in db_connections_table.c},
                 )
             )
 

@@ -229,14 +229,16 @@ async def test_hybrid_and_autopilot_foreign_connection_404(db):
     assert autopilot.status_code == 404
 
 
-async def test_anonymous_connection_still_usable_by_id(db):
-    """Unowned (anonymous/demo) connections keep working — no regression."""
-    with patch.object(idx, "run_sql_pipeline", side_effect=_fake_pipeline):
+async def test_legacy_unowned_connection_not_usable_by_id(db):
+    """DOCBOT-1635: a legacy unowned connection (no user_id, no anon_owner) is
+    no longer a capability — the UUID alone does not grant access."""
+    with patch.object(idx, "run_sql_pipeline", side_effect=_fake_pipeline) as pipe:
         async with _client() as c:
             resp = await c.post("/api/db/chat", json={
                 "connection_id": CONN_ANON, "question": "q", "session_id": "sess-anon",
             })
-    assert resp.status_code == 200
+    assert resp.status_code == 404
+    assert pipe.call_count == 0
 
 
 # --- /v1/* ------------------------------------------------------------------
@@ -289,10 +291,12 @@ async def test_v1_own_ids_pass_scope_check(db, v1_key_org_a):
 
 # --- predicate unit checks ----------------------------------------------------
 
-def test_anonymous_access_only_unowned_rows():
+def test_anonymous_access_only_own_anon_rows():
     anon = CallerScope(user_id=None, org_id=None, anon_token="d" * 64)
     clause = str(connection_access_clause(idx.db_connections_table, anon))
-    assert clause == "db_connections.user_id IS NULL"
+    assert clause == (
+        "db_connections.anon_owner = :anon_owner_1 AND db_connections.user_id IS NULL"
+    )
 
 
 def test_anonymous_never_lists_via_scope_filter():
@@ -302,5 +306,6 @@ def test_anonymous_never_lists_via_scope_filter():
 
 def test_api_key_scope_is_strict_org():
     clause = str(connection_access_clause(idx.db_connections_table, CallerScope(user_id=None, org_id=ORG_A, anon_token=None)))
-    assert "IS NULL" not in clause
+    assert "user_id IS NULL" not in clause
+    assert "user_id IS NOT NULL" in clause  # DOCBOT-1635: never anon rows
     assert "org_id" in clause
