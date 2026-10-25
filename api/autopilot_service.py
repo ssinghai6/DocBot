@@ -43,6 +43,12 @@ from typing import Annotated, Any, AsyncGenerator, Optional
 
 from typing_extensions import TypedDict
 
+from api.utils.response_format import (
+    SOURCE_CSV,
+    SOURCE_DB,
+    SOURCE_DOC,
+    build_format_block,
+)
 from api.utils.sandbox_paths import sandbox_csv_path
 
 from langgraph.graph import END, START, StateGraph
@@ -1119,6 +1125,27 @@ def make_executor_node(
 # ---------------------------------------------------------------------------
 
 
+def _autopilot_sources(state: AutopilotState, steps: list[dict]) -> set[str]:
+    """Source keys (for ``build_format_block``) the synthesizer can cite.
+
+    Derived from the tools that actually produced a result; ``python_analysis``
+    runs over the uploaded CSV when one is attached.
+    """
+    sources: set[str] = set()
+    for s in steps:
+        if s.get("error") and not s.get("result"):
+            continue
+        tool = s.get("tool")
+        if tool == "doc_search":
+            sources.add(SOURCE_DOC)
+        elif tool == "sql_query":
+            csv_only = state.get("has_csv") and not state.get("has_db")
+            sources.add(SOURCE_CSV if csv_only else SOURCE_DB)
+        elif tool == "python_analysis" and state.get("has_csv"):
+            sources.add(SOURCE_CSV)
+    return sources
+
+
 async def _synthesizer_node(state: AutopilotState) -> dict:
     """Synthesise all step results into a final markdown answer via Groq Llama."""
     steps = state.get("steps_completed", [])
@@ -1148,13 +1175,7 @@ async def _synthesizer_node(state: AutopilotState) -> dict:
         "Show intermediate calculations clearly. Never say 'insufficient data' when the "
         "question or investigation results provide the necessary inputs.\n\n"
         f"{PROMPT_INJECTION_DEFENSE_NOTICE}\n\n"
-        "FORMAT RULES:\n"
-        "- Use markdown headers (##, ###) for each section or question part.\n"
-        "- Present numerical projections in clean markdown tables with aligned columns.\n"
-        "- Format currency as $X.XM or $X.XB (e.g. $4.2M, $1.3B). Do not write raw division expressions in table cells.\n"
-        "- Show key formulas once, then present computed results in the table. Write formulas as LaTeX math inside `$$...$$` (own lines for display, inline in sentences for short expressions); never use `\\(...\\)`, `\\[...\\]`, or a single `$` as a math delimiter.\n"
-        "- Use **bold** for final values, conclusions, and key metrics.\n"
-        "- Use bullet points for qualitative analysis and risk factors."
+        f"{build_format_block(_autopilot_sources(state, steps))}"
     )
     user_content = (
         f"Original question: {state['question']}\n\n"
@@ -1291,12 +1312,7 @@ async def _verifier_node(state: AutopilotState) -> dict:
             "the FULL answer so it accurately reflects the retrieved data, fixing "
             "the specific contradiction described below, while keeping everything "
             "else that was already correct.\n"
-            "FORMAT RULES:\n"
-            "- Use markdown headers (##, ###) for each section or question part.\n"
-            "- Present numerical projections in clean markdown tables with aligned columns.\n"
-            "- Format currency as $X.XM or $X.XB. Do not write raw division expressions in table cells.\n"
-            "- Use **bold** for final values, conclusions, and key metrics.\n"
-            "- Use bullet points for qualitative analysis and risk factors."
+            f"{build_format_block(_autopilot_sources(state, steps))}"
         )
         correction_user_content = (
             f"Original question: {state.get('question', '')}\n\n"
@@ -1591,7 +1607,8 @@ async def run_autopilot(
 
                 elif node_name == "verifier":
                     from api.utils.pii_masking import mask_pii
-                    final_answer = mask_pii(updates.get("final_answer", ""))
+                    from api.utils.response_format import normalize_markdown
+                    final_answer = normalize_markdown(mask_pii(updates.get("final_answer", "")))
                     yield _sse({"type": "answer", "content": final_answer})
                     for cit in all_citations:
                         lineage.add_source(

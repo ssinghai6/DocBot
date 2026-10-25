@@ -1548,7 +1548,9 @@ async def run_csv_query_on_e2b(
                 yield f"data: {_stdlib_json.dumps({'type': 'chart', 'base64': chart_b64, 'index': idx, 'metadata': meta.model_dump() if meta else None})}\n\n"
 
         # --- SSE: answer tokens (stdout is the pandas output) ---
-        answer = _format_stdout_as_markdown(result.stdout.strip())
+        from api.utils.response_format import normalize_markdown
+
+        answer = normalize_markdown(_format_stdout_as_markdown(result.stdout.strip()))
         if result.error and not answer:
             answer = f"Execution error: {result.error}"
         elif result.error:
