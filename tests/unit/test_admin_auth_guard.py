@@ -41,7 +41,7 @@ ADMIN_ROUTES = [
     ("GET", "/admin/metrics", "/admin/metrics", None),
 ]
 
-_ADMIN_DEP_CALL = idx._rbac_admin.dependency
+_ADMIN_DEP_CALLS = {idx._rbac_admin.dependency, idx._rbac_platform_admin.dependency}
 
 
 @pytest.fixture(autouse=True)
@@ -72,7 +72,7 @@ def _route_uses_admin_dep(route: APIRoute) -> bool:
     stack = list(route.dependant.dependencies)
     while stack:
         dep = stack.pop()
-        if dep.call is _ADMIN_DEP_CALL:
+        if dep.call in _ADMIN_DEP_CALLS:
             return True
         stack.extend(dep.dependencies)
     return False
