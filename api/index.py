@@ -2237,6 +2237,7 @@ class AutopilotRequest(BaseModel):
     connection_id: Optional[str] = None
     question: str
     persona: str = "Generalist"
+    # Client hints only — resolved server-side in resolve_autopilot_sources().
     has_docs: bool = False
     has_db: bool = False
     has_csv: bool = False
@@ -2284,6 +2285,23 @@ async def autopilot_run(
         try:
             _autopilot_history = [{"role": m.role, "content": m.content} for m in (request.history or [])]
 
+            # Resolve data sources from persisted state — client-sent flags
+            # are fallback hints only (see api/utils/autopilot_sources.py).
+            from api.utils.autopilot_sources import SourceFlags, resolve_autopilot_sources
+            sources = await resolve_autopilot_sources(
+                session_id=request.session_id,
+                connection_id=request.connection_id,
+                db_connections_table=db_connections_table,
+                async_session_factory=async_session_factory,
+                vector_stores=VECTOR_STORES,
+                org_encryption_keys_table=org_encryption_keys_table,
+                fallback=SourceFlags(
+                    has_docs=request.has_docs,
+                    has_db=request.has_db,
+                    has_csv=request.has_csv,
+                ),
+            )
+
             async for chunk in run_autopilot(
                 question=request.question,
                 session_id=request.session_id,
@@ -2298,9 +2316,9 @@ async def autopilot_run(
                 async_session_factory=async_session_factory,
                 expert_personas=EXPERT_PERSONAS,
                 vector_stores=VECTOR_STORES,
-                has_docs=request.has_docs,
-                has_db=request.has_db,
-                has_csv=request.has_csv,
+                has_docs=sources.has_docs,
+                has_db=sources.has_db,
+                has_csv=sources.has_csv,
                 chat_history=_autopilot_history if _autopilot_history else None,
             ):
                 yield chunk
@@ -3563,6 +3581,7 @@ class V1AutopilotRequest(BaseModel):
     connection_id: Optional[str] = None
     question: str
     persona: str = "Generalist"
+    # Client hints only — resolved server-side in resolve_autopilot_sources().
     has_docs: bool = False
     has_db: bool = False
     has_csv: bool = False
@@ -3611,6 +3630,23 @@ async def v1_autopilot_run(raw_request: Request, request: V1AutopilotRequest, _k
     error_detail: Optional[str] = None
 
     try:
+        # Resolve data sources from persisted state — client-sent flags
+        # are fallback hints only (see api/utils/autopilot_sources.py).
+        from api.utils.autopilot_sources import SourceFlags, resolve_autopilot_sources
+        sources = await resolve_autopilot_sources(
+            session_id=request.session_id,
+            connection_id=request.connection_id,
+            db_connections_table=db_connections_table,
+            async_session_factory=async_session_factory,
+            vector_stores=VECTOR_STORES,
+            org_encryption_keys_table=org_encryption_keys_table,
+            fallback=SourceFlags(
+                has_docs=request.has_docs,
+                has_db=request.has_db,
+                has_csv=request.has_csv,
+            ),
+        )
+
         async for chunk in run_autopilot(
             question=request.question,
             session_id=request.session_id,
@@ -3625,9 +3661,9 @@ async def v1_autopilot_run(raw_request: Request, request: V1AutopilotRequest, _k
             async_session_factory=async_session_factory,
             expert_personas=EXPERT_PERSONAS,
             vector_stores=VECTOR_STORES,
-            has_docs=request.has_docs,
-            has_db=request.has_db,
-            has_csv=request.has_csv,
+            has_docs=sources.has_docs,
+            has_db=sources.has_db,
+            has_csv=sources.has_csv,
             chat_history=_autopilot_history if _autopilot_history else None,
         ):
             evt = _parse_sse_event(chunk)
