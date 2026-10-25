@@ -62,6 +62,7 @@ app.add_middleware(
 )
 
 from api.utils import request_guard
+from api.utils.pdf_io import open_pdf_bytes
 
 
 @app.middleware("http")
@@ -845,14 +846,11 @@ async def upload_documents(
         
         for file in files:
             content = await file.read()
-            temp_path = f"/tmp/{session_id}_{file.filename}"
-            
-            with open(temp_path, "wb") as f:
-                f.write(content)
-            
+
             try:
-                import fitz
-                doc = fitz.open(temp_path)
+                # DOCBOT-1633: parse from memory; never write the upload to a
+                # predictable /tmp path built from the user's filename.
+                doc = open_pdf_bytes(content)
 
                 # Extract AcroForm widget values once for the whole document.
                 # LCA and other government forms store field values as PDF

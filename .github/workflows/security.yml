@@ -5,9 +5,10 @@ name: Security
 # Jobs marked `continue-on-error: true` currently fail on PRE-EXISTING findings
 # (baseline recorded 2026-10-25 at 1f2ade3). They report but do not block.
 # Remove `continue-on-error` once each baseline is cleared:
-#   bandit    — 6 MEDIUM (5x B108 hardcoded /tmp, 1x B608 SQL string) / 0 HIGH
-#   pip-audit — langsmith 0.7.17 (5 advisories, fix >=0.8.18), chromadb 1.5.9 (5 advisories)
 #   npm audit — 1 critical (next), 10 high (incl. zod, sharp, postcss); fix tracked by Dependabot
+# Cleared by DOCBOT-1633 (now blocking):
+#   bandit    — B108/B608 findings fixed in code (no config-level skips)
+#   pip-audit — langsmith bumped; chromadb advisories with no fix ignored per-ID below
 # gitleaks is blocking: history is clean apart from an allowlisted test canary.
 
 on:
@@ -25,7 +26,6 @@ jobs:
   bandit:
     name: bandit (api/, medium+)
     runs-on: ubuntu-latest
-    continue-on-error: true  # baseline: 6 MEDIUM findings, see header
     steps:
       - uses: actions/checkout@v7
       - uses: actions/setup-python@v7
@@ -39,7 +39,6 @@ jobs:
   pip-audit:
     name: pip-audit (requirements.txt)
     runs-on: ubuntu-latest
-    continue-on-error: true  # baseline: langsmith + chromadb advisories, see header
     steps:
       - uses: actions/checkout@v7
       - uses: actions/setup-python@v7
@@ -49,8 +48,36 @@ jobs:
           cache-dependency-path: requirements.txt
       - name: Install pip-audit
         run: python -m pip install "pip-audit==2.10.1"
+      # DOCBOT-1633: chromadb 1.5.9 is the latest release and no fixed version
+      # exists for the advisories below. Every one targets Chroma's HTTP server
+      # (FastAPI /api/v2 routes) or its server-side auth providers. DocBot never
+      # runs that server: api/utils/vector_store.py embeds Chroma in-process via
+      # langchain_chroma / chromadb.PersistentClient, the container only exposes
+      # uvicorn api.index:app, and collection configs are never user-supplied
+      # (no trust_remote_code embedding functions). Ignored per ID, never
+      # wholesale. Revisit 2026-12-01 or as soon as a fixed chromadb ships.
       - name: Run pip-audit
-        run: pip-audit -r requirements.txt --progress-spinner off
+        run: |
+          ignores=(
+            # CVE-2026-45829 / GHSA-f4j7-r4q5-qw2c: pre-auth RCE via
+            # trust_remote_code on the server's create-collection endpoint.
+            # Not reachable: no Chroma HTTP server. Revisit 2026-12-01.
+            --ignore-vuln PYSEC-2026-311
+            # CVE-2026-45830 / GHSA-2wm9-hf6c-p5cr: server lacks per-tenant
+            # authz on collection CRUD. Not reachable: no Chroma server or
+            # Chroma tenants; DocBot scopes collections per session itself.
+            # Revisit 2026-12-01.
+            --ignore-vuln PYSEC-2026-3813
+            # CVE-2026-45833 / GHSA-36p7-vc44-83pf: authenticated RCE via
+            # trust_remote_code on the server's update-collection endpoint.
+            # Not reachable: no Chroma HTTP server. Revisit 2026-12-01.
+            --ignore-vuln PYSEC-2026-3814
+            # CVE-2026-45831 / GHSA-xph7-9rjv-w5fr: SimpleRBACAuthorizationProvider
+            # ignores tenant scope. Not reachable: that server auth provider is
+            # never configured. Revisit 2026-12-01.
+            --ignore-vuln PYSEC-2026-3815
+          )
+          pip-audit -r requirements.txt --progress-spinner off "${ignores[@]}"
 
   npm-audit:
     name: npm audit (high+)
