@@ -1,0 +1,13 @@
+# gitleaks config — DOCBOT-1625. Extends the built-in ruleset; keep the
+# allowlist narrow (exact canary patterns, never whole paths or rules).
+title = "DocBot gitleaks config"
+
+[extend]
+useDefault = true
+
+[allowlist]
+description = "Known non-secret canary values used by redaction tests"
+regexes = [
+  # tests/unit/test_langsmith_tracing.py — canaries asserted to NEVER reach traces.
+  '''SECRET-(PROMPT|RESPONSE|ROWDATA)-[0-9a-f]{6}''',
+]

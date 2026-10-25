@@ -1,6 +1,6 @@
 "use client"
 
-import React, { useState, useMemo } from "react"
+import React, { useState, useId } from "react"
 import ReactMarkdown from "react-markdown"
 import remarkGfm from "remark-gfm"
 import {
@@ -366,10 +366,9 @@ export default function ChatMessage({
   onCopy,
 }: ChatMessageProps) {
   // Stable per-message id for inspector artifact keys
-  const messageId = useMemo(
-    () => `m-${msg.timestamp?.getTime() ?? Math.random().toString(36).slice(2, 10)}`,
-    [msg.timestamp]
-  )
+  // useId() gives a render-pure fallback when the message has no timestamp.
+  const fallbackId = useId()
+  const messageId = `m-${msg.timestamp?.getTime() ?? fallbackId}`
 
   // User message — right-aligned minimal card
   if (msg.role === "user") {

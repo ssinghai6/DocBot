@@ -81,6 +81,7 @@ def _build_schema() -> tuple[MetaData, dict[str, Table]]:
         "db_connections", metadata,
         Column("id", String, primary_key=True),
         Column("session_id", String, nullable=False),
+        Column("user_id", String),
         Column("org_id", String, index=True),
     )
     marketplace_connections = Table(
