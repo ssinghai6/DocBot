@@ -310,6 +310,10 @@ edgar_filings_cache_table = register_edgar_cache_table(metadata)
 from api.llm_trace_service import register_llm_calls_table
 llm_calls_table = register_llm_calls_table(metadata)
 
+# ── DOCBOT-1801: usage ledger (per-org metering) ──────────────────────────────
+from api.usage_service import register_usage_events_table, bind_billing_stream, meter_upload
+usage_events_table = register_usage_events_table(metadata)
+
 # ── DOCBOT-1510: per-answer lineage (Inspector lineage trace) ────────────────
 from api.lineage_service import register_lineage_table
 answer_lineage_table = register_lineage_table(metadata)
@@ -447,6 +451,10 @@ async def init_db() -> None:
         # DOCBOT-1524: idempotent — creates the default org only if none
         # exists yet, and backfills org_id on rows that still lack one.
         default_org_id = await backfill_default_organization(conn)
+        # DOCBOT-1801: billing attribution columns on llm_calls (idempotent)
+        from api.usage_service import LLM_CALLS_BILLING_MIGRATIONS
+        for col_ddl in LLM_CALLS_BILLING_MIGRATIONS:
+            await conn.execute(text(col_ddl))
     logger.info(
         "Database tables verified / created "
         "(sessions, messages, db_connections, schema_cache, query_history, "
@@ -490,6 +498,10 @@ async def lifespan(app: FastAPI):
     wire_llm_trace_store(llm_calls_table, async_session_factory)
     set_trace_sink(enqueue_call)
     start_writer()
+    # DOCBOT-1801: usage_events ledger writer
+    from api.usage_service import wire_usage_store, start_writer as start_usage_writer
+    wire_usage_store(usage_events_table, async_session_factory)
+    start_usage_writer()
     from api.lineage_service import wire_lineage_store
     wire_lineage_store(answer_lineage_table, async_session_factory)
     # DOCBOT-1506: wire the exact-match LLM response cache (SQL gen + intent
@@ -619,6 +631,8 @@ async def lifespan(app: FastAPI):
     # DOCBOT-1501: drain and stop the LLM call log writer before closing the pool
     from api.llm_trace_service import stop_writer
     await stop_writer()
+    from api.usage_service import stop_writer as stop_usage_writer
+    await stop_usage_writer()
     # DOCBOT-1509: flush queued LangSmith runs on SIGTERM, bounded to 3s.
     # Off the event loop, and never joins the executor, so shutdown cannot hang.
     from api.utils.langsmith_tracing import shutdown as shutdown_langsmith
@@ -885,6 +899,7 @@ async def upload_documents(
                     "pages": page_count,
                     "size": len(content)
                 })
+                meter_upload(len(content), pages=page_count, session_id=session_id)  # DOCBOT-1801
             except Exception as e:
                 logger.error(f"Error processing PDF {file.filename}: {e}")
                 continue
@@ -1367,7 +1382,7 @@ async def chat(raw_request: Request, request: ChatRequest, _user=_rbac_viewer):
             logger.exception("Error in chat stream:")
             yield f"data: {json.dumps({'type': 'error', 'detail': safe_error_message(e)})}\n\n"
 
-    return StreamingResponse(event_stream(), media_type="text/event-stream")
+    return StreamingResponse(bind_billing_stream(event_stream()), media_type="text/event-stream")
 
 # ===== Phase 1 Features: Session History & Export =====
 
@@ -1936,7 +1951,7 @@ async def db_chat(raw_request: Request, request: DBChatRequest, _user=_rbac_view
             logger.error("db_chat pipeline error: %s — %s", type(exc).__name__, exc, exc_info=True)
             yield f"data: {json.dumps({'type': 'error', 'error_type': 'InternalError', 'detail': 'An internal error occurred.'})}\n\n"
 
-    return StreamingResponse(event_stream(), media_type="text/event-stream")
+    return StreamingResponse(bind_billing_stream(event_stream()), media_type="text/event-stream")
 
 
 @app.get("/api/db/sessions")
@@ -2293,7 +2308,7 @@ async def hybrid_chat_route(raw_request: Request, request: HybridChatRequest, _u
             logger.error("hybrid_chat_route error: %s", type(exc).__name__)
             yield f"data: {json.dumps({'type': 'error', 'detail': 'An internal error occurred.'})}\n\n"
 
-    return StreamingResponse(event_stream(), media_type="text/event-stream")
+    return StreamingResponse(bind_billing_stream(event_stream()), media_type="text/event-stream")
 
 
 # ---------------------------------------------------------------------------
@@ -2371,7 +2386,7 @@ async def autopilot_run(raw_request: Request, request: AutopilotRequest, _user=_
             logger.error("autopilot_run error: %s", type(exc).__name__)
             yield f"data: {json.dumps({'type': 'error', 'content': 'An internal error occurred.'})}\n\n"
 
-    return StreamingResponse(event_stream(), media_type="text/event-stream")
+    return StreamingResponse(bind_billing_stream(event_stream()), media_type="text/event-stream")
 
 
 # ── EPIC-06: SSO / SAML Auth routes (DOCBOT-601) ─────────────────────────────

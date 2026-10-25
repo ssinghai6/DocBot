@@ -22,6 +22,7 @@ from typing import Any, Dict, List, Optional, Tuple
 
 from sqlalchemy import Table, delete, insert, select
 
+from api.usage_service import meter_upload
 from api.utils.encryption import encrypt_credentials
 
 logger = logging.getLogger(__name__)
@@ -92,6 +93,8 @@ async def upload_sqlite(
     schema = await get_schema(
         connection_id, db_connections_table, schema_cache_table, async_session_factory
     )
+
+    meter_upload(len(file_bytes), session_id=session_id)  # DOCBOT-1801
 
     return {
         "connection_id": connection_id,
@@ -184,6 +187,8 @@ async def upload_csv(
         schema_cache_table=schema_cache_table,
         async_session_factory=async_session_factory,
     )
+
+    meter_upload(len(file_bytes), session_id=session_id)  # DOCBOT-1801
 
     return {
         "connection_id": connection_id,
