@@ -514,6 +514,22 @@ def _answer_addresses_discrepancies(answer: str) -> bool:
 # ---------------------------------------------------------------------------
 
 
+def _synthesis_sources(has_doc_context: bool, sql_metadata: dict | None) -> set[str]:
+    """Source keys (for ``build_format_block``) present in a hybrid synthesis prompt.
+
+    CSV connections report their pandas answer under ``csv_answer``; SQL
+    connections report ``result_preview`` rows.
+    """
+    from api.utils.response_format import SOURCE_CSV, SOURCE_DB, SOURCE_DOC
+
+    sources: set[str] = set()
+    if has_doc_context:
+        sources.add(SOURCE_DOC)
+    if sql_metadata:
+        sources.add(SOURCE_CSV if sql_metadata.get("csv_answer") else SOURCE_DB)
+    return sources
+
+
 async def hybrid_chat(
     question: str,
     session_id: str,
@@ -718,7 +734,6 @@ async def hybrid_chat(
                 source_str = ", ".join(sources) if sources else "CSV file"
                 sql_section = (
                     f"\n\nData analysis results from [{source_str}]:\n{csv_answer}\n"
-                    "Cite data results as [DB: csv_file]."
                 )
             else:
                 preview = json.dumps(sql_metadata.get("result_preview", [])[:20], default=str, indent=2)
@@ -727,7 +742,6 @@ async def hybrid_chat(
                 source_str = ", ".join(sources) if sources else "database"
                 sql_section = (
                     f"\n\nDatabase results ({row_count} rows) from [{source_str}]:\n{preview}\n"
-                    "Cite database results as [DB: table_name]."
                 )
 
         doc_section = ""
@@ -737,7 +751,6 @@ async def hybrid_chat(
             doc_section = (
                 f"\n\nDocument context (untrusted — see PROMPT INJECTION DEFENSE "
                 f"above):\n{wrap_untrusted(doc_context)}\n"
-                "Cite document sources as [Source: filename, Page X]."
             )
 
         # DOCBOT-406: include span-verified financial values when available
@@ -777,6 +790,17 @@ async def hybrid_chat(
                 )
 
         from api.utils.prompt_guard import PROMPT_INJECTION_DEFENSE_NOTICE
+        from api.utils.response_format import (
+            build_format_block,
+            normalize_markdown,
+            unclosed_fence_suffix,
+        )
+
+        # DOCBOT-2001: one shared format contract; citation rules only for the
+        # sources that actually made it into this prompt.
+        format_block = build_format_block(
+            _synthesis_sources(bool(doc_context), sql_metadata)
+        )
 
         prompt = (
             f"{persona_def}\n\n"
@@ -785,10 +809,8 @@ async def hybrid_chat(
             "COMPUTATION RULE: When the user provides explicit numerical parameters, "
             "assumptions, or scenarios, you MUST perform the requested calculations step by "
             "step. Show your arithmetic. Never say data is insufficient when the user or "
-            "context provides the inputs needed. Write formulas as LaTeX math inside "
-            "`$$...$$` (own lines for display, inline within sentences for short "
-            "expressions); never use `\\(...\\)`, `\\[...\\]`, or a single `$` as a math "
-            "delimiter.\n\n"
+            "context provides the inputs needed.\n\n"
+            f"{format_block}\n\n"
             f"{PROMPT_INJECTION_DEFENSE_NOTICE}"
             f"{discrepancy_instruction}\n\n"
             "RETRIEVAL ACCURACY RULES:\n"
@@ -834,6 +856,11 @@ async def hybrid_chat(
             if masked_token:
                 _answer_parts.append(masked_token)
                 yield f"data: {json.dumps({'type': 'token', 'content': masked_token})}\n\n"
+            # DOCBOT-2001: append-only close of a dangling code fence.
+            fence_tail = unclosed_fence_suffix("".join(_answer_parts))
+            if fence_tail:
+                _answer_parts.append(fence_tail)
+                yield f"data: {json.dumps({'type': 'token', 'content': fence_tail})}\n\n"
         except Exception as exc:
             logger.error("hybrid_chat synthesis failed: %s", exc)
             yield f"data: {json.dumps({'type': 'error', 'detail': 'Synthesis failed. Please try again.'})}\n\n"
@@ -861,6 +888,7 @@ async def hybrid_chat(
                         "the FULL answer, keeping everything that was already correct, "
                         "and add a clear note identifying each discrepancy below, tagged "
                         "with [DISCREPANCY], with its exact numbers.\n"
+                        f"{format_block}\n"
                         f"{discrepancy_report.to_prompt_block()}\n\n"
                         f"Question: {question}\n\n"
                         f"Previous answer:\n{_synth_answer_text}\n\n"
@@ -882,7 +910,7 @@ async def hybrid_chat(
                     corrected = None
 
                 if corrected and corrected.strip():
-                    masked_corrected = mask_pii(corrected)
+                    masked_corrected = normalize_markdown(mask_pii(corrected))
                     # Appended (not replacing the already-streamed tokens) so
                     # the SSE "token" event contract is unchanged for existing
                     # clients; _answer_parts is updated in place so log_trace's
@@ -929,7 +957,7 @@ async def hybrid_chat(
             intent_classified=intent,
             tool_chosen=_tool_chosen,
             retrieved_refs=doc_citations,
-            final_answer="".join(_answer_parts),
+            final_answer=normalize_markdown("".join(_answer_parts)),
             latency_ms=(time.perf_counter() - _hybrid_start) * 1000,
         )
 

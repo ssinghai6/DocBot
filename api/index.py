@@ -1222,16 +1222,27 @@ async def chat(raw_request: Request, request: ChatRequest, _user=_rbac_viewer):
                 )
                 return wrap_untrusted(joined)
 
+            # DOCBOT-2001: single shared format contract (citations per source).
+            from api.utils.response_format import (
+                build_format_block,
+                doc_sources_from_metadata,
+                normalize_markdown,
+                unclosed_fence_suffix,
+            )
+            format_block = build_format_block(
+                doc_sources_from_metadata(doc.metadata for doc in retrieved_docs)
+            ).replace("{", "{{").replace("}", "}}")
+
             qa_prompt = ChatPromptTemplate.from_messages([
                 ("system", (
                     f"{effective_persona_def}\n\n"
                     "Answer using the provided context as your primary source. "
-                    "Always cite your sources using the format [Source: filename, Page X]. "
                     "When the user provides explicit numerical parameters, assumptions, or "
                     "scenarios in their question, you MUST perform the requested calculations "
                     "step by step using those values. Show your work with intermediate steps. "
                     "Do not say data is insufficient when the user has provided the inputs."
                     f"{disclaimer_note}\n\n"
+                    f"{format_block}\n\n"
                     "RETRIEVAL ACCURACY RULES:\n"
                     "- Read EVERY chunk in the context carefully before concluding any field is absent.\n"
                     "- Structured forms (government forms, legal documents) store fields as labelled rows "
@@ -1273,7 +1284,13 @@ async def chat(raw_request: Request, request: ChatRequest, _user=_rbac_viewer):
                 full_answer.append(masked_chunk)
                 yield f"data: {json.dumps({'type': 'token', 'content': masked_chunk})}\n\n"
 
-            answer_text = "".join(full_answer)
+            # DOCBOT-2001: append-only fix for a dangling code fence (tokens
+            # already sent are never rewritten), then normalize the stored copy.
+            fence_tail = unclosed_fence_suffix("".join(full_answer))
+            if fence_tail:
+                full_answer.append(fence_tail)
+                yield f"data: {json.dumps({'type': 'token', 'content': fence_tail})}\n\n"
+            answer_text = normalize_markdown("".join(full_answer))
 
             # ── Emit citations after stream ends ──────────────────────────────
             from api.utils.lineage import safe_snippet
