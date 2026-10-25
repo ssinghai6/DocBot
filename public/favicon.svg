@@ -1,23 +1,11 @@
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 32 32" width="32" height="32">
-  <!-- Background -->
-  <rect width="32" height="32" rx="6" fill="#0f0f1a"/>
-  <!-- Document body -->
-  <rect x="6" y="4" width="16" height="20" rx="2" fill="white" opacity="0.95"/>
-  <!-- Dog-ear fold -->
-  <polygon points="18,4 22,4 22,8" fill="#764ba2"/>
-  <polygon points="18,4 22,8 18,8" fill="#e8e4f0" opacity="0.6"/>
-  <!-- Text lines on document -->
-  <rect x="9" y="10" width="10" height="1.5" rx="0.75" fill="#667eea" opacity="0.5"/>
-  <rect x="9" y="13.5" width="8" height="1.5" rx="0.75" fill="#667eea" opacity="0.4"/>
-  <rect x="9" y="17" width="6" height="1.5" rx="0.75" fill="#667eea" opacity="0.3"/>
-  <!-- AI node backdrop -->
-  <circle cx="22" cy="24" r="7" fill="#0f0f1a"/>
-  <!-- AI node glow -->
-  <circle cx="22" cy="24" r="5" fill="#10b981" opacity="0.15"/>
-  <!-- AI node -->
-  <circle cx="22" cy="24" r="3.5" fill="#10b981"/>
-  <!-- Spark lines -->
-  <line x1="22" y1="17.5" x2="22" y2="19" stroke="#10b981" stroke-width="1.2" stroke-linecap="round" opacity="0.7"/>
-  <line x1="26.5" y1="20.5" x2="25.3" y2="21.3" stroke="#10b981" stroke-width="1.2" stroke-linecap="round" opacity="0.7"/>
-  <line x1="17.5" y1="20.5" x2="18.7" y2="21.3" stroke="#10b981" stroke-width="1.2" stroke-linecap="round" opacity="0.7"/>
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64">
+  <rect width="64" height="64" rx="14" fill="#0F1E22"/>
+  <g transform="translate(2.56 5.78) scale(0.92)">
+    <g fill="none" stroke="#2DD4BF" stroke-width="5.2" stroke-linecap="round" stroke-linejoin="round">
+      <path d="M12.4 2.6H39.8L51.6 15.4V49.4A19.6 5 0 0 1 12.4 49.4V2.6Z"/>
+      <path d="M39.8 2.6V10.4A2.2 2.2 0 0 0 42 12.6H51.6"/>
+      <path d="M51.6 33.4A19.6 7.2 0 0 1 12.4 33.4"/>
+    </g>
+    <path d="M27.1 12C27.78 15.48 29.49 17.28 32.8 18C29.49 18.72 27.78 20.52 27.1 24C26.42 20.52 24.71 18.72 21.4 18C24.71 17.28 26.42 15.48 27.1 12Z" fill="#F5C66B"/>
+  </g>
 </svg>
