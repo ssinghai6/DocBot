@@ -170,18 +170,24 @@ class TestBuildExplanation:
 
 @pytest.mark.unit
 class TestBuildConnectionURLAzureSQL:
+    @staticmethod
+    def _odbc(url: str) -> str:
+        from sqlalchemy.engine import make_url
+        return make_url(url).query["odbc_connect"]
+
     def test_uses_mssql_pyodbc_driver(self):
         url = _build_connection_url("azure_sql", "myserver.database.windows.net", 1433, "mydb")
-        assert "mssql+pyodbc" in url
+        assert url.startswith("mssql+pyodbc://")
 
     def test_contains_odbc_driver_18(self):
         url = _build_connection_url("azure_sql", "myserver.database.windows.net", 1433, "mydb")
-        assert "ODBC Driver 18 for SQL Server" in url
+        assert "ODBC Driver 18 for SQL Server" in self._odbc(url)
 
     def test_contains_server_and_database(self):
         url = _build_connection_url("azure_sql", "myserver.database.windows.net", 1433, "mydb")
-        assert "myserver.database.windows.net,1433" in url
-        assert "mydb" in url
+        odbc = self._odbc(url)
+        assert "Server={myserver.database.windows.net,1433};" in odbc
+        assert "Database={mydb};" in odbc
 
     def test_no_credentials_in_url(self):
         url = _build_connection_url("azure_sql", "myserver.database.windows.net", 1433, "mydb")
@@ -190,9 +196,9 @@ class TestBuildConnectionURLAzureSQL:
         assert "@" not in base
 
     def test_encryption_flags_present(self):
-        url = _build_connection_url("azure_sql", "myserver.database.windows.net", 1433, "mydb")
-        assert "Encrypt=yes" in url
-        assert "TrustServerCertificate=no" in url
+        odbc = self._odbc(_build_connection_url("azure_sql", "myserver.database.windows.net", 1433, "mydb"))
+        assert "Encrypt=yes" in odbc
+        assert "TrustServerCertificate=no" in odbc
 
 
 @pytest.mark.unit
@@ -222,6 +228,15 @@ class TestBuildEntraConnectArgs:
 
 @pytest.mark.unit
 class TestDBConnectionRequestAzureSQL:
+    @pytest.fixture(autouse=True)
+    def _public_dns(self):
+        # DOCBOT-1608: azure_sql hosts must be *.database.windows.net; resolve
+        # them to a public IP without touching the network.
+        import socket
+        fake = [(socket.AF_INET, socket.SOCK_STREAM, 6, "", ("20.1.2.3", 0))]
+        with patch("api.utils.ssrf_validator.socket.getaddrinfo", return_value=fake):
+            yield
+
     def test_azure_sql_in_supported_dialects(self):
         from api.db_service import SUPPORTED_DIALECTS
         assert "azure_sql" in SUPPORTED_DIALECTS
@@ -229,7 +244,7 @@ class TestDBConnectionRequestAzureSQL:
     def test_valid_entra_sp_request(self):
         req = DBConnectionRequest(
             session_id="s", dialect="azure_sql",
-            host="8.8.8.8", port=1433, dbname="mydb",
+            host="myserver.database.windows.net", port=1433, dbname="mydb",
             auth_type="entra_sp",
             tenant_id="tid", client_id="cid", client_secret="sec",
         )
@@ -240,7 +255,7 @@ class TestDBConnectionRequestAzureSQL:
         with pytest.raises(ValidationError):
             DBConnectionRequest(
                 session_id="s", dialect="azure_sql",
-                host="8.8.8.8", port=1433, dbname="mydb",
+                host="myserver.database.windows.net", port=1433, dbname="mydb",
                 tenant_id="tid", client_id="cid", client_secret="sec",
             )
 
@@ -248,7 +263,7 @@ class TestDBConnectionRequestAzureSQL:
         with pytest.raises(ValidationError):
             DBConnectionRequest(
                 session_id="s", dialect="azure_sql",
-                host="8.8.8.8", port=1433, dbname="mydb",
+                host="myserver.database.windows.net", port=1433, dbname="mydb",
                 auth_type="entra_sp",
                 client_id="cid", client_secret="sec",
             )
@@ -257,7 +272,7 @@ class TestDBConnectionRequestAzureSQL:
         with pytest.raises(ValidationError):
             DBConnectionRequest(
                 session_id="s", dialect="azure_sql",
-                host="8.8.8.8", port=1433, dbname="mydb",
+                host="myserver.database.windows.net", port=1433, dbname="mydb",
                 auth_type="entra_sp",
                 tenant_id="tid", client_id="cid",
             )

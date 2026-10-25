@@ -21,7 +21,9 @@ from datetime import datetime, timedelta, timezone
 from decimal import Decimal
 from typing import Any, AsyncGenerator, Dict, List, Optional
 
-from pydantic import BaseModel, RootModel, ValidationError, field_validator, model_validator
+from pydantic import (
+    BaseModel, RootModel, ValidationError, ValidationInfo, field_validator, model_validator,
+)
 from sqlalchemy import (
     Column, DateTime, Integer, MetaData, String, Table, Text,
     func, insert, or_, select, text, true, update, delete,
@@ -29,7 +31,14 @@ from sqlalchemy import (
 from sqlalchemy.sql.elements import ColumnElement
 from sqlalchemy.ext.asyncio import AsyncSession, create_async_engine
 
-from api.utils.ssrf_validator import validate_ssrf
+from api.utils.ssrf_validator import validate_db_identifier, validate_hostname, validate_ssrf
+from api.utils.connection_url import (
+    DIALECT_DRIVER,
+    build_connection_url,
+    build_pinned_connection_url,
+    validate_azure_sql_host,
+    validate_sqlite_path,
+)
 from api.utils.encryption import encrypt_credentials, decrypt_credentials
 from api.utils.sql_validator import validate_and_sanitize_sql, QueryValidationError
 from api.utils.embeddings import find_similar_queries, embedding_to_json
@@ -209,12 +218,7 @@ def _json_dumps(obj: Any) -> str:
 
 SUPPORTED_DIALECTS = {"postgresql", "mysql", "sqlite", "azure_sql"}
 
-_DIALECT_DRIVER = {
-    "postgresql": "postgresql+psycopg2",
-    "mysql":      "mysql+pymysql",
-    "sqlite":     "sqlite",
-    "azure_sql":  "mssql+pyodbc",
-}
+_DIALECT_DRIVER = DIALECT_DRIVER
 
 # ---------------------------------------------------------------------------
 # Custom exceptions
@@ -573,12 +577,29 @@ class DBConnectionRequest(BaseModel):
 
     @field_validator("host")
     @classmethod
-    def host_must_pass_ssrf(cls, v: str) -> str:
+    def host_must_pass_ssrf(cls, v: str, info: ValidationInfo) -> str:
+        # DOCBOT-1608: syntactic check (no DSN/URL param injection, no
+        # non-canonical numeric IPs) + resolution check (every address must be
+        # is_global). The connect itself re-resolves and pins — see
+        # api/utils/connection_url.py.
+        dialect = info.data.get("dialect")
+        if dialect == "sqlite":
+            return v
+        if dialect == "azure_sql":
+            validate_azure_sql_host(v)
+        validate_hostname(v)
         validate_ssrf(v)
         return v
 
     @model_validator(mode="after")
     def validate_auth_fields(self) -> "DBConnectionRequest":
+        # DOCBOT-1608: reject DSN/URL delimiter characters in identifiers.
+        if self.dialect == "sqlite":
+            validate_sqlite_path(self.dbname)
+        else:
+            validate_db_identifier(self.dbname, "Database name")
+            if self.dialect != "azure_sql":
+                validate_db_identifier(self.user, "Username")
         if self.dialect == "azure_sql":
             if self.auth_type == "entra_sp":
                 missing = [f for f in ("tenant_id", "client_id", "client_secret")
@@ -685,24 +706,10 @@ async def _rephrase_with_history(
     return question
 
 
-def _build_connection_url(
-    dialect: str, host: str, port: int, dbname: str,
-    user: str = "", password: str = "",
-) -> str:
-    driver = _DIALECT_DRIVER[dialect]
-    if dialect == "sqlite":
-        return f"sqlite:///{dbname}"
-    if dialect == "azure_sql":
-        odbc_str = (
-            f"Driver={{ODBC Driver 18 for SQL Server}};"
-            f"Server={host},{port};Database={dbname};"
-            "Encrypt=yes;TrustServerCertificate=no;Connection Timeout=10;"
-        )
-        return f"mssql+pyodbc:///?odbc_connect={odbc_str}"
-    url = f"{driver}://{user}:{password}@{host}:{port}/{dbname}"
-    if dialect == "postgresql":
-        url += "?sslmode=prefer"
-    return url
+# DOCBOT-1608: URLs are built with sqlalchemy URL.create() in
+# api/utils/connection_url.py. Names kept for existing callers/tests.
+_build_connection_url = build_connection_url
+_build_pinned_connection_url = build_pinned_connection_url
 
 
 def _get_entra_token(tenant_id: str, client_id: str, client_secret: str) -> str:
@@ -769,7 +776,7 @@ def _resolve_connection(creds: Dict[str, Any]) -> tuple[str, Optional[Dict[str, 
     dialect = creds["dialect"]
     if dialect == "azure_sql":
         auth_type = creds.get("auth_type", "entra_sp")
-        url = _build_connection_url(dialect, creds["host"], creds["port"], creds["dbname"])
+        url = _build_pinned_connection_url(dialect, creds["host"], creds["port"], creds["dbname"])
         if auth_type == "entra_interactive":
             expires_at = datetime.fromisoformat(creds["token_expires_at"])
             if datetime.now(timezone.utc) >= expires_at - timedelta(minutes=5):
@@ -780,7 +787,9 @@ def _resolve_connection(creds: Dict[str, Any]) -> tuple[str, Optional[Dict[str, 
             creds["tenant_id"], creds["client_id"], creds["client_secret"]
         )
         return url, _build_entra_connect_args(token)
-    url = _build_connection_url(
+    # Re-resolve + re-validate on every use and pin the connect to the checked
+    # IP (DNS rebinding after the initial connect must not reach internal hosts).
+    url = _build_pinned_connection_url(
         dialect, creds["host"], creds["port"],
         creds["dbname"], creds["user"], creds["password"],
     )
@@ -856,7 +865,7 @@ async def connect_database(
 
     entra_connect_args: Optional[Dict[str, Any]] = None
     if req.dialect == "azure_sql":
-        sync_url = _build_connection_url(req.dialect, req.host, req.port, req.dbname)
+        sync_url = _build_pinned_connection_url(req.dialect, req.host, req.port, req.dbname)
         if req.auth_type == "entra_interactive":
             try:
                 token_expires_at = _parse_token_expiry(req.access_token)  # type: ignore[arg-type]
@@ -871,7 +880,7 @@ async def connect_database(
             )
             entra_connect_args = _build_entra_connect_args(token)
     else:
-        sync_url = _build_connection_url(
+        sync_url = _build_pinned_connection_url(
             req.dialect, req.host, req.port, req.dbname, req.user, req.password
         )
 
@@ -1224,7 +1233,8 @@ async def _test_connection(
     try:
         await asyncio.get_running_loop().run_in_executor(None, _sync_test)
     except Exception as exc:
-        logger.error("DB connection test failed: %s", exc)
+        # Never log the exception text: driver errors can echo DSN fragments.
+        logger.error("DB connection test failed: %s", type(exc).__name__)
         raise ValueError(
             "Database connection test failed. Please verify your credentials and host."
         ) from exc
