@@ -38,6 +38,7 @@ import json
 import logging
 import operator
 import os
+import re
 import time
 from typing import Annotated, Any, AsyncGenerator, Optional
 
@@ -70,10 +71,60 @@ _FAILURE_CONTENT_PREFIXES = (
     "No data source",
 )
 
+# P1: machine-readable degradation reason codes. The planner and executor
+# append these to state["degradation_reasons"]; a non-empty set forces the
+# synthesizer to label the final answer as degraded (P1c) so a LangGraph run
+# can never silently collapse to a one-step / doc-only investigation.
+_DEGR_PLANNER_FALLBACK = "planner_fallback_single_step"
+_DEGR_DATA_TOOL_MISSING = "data_tool_missing"
+
+# P1: the planner makes at most ONE bounded regeneration call (with the
+# validation error appended to the prompt) when its first output fails the
+# plan schema check. After that it falls back — visibly, never silently.
+_PLANNER_REGENERATION_LIMIT = 1
+
+# P3(a): lowercase claim fragments that read as the answer apologising for
+# missing data. Only actionable when data_results actually holds data —
+# otherwise the guard leaves the answer untouched.
+_APOLOGY_CLAIM_PATTERNS = (
+    "no numeric data",
+    "no numbers",
+    "no data",
+    "no available data",
+    "data unavailable",
+    "data is unavailable",
+    "no quantitative",
+    "insufficient data",
+    "unable to compute",
+    "cannot compute",
+    "could not compute",
+    "not enough data",
+    "no relevant data",
+)
+
+# P3: defensive scrub for DB-URL-with-password fragments that could ride
+# along in a tool error message surfaced through data summaries / refusal
+# detail lines. Connection strings must never leak into surfaced output.
+_DB_URL_SECRET_RE = re.compile(
+    r"(?P<scheme>postgres(?:ql)?|mysql|mariadb|sqlite|azure|sqlserver|mssql|"
+    r"oracle|db2|redshift|snowflake)://[^:/\s]+:[^@\s]+@",
+    re.IGNORECASE,
+)
+
 
 # ---------------------------------------------------------------------------
 # State schema
 # ---------------------------------------------------------------------------
+
+
+def _merge_dict_reducer(current: Optional[dict], update: Optional[dict]) -> dict:
+    """LangGraph reducer for ``data_results`` — merges per-wave updates (each
+    executor wave contributes its own "step:<plan index>:<tool>" entries)
+    into one accumulated dict instead of replacing it."""
+    merged = dict(current or {})
+    if isinstance(update, dict):
+        merged.update(update)
+    return merged
 
 
 class AutopilotState(TypedDict):
@@ -107,6 +158,17 @@ class AutopilotState(TypedDict):
     has_docs: bool
     has_db: bool
     has_csv: bool
+    # P2: normalized data outputs from executed tool steps, keyed by
+    # "step:<plan index>:<tool>". Each value carries {tool, step_label,
+    # row_count, sample_rows (max 10, deterministic), sql, explanation,
+    # result_excerpt, provenance}. Consumed by the synthesizer and the P3
+    # claim guard so the final answer can never claim "no numbers" while
+    # tool data exists.
+    data_results: Annotated[dict[str, Any], _merge_dict_reducer]
+    # P1: degradation reason codes accumulated across planner/executor
+    # nodes (e.g. "planner_fallback_single_step", "data_tool_missing:step:2:sql_query").
+    # Non-empty → the synthesizer labels the answer degraded.
+    degradation_reasons: Annotated[list[str], operator.add]
 
 
 # ---------------------------------------------------------------------------
@@ -124,13 +186,26 @@ def _sse(data: dict) -> str:
 
 
 async def _planner_node(state: AutopilotState) -> dict:
-    """Decompose the question into ≤5 investigation steps via Groq Llama."""
+    """Decompose the question into ≤5 investigation steps via Groq Llama.
+
+    P1 hardening:
+    - The model's plan output is schema-validated (a JSON array of non-empty
+      step strings, capped at MAX_ITERATIONS). On failure the planner makes
+      at most ONE bounded regeneration call with the validation error
+      appended to the prompt, then falls back to a single-step plan.
+    - Every fallback path records ``planner_fallback_single_step`` in
+      ``degradation_reasons`` so the synthesizer labels the final answer
+      degraded (P1c) — the run can never *silently* collapse to a one-step
+      (or doc-only) investigation.
+    """
     api_key = os.getenv("groq_api_key")
     if not api_key:
-        logger.warning("planner_node: groq_api_key not set — single-step fallback")
-        return {"plan": [state["question"]], "iteration": 0}
-
-    import groq as groq_module
+        logger.warning("planner_node: groq_api_key not set — single-step fallback (degraded)")
+        return {
+            "plan": [state["question"]],
+            "iteration": 0,
+            "degradation_reasons": [_DEGR_PLANNER_FALLBACK],
+        }
 
     # Build dynamic tools list based on available data sources
     tools_available: list[str] = []
@@ -140,7 +215,11 @@ async def _planner_node(state: AutopilotState) -> dict:
         tools_available.append("  - doc_search: search uploaded PDF documents for relevant information")
     tools_available.append("  - python_analysis: run Python / generate charts — ONLY after a data-fetch step has provided data")
 
-    tools_str = "\n".join(tools_available) if tools_available else "  - doc_search: search documents"
+    # P1: never invent a doc_search tool line when no sources are resolved —
+    # the executor would refuse the step anyway ("unsupported"), so the
+    # planner should plan honestly for that outcome instead of steering the
+    # whole investigation into doc-only wording.
+    tools_str = "\n".join(tools_available)
 
     # DOCBOT-1517: cheap ontology nearest-neighbor pre-check — if a data
     # ontology has already been built for this connection, bias the planner
@@ -203,13 +282,38 @@ async def _planner_node(state: AutopilotState) -> dict:
         '"Generate a bar chart of revenue trend."]'
     )
 
-    try:
+    def _parse_plan_response(raw: str) -> list[str]:
+        """Normalize + schema-validate a planner response. Raises ValueError
+        on any invalid tool map (not JSON, not an array, empty) so the caller
+        can trigger its bounded regeneration."""
+        lines = raw.splitlines()
+        if lines and lines[0].startswith("```"):
+            lines = lines[1:]
+        if lines and lines[-1].strip() == "```":
+            lines = lines[:-1]
+        stripped = "\n".join(lines).strip()
+        parsed = json.loads(stripped)
+        if not isinstance(parsed, list):
+            raise ValueError("Plan is not a JSON array")
+        plan = [str(s).strip() for s in parsed if str(s).strip()]
+        if not plan:
+            raise ValueError("Plan array is empty")
+        return plan[:MAX_ITERATIONS]
+
+    def _attempt(error_context: Optional[str]) -> str:
         from api.utils.llm_provider import chat_completion
 
-        raw = chat_completion(
+        user_content = f"Question: {state['question']}"
+        if error_context:
+            user_content += (
+                "\n\nYour previous response was invalid: "
+                f"{error_context}\nReturn ONLY a corrected JSON array of short step strings. "
+                "No explanation, no markdown fences."
+            )
+        return chat_completion(
             [
                 {"role": "system", "content": system_prompt},
-                {"role": "user", "content": f"Question: {state['question']}"},
+                {"role": "user", "content": user_content},
             ],
             temperature=0,
             max_tokens=400,
@@ -217,23 +321,37 @@ async def _planner_node(state: AutopilotState) -> dict:
             run_id=state.get("run_id"),
             prompt_version=PROMPT_VERSION_AUTOPILOT_PLANNER,
         )
-        # Strip markdown fences if the model adds them
-        lines = raw.splitlines()
-        if lines and lines[0].startswith("```"):
-            lines = lines[1:]
-        if lines and lines[-1].strip() == "```":
-            lines = lines[:-1]
-        raw = "\n".join(lines).strip()
 
-        plan: list[str] = json.loads(raw)
-        if not isinstance(plan, list):
-            raise ValueError("Plan is not a list")
-        plan = [str(s).strip() for s in plan[:MAX_ITERATIONS] if str(s).strip()]
-    except Exception as exc:
-        logger.warning("planner_node LLM call failed (%s) — single-step fallback", exc)
-        plan = [state["question"]]
+    degradation_reasons: list[str] = []
+    plan: list[str] = [state["question"]]
+    try:
+        plan = _parse_plan_response(_attempt(None))
+    except Exception as first_exc:
+        # P1: bounded retry — exactly one regeneration call with the
+        # validation error appended, then a visible (non-silent) fallback.
+        logger.warning(
+            "planner_node: plan schema validation failed (%s) — retrying once",
+            first_exc,
+        )
+        for _attempt_no in range(_PLANNER_REGENERATION_LIMIT):
+            try:
+                plan = _parse_plan_response(
+                    _attempt(f"Attempt failed: {first_exc}")
+                )
+                break
+            except Exception as retry_exc:
+                logger.warning(
+                    "planner_node: regeneration attempt %d failed (%s)",
+                    _attempt_no + 1, retry_exc,
+                )
+        else:
+            degradation_reasons.append(_DEGR_PLANNER_FALLBACK)
 
-    return {"plan": plan, "iteration": 0}
+    return {
+        "plan": plan,
+        "iteration": 0,
+        "degradation_reasons": degradation_reasons,
+    }
 
 
 # ---------------------------------------------------------------------------
@@ -303,6 +421,31 @@ def _select_tool_heuristic(step: str, has_db: bool = True, has_docs: bool = Fals
 # api/tools/builtin.py's ToolSpec registrations, which cite this set.
 _VALID_TOOL_SELECTIONS = {"sql_query", "doc_search", "python_analysis", "unsupported"}
 
+
+def _tool_available_for_sources(
+    tool: str, *, has_db: bool, has_docs: bool, has_csv: bool
+) -> bool:
+    """P1: True when ``tool`` can actually run given the resolved source flags.
+
+    ``_select_tool_llm`` validates membership in ``_VALID_TOOL_SELECTIONS``
+    but NOT availability — an LLM could return ``sql_query`` with no database
+    connected (doc-only degradation) or ``unsupported`` with sources present.
+    The executor calls this before advancing; on an invalid selection it
+    retries ONCE (bounded, error appended), then deterministically re-routes
+    with the flag-aware heuristic, which can never produce an unsupportable
+    tool.
+    """
+    any_source = has_db or has_docs or has_csv
+    if tool == "sql_query":
+        return has_db and not has_csv
+    if tool == "doc_search":
+        return has_docs
+    if tool == "python_analysis":
+        return any_source
+    if tool == "unsupported":
+        return not any_source
+    return False
+
 # DOCBOT-1507: bump manually ("v1" -> "v2") whenever the system prompt below
 # changes — see PROMPT_VERSION convention in api/utils/llm_provider.py.
 PROMPT_VERSION_AUTOPILOT_TOOL_ROUTER = "v1"
@@ -315,6 +458,7 @@ async def _select_tool_llm(
     has_csv: bool = False,
     persona_tool_preference: str | None = None,
     run_id: str | None = None,
+    error_context: str | None = None,
 ) -> str:
     """Model-driven replacement for ``_select_tool_heuristic`` — DOCBOT-1513.
 
@@ -324,6 +468,10 @@ async def _select_tool_llm(
     given which data sources are available and an optional persona
     tool-preference hint (``EXPERT_PERSONAS[persona]["tool_preference"]`` —
     ``"balanced"`` / ``"rag_first"`` / ``"sql_first"``).
+
+    ``error_context`` (P1) folds a previous selection's validation failure
+    into the prompt so the executor's bounded one-retry loop can ask for a
+    corrected tool map instead of a blind repeat.
 
     On ANY failure — the LLM call raising, the response not parsing as JSON,
     or the parsed value falling outside ``_VALID_TOOL_SELECTIONS`` — falls
@@ -373,6 +521,14 @@ async def _select_tool_llm(
         "no markdown fences."
     )
 
+    user_content = f"Step: {step}"
+    if error_context:
+        user_content += (
+            "\n\nYour previous selection was invalid: "
+            f"{error_context}\nRespond with ONLY a corrected JSON object "
+            'like {"tool": "<one of the available tools>"}.'
+        )
+
     try:
         # DOCBOT-1513: use the async call_llm (LangChain .ainvoke under the
         # hood), NOT the synchronous chat_completion — _select_tool_llm runs
@@ -383,7 +539,7 @@ async def _select_tool_llm(
         from api.utils.llm_provider import call_llm
 
         raw = await call_llm(
-            f"{system_prompt}\n\nStep: {step}",
+            f"{system_prompt}\n\n{user_content}",
             temperature=0,
             caller="autopilot_tool_router",
             run_id=run_id,
@@ -474,6 +630,82 @@ def _next_wave_indices(plan: list[str], start: int, state: AutopilotState) -> li
 # ---------------------------------------------------------------------------
 
 
+async def _persist_analysis_artifact(
+    *,
+    session_id: str,
+    step_idx: int,
+    step: str,
+    output: str,
+    session_artifacts_table: Any,
+    async_session_factory: Any,
+) -> Optional[str]:
+    """P2: persist a python/CSV analysis step's visible stdout as a session
+    artifact so the run's visible outputs survive the turn. Charts were
+    already persisted at the sandbox call sites; bare-text analysis outputs
+    were not. Non-fatal: any failure logs and returns None (save_artifact
+    itself is also failure-tolerant internally)."""
+    if session_artifacts_table is None or not (output or "").strip():
+        return None
+    try:
+        from api.artifact_service import save_artifact
+
+        artifact_id = await save_artifact(
+            session_id=session_id,
+            turn_id=step_idx + 1,
+            artifact_type="analysis",
+            name=f"Analysis: {step[:60]}",
+            result_dicts=[{"output": output[:2000]}],
+            session_artifacts_table=session_artifacts_table,
+            async_session_factory=async_session_factory,
+        )
+        return artifact_id
+    except Exception as exc:
+        logger.warning(
+            "_persist_analysis_artifact failed (non-fatal) for step '%s': %s",
+            step[:60], exc,
+        )
+        return None
+
+
+def _sql_data_result(
+    *, step: str, row_count: int, preview: Any, sql: Any, explanation: Any, artifact_id: Optional[str]
+) -> dict:
+    """P2: build the normalized data_results entry for a sql_query step."""
+    sample_rows: list = list(preview)[:10] if isinstance(preview, list) else []
+    return {
+        "tool": "sql_query",
+        "step_label": step,
+        "row_count": row_count,
+        "sample_rows": sample_rows,
+        "sql": sql if isinstance(sql, str) else None,
+        "explanation": explanation if isinstance(explanation, str) else None,
+        "provenance": "sql_pipeline",
+        "artifact_id": artifact_id,
+    }
+
+
+def _python_data_result(
+    *,
+    step: str,
+    provenance: str,
+    result_excerpt: str,
+    row_count: Optional[int] = None,
+    artifact_id: Optional[str] = None,
+) -> dict:
+    """P2: build the normalized data_results entry for a python_analysis step."""
+    return {
+        "tool": "python_analysis",
+        "step_label": step,
+        "row_count": row_count,
+        "sample_rows": [],
+        "sql": None,
+        "explanation": None,
+        "result_excerpt": result_excerpt,
+        "provenance": provenance,
+        "artifact_id": artifact_id,
+    }
+
+
 def make_executor_node(
     *,
     db_connections_table: Any,
@@ -505,14 +737,49 @@ def make_executor_node(
             if isinstance(expert_personas.get(persona_name), dict)
             else None
         )
+        source_flags = {
+            "has_db": state.get("has_db", True),
+            "has_docs": state.get("has_docs", False),
+            "has_csv": state.get("has_csv", False),
+        }
         tool = await _select_tool_llm(
             step,
-            has_db=state.get("has_db", True),
-            has_docs=state.get("has_docs", False),
-            has_csv=state.get("has_csv", False),
             persona_tool_preference=persona_pref,
             run_id=state.get("run_id"),
+            **source_flags,
         )
+
+        # P1: validate the selected tool map against the resolved source
+        # flags before advancing. An out-of-map selection (e.g. the LLM
+        # picked sql_query with no database, or unsupported with sources
+        # present) gets exactly ONE bounded regeneration with the error
+        # appended; if that is still invalid, the flag-aware heuristic
+        # re-routes deterministically so an unsupportable tool can never
+        # execute and the run can never silently degrade to doc-only.
+        if not _tool_available_for_sources(tool, **source_flags):
+            logger.warning(
+                "executor_node: tool selection %r invalid for sources "
+                "(db=%s docs=%s csv=%s) — retrying once for step: %s",
+                tool, source_flags["has_db"], source_flags["has_docs"],
+                source_flags["has_csv"], step[:80],
+            )
+            tool = await _select_tool_llm(
+                step,
+                persona_tool_preference=persona_pref,
+                run_id=state.get("run_id"),
+                error_context=(
+                    f"Tool {tool!r} is not available: "
+                    f"db={source_flags['has_db']}, docs={source_flags['has_docs']}, "
+                    f"csv={source_flags['has_csv']}. Choose one of the listed available tools."
+                ),
+                **source_flags,
+            )
+            if not _tool_available_for_sources(tool, **source_flags):
+                tool = _select_tool_heuristic(step, **source_flags)
+                logger.warning(
+                    "executor_node: regeneration still invalid — deterministic "
+                    "heuristic re-route → %r for step: %s", tool, step[:80],
+                )
 
         # Bug #12: python_analysis needs prior data (a sql_query row-set or a
         # doc_search context). If the planner picked it as the very first step,
@@ -554,6 +821,12 @@ def make_executor_node(
             "artifact_id": None,
             "chart_b64": None,
             "error": None,
+            # P1: machine-readable failure code (e.g. data_tool_missing);
+            # folded into state["degradation_reasons"] by executor_node.
+            "failure_reason": None,
+            # P2: normalized data output, popped into state["data_results"]
+            # by executor_node (never doubled in steps_completed).
+            "data_result": None,
         }
         new_citations: list[dict] = []
 
@@ -569,6 +842,9 @@ def make_executor_node(
                 )
                 result_entry["result"] = msg
                 result_entry["error"] = "No data source available"
+                # P1: the planned data tool was lost — record it so the run
+                # is marked degraded instead of silently continuing.
+                result_entry["failure_reason"] = _DEGR_DATA_TOOL_MISSING
 
             # ── sql_query ──────────────────────────────────────────────────
             elif tool == "sql_query":
@@ -598,6 +874,16 @@ def make_executor_node(
                     )
                     result_entry["sql"] = sql_meta.get("sql_query") or sql_meta.get("sql")
                     result_entry["explanation"] = sql_meta.get("explanation")
+                    # P2: normalized data entry — the synthesizer and P3 claim
+                    # guard consume this instead of relying on LLM recall.
+                    result_entry["data_result"] = _sql_data_result(
+                        step=step,
+                        row_count=row_count if isinstance(row_count, (int, float)) else 0,
+                        preview=preview,
+                        sql=result_entry.get("sql"),
+                        explanation=result_entry.get("explanation"),
+                        artifact_id=None,
+                    )
                     # Persist artifact for potential python_analysis in a later step
                     if preview and session_artifacts_table is not None:
                         from api.artifact_service import save_artifact
@@ -612,13 +898,22 @@ def make_executor_node(
                             async_session_factory=async_session_factory,
                         )
                         result_entry["artifact_id"] = artifact_id
+                        if isinstance(result_entry.get("data_result"), dict):
+                            result_entry["data_result"]["artifact_id"] = artifact_id
                 else:
                     result_entry["result"] = "No SQL result returned."
+                    # P1: the routed data tool produced nothing at all while
+                    # the connection flags said data should exist — mark it
+                    # failed with data_tool_missing instead of auto-continuing.
+                    result_entry["failure_reason"] = _DEGR_DATA_TOOL_MISSING
 
             # ── doc_search ─────────────────────────────────────────────────
             elif tool == "doc_search":
                 if session_id not in vector_stores:
                     result_entry["result"] = "No relevant documents found."
+                    # P1: has_docs was resolved upstream, but the session's
+                    # vector store is gone — the planned data tool is lost.
+                    result_entry["failure_reason"] = _DEGR_DATA_TOOL_MISSING
                 else:
                     from api.deep_research_service import deep_retrieve
 
@@ -740,6 +1035,9 @@ def make_executor_node(
                                     "CSV code generation failed."
                                 )
                                 result_entry["error"] = "CSV code generation failed"
+                                # P1: the analysis tool over the CSV data
+                                # source is lost — mark the run degraded.
+                                result_entry["failure_reason"] = _DEGR_DATA_TOOL_MISSING
                             else:
                                 # Build preamble that defines `df` — same logic as
                                 # run_csv_query_on_e2b. Without this, the sandbox never
@@ -828,6 +1126,9 @@ def make_executor_node(
 
                                 if sandbox_result.error:
                                     result_entry["error"] = sandbox_result.error
+                                    # P1: failed analysis over the CSV source —
+                                    # mark degraded, don't auto-continue.
+                                    result_entry["failure_reason"] = _DEGR_DATA_TOOL_MISSING
                                     # Surface error in result so synthesizer + UI
                                     # see the failure, not a misleading "complete".
                                     result_entry["result"] = (
@@ -841,6 +1142,23 @@ def make_executor_node(
                                         if sandbox_result.stdout
                                         else "Analysis complete."
                                     )
+                                    # P2: normalized data output for the claim
+                                    # guard / synthesizer.
+                                    result_entry["data_result"] = _python_data_result(
+                                        step=step,
+                                        provenance="e2b_csv",
+                                        result_excerpt=result_entry["result"],
+                                    )
+                                    _analysis_artifact_id = await _persist_analysis_artifact(
+                                        session_id=session_id,
+                                        step_idx=step_idx,
+                                        step=step,
+                                        output=result_entry["result"],
+                                        session_artifacts_table=session_artifacts_table,
+                                        async_session_factory=async_session_factory,
+                                    )
+                                    if _analysis_artifact_id and not result_entry["artifact_id"]:
+                                        result_entry["artifact_id"] = _analysis_artifact_id
                                 if (
                                     sandbox_result.charts
                                     and session_artifacts_table is not None
@@ -863,6 +1181,7 @@ def make_executor_node(
                             "executor_node CSV python_analysis failed: %s", csv_exc
                         )
                         result_entry["result"] = f"CSV analysis failed: {csv_exc}"
+                        result_entry["failure_reason"] = _DEGR_DATA_TOOL_MISSING
                         handled_csv = True  # don't fall through to SQL-artifact path
 
                 if handled_csv:
@@ -935,6 +1254,9 @@ def make_executor_node(
 
                     if not prior_rows:
                         result_entry["result"] = "No prior data available for analysis."
+                        # P1: the analysis tool has no data source to work on
+                        # — the planned data tool is lost, mark degraded.
+                        result_entry["failure_reason"] = _DEGR_DATA_TOOL_MISSING
                     else:
                         from api.sandbox_service import generate_analysis_code, run_python, _FORECAST_RE
 
@@ -993,6 +1315,8 @@ def make_executor_node(
 
                             if sandbox_result.error:
                                 result_entry["error"] = sandbox_result.error
+                                # P1: failed analysis → mark degraded.
+                                result_entry["failure_reason"] = _DEGR_DATA_TOOL_MISSING
                                 result_entry["result"] = (
                                     sandbox_result.stdout[:500] if sandbox_result.stdout
                                     else f"Step failed: {sandbox_result.error}"
@@ -1002,6 +1326,24 @@ def make_executor_node(
                                     sandbox_result.stdout[:500] if sandbox_result.stdout
                                     else "Analysis complete."
                                 )
+                                # P2: normalized data output for the claim
+                                # guard / synthesizer.
+                                result_entry["data_result"] = _python_data_result(
+                                    step=step,
+                                    provenance="e2b_python",
+                                    result_excerpt=result_entry["result"],
+                                    row_count=len(prior_rows),
+                                )
+                                _analysis_artifact_id = await _persist_analysis_artifact(
+                                    session_id=session_id,
+                                    step_idx=step_idx,
+                                    step=step,
+                                    output=result_entry["result"],
+                                    session_artifacts_table=session_artifacts_table,
+                                    async_session_factory=async_session_factory,
+                                )
+                                if _analysis_artifact_id and not result_entry["artifact_id"]:
+                                    result_entry["artifact_id"] = _analysis_artifact_id
                             # Persist first chart as an artifact
                             if sandbox_result.charts and session_artifacts_table is not None:
                                 from api.artifact_service import save_artifact
@@ -1019,6 +1361,9 @@ def make_executor_node(
                                 result_entry["chart_b64"] = sandbox_result.charts[0]
                         else:
                             result_entry["result"] = "Code generation failed or insufficient data."
+                            # P1: the analysis generator produced nothing —
+                            # the data tool's output is lost, mark degraded.
+                            result_entry["failure_reason"] = _DEGR_DATA_TOOL_MISSING
 
         except Exception as exc:
             logger.warning("executor_node step %d ('%s') failed: %s", step_idx, tool, exc)
@@ -1094,6 +1439,7 @@ def make_executor_node(
                     "artifact_id": None,
                     "chart_b64": None,
                     "error": str(outcome),
+                    "failure_reason": None,
                 })
                 continue
             entry, citations = outcome
@@ -1101,12 +1447,46 @@ def make_executor_node(
             if citations:
                 all_new_citations.extend(citations)
 
+        # P1/P2 fan-in: normalize the wave's outputs into
+        # (a) ``data_results`` — one entry per step keyed
+        #     "step:<plan index>:<tool>" (bulk payloads are popped out of the
+        #     step entries so steps_completed stays lean), and
+        # (b) ``degradation_reasons`` — marks for steps that lost their
+        #     planned data tool or crashed, which force the synthesizer to
+        #     label the final answer degraded (P1c).
+        data_results_update: dict[str, Any] = {}
+        degradation_update: list[str] = []
+        for wave_pos, idx in enumerate(wave_indices):
+            entry = step_results[wave_pos]
+            tool_name = str(entry.get("tool", "unknown"))
+            key = f"step:{idx + 1}:{tool_name}"
+            data_result = entry.pop("data_result", None)
+            if isinstance(data_result, dict):
+                data_result.setdefault("step_label", entry.get("step", ""))
+                data_results_update[key] = data_result
+            if entry.get("failure_reason"):
+                degradation_update.append(f"{entry['failure_reason']}:{key}")
+            elif entry.get("error"):
+                # A step that crashed for any other reason also means part of
+                # the plan did not run — keep the degraded labeling honest.
+                degradation_update.append(f"step_execution_error:{key}")
+
+        # Dedupe while preserving order (a wave may repeat a reason pattern).
+        seen_reasons: set[str] = set()
+        degradation_update = [
+            r for r in degradation_update if not (r in seen_reasons or seen_reasons.add(r))
+        ]
+
         update: dict = {
             "iteration": state.get("iteration", 0) + 1,
             "steps_completed": step_results,
         }
         if all_new_citations:
             update["citations"] = all_new_citations
+        if data_results_update:
+            update["data_results"] = data_results_update
+        if degradation_update:
+            update["degradation_reasons"] = degradation_update
         return update
 
     return executor_node
@@ -1117,8 +1497,184 @@ def make_executor_node(
 # ---------------------------------------------------------------------------
 
 
+def _scrub_db_url_secrets(text: str) -> str:
+    """P3: defensive scrub for DB-URL-with-password fragments in text that
+    gets surfaced to users (data summaries, refusal details)."""
+    if not text:
+        return text
+    return _DB_URL_SECRET_RE.sub(r"\g<scheme>://[redacted]@", text)
+
+
+def _build_data_results_summary(state: AutopilotState) -> tuple[str, int, bool]:
+    """P2(2): deterministic summary of ``state['data_results']`` for the
+    synthesizer prompt and the P3 claim guard.
+
+    Returns ``(text, rows_total, has_real_data)``:
+    - ``text``: markdown blocks per step (row count + deterministic sample
+      capped at 10 rows + generated-SQL/tool provenance), "" when empty.
+    - ``rows_total``: sum of reported row counts (python entries count their
+      input rows; CSV entries report None and don't add rows but still set
+      ``has_real_data`` via their excerpt).
+    - ``has_real_data``: True if any entry carries actual data (non-zero
+      rows, sample rows, or a tool output excerpt) — i.e. the final answer
+      has numbers available and may not claim "no data".
+    """
+    data_results = state.get("data_results")
+    if not isinstance(data_results, dict):
+        return "", 0, False
+
+    blocks: list[str] = []
+    rows_total = 0
+    has_real_data = False
+    for key in sorted(data_results.keys()):
+        entry = data_results.get(key)
+        if not isinstance(entry, dict):
+            continue
+        step_label = str(entry.get("step_label") or key)
+        entry_tool = str(entry.get("tool", "unknown"))
+        entry_lines = [f"### Data from {key} (tool: {entry_tool}, step: {step_label})"]
+
+        row_count = entry.get("row_count")
+        if isinstance(row_count, (int, float)):
+            rows_total += int(row_count or 0)
+            if entry_tool == "sql_query" and int(row_count) == 0:
+                entry_lines.append(
+                    "- Rows returned: 0 — the query executed successfully "
+                    "and returned NO rows (empty result set, not missing data)."
+                )
+            else:
+                entry_lines.append(f"- Rows returned: {int(row_count)}")
+                has_real_data = has_real_data or int(row_count) > 0
+
+        sql = entry.get("sql")
+        if isinstance(sql, str) and sql.strip():
+            entry_lines.append(
+                f"- Generated SQL (provenance: {entry.get('provenance', 'unknown')}): "
+                f"{_scrub_db_url_secrets(sql)[:400]}"
+            )
+        explanation = entry.get("explanation")
+        if isinstance(explanation, str) and explanation.strip():
+            entry_lines.append(f"- Query explanation: {explanation[:300]}")
+
+        excerpt = entry.get("result_excerpt")
+        if isinstance(excerpt, str) and excerpt.strip():
+            entry_lines.append(f"- Tool output (excerpt): {_scrub_db_url_secrets(excerpt)[:600]}")
+            has_real_data = True
+
+        sample_rows = entry.get("sample_rows")
+        if isinstance(sample_rows, list) and sample_rows:
+            entry_lines.append(
+                "- Deterministic sample (max 10 rows): "
+                + _scrub_db_url_secrets(json.dumps(sample_rows[:10], default=str))
+            )
+            has_real_data = True
+
+        blocks.append("\n".join(entry_lines))
+
+    if not blocks:
+        return "", 0, False
+    return _scrub_db_url_secrets("\n\n".join(blocks)), rows_total, has_real_data
+
+
+def _collect_doc_context(state: AutopilotState) -> str:
+    """Join successful doc_search step outputs — the document side for the
+    P2(3) doc-vs-data discrepancy cross-check."""
+    doc_parts = [
+        str(s.get("result", ""))
+        for s in state.get("steps_completed", [])
+        if s.get("tool") == "doc_search" and not s.get("error") and s.get("result")
+    ]
+    return "\n\n".join(part for part in doc_parts if part)
+
+
+def _executed_rows_preview(state: AutopilotState) -> list[dict]:
+    """All sample rows actually returned by executed data tools."""
+    rows: list[dict] = []
+    data_results = state.get("data_results")
+    if not isinstance(data_results, dict):
+        return rows
+    for key in sorted(data_results.keys()):
+        entry = data_results.get(key)
+        if isinstance(entry, dict) and isinstance(entry.get("sample_rows"), list):
+            rows.extend(r for r in entry["sample_rows"] if isinstance(r, dict))
+    return rows
+
+
+def _detect_data_doc_discrepancies(state: AutopilotState):
+    """P2(3): cross-check doc-search context against data_results rows with
+    the hybrid discrepancy detector (api/utils/discrepancy_detector.py).
+    Deterministic, no LLM. Returns None on failure/empty inputs — never raises."""
+    doc_context = _collect_doc_context(state)
+    rows = _executed_rows_preview(state)
+    if not doc_context or not rows:
+        return None
+    try:
+        from api.utils.discrepancy_detector import detect_discrepancies
+
+        return detect_discrepancies(
+            doc_context,
+            {"result_preview": rows},
+        )
+    except Exception as exc:
+        logger.warning("autopilot discrepancy detection failed (non-fatal): %s", exc)
+        return None
+
+
+def _ensure_discrepancies_in_answer(answer: str, report) -> str:
+    """P2(3) deterministic backstop: if pre-computed discrepancies exist, the
+    final answer MUST contain them — even when the LLM omits them."""
+    if report is None or not getattr(report, "has_discrepancies", False):
+        return answer
+    if "discrepan" in (answer or "").lower():
+        return answer
+    lines = ["", "---", "**Detected discrepancies (document vs database):**"]
+    for d in report.discrepancies:
+        sign = "+" if d.delta >= 0 else ""
+        pct_str = f" ({sign}{d.pct:.1f}%)" if d.pct is not None else ""
+        doc_val = int(d.doc_value) if d.doc_value == int(d.doc_value) else d.doc_value
+        db_val = int(d.db_value) if d.db_value == int(d.db_value) else d.db_value
+        delta_val = int(d.delta) if d.delta == int(d.delta) else d.delta
+        lines.append(
+            f"- [DISCREPANCY] {d.label}: document says {doc_val:,} vs database {db_val:,} "
+            f"(delta {sign}{delta_val:,}{pct_str})"
+        )
+    return (answer or "").rstrip() + "\n" + "\n".join(lines)
+
+
+def _degradation_label(state: AutopilotState) -> str:
+    """P1(c): the deterministic degraded-answer label, driven purely by
+    machine-readable degradation reasons (never LLM discretion)."""
+    reasons = state.get("degradation_reasons") or []
+    if not reasons:
+        return ""
+    return (
+        "\n\n---\n**Note:** This analysis is **degraded** — not all planned "
+        "investigation steps could run ("
+        + ", ".join(sorted(set(str(r) for r in reasons)))
+        + "). Findings may be incomplete."
+    )
+
+
+def _ensure_degradation_label(answer: str, label: str) -> str:
+    if not label:
+        return answer
+    if "analysis is **degraded**" in (answer or ""):
+        return answer
+    return (answer or "") + label
+
+
 async def _synthesizer_node(state: AutopilotState) -> dict:
-    """Synthesise all step results into a final markdown answer via Groq Llama."""
+    """Synthesise all step results into a final markdown answer via Groq Llama.
+
+    P1/P2 hardening:
+    - The prompt carries a deterministic ground-truth summary of
+      ``data_results`` (row counts, ≤10-row samples, SQL/tool provenance) so
+      the answer cannot claim "no numbers" while tool data exists.
+    - Pre-computed doc-vs-data discrepancies are injected with exact numbers.
+    - The returned answer is deterministically backstopped: discrepancies
+      forced in (P2) and a degraded-label appended when any planned tool was
+      skipped (P1c) — never left to LLM discretion.
+    """
     steps = state.get("steps_completed", [])
 
     if not steps:
@@ -1131,9 +1687,33 @@ async def _synthesizer_node(state: AutopilotState) -> dict:
         for i, s in enumerate(steps)
     )
 
+    # P2(2): ground-truth data summary (also feeds the P3 refusal guard).
+    data_summary_text, _rows_total, _has_real_data = _build_data_results_summary(state)
+
+    # P2(3): pre-computed doc-vs-data discrepancy cross-check.
+    discrepancy_report = _detect_data_doc_discrepancies(state)
+    discrepancy_instruction = (
+        discrepancy_report.to_prompt_block()
+        if discrepancy_report is not None and discrepancy_report.has_discrepancies
+        else ""
+    )
+
+    degradation_reasons = [str(r) for r in (state.get("degradation_reasons") or [])]
+
     api_key = os.getenv("groq_api_key")
     if not api_key:
-        return {"final_answer": f"Investigation complete.\n\n{steps_text}", "citations": []}
+        base = f"Investigation complete.\n\n{steps_text}"
+        if data_summary_text:
+            base = (
+                f"{base}\n\n## Available data from executed tools\n{data_summary_text}"
+            )
+        return {
+            "final_answer": _ensure_degradation_label(
+                _ensure_discrepancies_in_answer(base, discrepancy_report),
+                _degradation_label(state),
+            ),
+            "citations": [],
+        }
 
     from api.utils.prompt_guard import PROMPT_INJECTION_DEFENSE_NOTICE
 
@@ -1146,6 +1726,24 @@ async def _synthesizer_node(state: AutopilotState) -> dict:
         "Show intermediate calculations clearly. Never say 'insufficient data' when the "
         "question or investigation results provide the necessary inputs.\n\n"
         f"{PROMPT_INJECTION_DEFENSE_NOTICE}\n\n"
+    )
+    if data_summary_text:
+        system_prompt += (
+            "GROUND-TRUTH DATA RETURNED BY THE INVESTIGATION TOOLS — use these "
+            "numbers where relevant. You MUST NOT claim that no data or no "
+            "numbers are available:\n\n"
+            f"{data_summary_text}\n\n"
+        )
+    if discrepancy_instruction:
+        system_prompt += f"{discrepancy_instruction}\n\n"
+    if degradation_reasons:
+        system_prompt += (
+            "This investigation is DEGRADED — the following planned steps could "
+            f"not run: {', '.join(sorted(set(degradation_reasons)))}. End your "
+            "answer with a short note stating that the analysis is degraded and "
+            "that findings may be incomplete.\n\n"
+        )
+    system_prompt += (
         "FORMAT RULES:\n"
         "- Use markdown headers (##, ###) for each section or question part.\n"
         "- Present numerical projections in clean markdown tables with aligned columns.\n"
@@ -1176,6 +1774,14 @@ async def _synthesizer_node(state: AutopilotState) -> dict:
     except Exception as exc:
         logger.warning("synthesizer_node LLM call failed: %s", exc)
         final_answer = f"Investigation complete.\n\n{steps_text}"
+        if data_summary_text:
+            final_answer = (
+                f"{final_answer}\n\n## Available data from executed tools\n{data_summary_text}"
+            )
+
+    # Deterministic backstops — never trust the LLM to label these itself.
+    final_answer = _ensure_discrepancies_in_answer(final_answer, discrepancy_report)
+    final_answer = _ensure_degradation_label(final_answer, _degradation_label(state))
 
     return {"final_answer": final_answer}
 
@@ -1187,6 +1793,145 @@ async def _synthesizer_node(state: AutopilotState) -> dict:
 # DOCBOT-1507: bump manually ("v1" -> "v2") whenever either prompt below
 # changes — see PROMPT_VERSION convention in api/utils/llm_provider.py.
 PROMPT_VERSION_AUTOPILOT_VERIFIER = "v1"
+
+
+def _has_apology_claim(answer: str) -> bool:
+    """P3(a): cheap deterministic scan for "no data / no numbers / unable to
+    compute"-style claims in a generated answer."""
+    lowered = (answer or "").lower()
+    return any(pattern in lowered for pattern in _APOLOGY_CLAIM_PATTERNS)
+
+
+def _zero_row_sql_entries(state: AutopilotState) -> list[dict]:
+    """P3(b): normalized data_results entries for sql_query steps that
+    executed successfully but returned zero rows — the feedstock for the
+    explicit "this query ran and returned empty" refusal clarity."""
+    data_results = state.get("data_results")
+    if not isinstance(data_results, dict):
+        return []
+    entries: list[dict] = []
+    for key in sorted(data_results.keys()):
+        entry = data_results.get(key)
+        if not isinstance(entry, dict) or entry.get("tool") != "sql_query":
+            continue
+        row_count = entry.get("row_count")
+        if isinstance(row_count, (int, float)) and int(row_count) == 0:
+            entries.append(entry)
+    return entries
+
+
+def _refusal_detail(zero_entries: list[dict]) -> str:
+    """P3(b): deterministic refusal-clarification block naming exactly which
+    query ran and returned empty — replaces blanket data-absence claims."""
+    lines = [
+        "**Data availability detail:** the following queries executed "
+        "successfully and returned zero rows — this is an empty result set, "
+        "not missing data:"
+    ]
+    for entry in zero_entries:
+        step_label = str(entry.get("step_label") or "unnamed step")
+        sql = str(entry.get("sql") or "").strip()
+        if sql:
+            lines.append(
+                f'- Step "{step_label}": `{_scrub_db_url_secrets(sql)}` returned 0 rows.'
+            )
+        else:
+            lines.append(
+                f'- Step "{step_label}" (tool: sql_query) executed against the '
+                "connected database and returned 0 rows."
+            )
+    return "\n".join(lines)
+
+
+async def _force_fixup_with_data(
+    state: AutopilotState, answer: str, data_summary_text: str
+) -> str:
+    """P3(a): ONE bounded regeneration with the explicit ground-truth data
+    context, replacing an answer that claims no data exists while data does.
+    If the regenerated text still denies the data — or the call fails — a
+    deterministic data block is appended instead so numbers always surface.
+    Never raises."""
+    try:
+        from api.utils.llm_provider import chat_completion
+
+        system_prompt = (
+            "You are a senior data analyst. The draft answer below wrongly claims "
+            "that no data or no numbers are available, but the investigation tools "
+            "DID return the ground-truth data listed below. Rewrite the FULL "
+            "answer so it uses those actual numbers. Do NOT claim data is "
+            "unavailable. Keep any correct structure or formatting from the draft."
+        )
+        user_content = (
+            f"Original question: {state.get('question', '')}\n\n"
+            f"Ground-truth data returned by the tools:\n{data_summary_text}\n\n"
+            f"Draft answer to rewrite:\n{answer}"
+        )
+        fixed = chat_completion(
+            [
+                {"role": "system", "content": system_prompt},
+                {"role": "user", "content": user_content},
+            ],
+            temperature=0.2,
+            max_tokens=2000,
+            caller="autopilot_claim_guard",
+            run_id=state.get("run_id"),
+            prompt_version=PROMPT_VERSION_AUTOPILOT_VERIFIER,
+        )
+        fixed_text = (fixed or "").strip() if isinstance(fixed, str) else ""
+        if fixed_text:
+            if _has_apology_claim(fixed_text):
+                return fixed_text + (
+                    "\n\n---\n**Available data from executed tools:**\n"
+                    + data_summary_text
+                )
+            return fixed_text
+        return answer + (
+            "\n\n---\n**Available data from executed tools:**\n" + data_summary_text
+        )
+    except Exception as exc:
+        logger.warning(
+            "claim-guard fix-up regeneration failed (non-fatal): %s", exc
+        )
+        return answer + (
+            "\n\n---\n**Available data from executed tools:**\n" + data_summary_text
+        )
+
+
+async def _apply_claim_guard(state: AutopilotState, answer: str) -> str:
+    """P3 final-answer output guard. Runs once at the very end of the
+    verifier node, on the post-verification answer:
+
+    (a) If the tools returned real data but the answer contains a
+        "no data / no numbers / unable to compute"-style claim → force ONE
+        fix-up regeneration with the explicit data context.
+    (b) If queries executed and returned empty sets → the answer must state
+        specifically which query ran and returned empty (deterministic
+        append; no extra LLM cost).
+
+    Vacuous when data_results is empty. Never raises, never blocks."""
+    if not answer:
+        return answer
+    try:
+        data_summary_text, rows_total, has_real_data = _build_data_results_summary(state)
+        zero_entries = _zero_row_sql_entries(state)
+
+        if _has_apology_claim(answer):
+            if has_real_data and data_summary_text:
+                answer = await _force_fixup_with_data(state, answer, data_summary_text)
+            elif rows_total == 0 and zero_entries:
+                answer = answer.rstrip() + "\n\n" + _refusal_detail(zero_entries)
+        return answer
+    except Exception as exc:
+        logger.warning("claim guard failed (non-fatal): %s", exc)
+        return answer
+
+
+async def _finalize_answer(state: AutopilotState, answer: str) -> str:
+    """Shared verifier tail (P1c + P3): claim guard first, then re-stamp the
+    degraded label (a verifier correction may have dropped the label the
+    synthesizer appended). Never raises, never blocks."""
+    guarded = await _apply_claim_guard(state, answer)
+    return _ensure_degradation_label(guarded, _degradation_label(state))
 
 
 async def _verifier_node(state: AutopilotState) -> dict:
@@ -1217,6 +1962,12 @@ async def _verifier_node(state: AutopilotState) -> dict:
     fails) — never raises, never blocks the response — passes the original
     synthesized answer through unchanged. This is a quality gate, not a new
     point of failure; mirrors `_select_tool_llm`'s try/except/fallback shape.
+
+    P3: after the contradiction gate, the FINAL answer (original or
+    corrected) is passed through ``_apply_claim_guard`` — the deterministic
+    "no data" claim guard — and re-stamped with the P1c degraded label if
+    degradation reasons exist (correction may have dropped it). All return
+    paths funnel through this tail so the guard always runs.
     """
     original_answer = state.get("final_answer", "")
     steps = [s for s in state.get("steps_completed", []) if not s.get("error")]
@@ -1272,10 +2023,13 @@ async def _verifier_node(state: AutopilotState) -> dict:
             "verifier_node LLM call/parse failed (%s) — passing answer through unchanged",
             exc,
         )
-        return {"final_answer": original_answer}
+        final_answer = original_answer
+        # P3+P1c tail still runs: the claim guard is independent of the
+        # verifier's own LLM health.
+        return {"final_answer": await _finalize_answer(state, final_answer)}
 
     if not contradiction_found or not explanation:
-        return {"final_answer": original_answer}
+        return {"final_answer": await _finalize_answer(state, original_answer)}
 
     # One corrective re-synthesis — same correction prompt shape as
     # _synthesizer_node, with the verifier's specific contradiction folded in.
@@ -1319,13 +2073,13 @@ async def _verifier_node(state: AutopilotState) -> dict:
             "verifier_node correction LLM call failed (%s) — passing original answer through unchanged",
             exc,
         )
-        return {"final_answer": original_answer}
+        return {"final_answer": await _finalize_answer(state, original_answer)}
 
     if not corrected_answer or not corrected_answer.strip():
-        return {"final_answer": original_answer}
+        return {"final_answer": await _finalize_answer(state, original_answer)}
 
     logger.info("verifier_node: corrected final answer after contradiction: %s", explanation[:200])
-    return {"final_answer": corrected_answer}
+    return {"final_answer": await _finalize_answer(state, corrected_answer)}
 
 
 # ---------------------------------------------------------------------------
@@ -1461,6 +2215,10 @@ async def run_autopilot(
         "has_docs": has_docs,
         "has_db": has_db,
         "has_csv": has_csv,
+        # P1/P2: normalized tool data + degradation marks (populated by
+        # executor waves; consumed by synthesizer + claim guard).
+        "data_results": {},
+        "degradation_reasons": [],
     }
 
     step_num = 0
