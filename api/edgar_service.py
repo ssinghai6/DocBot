@@ -31,6 +31,7 @@ async def ingest_edgar_filing(
     company_name: str,
     ticker: str,
     user_id: str | None = None,
+    owner: dict[str, Any] | None = None,
     # Injected dependencies (from index.py route handler)
     sessions_table: Any,
     async_session_factory: Any,
@@ -108,8 +109,9 @@ async def ingest_edgar_filing(
                     persona="Finance Expert",
                     file_count=1,
                     files_info=files_info,
-                    user_id=user_id,
                     source="edgar",
+                    # DOCBOT-1601: owner columns from caller_scope.owner_values()
+                    **(owner if owner is not None else {"user_id": user_id}),
                 )
             )
 
@@ -160,6 +162,7 @@ async def ingest_multiple_filings(
     filing_type: str = "10-K",
     count: int = 5,
     user_id: str | None = None,
+    owner: dict[str, Any] | None = None,
     # Injected dependencies
     sessions_table: Any,
     async_session_factory: Any,
@@ -188,6 +191,7 @@ async def ingest_multiple_filings(
                 company_name=company_name,
                 ticker=ticker,
                 user_id=user_id,
+                owner=owner,
                 sessions_table=sessions_table,
                 async_session_factory=async_session_factory,
                 vector_stores=vector_stores,
