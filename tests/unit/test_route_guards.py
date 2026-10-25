@@ -44,6 +44,14 @@ from fastapi.dependencies.models import Dependant  # noqa: E402
 from fastapi.routing import APIRoute  # noqa: E402
 from fastapi.testclient import TestClient  # noqa: E402
 
+try:
+    # fastapi >= 0.162 wraps include_router() output in a private _IncludedRouter
+    # entry instead of flattening every sub-route into app.routes. Older
+    # fastapi versions flatten directly, so the class may not exist.
+    from fastapi.routing import _IncludedRouter  # noqa: E402
+except ImportError:  # pragma: no cover — only hit on fastapi < 0.162
+    _IncludedRouter = ()
+
 import api.index as idx  # noqa: E402
 
 RouteKey = tuple[str, str]  # (METHOD, path)
@@ -100,14 +108,31 @@ def _has_guard(route: APIRoute) -> bool:
 
 
 def _api_routes() -> dict[RouteKey, APIRoute]:
+    """Flatten every reachable HTTP route, including nested included routers.
+
+    fastapi >= 0.162 keeps ``include_router()`` output behind an
+    ``_IncludedRouter`` wrapper instead of appending each sub-route directly to
+    ``app.routes``, so a plain iteration only sees top-level routes. Descend
+    into the wrapped router and apply the include prefix; guard detection still
+    uses each sub-route's own dependency (include-level ``Depends`` ratchets the
+    manifest test's "guarded" signal, never loosens it).
+    """
     routes: dict[RouteKey, APIRoute] = {}
-    for route in idx.app.routes:
-        if not isinstance(route, APIRoute):
-            continue  # /openapi.json, /docs, /redoc — FastAPI built-ins
-        for method in route.methods:
-            if method in ("HEAD", "OPTIONS"):
+
+    def _collect(items: Iterable[object], prefix: str) -> None:
+        for route in items:
+            if isinstance(route, _IncludedRouter):
+                ctx = route.include_context
+                _collect(route.original_router.routes, prefix + ctx.prefix)
                 continue
-            routes[(method, route.path)] = route
+            if not isinstance(route, APIRoute):
+                continue  # /openapi.json, /docs, /redoc — FastAPI built-ins
+            for method in route.methods:
+                if method in ("HEAD", "OPTIONS"):
+                    continue
+                routes[(method, prefix + route.path)] = route
+
+    _collect(idx.app.routes, "")
     return routes
 
 
