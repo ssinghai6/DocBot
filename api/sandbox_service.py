@@ -20,6 +20,8 @@ import groq as groq_module
 from pydantic import BaseModel, ValidationError
 
 from api.utils.sandbox_paths import sandbox_csv_path
+from api.utils.billing_context import copy_ctx_run
+from api.usage_service import meter_sandbox
 
 logger = logging.getLogger(__name__)
 
@@ -450,6 +452,7 @@ def _run_in_sandbox(code: str) -> SandboxResult:
     _get_api_key()
     sandbox: Optional[Sandbox] = None
     start_ms = int(time.monotonic() * 1000)
+    start_s = time.monotonic()  # DOCBOT-1801: billed sandbox wall-clock
 
     # Determine which heavy packages (if any) the generated code actually
     # imports. Doing this BEFORE sandbox creation lets us skip the pip
@@ -520,6 +523,8 @@ def _run_in_sandbox(code: str) -> SandboxResult:
                 sandbox.kill()
             except Exception as teardown_err:
                 logger.warning("Failed to close sandbox cleanly: %s", teardown_err)
+        # DOCBOT-1801: meter E2B seconds even on error / timeout.
+        meter_sandbox(time.monotonic() - start_s)
 
 
 # ---------------------------------------------------------------------------
@@ -748,7 +753,7 @@ async def run_python(
 
     try:
         result = await asyncio.wait_for(
-            loop.run_in_executor(None, _run_in_sandbox, code),
+            loop.run_in_executor(None, copy_ctx_run(_run_in_sandbox, code)),
             timeout=float(timeout_seconds),
         )
     except asyncio.TimeoutError:
@@ -1121,6 +1126,7 @@ def _run_csv_in_sandbox_sync(code: str, csv_path: str, csv_bytes: bytes) -> Sand
     _get_api_key()
     sandbox: Optional[Sandbox] = None
     start_ms = int(time.monotonic() * 1000)
+    start_s = time.monotonic()  # DOCBOT-1801: billed sandbox wall-clock
 
     # Conditionally install only the packages the generated code imports.
     # Empty list → no install at all → sandbox boots ~20x faster.
@@ -1181,6 +1187,8 @@ def _run_csv_in_sandbox_sync(code: str, csv_path: str, csv_bytes: bytes) -> Sand
                 sandbox.kill()
             except Exception as teardown_err:
                 logger.warning("Failed to close CSV sandbox cleanly: %s", teardown_err)
+        # DOCBOT-1801: meter E2B seconds even on error / timeout.
+        meter_sandbox(time.monotonic() - start_s)
 
 
 async def _run_csv_in_sandbox(
@@ -1193,7 +1201,9 @@ async def _run_csv_in_sandbox(
     loop = asyncio.get_running_loop()
     try:
         return await asyncio.wait_for(
-            loop.run_in_executor(None, _run_csv_in_sandbox_sync, code, csv_path, csv_bytes),
+            loop.run_in_executor(
+                None, copy_ctx_run(_run_csv_in_sandbox_sync, code, csv_path, csv_bytes)
+            ),
             timeout=float(timeout_seconds),
         )
     except asyncio.TimeoutError:
@@ -1371,7 +1381,7 @@ async def run_csv_query_on_e2b(
             except Exception:
                 csv_bytes_for_profile = b""
             dtypes_info, sample_rows = await asyncio.get_running_loop().run_in_executor(
-                None, _inspect_csv_profile, csv_bytes_for_profile,
+                None, copy_ctx_run(_inspect_csv_profile, csv_bytes_for_profile),
             )
             preamble = (
                 "import pandas as pd\n"
