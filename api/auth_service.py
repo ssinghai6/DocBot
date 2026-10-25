@@ -310,8 +310,12 @@ async def jit_provision_user(
     attrs keys: email, name, provider, provider_id (optional), password_hash (optional)
     Providers: saml | okta | azure_ad | github | google | email
 
-    This is the ONLY user-creation path: SAML ACS, GitHub/Google OAuth
-    callbacks and email/password registration in api/index.py all call it.
+    DOCBOT-1617: NO route calls this any more. It matches returning users by
+    email alone, which is the SEC-09 account-takeover shape. Login routes go
+    through `api.identity_service.resolve_provider_login` (provider+sub
+    first, verified-email linking only) and registration through
+    `api.identity_service.register_password_user`. Kept for the legacy
+    org-provisioning tests; do not wire it into a new route.
 
     DOCBOT-1702: a NEW user gets their own personal organization and is its
     admin. The org INSERT and the user INSERT share one transaction, so no
@@ -319,8 +323,7 @@ async def jit_provision_user(
     duplicate-email race — rolls the org back too). Returning users are
     untouched: their org_id and role are never modified on re-login.
     """
-    from sqlalchemy import select as sa_select, insert as sa_insert, update as sa_update
-    from api.org_service import PERSONAL_ORG_CREATOR_ROLE, create_personal_org
+    from sqlalchemy import select as sa_select, update as sa_update
     email = attrs["email"]
 
     async with async_session_factory() as session:
@@ -348,25 +351,47 @@ async def jit_provision_user(
                 return existing.id
 
             # First login — provision a personal org + the user, atomically.
-            org_id = await create_personal_org(session, attrs["name"])
-            user_id = str(uuid.uuid4())
-            insert_vals: dict[str, Any] = {
-                "id": user_id,
-                "email": email,
-                "name": attrs["name"],
-                "provider": attrs["provider"],
-                "role": PERSONAL_ORG_CREATOR_ROLE,  # creator = admin of own org
-                "org_id": org_id,
-                "last_login_at": datetime.now(timezone.utc),
-            }
-            if attrs.get("provider_id"):
-                insert_vals["provider_id"] = attrs["provider_id"]
-            if attrs.get("password_hash"):
-                insert_vals["password_hash"] = attrs["password_hash"]
+            return await insert_new_user(session, users_table, attrs)
 
-            await session.execute(sa_insert(users_table).values(**insert_vals))
-            logger.info(
-                "Auth JIT provision: new user %s in personal org %s via %s",
-                user_id, org_id, attrs["provider"],
-            )
-            return user_id
+
+async def insert_new_user(
+    session: Any,
+    users_table: Any,
+    attrs: dict,
+    email_verified: Optional[bool] = None,
+) -> str:
+    """Insert a personal org + a new user row on the caller's transaction.
+
+    Shared by `jit_provision_user` and `api.identity_service` (DOCBOT-1617)
+    so there is exactly one place that builds a new user row. The caller
+    owns the transaction: a failed user insert (e.g. a concurrent duplicate
+    email) rolls the org back too. ``email_verified`` is only written when
+    the users table carries that column (DOCBOT-1617 migration).
+    """
+    from sqlalchemy import insert as sa_insert
+    from api.org_service import PERSONAL_ORG_CREATOR_ROLE, create_personal_org
+
+    org_id = await create_personal_org(session, attrs["name"])
+    user_id = str(uuid.uuid4())
+    insert_vals: dict[str, Any] = {
+        "id": user_id,
+        "email": attrs["email"],
+        "name": attrs["name"],
+        "provider": attrs["provider"],
+        "role": PERSONAL_ORG_CREATOR_ROLE,  # creator = admin of own org
+        "org_id": org_id,
+        "last_login_at": datetime.now(timezone.utc),
+    }
+    if attrs.get("provider_id"):
+        insert_vals["provider_id"] = attrs["provider_id"]
+    if attrs.get("password_hash"):
+        insert_vals["password_hash"] = attrs["password_hash"]
+    if email_verified is not None and "email_verified" in users_table.c:
+        insert_vals["email_verified"] = email_verified
+
+    await session.execute(sa_insert(users_table).values(**insert_vals))
+    logger.info(
+        "Auth JIT provision: new user %s in personal org %s via %s",
+        user_id, org_id, attrs["provider"],
+    )
+    return user_id

@@ -215,6 +215,8 @@ users_table = Table(
     Column("provider", String, nullable=False),            # github | google | email | okta | azure_ad | saml
     Column("provider_id", String),                         # GitHub/Google user ID (nullable for email/saml)
     Column("password_hash", Text),                         # bcrypt hash (nullable for OAuth users)
+    # DOCBOT-1617: True only once a provider/IdP proved ownership of `email`
+    Column("email_verified", Boolean, server_default="false", nullable=False),
     Column("role", String, server_default="analyst", nullable=False),  # viewer | analyst | admin
     Column("last_login_at", DateTime(timezone=True)),
     Column("created_at", DateTime(timezone=True), server_default=func.now(), nullable=False),
@@ -307,6 +309,12 @@ commerce_orders_table, commerce_financials_table = register_commerce_tables(meta
 # ── DOCBOT-1524: Organization/workspace data model ────────────────────────────
 from api.org_service import register_organizations_table, ORG_ID_COLUMN_MIGRATIONS, backfill_default_organization
 organizations_table = register_organizations_table(metadata)
+
+# ── DOCBOT-1617: provider identity linking (closes SEC-09) ───────────────────
+from api.identity_service import (
+    register_user_identities_table, USER_IDENTITY_COLUMN_MIGRATIONS, backfill_legacy_identities,
+)
+user_identities_table = register_user_identities_table(metadata)
 
 # ── DOCBOT-1529: per-org envelope encryption (wrapped DEK per org) ────────────
 from api.utils.envelope_encryption import register_org_encryption_keys_table
@@ -439,6 +447,10 @@ async def init_db() -> None:
             "ALTER TABLE users ADD COLUMN IF NOT EXISTS password_hash TEXT",
         ]:
             await conn.execute(text(col_ddl))
+        # DOCBOT-1617: users.email_verified + legacy identity backfill
+        for col_ddl in USER_IDENTITY_COLUMN_MIGRATIONS:
+            await conn.execute(text(col_ddl))
+        await backfill_legacy_identities(conn)
         # DOCBOT-604: pii_masking_enabled column (added after initial deploy)
         await conn.execute(text(
             "ALTER TABLE db_connections ADD COLUMN IF NOT EXISTS pii_masking_enabled BOOLEAN DEFAULT false"
@@ -2327,10 +2339,8 @@ async def saml_acs(request: Request, response: Response):
     On success: creates session, sets HttpOnly cookie, redirects to frontend.
     On failure: returns 401.
     """
-    from api.auth_service import (
-        build_saml_auth, process_acs, jit_provision_user,
-        create_user_session, is_saml_configured,
-    )
+    from api.auth_service import build_saml_auth, process_acs, create_user_session, is_saml_configured
+    from api.identity_service import IdentityLinkError, identity_from_saml_attrs, resolve_provider_login
     if not is_saml_configured():
         raise HTTPException(status_code=503, detail="SAML is not configured.")
 
@@ -2348,7 +2358,17 @@ async def saml_acs(request: Request, response: Response):
         raise HTTPException(status_code=500, detail="SSO processing error.")
 
     try:
-        user_id = await jit_provision_user(attrs, users_table, async_session_factory)
+        user_id = await resolve_provider_login(
+            identity_from_saml_attrs(attrs), users_table, user_identities_table,
+            user_sessions_table, async_session_factory,
+        )
+    except IdentityLinkError as exc:
+        logger.warning("SSO login refused (%s): %s", attrs["provider"], exc.reason)
+        raise HTTPException(status_code=401, detail="Sign-in failed.")
+    except ValueError:
+        logger.warning("SSO login refused (%s): incomplete assertion", attrs["provider"])
+        raise HTTPException(status_code=401, detail="Sign-in failed.")
+    try:
         token = await create_user_session(user_id, user_sessions_table, async_session_factory)
     except Exception as exc:
         logger.error("Session creation failed after SSO: %s", exc)
@@ -2442,10 +2462,10 @@ async def github_login():
 async def github_callback(code: str, state: str, response: Response):
     """Handle GitHub OAuth callback: exchange code → provision user → set cookie."""
     from api.oauth_service import github_exchange_code, validate_oauth_state, oauth_success_redirect
-    from api.auth_service import jit_provision_user, create_user_session
+    from api.auth_service import create_user_session
+    from api.identity_service import IdentityLinkError, identity_from_oauth_attrs, resolve_provider_login
     from api.audit_service import log_event, AuditEventType
     from fastapi.responses import RedirectResponse
-    from urllib.parse import urlencode
 
     frontend_url = oauth_success_redirect("")
 
@@ -2459,7 +2479,14 @@ async def github_callback(code: str, state: str, response: Response):
         return RedirectResponse(url=f"{frontend_url.split('?')[0]}?auth_error=github_failed")
 
     try:
-        user_id = await jit_provision_user(attrs, users_table, async_session_factory)
+        user_id = await resolve_provider_login(
+            identity_from_oauth_attrs(attrs), users_table, user_identities_table,
+            user_sessions_table, async_session_factory,
+        )
+    except ValueError as exc:  # IdentityLinkError or invalid identity
+        logger.warning("GitHub login refused: %s", getattr(exc, "reason", "invalid identity"))
+        return RedirectResponse(url=f"{frontend_url.split('?')[0]}?auth_error=signin_failed")
+    try:
         token = await create_user_session(user_id, user_sessions_table, async_session_factory)
     except Exception as exc:
         logger.error("GitHub user provisioning failed: %s", exc)
@@ -2493,7 +2520,8 @@ async def google_login():
 async def google_callback(code: str, state: str, response: Response):
     """Handle Google OAuth callback: exchange code → provision user → set cookie."""
     from api.oauth_service import google_exchange_code, validate_oauth_state, _frontend_url
-    from api.auth_service import jit_provision_user, create_user_session
+    from api.auth_service import create_user_session
+    from api.identity_service import identity_from_oauth_attrs, resolve_provider_login
     from api.audit_service import log_event, AuditEventType
     from fastapi.responses import RedirectResponse
 
@@ -2507,7 +2535,14 @@ async def google_callback(code: str, state: str, response: Response):
         return RedirectResponse(url=f"{_frontend_url()}/chat?auth_error=google_failed")
 
     try:
-        user_id = await jit_provision_user(attrs, users_table, async_session_factory)
+        user_id = await resolve_provider_login(
+            identity_from_oauth_attrs(attrs), users_table, user_identities_table,
+            user_sessions_table, async_session_factory,
+        )
+    except ValueError as exc:  # IdentityLinkError or invalid identity
+        logger.warning("Google login refused: %s", getattr(exc, "reason", "invalid identity"))
+        return RedirectResponse(url=f"{_frontend_url()}/chat?auth_error=signin_failed")
+    try:
         token = await create_user_session(user_id, user_sessions_table, async_session_factory)
     except Exception as exc:
         logger.error("Google user provisioning failed: %s", exc)
@@ -2541,7 +2576,8 @@ class LoginRequest(BaseModel):
 async def auth_register(body: RegisterRequest, response: Response):
     """Register a new user with email + password."""
     from api.oauth_service import hash_password, validate_password_strength
-    from api.auth_service import jit_provision_user, create_user_session
+    from api.auth_service import create_user_session
+    from api.identity_service import EmailAlreadyRegistered, register_password_user
     from api.audit_service import log_event, AuditEventType
     import re
 
@@ -2553,23 +2589,17 @@ async def auth_register(body: RegisterRequest, response: Response):
     if err:
         raise HTTPException(status_code=422, detail=err)
 
-    # Check if email already exists
-    async with async_session_factory() as session:
-        result = await session.execute(
-            select(users_table).where(users_table.c.email == email)
+    # DOCBOT-1617: insert-only — never returns or attaches to an existing
+    # (OAuth, SAML or password) account, even under a concurrent race.
+    try:
+        user_id = await register_password_user(
+            email, body.name or email.split("@")[0], hash_password(body.password),
+            users_table, async_session_factory,
         )
-        if result.fetchone():
-            raise HTTPException(status_code=409, detail="An account with this email already exists.")
-
-    attrs = {
-        "email": email,
-        "name": body.name or email.split("@")[0],
-        "provider": "email",
-        "password_hash": hash_password(body.password),
-    }
+    except EmailAlreadyRegistered:
+        raise HTTPException(status_code=409, detail="An account with this email already exists.")
 
     try:
-        user_id = await jit_provision_user(attrs, users_table, async_session_factory)
         token = await create_user_session(user_id, user_sessions_table, async_session_factory)
     except Exception as exc:
         logger.error("Registration failed: %s", exc)
