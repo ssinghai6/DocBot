@@ -241,6 +241,14 @@ export const LineageModelCallSchema = z.object({
 })
 export type LineageModelCall = z.infer<typeof LineageModelCallSchema>
 
+/** DOCBOT-2311: SSE event sent when a session's document vectors are gone (e.g. after a redeploy). */
+export const DocumentsExpiredEventSchema = z.object({
+  type: z.literal("documents_expired"),
+  session_id: z.string(),
+  message: z.string(),
+})
+export type DocumentsExpiredEvent = z.infer<typeof DocumentsExpiredEventSchema>
+
 export const LineageSchema = z.object({
   run_id: z.string(),
   mode: z.enum(["docs", "db", "csv", "hybrid", "autopilot"]),
