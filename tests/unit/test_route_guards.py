@@ -156,10 +156,6 @@ DEV_ONLY: dict[RouteKey, str] = {
 KNOWN_UNGUARDED: dict[RouteKey, str] = {
     # Uploads: gate_uploads only enforces when GATE_UPLOADS=true.
     ("POST", "/api/upload"): "DOCBOT-1711",
-    # Session-bound routes accepting foreign session_id (SEC-02).
-    ("POST", "/api/session/{session_id}/update-persona"): "DOCBOT-1611",
-    ("GET", "/api/artifacts/{session_id}"): "DOCBOT-1611",
-    ("GET", "/api/artifacts/item/{artifact_id}"): "DOCBOT-1611",
     # Connector + commerce RBAC (SEC-03).
     ("POST", "/api/connectors/register"): "DOCBOT-1602",
     ("GET", "/api/connectors"): "DOCBOT-1602",

@@ -21,6 +21,80 @@ from sqlalchemy import insert
 logger = logging.getLogger(__name__)
 
 
+async def _insert_session_row(
+    *,
+    session_id: str,
+    source_label: str,
+    pages: int,
+    size: int,
+    owner_cols: dict[str, Any],
+    sessions_table: Any,
+    async_session_factory: Any,
+) -> None:
+    """Insert the ``sessions`` row for an EDGAR filing, stamped with its owner."""
+    files_info = json.dumps([{
+        "filename": f"{source_label}.htm",
+        "pages": pages,
+        "size": size,
+        "source": "edgar",
+    }])
+    async with async_session_factory() as session:
+        async with session.begin():
+            await session.execute(
+                insert(sessions_table).values(
+                    session_id=session_id,
+                    persona="Finance Expert",
+                    file_count=1,
+                    files_info=files_info,
+                    source="edgar",
+                    # DOCBOT-1601: owner columns from caller_scope.owner_values()
+                    **owner_cols,
+                )
+            )
+
+
+async def _session_from_cache(
+    *,
+    cached_session_id: str,
+    source_label: str,
+    owner_cols: dict[str, Any],
+    sessions_table: Any,
+    async_session_factory: Any,
+    vector_stores: dict,
+    get_embeddings_fn: Any,
+    extracted_fields_store: dict,
+) -> str | None:
+    """DOCBOT-1611: new caller-owned session cloned from a cached filing's vectors.
+
+    Returns the new session id, or None when the cached vectors are gone.
+    """
+    from api.utils.vector_store import clone_store
+
+    session_id = str(uuid.uuid4())
+    try:
+        cloned = clone_store(cached_session_id, session_id, get_embeddings_fn())
+    except Exception as exc:  # chromadb raises assorted error types
+        logger.warning("edgar: could not clone cached vectors (%s)", type(exc).__name__)
+        return None
+    if cloned is None:
+        return None
+    store, chunk_count = cloned
+    vector_stores[session_id] = store
+    await _insert_session_row(
+        session_id=session_id,
+        source_label=source_label,
+        pages=chunk_count,
+        size=0,
+        owner_cols=owner_cols,
+        sessions_table=sessions_table,
+        async_session_factory=async_session_factory,
+    )
+    fields = extracted_fields_store.get(cached_session_id)
+    if fields:
+        extracted_fields_store[session_id] = list(fields)
+    return session_id
+
+
 async def ingest_edgar_filing(
     *,
     cik: str,
@@ -43,7 +117,11 @@ async def ingest_edgar_filing(
 
     Returns {"session_id", "chunks_created", "cached", "filing_date"}.
     """
-    from api.connector_store import get_cached_filing, save_filing_cache
+    from api.connector_store import (
+        get_cached_filing,
+        save_filing_cache,
+        update_filing_cache_session,
+    )
     from api.connectors.edgar_connector import EdgarConnector
     from api.document_extractor import (
         extract_document_fields,
@@ -52,16 +130,37 @@ async def ingest_edgar_filing(
     from api.utils.chunker import chunk_document, detect_doc_type
     from api.utils.vector_store import create_store
 
+    source_label = f"{ticker}-{filing_type}-{filing_date}"
+    owner_cols = owner if owner is not None else {"user_id": user_id}
+
     # ── 1. Check cache ───────────────────────────────────────────────────
+    # DOCBOT-1611: the cached session belongs to whoever first ingested the
+    # filing. Never hand that id to another caller: clone its vectors into a
+    # fresh session owned by THIS caller instead.
     cached = await get_cached_filing(accession_number)
+    refresh_cache = False
     if cached and cached.get("session_id"):
-        logger.info("edgar: cache hit for %s → session %s", accession_number, cached["session_id"])
-        return {
-            "session_id": cached["session_id"],
-            "chunks_created": 0,
-            "cached": True,
-            "filing_date": filing_date,
-        }
+        hit = await _session_from_cache(
+            cached_session_id=cached["session_id"],
+            source_label=source_label,
+            owner_cols=owner_cols,
+            sessions_table=sessions_table,
+            async_session_factory=async_session_factory,
+            vector_stores=vector_stores,
+            get_embeddings_fn=get_embeddings_fn,
+            extracted_fields_store=extracted_fields_store,
+        )
+        if hit is not None:
+            logger.info("edgar: cache hit for %s → new session %s", accession_number, hit)
+            return {
+                "session_id": hit,
+                "chunks_created": 0,
+                "cached": True,
+                "filing_date": filing_date,
+            }
+        # Source store was deleted or reaped: re-ingest and re-point the cache.
+        logger.info("edgar: cache entry for %s has no vectors; re-ingesting", accession_number)
+        refresh_cache = True
 
     # ── 2. Download filing text ──────────────────────────────────────────
     connector = EdgarConnector()
@@ -77,7 +176,6 @@ async def ingest_edgar_filing(
     chunks = chunk_document(text, doc_type=doc_type)
 
     # Tag every chunk with filing metadata
-    source_label = f"{ticker}-{filing_type}-{filing_date}"
     for chunk in chunks:
         chunk.metadata.update({
             "source": source_label,
@@ -94,39 +192,31 @@ async def ingest_edgar_filing(
     vector_stores[session_id] = store
 
     # ── 5. Create session row ────────────────────────────────────────────
-    files_info = json.dumps([{
-        "filename": f"{source_label}.htm",
-        "pages": len(chunks),
-        "size": len(text),
-        "source": "edgar",
-    }])
-
-    async with async_session_factory() as session:
-        async with session.begin():
-            await session.execute(
-                insert(sessions_table).values(
-                    session_id=session_id,
-                    persona="Finance Expert",
-                    file_count=1,
-                    files_info=files_info,
-                    source="edgar",
-                    # DOCBOT-1601: owner columns from caller_scope.owner_values()
-                    **(owner if owner is not None else {"user_id": user_id}),
-                )
-            )
+    await _insert_session_row(
+        session_id=session_id,
+        source_label=source_label,
+        pages=len(chunks),
+        size=len(text),
+        owner_cols=owner_cols,
+        sessions_table=sessions_table,
+        async_session_factory=async_session_factory,
+    )
 
     # ── 6. Cache the filing ──────────────────────────────────────────────
-    await save_filing_cache(
-        filing_id=str(uuid.uuid4()),
-        cik=cik,
-        accession_number=accession_number,
-        filing_type=filing_type,
-        filing_date=filing_date,
-        company_name=company_name,
-        ticker=ticker,
-        session_id=session_id,
-        text_hash=text_hash,
-    )
+    if refresh_cache:
+        await update_filing_cache_session(accession_number, session_id)
+    else:
+        await save_filing_cache(
+            filing_id=str(uuid.uuid4()),
+            cik=cik,
+            accession_number=accession_number,
+            filing_type=filing_type,
+            filing_date=filing_date,
+            company_name=company_name,
+            ticker=ticker,
+            session_id=session_id,
+            text_hash=text_hash,
+        )
 
     # ── 7. Run structured extraction (async, non-blocking) ───────────────
     gemini_key = os.getenv("GEMINI_API_KEY") or ""

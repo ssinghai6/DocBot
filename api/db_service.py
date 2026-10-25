@@ -26,7 +26,7 @@ from pydantic import (
 )
 from sqlalchemy import (
     Column, DateTime, Integer, MetaData, String, Table, Text,
-    func, insert, or_, select, text, true, update, delete,
+    and_, func, insert, select, text, true, update, delete,
 )
 from sqlalchemy.sql.elements import ColumnElement
 from sqlalchemy.ext.asyncio import AsyncSession, create_async_engine
@@ -238,20 +238,31 @@ class ConnectionNotFoundError(Exception):
 # connection the caller may access. ``scope=None`` means an internal,
 # already-authorised caller (back-compat for service-to-service calls);
 # every HTTP route passes an explicit CallerScope.
+#
+# DOCBOT-1635: ownership is exactly ``caller_scope.scope_filter``:
+#   * logged-in user  -> own rows (org admin: every row in their org);
+#   * anonymous       -> ``anon_owner = sha256(docbot_anon cookie)`` AND
+#                        ``user_id IS NULL`` (stamped on connect / CSV /
+#                        SQLite upload / demo init);
+#   * legacy anonymous rows (``user_id`` AND ``anon_owner`` NULL, created
+#     before 1635) match no anonymous or non-admin caller. They remain
+#     reachable only by an admin of the org the DOCBOT-1524 startup backfill
+#     homed them into (the default org).
+# Knowing a connection UUID is no longer a capability.
 
 
-def _unowned_clause(db_connections_table: Table) -> ColumnElement[bool]:
-    """Connections created by an anonymous caller (no owning user).
+def _api_key_org_clause(db_connections_table: Table, org_id: str) -> ColumnElement[bool]:
+    """Connections an org-scoped API key (``/v1``) may use.
 
-    ``org_id`` is deliberately ignored: DOCBOT-1524's startup backfill stamps
-    the default org on rows that lack one, so an anonymous connection may
-    carry an org without having an owner. Every logged-in create path stamps
-    ``user_id``, so ``user_id IS NULL`` identifies anonymous/demo rows.
+    Only rows owned by a USER of the key's org. The DOCBOT-1524 startup
+    backfill stamps the default org on anonymous rows (``user_id IS NULL``),
+    so matching on ``org_id`` alone would hand every anonymous / demo
+    connection to default-org API keys. No ``/v1`` route creates
+    connections, so no row is "created via the key's org" with a NULL
+    ``user_id``; a future API-key create path must stamp an owning user.
     """
     cols = db_connections_table.c
-    if "user_id" in cols:
-        return cols.user_id.is_(None)
-    return true()
+    return and_(cols.org_id == org_id, cols.user_id.is_not(None))
 
 
 def connection_access_clause(
@@ -259,20 +270,17 @@ def connection_access_clause(
 ) -> ColumnElement[bool]:
     """Predicate for connections the caller may USE (query, schema, history).
 
-    - ``scope is None``              → internal caller, no restriction.
-    - API-key scope (org, no user)   → strictly the key's org.
-    - browser caller (user or anon)  → rows it owns, plus unowned
-      (anonymous/demo) rows, whose UUID id is the capability. A user-owned
-      or org-owned row is never reachable by anyone outside that owner/org.
+    - ``scope is None``              -> internal caller, no restriction.
+    - API-key scope (org, no user)   -> user-owned rows of the key's org.
+    - browser caller (user or anon)  -> ``scope_filter`` (rows it owns; org
+      admins see their org). Anonymous callers without an owner cookie
+      match nothing.
     """
     if scope is None:
         return true()
     if scope.user_id is None and scope.org_id:
-        # Org-only (API-key) scope: strictly the key's org.
-        return db_connections_table.c.org_id == scope.org_id
-    if scope.user_id is None:
-        return _unowned_clause(db_connections_table)
-    return or_(scope_filter(db_connections_table, scope), _unowned_clause(db_connections_table))
+        return _api_key_org_clause(db_connections_table, scope.org_id)
+    return scope_filter(db_connections_table, scope)
 
 
 async def get_connection_row(
@@ -421,19 +429,26 @@ async def stamp_connection_owner(
     db_connections_table: Table,
     async_session_factory,
 ) -> None:
-    """Record the owning user (and their org) on a freshly created connection.
+    """Record the owner on a freshly created connection.
 
-    No-op for anonymous callers. Used by file-upload paths that do not go
-    through ``connect_database``.
+    Logged-in callers stamp ``user_id`` + ``org_id``; anonymous callers stamp
+    ``anon_owner`` (DOCBOT-1635, cookie digest, never the raw cookie). An
+    anonymous caller without an owner cookie leaves the row unowned, which
+    makes it unreachable. Used by file-upload paths that do not go through
+    ``connect_database``.
     """
-    if scope.user_id is None:
+    if scope.user_id is not None:
+        values: Dict[str, Optional[str]] = {"user_id": scope.user_id, "org_id": scope.org_id}
+    elif scope.anon_token and "anon_owner" in db_connections_table.c:
+        values = {"anon_owner": scope.anon_token}
+    else:
         return
     async with async_session_factory() as session:
         async with session.begin():
             await session.execute(
                 update(db_connections_table)
                 .where(db_connections_table.c.id == connection_id)
-                .values(user_id=scope.user_id, org_id=scope.org_id)
+                .values(**values)
             )
 
 
@@ -845,11 +860,14 @@ async def connect_database(
     async_session_factory,
     org_id: Optional[str] = None,
     user_id: Optional[str] = None,
+    anon_owner: Optional[str] = None,
 ) -> Dict[str, Any]:
     """
     Validate credentials, encrypt, store, and return connection_id + schema summary.
 
-    ``user_id`` / ``org_id`` stamp ownership on the row (DOCBOT-1603).
+    ``user_id`` / ``org_id`` stamp ownership on the row (DOCBOT-1603);
+    ``anon_owner`` (cookie digest) stamps an anonymous caller's row
+    (DOCBOT-1635) and is ignored when ``user_id`` is set.
 
     Steps:
       1. SSRF already validated by Pydantic field_validator on host.
@@ -925,6 +943,11 @@ async def connect_database(
                     pii_masking_enabled=req.pii_masking_enabled,
                     org_id=org_id,
                     **({"user_id": user_id} if "user_id" in db_connections_table.c else {}),
+                    **(
+                        {"anon_owner": anon_owner}
+                        if user_id is None and anon_owner and "anon_owner" in db_connections_table.c
+                        else {}
+                    ),
                 )
             )
 
@@ -1565,7 +1588,7 @@ async def run_sql_pipeline(
                 )
                 if analysis_code:
                     yield f"data: {_json_dumps({'type': 'analysis_code', 'code': analysis_code})}\n\n"
-                    sandbox_result = await run_sandbox(analysis_code)
+                    sandbox_result = await run_sandbox(analysis_code, allow_pip_egress=True)
                     for idx, chart_b64 in enumerate(sandbox_result.charts):
                         meta = (
                             sandbox_result.chart_metadata[idx]

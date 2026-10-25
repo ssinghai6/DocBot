@@ -35,8 +35,12 @@ def _mock_embeddings():
 # ── ingest_edgar_filing tests ────────────────────────────────────────────────
 
 class TestIngestEdgarFiling:
-    def test_returns_cached_session_on_duplicate(self):
-        """If a filing is already cached, return existing session without downloading."""
+    def test_cache_hit_gives_each_caller_a_distinct_owned_session(self):
+        """DOCBOT-1611: a cache hit never returns the first ingester's session id.
+
+        Each caller gets a fresh session cloned from the cached vectors and
+        stamped with *their* owner columns; nothing is downloaded.
+        """
         cached = {
             "id": "cache-1",
             "cik": "320193",
@@ -48,12 +52,34 @@ class TestIngestEdgarFiling:
             "session_id": "existing-session-123",
             "text_hash": "abc",
         }
+        owner_a = {"user_id": None, "org_id": None, "anon_owner": "digest-a"}
+        owner_b = {"user_id": "u-b", "org_id": "org-b", "anon_owner": None}
+        inserted: list[dict] = []
 
-        with patch("api.connector_store.get_cached_filing", new_callable=AsyncMock, return_value=cached):
+        def _fake_insert(_table):
+            stmt = MagicMock()
+            stmt.values = MagicMock(side_effect=lambda **kw: inserted.append(kw) or MagicMock())
+            return stmt
+
+        def _fake_clone(src, dst, _emb):
+            assert src == "existing-session-123"
+            return MagicMock(name=f"store-{dst}"), 7
+
+        with (
+            patch("api.connector_store.get_cached_filing", new_callable=AsyncMock, return_value=cached),
+            patch("api.connector_store.save_filing_cache", new_callable=AsyncMock) as save,
+            patch("api.utils.vector_store.clone_store", side_effect=_fake_clone),
+            patch("api.connectors.edgar_connector.EdgarConnector.fetch_filing_text",
+                  new_callable=AsyncMock) as fetch,
+            patch("api.edgar_service.insert", side_effect=_fake_insert),
+        ):
             from api.edgar_service import ingest_edgar_filing
 
-            async def run():
-                result = await ingest_edgar_filing(
+            vector_stores: dict = {}
+            fields_store: dict = {"existing-session-123": ["field"]}
+
+            async def ingest(owner):
+                return await ingest_edgar_filing(
                     cik="320193",
                     accession_number="0000320193-23-000106",
                     primary_document="aapl-20230930.htm",
@@ -61,17 +87,69 @@ class TestIngestEdgarFiling:
                     filing_date="2023-11-03",
                     company_name="Apple Inc.",
                     ticker="AAPL",
+                    owner=owner,
                     sessions_table=_mock_sessions_table(),
                     async_session_factory=_mock_session_factory(),
-                    vector_stores={},
+                    vector_stores=vector_stores,
                     get_embeddings_fn=_mock_embeddings,
+                    extracted_fields_store=fields_store,
+                )
+
+            async def run():
+                return await ingest(owner_a), await ingest(owner_b)
+
+            res_a, res_b = asyncio.run(run())
+
+        for res in (res_a, res_b):
+            assert res["cached"] is True
+            assert res["chunks_created"] == 0
+            assert res["session_id"] != "existing-session-123"
+            assert res["session_id"] in vector_stores
+            assert fields_store[res["session_id"]] == ["field"]
+        assert res_a["session_id"] != res_b["session_id"]
+        assert [row["session_id"] for row in inserted] == [res_a["session_id"], res_b["session_id"]]
+        assert inserted[0]["anon_owner"] == "digest-a" and inserted[0]["user_id"] is None
+        assert inserted[1]["user_id"] == "u-b" and inserted[1]["org_id"] == "org-b"
+        fetch.assert_not_called()
+        save.assert_not_called()
+
+    def test_cache_hit_with_missing_vectors_reingests_and_repoints_cache(self):
+        """Cached source store was deleted/reaped: download again, update the cache row."""
+        cached = {"accession_number": "acc-1", "session_id": "gone-session"}
+        mock_text = "UNITED STATES SECURITIES AND EXCHANGE COMMISSION\n" * 50
+
+        with (
+            patch("api.connector_store.get_cached_filing", new_callable=AsyncMock, return_value=cached),
+            patch("api.connector_store.save_filing_cache", new_callable=AsyncMock) as save,
+            patch("api.connector_store.update_filing_cache_session", new_callable=AsyncMock) as repoint,
+            patch("api.utils.vector_store.clone_store", return_value=None),
+            patch("api.connectors.edgar_connector.EdgarConnector.fetch_filing_text",
+                  new_callable=AsyncMock, return_value=mock_text),
+            patch("api.utils.chunker.chunk_document", return_value=[MagicMock(metadata={})]),
+            patch("api.utils.chunker.detect_doc_type", return_value="financial"),
+            patch("api.utils.vector_store.create_store", return_value=MagicMock()),
+            patch("api.document_extractor.is_extractable_document", return_value=False),
+            patch("api.edgar_service.insert", MagicMock()),
+        ):
+            from api.edgar_service import ingest_edgar_filing
+
+            async def run():
+                return await ingest_edgar_filing(
+                    cik="1", accession_number="acc-1", primary_document="d.htm",
+                    filing_type="10-K", filing_date="2024-01-01", company_name="Co",
+                    ticker="CO", owner={"user_id": "u", "org_id": "o", "anon_owner": None},
+                    sessions_table=_mock_sessions_table(),
+                    async_session_factory=_mock_session_factory(),
+                    vector_stores={}, get_embeddings_fn=_mock_embeddings,
                     extracted_fields_store={},
                 )
-                assert result["cached"] is True
-                assert result["session_id"] == "existing-session-123"
-                assert result["chunks_created"] == 0
 
-            asyncio.run(run())
+            result = asyncio.run(run())
+
+        assert result["cached"] is False
+        assert result["session_id"] != "gone-session"
+        repoint.assert_awaited_once_with("acc-1", result["session_id"])
+        save.assert_not_called()
 
     def test_creates_session_and_vectors(self):
         """Fresh filing: downloads, chunks, embeds, creates session."""

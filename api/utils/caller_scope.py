@@ -240,4 +240,7 @@ def owner_values(scope: CallerScope) -> dict[str, Optional[str]]:
 ANON_OWNER_COLUMN_MIGRATIONS: list[str] = [
     "ALTER TABLE sessions ADD COLUMN IF NOT EXISTS anon_owner TEXT",
     "CREATE INDEX IF NOT EXISTS ix_sessions_anon_owner ON sessions (anon_owner)",
+    # DOCBOT-1635: anonymous DB connections (connect / CSV / SQLite / demo).
+    "ALTER TABLE db_connections ADD COLUMN IF NOT EXISTS anon_owner TEXT",
+    "CREATE INDEX IF NOT EXISTS ix_db_connections_anon_owner ON db_connections (anon_owner)",
 ]

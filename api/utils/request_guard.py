@@ -28,6 +28,12 @@ because every call builds a vector store + SQLite DB in memory:
     DEMO_INIT_GLOBAL_PER_HOUR=300  # all clients combined; 0 disables. Bounds
                                    # total cost even if X-Forwarded-For is spoofed.
 
+Exception — ON by default (DOCBOT-1607): POST /api/sandbox/execute is
+metered per org (falling back to per user) — never per session_id, which a
+client can mint freely:
+
+    SANDBOX_RUNS_PER_HOUR=60       # per org (or user), sliding 1h window; 0 disables
+
 Client IP (DOCBOT-1612, groundwork for DOCBOT-1606):
 
     TRUSTED_PROXY_HOPS=0           # 0 = legacy: left-most X-Forwarded-For entry
@@ -71,6 +77,10 @@ SESSION_BUDGET: int = _env_int("SESSION_BUDGET", 0)
 DEMO_INIT_WINDOW_SEC: int = 3600
 DEMO_INIT_PER_IP_PER_HOUR: int = _env_int("DEMO_INIT_PER_IP_PER_HOUR", 10)
 DEMO_INIT_GLOBAL_PER_HOUR: int = _env_int("DEMO_INIT_GLOBAL_PER_HOUR", 300)
+
+# DOCBOT-1607: raw sandbox executions per org (or user) per hour.
+SANDBOX_WINDOW_SEC: int = 3600
+SANDBOX_RUNS_PER_HOUR: int = _env_int("SANDBOX_RUNS_PER_HOUR", 60)
 
 # Number of trusted reverse proxies that APPEND to X-Forwarded-For in front of
 # the app. 0 keeps the legacy left-most behaviour (see client_ip()).
@@ -123,6 +133,8 @@ _user_spend: Dict[str, Tuple[str, int]] = {}
 # DOCBOT-1612: /api/demo/init sliding windows (per-IP and global).
 _demo_init_ip_hits: Dict[str, Deque[float]] = defaultdict(deque)
 _demo_init_global_hits: Deque[float] = deque()
+# DOCBOT-1607: sandbox sliding windows keyed by "org:<id>" / "user:<id>".
+_sandbox_principal_hits: Dict[str, Deque[float]] = defaultdict(deque)
 # Upper bound on tracked IPs before expired entries are swept (memory guard).
 _MAX_TRACKED_IPS = 10_000
 
@@ -263,6 +275,55 @@ def check_demo_init_limit(request: Request) -> None:
         ip_hits.append(now)
 
 
+def sandbox_principal_key(user: object, request: Request) -> str:
+    """Metering key for raw sandbox runs — org first, then user, then IP.
+
+    Never derived from session_id (client-mintable). The IP fallback only
+    applies to the dev-only anonymous sandbox (ALLOW_ANONYMOUS_SANDBOX).
+    """
+    org_id = getattr(user, "org_id", None) if user is not None else None
+    if org_id:
+        return f"org:{org_id}"
+    user_id = getattr(user, "id", None) if user is not None else None
+    if user_id:
+        return f"user:{user_id}"
+    return f"ip:{client_ip(request)}"
+
+
+def enforce_sandbox_quota(request: Request, user: object) -> None:
+    """Rate-limit + budget POST /api/sandbox/execute by org/user — DOCBOT-1607.
+
+    1. Sliding 1h window of ``SANDBOX_RUNS_PER_HOUR`` per org (or user).
+    2. The authenticated user's daily weighted budget (``USER_DAILY_BUDGET``).
+
+    Owner requests bypass. A rejected call does not consume quota. Raises 429.
+    """
+    if is_owner(request):
+        return
+
+    if SANDBOX_RUNS_PER_HOUR > 0:
+        now = time.monotonic()
+        window_start = now - SANDBOX_WINDOW_SEC
+        _sweep_expired_ips(_sandbox_principal_hits, window_start)
+        hits = _sandbox_principal_hits[sandbox_principal_key(user, request)]
+        _prune_window(hits, window_start)
+        if len(hits) >= SANDBOX_RUNS_PER_HOUR:
+            retry_after = max(int(hits[0] + SANDBOX_WINDOW_SEC - now) + 1, 1)
+            raise HTTPException(
+                status_code=429,
+                detail=(
+                    f"Sandbox limit reached ({SANDBOX_RUNS_PER_HOUR}/hour for your "
+                    f"organization). Retry in {retry_after}s."
+                ),
+                headers={"Retry-After": str(retry_after)},
+            )
+        hits.append(now)
+
+    user_id = getattr(user, "id", None) if user is not None else None
+    if user_id:
+        enforce_user_budget(str(user_id), "sandbox")
+
+
 def enforce_session_budget(session_id: str, endpoint: str) -> None:
     """Charge the session's weighted budget for an expensive op.
 
@@ -323,3 +384,4 @@ def reset_state() -> None:
     _user_spend.clear()
     _demo_init_ip_hits.clear()
     _demo_init_global_hits.clear()
+    _sandbox_principal_hits.clear()

@@ -22,6 +22,7 @@ from pydantic import BaseModel, ValidationError
 from api.utils.sandbox_paths import sandbox_csv_path
 from api.utils.billing_context import copy_ctx_run
 from api.usage_service import meter_sandbox
+from api.utils import sandbox_policy
 
 logger = logging.getLogger(__name__)
 
@@ -437,11 +438,21 @@ def _extract_charts(
     return clean, charts, metadata
 
 
-def _run_in_sandbox(code: str) -> SandboxResult:
+def _run_in_sandbox(
+    code: str,
+    *,
+    allow_pip_egress: bool = False,
+    holder: Optional[sandbox_policy.SandboxHolder] = None,
+) -> SandboxResult:
     """Synchronous execution block — called from a thread via asyncio.
 
     Kept synchronous because the E2B SDK's Sandbox class is synchronous.
     We offload it to a thread pool so the event loop stays unblocked.
+
+    DOCBOT-1607: the sandbox is created via ``sandbox_policy`` (60 s
+    lifetime, internet off). ``allow_pip_egress`` is True only for internal
+    LLM-codegen callers; raw user code (``/api/sandbox/execute``) never gets
+    egress, so runtime pip installs are skipped for it.
     """
     # Import here to defer the dependency until first use; also makes
     # import errors surfaceable at call-time rather than module-load-time.
@@ -457,11 +468,17 @@ def _run_in_sandbox(code: str) -> SandboxResult:
     # Determine which heavy packages (if any) the generated code actually
     # imports. Doing this BEFORE sandbox creation lets us skip the pip
     # install entirely for the common pandas/matplotlib-only case.
-    needed_packages = _detect_needed_packages(code)
+    install_packages = sandbox_policy.packages_to_install(_detect_needed_packages(code))
+    allow_internet = sandbox_policy.internet_allowed(
+        allow_pip_egress=allow_pip_egress, install_packages=install_packages
+    )
+    holder = holder or sandbox_policy.SandboxHolder()
 
     try:
-        sandbox = Sandbox.create()
-        _install_sandbox_packages(sandbox, needed_packages)
+        sandbox = sandbox_policy.create_sandbox(Sandbox, allow_internet=allow_internet)
+        holder.set(sandbox)
+        if allow_internet:
+            _install_sandbox_packages(sandbox, install_packages)
         # Prepend preamble + append suffix so all figures are captured
         full_code = _MATPLOTLIB_PREAMBLE + code + _MATPLOTLIB_SUFFIX
         execution = sandbox.run_code(full_code)
@@ -473,7 +490,7 @@ def _run_in_sandbox(code: str) -> SandboxResult:
             pkg = _parse_missing_module(
                 getattr(execution.error, "value", str(execution.error))
             )
-            if pkg and _pip_install_in_sandbox(sandbox, pkg):
+            if pkg and allow_internet and _pip_install_in_sandbox(sandbox, pkg):
                 logger.info("Retrying sandbox execution after installing %s", pkg)
                 execution = sandbox.run_code(full_code)
 
@@ -519,10 +536,7 @@ def _run_in_sandbox(code: str) -> SandboxResult:
 
     finally:
         if sandbox is not None:
-            try:
-                sandbox.kill()
-            except Exception as teardown_err:
-                logger.warning("Failed to close sandbox cleanly: %s", teardown_err)
+            holder.kill()  # idempotent; never raises
         # DOCBOT-1801: meter E2B seconds even on error / timeout.
         meter_sandbox(time.monotonic() - start_s)
 
@@ -730,6 +744,8 @@ async def generate_analysis_code(
 async def run_python(
     code: str,
     timeout_seconds: int = 25,
+    *,
+    allow_pip_egress: bool = False,
 ) -> SandboxResult:
     """Execute Python code in an isolated E2B sandbox.
 
@@ -740,7 +756,12 @@ async def run_python(
         computation details — only timing and structural metrics are logged.
     timeout_seconds:
         Hard wall-clock limit.  Defaults to 25 s to stay comfortably inside
-        the Vercel / Railway 30-second response deadline.
+        the Vercel / Railway 30-second response deadline.  On timeout the
+        sandbox is killed immediately (DOCBOT-1607).
+    allow_pip_egress:
+        False (default) for arbitrary user code — the sandbox has no
+        internet.  Internal LLM-codegen callers pass True so a missing
+        non-pre-baked package (e.g. statsmodels) can be pip-installed.
 
     Returns
     -------
@@ -750,16 +771,23 @@ async def run_python(
         as exceptions.
     """
     loop = asyncio.get_running_loop()
+    holder = sandbox_policy.SandboxHolder()
 
     try:
         result = await asyncio.wait_for(
-            loop.run_in_executor(None, copy_ctx_run(_run_in_sandbox, code)),
+            loop.run_in_executor(
+                None,
+                copy_ctx_run(
+                    _run_in_sandbox, code, allow_pip_egress=allow_pip_egress, holder=holder
+                ),
+            ),
             timeout=float(timeout_seconds),
         )
     except asyncio.TimeoutError:
         logger.error(
             "Sandbox execution timed out after %d seconds.", timeout_seconds
         )
+        await loop.run_in_executor(None, holder.kill)
         return SandboxResult(
             stdout="",
             stderr="",
@@ -1119,8 +1147,17 @@ async def generate_csv_analysis_code(
     return None
 
 
-def _run_csv_in_sandbox_sync(code: str, csv_path: str, csv_bytes: bytes) -> SandboxResult:
-    """Synchronous: upload CSV bytes to E2B sandbox, run code, return result."""
+def _run_csv_in_sandbox_sync(
+    code: str,
+    csv_path: str,
+    csv_bytes: bytes,
+    holder: Optional[sandbox_policy.SandboxHolder] = None,
+) -> SandboxResult:
+    """Synchronous: upload CSV bytes to E2B sandbox, run code, return result.
+
+    LLM-generated code (internal path) — pip egress allowed only when a
+    non-pre-baked package is imported (DOCBOT-1607, see sandbox_policy).
+    """
     from e2b_code_interpreter import Sandbox
 
     _get_api_key()
@@ -1130,11 +1167,17 @@ def _run_csv_in_sandbox_sync(code: str, csv_path: str, csv_bytes: bytes) -> Sand
 
     # Conditionally install only the packages the generated code imports.
     # Empty list → no install at all → sandbox boots ~20x faster.
-    needed_packages = _detect_needed_packages(code)
+    install_packages = sandbox_policy.packages_to_install(_detect_needed_packages(code))
+    allow_internet = sandbox_policy.internet_allowed(
+        allow_pip_egress=True, install_packages=install_packages
+    )
+    holder = holder or sandbox_policy.SandboxHolder()
 
     try:
-        sandbox = Sandbox.create()
-        _install_sandbox_packages(sandbox, needed_packages)
+        sandbox = sandbox_policy.create_sandbox(Sandbox, allow_internet=allow_internet)
+        holder.set(sandbox)
+        if allow_internet:
+            _install_sandbox_packages(sandbox, install_packages)
         # Upload CSV bytes to the sandbox filesystem
         sandbox.files.write(csv_path, csv_bytes)
 
@@ -1148,7 +1191,7 @@ def _run_csv_in_sandbox_sync(code: str, csv_path: str, csv_bytes: bytes) -> Sand
             pkg = _parse_missing_module(
                 getattr(execution.error, "value", str(execution.error))
             )
-            if pkg and _pip_install_in_sandbox(sandbox, pkg):
+            if pkg and allow_internet and _pip_install_in_sandbox(sandbox, pkg):
                 logger.info("Retrying CSV sandbox execution after installing %s", pkg)
                 execution = sandbox.run_code(full_code)
 
@@ -1183,10 +1226,7 @@ def _run_csv_in_sandbox_sync(code: str, csv_path: str, csv_bytes: bytes) -> Sand
 
     finally:
         if sandbox is not None:
-            try:
-                sandbox.kill()
-            except Exception as teardown_err:
-                logger.warning("Failed to close CSV sandbox cleanly: %s", teardown_err)
+            holder.kill()  # idempotent; never raises
         # DOCBOT-1801: meter E2B seconds even on error / timeout.
         meter_sandbox(time.monotonic() - start_s)
 
@@ -1199,15 +1239,17 @@ async def _run_csv_in_sandbox(
 ) -> SandboxResult:
     """Async wrapper around _run_csv_in_sandbox_sync with configurable timeout."""
     loop = asyncio.get_running_loop()
+    holder = sandbox_policy.SandboxHolder()
     try:
         return await asyncio.wait_for(
             loop.run_in_executor(
-                None, copy_ctx_run(_run_csv_in_sandbox_sync, code, csv_path, csv_bytes)
+                None, copy_ctx_run(_run_csv_in_sandbox_sync, code, csv_path, csv_bytes, holder)
             ),
             timeout=float(timeout_seconds),
         )
     except asyncio.TimeoutError:
         logger.error("CSV sandbox timed out after %d seconds.", timeout_seconds)
+        await loop.run_in_executor(None, holder.kill)
         return SandboxResult(
             stdout="", stderr="", charts=[],
             error=f"CSV analysis timed out after {timeout_seconds} seconds.",
