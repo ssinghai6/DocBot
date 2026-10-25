@@ -2,7 +2,7 @@
 
 import React, { useState } from "react"
 import {
-  Brain, X, Menu, Trash, Keyboard,
+  X, Menu, Trash, Keyboard,
   Database, LogOut, ShieldCheck, Shield,
   ChevronDown, Sparkles, Wrench, Settings,
   FileText,
@@ -12,6 +12,7 @@ import ConnectionPanel from "@/components/ConnectionPanel"
 import MarketplacePanel from "@/components/MarketplacePanel"
 import EdgarPanel from "@/components/EdgarPanel"
 import PersonaSelector from "@/components/PersonaSelector"
+import LogoMark from "@/components/LogoMark"
 import DataHandlingPanel from "@/components/DataHandlingPanel"
 import { useToolRegistry } from "@/components/ToolPicker"
 import type {
@@ -242,7 +243,7 @@ export default function Sidebar(props: SidebarProps) {
         {/* Logo */}
         <div className="flex items-center gap-2.5 mb-4 h-11">
           <div className="w-8 h-8 rounded-[5px] bg-[var(--color-cyan-500)]/10 border border-[var(--color-cyan-500)]/30 flex items-center justify-center">
-            <Brain className="w-4 h-4 text-[var(--color-cyan-500)]" />
+            <LogoMark className="w-4 h-4" />
           </div>
           <div className="flex-1 min-w-0">
             <h2 className="text-[13px] font-semibold text-[var(--color-text-primary)] flex items-center gap-1.5 leading-none">

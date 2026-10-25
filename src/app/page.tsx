@@ -31,6 +31,7 @@ import {
   VolumeX,
 } from "lucide-react"
 import { Button, Badge, Card } from "@/components/ui"
+import LogoMark from "@/components/LogoMark"
 
 // ── Feature data ──────────────────────────────────────────────────────────────
 
@@ -348,8 +349,8 @@ export default function LandingPage() {
       <nav className="fixed top-0 left-0 right-0 z-50 border-b border-[var(--color-border-subtle)] backdrop-blur-md bg-[var(--color-bg-base)]/80">
         <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 h-16 flex items-center justify-between">
           <div className="flex items-center gap-2">
-            <div className="w-8 h-8 rounded-lg bg-gradient-to-br from-[var(--color-cyan-500)] to-[var(--color-info-500)] flex items-center justify-center">
-              <FileText className="w-4 h-4 text-white" />
+            <div className="w-8 h-8 rounded-lg bg-[#0F1E22] border border-white/10 flex items-center justify-center">
+              <LogoMark className="w-4 h-4" />
             </div>
             <span className="font-semibold text-[var(--color-text-primary)] text-lg">DocBot</span>
           </div>
@@ -764,8 +765,8 @@ export default function LandingPage() {
       <footer className="border-t border-[var(--color-border-subtle)] py-8 px-4 sm:px-6 lg:px-8">
         <div className="max-w-7xl mx-auto flex flex-col sm:flex-row items-center justify-between gap-4 text-sm text-[var(--color-text-tertiary)]">
           <div className="flex items-center gap-2">
-            <div className="w-6 h-6 rounded-md bg-gradient-to-br from-[var(--color-cyan-500)] to-[var(--color-info-500)] flex items-center justify-center">
-              <FileText className="w-3 h-3 text-white" />
+            <div className="w-6 h-6 rounded-md bg-[#0F1E22] border border-white/10 flex items-center justify-center">
+              <LogoMark className="w-3 h-3" />
             </div>
             <span className="font-medium text-[var(--color-text-secondary)]">DocBot</span>
             <span className="hidden sm:inline text-[var(--color-text-quaternary)]">|</span>

@@ -17,6 +17,7 @@
     "@tanstack/react-table": "^8.21.3",
     "@vercel/analytics": "^2.0.1",
     "cmdk": "^1.1.1",
+    "katex": "^0.16.47",
     "lucide-react": "^1.61.0",
     "next": "16.4.2",
     "prism-react-renderer": "^2.4.1",
@@ -24,12 +25,15 @@
     "react-dom": "19.3.1",
     "react-markdown": "^10.1.0",
     "react-resizable-panels": "^4.14.8",
+    "rehype-katex": "^7.0.1",
     "remark-gfm": "^4.0.1",
+    "remark-math": "^6.0.0",
     "zod": "^4.6.7",
     "zustand": "^5.0.16"
   },
   "devDependencies": {
     "@tailwindcss/postcss": "^4",
+    "@types/katex": "^0.16.8",
     "@types/node": "^20",
     "@types/react": "^19",
     "@types/react-dom": "^19",

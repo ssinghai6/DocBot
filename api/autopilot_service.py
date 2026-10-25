@@ -56,7 +56,7 @@ TOTAL_TIMEOUT_S = 90
 # manually when the wording/instructions change — see PROMPT_VERSION
 # convention in api/utils/llm_provider.py.
 PROMPT_VERSION_AUTOPILOT_PLANNER = "v1"
-PROMPT_VERSION_AUTOPILOT_SYNTHESIZER = "v1"
+PROMPT_VERSION_AUTOPILOT_SYNTHESIZER = "v2"
 
 # Internal step-result prefixes that signal a failed/empty step. These are
 # scrubbed from user-facing output and replaced with a calm generic message —
@@ -1150,7 +1150,7 @@ async def _synthesizer_node(state: AutopilotState) -> dict:
         "- Use markdown headers (##, ###) for each section or question part.\n"
         "- Present numerical projections in clean markdown tables with aligned columns.\n"
         "- Format currency as $X.XM or $X.XB (e.g. $4.2M, $1.3B). Do not write raw division expressions in table cells.\n"
-        "- Show key formulas once, then present computed results in the table.\n"
+        "- Show key formulas once, then present computed results in the table. Write formulas as LaTeX math inside `$$...$$` (own lines for display, inline in sentences for short expressions); never use `\\(...\\)`, `\\[...\\]`, or a single `$` as a math delimiter.\n"
         "- Use **bold** for final values, conclusions, and key metrics.\n"
         "- Use bullet points for qualitative analysis and risk factors."
     )
