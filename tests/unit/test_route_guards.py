@@ -58,6 +58,8 @@ RouteKey = tuple[str, str]  # (METHOD, path)
 GUARD_CALLABLE_NAMES: frozenset[str] = frozenset({
     "require_role",        # api/rbac_service.py — session cookie + role (viewer/analyst/admin)
     "require_admin",       # DOCBOT-1610 (Lane S) — admin guard that ignores open mode
+    "require_platform_admin",  # DOCBOT-1610 — admin + PLATFORM_ADMIN_USER_IDS (/admin/metrics)
+    "require_sandbox_user",    # DOCBOT-1612 — analyst+ in every mode; anon only via dev-only ALLOW_ANONYMOUS_SANDBOX
     "require_principal",   # DOCBOT-1711 — user / demo principal, else 401
     "require_user",
     "require_auth",
@@ -167,8 +169,6 @@ KNOWN_UNGUARDED: dict[RouteKey, str] = {
     ("POST", "/api/db/refresh-schema/{connection_id}"): "DOCBOT-1603",
     ("GET", "/api/db/sessions"): "DOCBOT-1603",
     ("GET", "/api/db/history/{connection_id}"): "DOCBOT-1603",
-    # Anonymous E2B execution (SEC-04).
-    ("POST", "/api/sandbox/execute"): "DOCBOT-1607",
     # Connector + commerce RBAC (SEC-03).
     ("POST", "/api/connectors/register"): "DOCBOT-1602",
     ("GET", "/api/connectors"): "DOCBOT-1602",
