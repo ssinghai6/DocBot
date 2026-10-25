@@ -253,11 +253,13 @@ class TestRunEvalBatch:
     async def test_aggregates_verdicts_from_judge_trace(self, wired_stores, monkeypatch):
         traces_table, judgments_table, session_factory = wired_stores
 
+        # Drain after each write: concurrent sessions sharing the single
+        # in-memory aiosqlite connection can drop an insert on SQLAlchemy 2.1.
         for i in range(3):
             await trace_service.log_trace(
                 run_id=f"r{i}", session_id="s1", pipeline="autopilot", question=f"q{i}",
             )
-        await _drain_pending_writes()
+            await _drain_pending_writes()
 
         verdicts = [
             {"trace_id": "t0", "tool_selection_verdict": "correct",
