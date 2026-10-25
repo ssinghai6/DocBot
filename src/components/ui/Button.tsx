@@ -1,7 +1,7 @@
 "use client"
 
 import React from "react"
-import { Loader2 } from "lucide-react"
+import { LoaderCircle } from "lucide-react"
 
 type ButtonVariant = "primary" | "secondary" | "ghost" | "danger" | "amber"
 type ButtonSize = "xs" | "sm" | "md" | "lg"
@@ -71,7 +71,7 @@ export default function Button({
         .filter(Boolean)
         .join(" ")}
     >
-      {loading && <Loader2 className="w-3.5 h-3.5 animate-spin shrink-0" aria-hidden="true" />}
+      {loading && <LoaderCircle className="w-3.5 h-3.5 animate-spin shrink-0" aria-hidden="true" />}
       {children}
     </button>
   )

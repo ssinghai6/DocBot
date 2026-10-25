@@ -2,9 +2,9 @@
 
 import React, { useMemo, useState } from "react"
 import {
-  X, Loader2, Users, ClipboardList, Shield,
-  Filter, RefreshCw, Download, ChevronDown, ChevronRight,
-  BarChart3, KeyRound, Copy, Check, Trash2, Plus,
+  X, LoaderCircle, Users, ClipboardList, Shield,
+  Funnel, RefreshCw, Download, ChevronDown, ChevronRight,
+  ChartColumn, KeyRound, Copy, Check, Trash, Plus,
 } from "lucide-react"
 import type { AdminUser, AuditEvent, AuthUser, AdminMetrics, ApiKey, ApiKeyCreateResponse } from "@/components/types"
 import type { AuditLogFilters } from "@/hooks/useChatHandlers"
@@ -190,7 +190,7 @@ export default function AdminPanel({
                     : "text-[var(--color-text-secondary)] hover:text-gray-200 hover:bg-[var(--color-bg-overlay)]"
                 }`}
               >
-                <BarChart3 className="w-3 h-3" />
+                <ChartColumn className="w-3 h-3" />
                 Usage
               </button>
               <button
@@ -234,7 +234,7 @@ export default function AdminPanel({
 
               {adminUsersLoading ? (
                 <div className="flex items-center justify-center py-12">
-                  <Loader2 className="w-6 h-6 text-[var(--color-cyan-500)] animate-spin" />
+                  <LoaderCircle className="w-6 h-6 text-[var(--color-cyan-500)] animate-spin" />
                 </div>
               ) : adminUsers.length === 0 ? (
                 <div className="flex flex-col items-center justify-center py-12 text-[var(--color-text-tertiary)]">
@@ -301,7 +301,7 @@ export default function AdminPanel({
             <div className="p-5">
               <div className="flex items-center gap-3 mb-4 flex-wrap">
                 <div className="flex items-center gap-2">
-                  <Filter className="w-3.5 h-3.5 text-[var(--color-text-tertiary)] shrink-0" />
+                  <Funnel className="w-3.5 h-3.5 text-[var(--color-text-tertiary)] shrink-0" />
                   <select
                     value={auditEventTypeFilter}
                     onChange={(e) => {
@@ -394,7 +394,7 @@ export default function AdminPanel({
 
               {auditLoading ? (
                 <div className="flex items-center justify-center py-12">
-                  <Loader2 className="w-6 h-6 text-[var(--color-cyan-500)] animate-spin" />
+                  <LoaderCircle className="w-6 h-6 text-[var(--color-cyan-500)] animate-spin" />
                 </div>
               ) : auditEvents.length === 0 ? (
                 <div className="flex flex-col items-center justify-center py-12 text-[var(--color-text-tertiary)]">
@@ -518,11 +518,11 @@ export default function AdminPanel({
 
               {adminMetricsLoading ? (
                 <div className="flex items-center justify-center py-12">
-                  <Loader2 className="w-6 h-6 text-[var(--color-cyan-500)] animate-spin" />
+                  <LoaderCircle className="w-6 h-6 text-[var(--color-cyan-500)] animate-spin" />
                 </div>
               ) : !adminMetrics ? (
                 <div className="flex flex-col items-center justify-center py-12 text-[var(--color-text-tertiary)]">
-                  <BarChart3 className="w-8 h-8 mb-3 opacity-40" />
+                  <ChartColumn className="w-8 h-8 mb-3 opacity-40" />
                   <p className="text-sm">No metrics loaded</p>
                 </div>
               ) : (
@@ -755,7 +755,7 @@ export default function AdminPanel({
 
               {apiKeysLoading ? (
                 <div className="flex items-center justify-center py-12">
-                  <Loader2 className="w-6 h-6 text-[var(--color-cyan-500)] animate-spin" />
+                  <LoaderCircle className="w-6 h-6 text-[var(--color-cyan-500)] animate-spin" />
                 </div>
               ) : apiKeys.length === 0 ? (
                 <div className="flex flex-col items-center justify-center py-12 text-[var(--color-text-tertiary)]">
@@ -804,7 +804,7 @@ export default function AdminPanel({
                                 onClick={() => revokeApiKey(key.id)}
                                 className="flex items-center gap-1 text-[10px] px-1.5 py-0.5 rounded bg-[var(--color-danger-500)]/10 text-[var(--color-danger-500)] border border-[var(--color-danger-500)]/30 hover:bg-[var(--color-danger-500)]/20 transition-all"
                               >
-                                <Trash2 className="w-2.5 h-2.5" />
+                                <Trash className="w-2.5 h-2.5" />
                                 Revoke
                               </button>
                             )}

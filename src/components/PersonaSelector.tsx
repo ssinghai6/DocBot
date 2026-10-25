@@ -2,8 +2,8 @@
 
 import React from "react"
 import {
-  Wand2, UserCog,
-  CheckCircle2, Info,
+  WandSparkles, UserCog,
+  CircleCheck, Info,
 } from "lucide-react"
 
 import { EXPERT_PERSONAS } from "@/components/personas"
@@ -45,7 +45,7 @@ export default function PersonaSelector({
               : "bg-white/5 text-[var(--color-text-secondary)] border border-white/10 hover:bg-white/10"
           }`}
         >
-          <Wand2 className="w-3 h-3" />
+          <WandSparkles className="w-3 h-3" />
           AUTO
         </button>
         <button
@@ -89,7 +89,7 @@ export default function PersonaSelector({
                   </div>
                   {isSelected && (
                     <div className="absolute top-2 right-2">
-                      <CheckCircle2 className="w-3 h-3 text-[var(--color-text-primary)]" />
+                      <CircleCheck className="w-3 h-3 text-[var(--color-text-primary)]" />
                     </div>
                   )}
                 </button>

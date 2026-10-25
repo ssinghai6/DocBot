@@ -1,6 +1,6 @@
 "use client"
 
-import { AlertTriangle, Database, FileText, GitBranch, Layers, MessageSquare, Search, Sparkles } from "lucide-react"
+import { TriangleAlert, Database, FileText, GitBranch, Layers, MessageSquare, Search, Sparkles } from "lucide-react"
 import type { Lineage, LineageSource, LineageStep } from "@/components/types"
 import { useUIStore } from "@/store/uiStore"
 import { Chip, EmptyTab, SectionLabel, fmtMs, fmtNum } from "./shared"
@@ -201,7 +201,7 @@ export default function LineageTab({ lineage }: { lineage: Lineage | null }) {
           <Connector label="cross-check" />
           <div className="rounded-[5px] border border-[var(--color-amber-500)]/50 bg-[var(--color-amber-500)]/5 p-3">
             <div className="flex items-center gap-1.5 mb-2 text-[var(--color-amber-500)]">
-              <AlertTriangle className="w-3 h-3" />
+              <TriangleAlert className="w-3 h-3" />
               <span className="text-[10px] font-semibold uppercase tracking-wider">
                 {lineage.discrepancies.length} discrepanc{lineage.discrepancies.length === 1 ? "y" : "ies"} between docs and data
               </span>

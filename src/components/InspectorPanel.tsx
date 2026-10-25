@@ -1,6 +1,6 @@
 "use client"
 
-import { PanelRight, GitBranch, BookOpen, Code2, Table2, Gauge } from "lucide-react"
+import { PanelRight, GitBranch, BookOpen, CodeXml, Table2, Gauge } from "lucide-react"
 import { Tabs, TabsList, TabsTrigger, TabsContent } from "@/components/ui"
 import { useUIStore, normalizeInspectorTab, type InspectorTab } from "@/store/uiStore"
 import LineageTab from "./inspector/LineageTab"
@@ -16,7 +16,7 @@ interface InspectorPanelProps {
 const TABS: Array<{ id: InspectorTab; label: string; icon: React.ReactNode }> = [
   { id: "lineage", label: "Lineage", icon: <GitBranch className="w-3 h-3" /> },
   { id: "sources", label: "Sources", icon: <BookOpen className="w-3 h-3" /> },
-  { id: "query",   label: "Query",   icon: <Code2 className="w-3 h-3" /> },
+  { id: "query",   label: "Query",   icon: <CodeXml className="w-3 h-3" /> },
   { id: "data",    label: "Data",    icon: <Table2 className="w-3 h-3" /> },
   { id: "run",     label: "Run",     icon: <Gauge className="w-3 h-3" /> },
 ]

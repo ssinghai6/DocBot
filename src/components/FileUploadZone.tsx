@@ -1,7 +1,7 @@
 "use client"
 
 import React from "react"
-import { Upload, FileText, Loader2, CheckCircle2, AlertCircle } from "lucide-react"
+import { Upload, FileText, LoaderCircle, CircleCheck, CircleAlert } from "lucide-react"
 import type { FileUploadState } from "./types"
 
 interface FileUploadZoneProps {
@@ -142,7 +142,7 @@ export default function FileUploadZone({
             <div className="w-12 h-12 mx-auto mb-3 relative">
               <div className="absolute inset-0 rounded-2xl border-2 border-[var(--color-cyan-500)]/30" />
               <div className="absolute inset-0 rounded-2xl border-2 border-transparent border-t-[var(--color-cyan-500)] animate-spin" />
-              <Loader2 className="absolute inset-0 m-auto w-6 h-6 text-[var(--color-cyan-500)] animate-spin" />
+              <LoaderCircle className="absolute inset-0 m-auto w-6 h-6 text-[var(--color-cyan-500)] animate-spin" />
             </div>
             <p className="text-sm font-medium text-gray-300">Processing documents...</p>
             {uploadProgress !== null && (
@@ -157,14 +157,14 @@ export default function FileUploadZone({
         ) : fileUploadState === "success" ? (
           <div className="py-2">
             <div className="w-12 h-12 mx-auto mb-3 rounded-2xl bg-[var(--color-success-500)]/20 flex items-center justify-center">
-              <CheckCircle2 className="w-6 h-6 text-[var(--color-success-500)]" />
+              <CircleCheck className="w-6 h-6 text-[var(--color-success-500)]" />
             </div>
             <p className="text-sm font-medium text-[var(--color-success-500)]">Upload complete!</p>
           </div>
         ) : fileUploadState === "error" ? (
           <div className="py-2">
             <div className="w-12 h-12 mx-auto mb-3 rounded-2xl bg-[var(--color-danger-500)]/20 flex items-center justify-center">
-              <AlertCircle className="w-6 h-6 text-[#ef4444]" />
+              <CircleAlert className="w-6 h-6 text-[#ef4444]" />
             </div>
             <p className="text-sm font-medium text-[#ef4444]">Upload failed</p>
           </div>

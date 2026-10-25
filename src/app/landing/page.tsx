@@ -8,15 +8,15 @@ import {
   Layers,
   Brain,
   ShieldCheck,
-  BarChart2,
+  ChartNoAxesColumn,
   ArrowRight,
-  CheckCircle2,
+  CircleCheck,
   MessageSquare,
   Upload,
   Zap,
-  Wand2,
+  WandSparkles,
   ShoppingCart,
-  XCircle,
+  CircleX,
   Play,
 } from "lucide-react"
 import { Button, Badge, Card } from "@/components/ui"
@@ -55,7 +55,7 @@ const features = [
     iconBg: "bg-green-900/30",
   },
   {
-    icon: <BarChart2 className="w-6 h-6" />,
+    icon: <ChartNoAxesColumn className="w-6 h-6" />,
     title: "CSV Intelligence",
     description:
       "Upload spreadsheets and get instant pandas-powered analysis via E2B sandboxes. Charts, aggregations, and trend analysis. all from natural language.",
@@ -65,7 +65,7 @@ const features = [
     iconBg: "bg-yellow-900/30",
   },
   {
-    icon: <Wand2 className="w-6 h-6" />,
+    icon: <WandSparkles className="w-6 h-6" />,
     title: "Autopilot",
     description:
       "Auto-triggers multi-step investigations when it detects complex questions. Plans steps, queries databases, searches documents, runs Python analysis, and synthesizes findings.",
@@ -406,11 +406,11 @@ export default function LandingPage() {
 
               <div className="flex items-center gap-4 mt-8 text-sm text-gray-500">
                 <span className="flex items-center gap-1.5">
-                  <CheckCircle2 className="w-4 h-4 text-green-500" />
+                  <CircleCheck className="w-4 h-4 text-green-500" />
                   No SQL knowledge required
                 </span>
                 <span className="flex items-center gap-1.5">
-                  <CheckCircle2 className="w-4 h-4 text-green-500" />
+                  <CircleCheck className="w-4 h-4 text-green-500" />
                   WCAG AA accessible
                 </span>
               </div>
@@ -528,7 +528,7 @@ export default function LandingPage() {
               { icon: <Database className="w-5 h-5" />, label: "Azure SQL" },
               { icon: <Database className="w-5 h-5" />, label: "SQLite" },
               { icon: <ShoppingCart className="w-5 h-5" />, label: "Amazon SP-API" },
-              { icon: <BarChart2 className="w-5 h-5" />, label: "E2B Sandbox" },
+              { icon: <ChartNoAxesColumn className="w-5 h-5" />, label: "E2B Sandbox" },
             ].map((item) => (
               <div key={item.label} className="flex items-center gap-2 text-gray-500 hover:text-gray-300 transition-colors">
                 {item.icon}
@@ -612,7 +612,7 @@ export default function LandingPage() {
                     <td className="py-3 px-4 text-gray-300">{label as string}</td>
                     {(values as boolean[]).map((v, j) => (
                       <td key={j} className={`py-3 px-4 text-center ${j === 3 ? "bg-gradient-to-r from-blue-600/5 to-purple-600/5" : ""}`}>
-                        {v ? <CheckCircle2 className="w-5 h-5 text-green-400 mx-auto" /> : <XCircle className="w-5 h-5 text-gray-700 mx-auto" />}
+                        {v ? <CircleCheck className="w-5 h-5 text-green-400 mx-auto" /> : <CircleX className="w-5 h-5 text-gray-700 mx-auto" />}
                       </td>
                     ))}
                   </tr>
@@ -702,7 +702,7 @@ export default function LandingPage() {
                 <ul className="space-y-2 mb-6">
                   {tier.features.map((f) => (
                     <li key={f} className="flex items-center gap-2 text-sm text-gray-300">
-                      <CheckCircle2 className="w-4 h-4 text-green-400 flex-shrink-0" />
+                      <CircleCheck className="w-4 h-4 text-green-400 flex-shrink-0" />
                       {f}
                     </li>
                   ))}
@@ -746,11 +746,11 @@ export default function LandingPage() {
 
           <div className="mt-8 flex flex-col sm:flex-row items-center justify-center gap-4 sm:gap-8 text-sm text-gray-500">
             <span className="flex items-center gap-2">
-              <CheckCircle2 className="w-4 h-4 text-green-500" />
+              <CircleCheck className="w-4 h-4 text-green-500" />
               Free to start
             </span>
             <span className="flex items-center gap-2">
-              <CheckCircle2 className="w-4 h-4 text-green-500" />
+              <CircleCheck className="w-4 h-4 text-green-500" />
               686+ tests passing
             </span>
           </div>

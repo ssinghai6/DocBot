@@ -1,7 +1,7 @@
 import React from "react"
 import {
   Sparkles, Stethoscope, TrendingUp,
-  Scale, Briefcase, BarChart2,
+  Scale, Briefcase, ChartNoAxesColumn,
 } from "lucide-react"
 
 export interface PersonaConfig {
@@ -106,7 +106,7 @@ export const EXPERT_PERSONAS: Record<string, PersonaConfig> = {
     output_conventions: { number_format: "raw", disclaimer_position: null, highlight_pattern: null, accent_color: "#667eea" },
   },
   "Data Analyst": {
-    icon: <BarChart2 className="w-5 h-5" />,
+    icon: <ChartNoAxesColumn className="w-5 h-5" />,
     description: "Quantitative analysis with full SQL transparency and data quality flags",
     color: "text-[#f97316]",
     gradient: "from-[#f97316] to-[#ea580c]",

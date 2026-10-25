@@ -2,8 +2,8 @@
 
 import React, { useState } from "react"
 import {
-  ShoppingCart, Plus, ChevronDown, XCircle,
-  RefreshCw, Loader2, Eye, EyeOff, AlertCircle,
+  ShoppingCart, Plus, ChevronDown, CircleX,
+  RefreshCw, LoaderCircle, Eye, EyeOff, CircleAlert,
 } from "lucide-react"
 import type { ConnectorInfo, ConnectorSyncResponse } from "./types"
 import { formatRelativeTime, getStalenessLevel, STALENESS_COLOR_CLASSES } from "@/lib/relativeTime"
@@ -188,7 +188,7 @@ export default function MarketplacePanel({
                   className="text-[var(--color-text-tertiary)] hover:text-red-400 transition-colors shrink-0"
                   title="Disconnect"
                 >
-                  <XCircle className="w-3.5 h-3.5" />
+                  <CircleX className="w-3.5 h-3.5" />
                 </button>
               </div>
 
@@ -226,7 +226,7 @@ export default function MarketplacePanel({
                     className="w-full flex items-center justify-center gap-2 px-3 py-1.5 rounded-lg bg-[var(--color-cyan-500)]/20 hover:bg-[var(--color-cyan-500)]/30 border border-[var(--color-cyan-500)]/30 text-[var(--color-cyan-500)] text-xs font-medium transition-all disabled:opacity-50 disabled:cursor-not-allowed"
                   >
                     {syncingId === conn.connector_id ? (
-                      <><Loader2 className="w-3.5 h-3.5 animate-spin" /> Syncing...</>
+                      <><LoaderCircle className="w-3.5 h-3.5 animate-spin" /> Syncing...</>
                     ) : (
                       <><RefreshCw className="w-3.5 h-3.5" /> Sync Data</>
                     )}
@@ -249,7 +249,7 @@ export default function MarketplacePanel({
                   {/* Sync error */}
                   {syncError && syncingId === null && expandedSyncId === conn.connector_id && (
                     <p className="text-[10px] text-red-400 px-1 flex items-center gap-1">
-                      <AlertCircle className="w-3 h-3 shrink-0" />
+                      <CircleAlert className="w-3 h-3 shrink-0" />
                       {syncError}
                     </p>
                   )}
@@ -318,7 +318,7 @@ export default function MarketplacePanel({
 
           {registerError && (
             <p className="text-[10px] text-red-400 px-1 flex items-center gap-1">
-              <AlertCircle className="w-3 h-3 shrink-0" />
+              <CircleAlert className="w-3 h-3 shrink-0" />
               {registerError}
             </p>
           )}
@@ -329,7 +329,7 @@ export default function MarketplacePanel({
             className="w-full flex items-center justify-center gap-2 px-3 py-2 rounded-lg bg-[var(--color-cyan-500)]/20 hover:bg-[var(--color-cyan-500)]/30 border border-[var(--color-cyan-500)]/30 text-[var(--color-cyan-500)] text-xs font-medium transition-all disabled:opacity-50 disabled:cursor-not-allowed"
           >
             {registerState === "submitting" ? (
-              <><Loader2 className="w-3.5 h-3.5 animate-spin" /> Connecting...</>
+              <><LoaderCircle className="w-3.5 h-3.5 animate-spin" /> Connecting...</>
             ) : (
               <><ShoppingCart className="w-3.5 h-3.5" /> Test &amp; Connect</>
             )}

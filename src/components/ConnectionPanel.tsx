@@ -2,8 +2,8 @@
 
 import React from "react"
 import {
-  Database, Loader2, RefreshCw, ChevronDown,
-  XCircle, Wand2, Clock, ArrowRight, Eye, EyeOff,
+  Database, LoaderCircle, RefreshCw, ChevronDown,
+  CircleX, WandSparkles, Clock, ArrowRight, Eye, EyeOff,
 } from "lucide-react"
 import type { LiveDbForm, QueryHistoryItem } from "./types"
 import { formatRelativeTime } from "@/lib/relativeTime"
@@ -114,7 +114,7 @@ export default function ConnectionPanel({
               className="text-[var(--color-text-tertiary)] hover:text-red-400 transition-colors shrink-0"
               title="Disconnect database"
             >
-              <XCircle className="w-3.5 h-3.5" />
+              <CircleX className="w-3.5 h-3.5" />
             </button>
           </div>
 
@@ -291,7 +291,7 @@ export default function ConnectionPanel({
                       className="w-full flex items-center justify-center gap-2 px-3 py-2 rounded-lg bg-[#0078d4]/20 hover:bg-[#0078d4]/30 border border-[#0078d4]/30 text-[#4fc3f7] text-xs font-medium transition-all disabled:opacity-50 disabled:cursor-not-allowed"
                     >
                       {entraSignInState === "signing_in"
-                        ? <><Loader2 className="w-3.5 h-3.5 animate-spin" /> Signing in...</>
+                        ? <><LoaderCircle className="w-3.5 h-3.5 animate-spin" /> Signing in...</>
                         : "Sign in with Microsoft"
                       }
                     </button>
@@ -360,7 +360,7 @@ export default function ConnectionPanel({
                 className="w-full flex items-center justify-center gap-2 px-3 py-2 rounded-lg bg-[var(--color-amber-500)]/20 hover:bg-[var(--color-amber-500)]/30 border border-[var(--color-amber-500)]/30 text-[var(--color-amber-500)] text-xs font-medium transition-all disabled:opacity-50 disabled:cursor-not-allowed"
               >
                 {liveDbConnectState === "connecting"
-                  ? <><Loader2 className="w-3.5 h-3.5 animate-spin" /> Connecting...</>
+                  ? <><LoaderCircle className="w-3.5 h-3.5 animate-spin" /> Connecting...</>
                   : <><Database className="w-3.5 h-3.5" /> Connect</>
                 }
               </button>
@@ -379,7 +379,7 @@ export default function ConnectionPanel({
               : "border-[var(--color-border-default)] text-[var(--color-text-secondary)] hover:text-[var(--color-text-primary)] hover:bg-[var(--color-bg-overlay)]"
           }`}
         >
-          <Wand2 className={`w-3.5 h-3.5 shrink-0 ${autopilotMode ? "text-[var(--color-cyan-500)]" : "text-[var(--color-cyan-500)]"}`} />
+          <WandSparkles className={`w-3.5 h-3.5 shrink-0 ${autopilotMode ? "text-[var(--color-cyan-500)]" : "text-[var(--color-cyan-500)]"}`} />
           <span className="flex-1 text-left font-medium">Autopilot</span>
           <span className={`text-[10px] px-1.5 py-0.5 rounded-full font-medium ${
             autopilotMode ? "bg-[var(--color-cyan-500)]/30 text-[var(--color-cyan-500)]" : "bg-[#ffffff10] text-[var(--color-text-tertiary)]"
