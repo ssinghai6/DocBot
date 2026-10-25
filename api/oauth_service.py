@@ -113,16 +113,14 @@ async def github_exchange_code(code: str) -> dict:
         user_resp.raise_for_status()
         user = user_resp.json()
 
-        email = user.get("email")
-        if not email:
-            emails_resp = await client.get(GITHUB_EMAILS_URL, headers=headers)
-            emails_resp.raise_for_status()
-            emails = emails_resp.json()
-            primary = next((e for e in emails if e.get("primary") and e.get("verified")), None)
-            email = primary["email"] if primary else None
+        # DOCBOT-1617: never trust the public profile `email` field — always
+        # take the primary address GitHub itself marks verified.
+        emails_resp = await client.get(GITHUB_EMAILS_URL, headers=headers)
+        emails_resp.raise_for_status()
+        email = select_github_verified_email(emails_resp.json())
 
         if not email:
-            raise ValueError("GitHub account has no verified email. Please add one in your GitHub settings.")
+            raise ValueError("GitHub account has no verified primary email. Please verify one in your GitHub settings.")
 
         name = user.get("name") or user.get("login") or email.split("@")[0]
         return {
@@ -130,8 +128,25 @@ async def github_exchange_code(code: str) -> dict:
             "name": name,
             "provider": "github",
             "provider_id": str(user["id"]),
+            "email_verified": True,
             "avatar_url": user.get("avatar_url"),
         }
+
+
+def select_github_verified_email(emails: object) -> Optional[str]:
+    """Return the primary+verified address from GitHub's /user/emails, or None."""
+    if not isinstance(emails, list):
+        return None
+    for entry in emails:
+        if (
+            isinstance(entry, dict)
+            and entry.get("primary") is True
+            and entry.get("verified") is True
+            and isinstance(entry.get("email"), str)
+            and entry["email"].strip()
+        ):
+            return entry["email"]
+    return None
 
 
 # ---------------------------------------------------------------------------
@@ -196,8 +211,19 @@ async def google_exchange_code(code: str) -> dict:
             "name": name,
             "provider": "google",
             "provider_id": info.get("sub", ""),
+            # DOCBOT-1617: identity linking requires Google's own assertion.
+            "email_verified": is_truthy_claim(info.get("email_verified")),
             "avatar_url": info.get("picture"),
         }
+
+
+def is_truthy_claim(value: object) -> bool:
+    """Google returns email_verified as a bool (userinfo) or "true" (id_token)."""
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, str):
+        return value.strip().lower() == "true"
+    return False
 
 
 # ---------------------------------------------------------------------------
