@@ -37,7 +37,7 @@ export interface AuditLogFilters {
 
 interface UseChatHandlersParams {
   sessionId: string | null
-  anonymousSessionIdRef: React.RefObject<string>
+  anonymousSessionId: string
   authModalTab: "login" | "register"
   authEmail: string
   authPassword: string
@@ -100,7 +100,7 @@ interface UseChatHandlersParams {
 export function useChatHandlers(params: UseChatHandlersParams) {
   const {
     sessionId,
-    anonymousSessionIdRef,
+    anonymousSessionId,
     authModalTab,
     authEmail,
     authPassword,
@@ -245,7 +245,7 @@ export function useChatHandlers(params: UseChatHandlersParams) {
     setDbUploadState("uploading");
     const formData = new FormData();
     formData.append("file", file);
-    formData.append("session_id", sessionId ?? anonymousSessionIdRef.current);
+    formData.append("session_id", sessionId ?? anonymousSessionId);
     try {
       const endpoint = type === "csv" ? "/api/db/upload/csv" : "/api/db/upload";
       const response = await fetch(endpoint, { method: "POST", body: formData });
@@ -278,7 +278,7 @@ export function useChatHandlers(params: UseChatHandlersParams) {
       const isEntra = liveDbForm.dialect === "azure_sql";
       const body = isEntra
         ? {
-            session_id: sessionId ?? anonymousSessionIdRef.current,
+            session_id: sessionId ?? anonymousSessionId,
             dialect: "azure_sql",
             host: liveDbForm.host,
             port: parseInt(liveDbForm.port, 10),
@@ -288,7 +288,7 @@ export function useChatHandlers(params: UseChatHandlersParams) {
             pii_masking_enabled: liveDbForm.pii_masking_enabled,
           }
         : {
-            session_id: sessionId ?? anonymousSessionIdRef.current,
+            session_id: sessionId ?? anonymousSessionId,
             dialect: liveDbForm.dialect,
             host: liveDbForm.host,
             port: parseInt(liveDbForm.port, 10),
