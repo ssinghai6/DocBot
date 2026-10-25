@@ -2028,17 +2028,19 @@ class SandboxExecuteRequest(BaseModel):
     session_id: Optional[str] = None
 
 
-# DOCBOT-1612: raw code execution requires a logged-in analyst+ in every mode
-# unless ALLOW_ANONYMOUS_SANDBOX=true (local dev only; refused with MULTI_TENANT).
-@app.post(
-    "/api/sandbox/execute",
-    response_model=SandboxResult,
-    dependencies=[Depends(require_sandbox_user())],
-)
-async def execute_sandbox(request: SandboxExecuteRequest, raw_request: Request) -> SandboxResult:
+# DOCBOT-1612/1607: raw code execution requires a logged-in analyst+ in every
+# mode. ALLOW_ANONYMOUS_SANDBOX=true is honored only in local dev (ignored on
+# Railway/production; refused with MULTI_TENANT). Metered per org/user.
+@app.post("/api/sandbox/execute", response_model=SandboxResult)
+async def execute_sandbox(
+    request: SandboxExecuteRequest,
+    raw_request: Request,
+    user: Optional[Any] = Depends(require_sandbox_user()),
+) -> SandboxResult:
     """Execute Python code in an isolated E2B sandbox.
 
-    The code runs in a fully isolated cloud container with no access to the
+    The code runs in a fully isolated cloud container with no internet access
+    (DOCBOT-1607) and no access to the
     host server or internal network resources. Execution is capped at 25 s.
     Charts produced by matplotlib are returned as base64 PNGs.
 
@@ -2055,7 +2057,7 @@ async def execute_sandbox(request: SandboxExecuteRequest, raw_request: Request) 
     error            : Human-readable error message, or null on success
     execution_time_ms: Wall-clock time for the sandbox run
     """
-    await charge_budget(raw_request, request.session_id or "", "sandbox")
+    request_guard.enforce_sandbox_quota(raw_request, user)
 
     log_prefix = f"[session={request.session_id}]" if request.session_id else "[anonymous]"
     logger.info(
@@ -2065,7 +2067,7 @@ async def execute_sandbox(request: SandboxExecuteRequest, raw_request: Request) 
     )
 
     try:
-        result = await sandbox_service.run_python(code=request.code)
+        result = await sandbox_service.run_python(code=request.code, allow_pip_egress=False)
     except EnvironmentError as env_err:
         # E2B_API_KEY not configured — surface clearly to the caller
         logger.error("%s Sandbox environment error: %s", log_prefix, env_err)

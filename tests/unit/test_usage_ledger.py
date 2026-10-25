@@ -194,7 +194,7 @@ def test_csv_sandbox_ms_recorded_on_exception(fake_e2b):
 def test_run_python_timeout_still_meters_on_request_meter(fake_e2b, monkeypatch):
     import time as _time
 
-    def _slow(code):
+    def _slow(code, **_kwargs):
         start = _time.monotonic()
         try:
             _time.sleep(0.3)
