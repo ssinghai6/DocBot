@@ -1298,7 +1298,7 @@ def make_executor_node(
                                 f"data = _json.loads({json.dumps(json.dumps(prior_rows, default=str))})\n"
                                 "df = pd.DataFrame(data)\n"
                             )
-                            sandbox_result = await run_python(preamble + code)
+                            sandbox_result = await run_python(preamble + code, allow_pip_egress=True)
 
                             # One corrective retry: feed the runtime error back so
                             # the generator can fix bad literals / API misuse
@@ -1319,7 +1319,7 @@ def make_executor_node(
                                 )
                                 if _retry_code:
                                     result_entry["code"] = _retry_code
-                                    sandbox_result = await run_python(preamble + _retry_code)
+                                    sandbox_result = await run_python(preamble + _retry_code, allow_pip_egress=True)
 
                             if sandbox_result.error:
                                 result_entry["error"] = sandbox_result.error

@@ -39,6 +39,8 @@ def _env(monkeypatch):
     monkeypatch.delenv("AUTH_REQUIRED", raising=False)
     monkeypatch.delenv("MULTI_TENANT", raising=False)
     monkeypatch.delenv("ALLOW_ANONYMOUS_SANDBOX", raising=False)
+    for _name in ("RAILWAY_ENVIRONMENT", "RAILWAY_ENVIRONMENT_NAME", "ENVIRONMENT", "APP_ENV"):
+        monkeypatch.delenv(_name, raising=False)
     monkeypatch.setattr(request_guard, "RATE_LIMIT_PER_MIN", 0)
     monkeypatch.setattr(request_guard, "SESSION_BUDGET", 0)
     monkeypatch.setattr(request_guard, "USER_DAILY_BUDGET", 0)

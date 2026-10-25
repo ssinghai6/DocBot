@@ -1578,7 +1578,7 @@ async def run_sql_pipeline(
                 )
                 if analysis_code:
                     yield f"data: {_json_dumps({'type': 'analysis_code', 'code': analysis_code})}\n\n"
-                    sandbox_result = await run_sandbox(analysis_code)
+                    sandbox_result = await run_sandbox(analysis_code, allow_pip_egress=True)
                     for idx, chart_b64 in enumerate(sandbox_result.charts):
                         meta = (
                             sandbox_result.chart_metadata[idx]

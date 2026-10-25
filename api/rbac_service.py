@@ -22,7 +22,8 @@ Exceptions that are enforced in EVERY mode (DOCBOT-1610 / DOCBOT-1612):
     require_platform_admin() — cross-org data (/admin/metrics) additionally
                              needs users.id in PLATFORM_ADMIN_USER_IDS
     require_sandbox_user() — raw code execution needs a logged-in analyst+
-                             unless ALLOW_ANONYMOUS_SANDBOX=true (dev only)
+                             unless ALLOW_ANONYMOUS_SANDBOX=true (dev only;
+                             ignored on Railway/production — DOCBOT-1607)
 
 Startup guard: assert_safe_auth_config() refuses to boot when
 MULTI_TENANT=true without AUTH_REQUIRED=true.
@@ -30,11 +31,14 @@ MULTI_TENANT=true without AUTH_REQUIRED=true.
 
 from __future__ import annotations
 
+import logging
 import os
 from enum import IntEnum
 from typing import Any, Optional
 
 from fastapi import Cookie, Depends, HTTPException
+
+logger = logging.getLogger(__name__)
 
 
 class UserRole(IntEnum):
@@ -245,13 +249,32 @@ async def update_user_role_in_org(caller: Any, target_user_id: str, new_role: st
     return RoleChangeResult(user_id=target_user_id, email=target.email, new_role=new_role)
 
 
+def is_deployed_environment() -> bool:
+    """True on any hosted deploy (Railway) or an explicit production env — DOCBOT-1607.
+
+    Railway injects RAILWAY_ENVIRONMENT / RAILWAY_ENVIRONMENT_NAME into every
+    service; ENVIRONMENT / APP_ENV = prod|production covers other hosts.
+    """
+    if os.getenv("RAILWAY_ENVIRONMENT", "").strip() or os.getenv("RAILWAY_ENVIRONMENT_NAME", "").strip():
+        return True
+    for name in ("ENVIRONMENT", "APP_ENV"):
+        if os.getenv(name, "").strip().lower() in ("prod", "production"):
+            return True
+    return False
+
+
+def _anonymous_sandbox_flag_set() -> bool:
+    return os.getenv("ALLOW_ANONYMOUS_SANDBOX", "").strip().lower() in ("1", "true", "yes", "on")
+
+
 def anonymous_sandbox_allowed() -> bool:
     """True only when ALLOW_ANONYMOUS_SANDBOX is explicitly enabled — DOCBOT-1612.
 
-    Read at request time so the flag can be toggled per-environment (and in
-    tests) without re-importing. Default: deny.
+    DEV-ONLY: never honored on a deployed environment (DOCBOT-1607) — on
+    Railway / production the flag is ignored and a warning is logged at boot.
+    Read at request time so it can be toggled in tests. Default: deny.
     """
-    return os.getenv("ALLOW_ANONYMOUS_SANDBOX", "").strip().lower() in ("1", "true", "yes", "on")
+    return _anonymous_sandbox_flag_set() and not is_deployed_environment()
 
 
 def require_sandbox_user():
@@ -297,6 +320,13 @@ def assert_safe_auth_config() -> None:
     Raises:
         UnsafeAuthConfigError: with an actionable message.
     """
+    if _anonymous_sandbox_flag_set() and is_deployed_environment():
+        # DOCBOT-1607: don't brick a prod boot over a stray dev flag — it is
+        # already ignored by anonymous_sandbox_allowed(); make it visible.
+        logger.warning(
+            "ALLOW_ANONYMOUS_SANDBOX is set on a deployed environment and is IGNORED "
+            "(dev-only). Remove it from this environment."
+        )
     if not _env_true("MULTI_TENANT"):
         return
 
@@ -308,7 +338,7 @@ def assert_safe_auth_config() -> None:
             "Open/demo mode skips role checks and cannot isolate tenants. "
             "Set AUTH_REQUIRED=true or unset MULTI_TENANT."
         )
-    if anonymous_sandbox_allowed():
+    if _anonymous_sandbox_flag_set():
         raise UnsafeAuthConfigError(
             "Refusing to start: ALLOW_ANONYMOUS_SANDBOX=true is not permitted "
             "when MULTI_TENANT=true. Unset ALLOW_ANONYMOUS_SANDBOX."
