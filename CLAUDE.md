@@ -280,7 +280,7 @@ Max 2–3 LLM calls. No loops. CSV dialect short-circuits before Step 1.
 
 - Python: No `type: ignore`, no bare `except`. Use specific exception types.
 - TypeScript: No `any`. Use Zod for runtime validation on API responses.
-- All new API routes need Pydantic models for request/response.
+- All new API routes need Pydantic models for request/response, defined in an `api/*_models.py` module, and live in `api/routes/*_routes.py` (F-4).
 - All new frontend API calls need Zod schemas.
 - No hardcoded secrets anywhere. Check with `grep -r "sk-\|api_key\s*=" --include="*.py" --include="*.ts"` before committing.
 
@@ -326,7 +326,10 @@ tests/
 ## Module Structure
 **Never dump new logic into `api/index.py`.** That file is the FastAPI entrypoint only — it should contain:
 - App setup (middleware, lifespan, engine, table definitions)
-- Route handlers (thin — call service functions, return responses)
+- Existing route handlers (thin — call service functions, return responses)
+- `app.include_router(...)` calls for route modules in `api/routes/`
+
+**Route rule (decision F-4, DOCBOT-1800):** every NEW route lives in `api/routes/<area>_routes.py` as a FastAPI `APIRouter` (module-level `router`). `api/index.py` only calls `app.include_router(<area>_routes.router)` — no new handlers in `index.py`. Request/response Pydantic models go in a models module (`api/<area>_models.py`, e.g. `api/billing_models.py`), never inline in the route file, with a matching Zod mirror in `src/lib/schemas/<area>.ts` (identical field names). Every route carries an auth guard or is listed in `PUBLIC_ROUTES`. Existing routes in `index.py` are migrated only deliberately, not as drive-by edits. See `api/routes/__init__.py`.
 
 All business logic lives in dedicated service/util modules:
 - `api/db_service.py` — DB connectivity, schema, 7-step SQL pipeline
@@ -353,6 +356,9 @@ All business logic lives in dedicated service/util modules:
   - `shopify_connector.py` — Shopify Admin REST API (orders, financials, cursor pagination, HMAC webhooks)
   - `edgar_connector.py` — SEC EDGAR connector (search companies, list/download filings)
 - `api/utils/` — shared helpers (embeddings, encryption, validators, LLM provider, reranker, chunker, vector store, etc.)
+- `api/routes/` — `APIRouter` modules for all new routes (`*_routes.py`, F-4)
+- `api/billing_models.py` — EPIC-18 billing Pydantic contracts (credits are integers, 1 credit = $0.001; raw cost is integer micro-USD); Zod mirror in `src/lib/schemas/billing.ts`
+- `api/utils/billing_context.py` — request ContextVars: `Principal`, `KeyContext` (masked repr, never exposes keys), `RequestMeter`; use `copy_ctx_run(fn, *args)` for every `run_in_executor` / thread-pool call so principal + meter propagate
 
 **Rule:** If a function is more than ~15 lines or has no direct dependency on the HTTP request/response, it belongs in a service or utils module, not in index.py.
 
