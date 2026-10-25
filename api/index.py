@@ -655,7 +655,8 @@ async def lifespan(app: FastAPI):
     # DOCBOT-1001: warm VECTOR_STORES from Chroma disk — recovers sessions after restart
     try:
         from api.utils.vector_store import list_stored_sessions, load_store
-        stored = list_stored_sessions()
+        # DOCBOT-2311: warm at most the LRU cap; the rest lazy-load on demand.
+        stored = list_stored_sessions()[: VECTOR_STORES.maxsize]
         if stored:
             embeddings = get_embeddings()
             for sid in stored:
@@ -728,7 +729,9 @@ class Citation(BaseModel):
     page: int
     text: str
 
-VECTOR_STORES = {}
+# DOCBOT-2311: LRU-capped; misses lazy-load from CHROMA_DIR (get_or_load_store).
+from api.utils.vector_store import SessionStoreCache
+VECTOR_STORES = SessionStoreCache()
 
 # SCRUM-391: in-memory store of span-verified extracted fields per session (any doc type)
 # { session_id: list[ExtractedField] }
@@ -1126,15 +1129,11 @@ async def chat(
     await _require_session(request.session_id, scope)
     await charge_budget(raw_request, request.session_id, "chat")
 
-    if request.session_id not in VECTOR_STORES:
-        # DOCBOT-1001: try to lazy-load from Chroma disk before giving up
-        from api.utils.vector_store import load_store
-        recovered = load_store(request.session_id, get_embeddings())
-        if recovered is not None:
-            VECTOR_STORES[request.session_id] = recovered
-            logger.info("chat: lazy-loaded vector store for session %s from disk", request.session_id)
-        else:
-            raise HTTPException(status_code=404, detail="Session not found. Please upload documents again.")
+    # DOCBOT-1001/2311: lazy-load from CHROMA_DIR on cache miss; if the vectors
+    # are gone, stream an explicit documents_expired event (never a silent 404).
+    from api.utils.vector_store import documents_expired_stream, get_or_load_store
+    if await asyncio.to_thread(get_or_load_store, request.session_id, VECTOR_STORES, get_embeddings) is None:
+        return StreamingResponse(documents_expired_stream(request.session_id), media_type="text/event-stream")
 
     # ── BUG #4 fix: plot/chart intent detection for doc-only mode ───────────
     # /api/chat is a pure RAG → LLM text pipeline; there is no sandbox or

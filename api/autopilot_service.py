@@ -2193,6 +2193,26 @@ async def run_autopilot(
     )
     run_id = current_run_id() or new_run_id()
 
+    # DOCBOT-2311: lazy-load the session's vectors from CHROMA_DIR; if they
+    # are gone, say so explicitly instead of investigating without the docs.
+    if has_docs:
+        from api.utils.vector_store import (
+            DOCUMENTS_EXPIRED_MESSAGE,
+            documents_expired_sse,
+            get_or_load_store,
+        )
+
+        store = await asyncio.to_thread(get_or_load_store, session_id, vector_stores)
+        if store is None:
+            logger.info("autopilot: documents expired for session %s", session_id)
+            yield documents_expired_sse(session_id)
+            has_docs = False
+            if not (has_db or has_csv):
+                yield f"data: {json.dumps({'type': 'answer', 'content': DOCUMENTS_EXPIRED_MESSAGE})}\n\n"
+                yield f"data: {json.dumps({'type': 'done', 'citations': []})}\n\n"
+                return
+            yield f"data: {json.dumps({'type': 'warning', 'content': DOCUMENTS_EXPIRED_MESSAGE})}\n\n"
+
     # Rephrase follow-up questions into standalone queries using chat history
     if chat_history:
         from api.db_service import _rephrase_with_history

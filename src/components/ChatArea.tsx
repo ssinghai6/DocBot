@@ -16,6 +16,7 @@ import ChatMessage from "@/components/ChatMessage"
 import ChatEmptyState from "@/components/ChatEmptyState"
 import { Tooltip, Button } from "@/components/ui"
 import type { Message, AutopilotStep, Toast, PickedTool } from "@/components/types"
+import { useUIStore } from "@/store/uiStore"
 
 function TypingIndicator() {
   return (
@@ -187,6 +188,11 @@ export default function ChatArea(props: ChatAreaProps) {
   const isFuelDemo = dbFileName === "FuelPrices-1970-2026.db";
   const isDemo = dbFileName === "QuickBite-Financials.db" || isFuelDemo;
 
+  // DOCBOT-2311: banner while the active session's documents are expired.
+  const expiredSessionId = useUIStore((s) => s.expiredSessionId);
+  const setExpiredSessionId = useUIStore((s) => s.setExpiredSessionId);
+  const docsExpired = !!sessionId && expiredSessionId === sessionId;
+
   return (
     <main className="h-full flex flex-col min-w-0 bg-[var(--color-bg-base)] relative">
       {/* Top Bar — 44px */}
@@ -299,6 +305,35 @@ export default function ChatArea(props: ChatAreaProps) {
           </Tooltip>
         )}
       </header>
+
+      {docsExpired && (
+        <div
+          role="alert"
+          className="mx-auto mt-2 w-full max-w-5xl px-5 lg:px-6"
+        >
+          <div className="flex items-center gap-2 rounded-[5px] border border-[var(--color-warning-500)] bg-[var(--color-bg-elevated)] px-3 py-2 text-xs text-[var(--color-text-primary)]">
+            <FileText className="w-3.5 h-3.5 shrink-0 text-[var(--color-warning-500)]" aria-hidden="true" />
+            <span className="flex-1">Your documents expired. Re-upload them to include them in answers.</span>
+            {onUploadClick && (
+              <button
+                type="button"
+                onClick={onUploadClick}
+                className="font-medium underline underline-offset-2 hover:opacity-80"
+              >
+                Re-upload
+              </button>
+            )}
+            <button
+              type="button"
+              onClick={() => setExpiredSessionId(null)}
+              aria-label="Dismiss"
+              className="p-0.5 hover:opacity-80"
+            >
+              <X className="w-3.5 h-3.5" />
+            </button>
+          </div>
+        </div>
+      )}
 
       {/* Chat Output */}
       <div ref={chatContainerRef} className="flex-1 overflow-y-auto px-5 lg:px-6 pb-4 max-w-5xl mx-auto w-full">

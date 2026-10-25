@@ -9,10 +9,16 @@ Collection naming: "session_<uuid_with_underscores>" — Chroma requires alphanu
 
 Environment variables
 ---------------------
-CHROMA_PERSIST_DIR          Path where Chroma stores its SQLite + embedding files.
-                            Default: /tmp/docbot_chroma
-                            Set to a Railway persistent-volume mount path (e.g.
-                            /data/chroma) for cross-redeploy persistence.
+CHROMA_DIR                  Path where Chroma stores its SQLite + embedding files
+                            (DOCBOT-2311). Takes precedence over the legacy
+                            CHROMA_PERSIST_DIR name, which is still honoured.
+                            Default: <tempdir>/docbot_chroma (ephemeral, wiped
+                            on every Railway redeploy). Set to a Railway
+                            persistent-volume mount path (e.g. /data/chroma) for
+                            cross-redeploy persistence.
+VECTOR_STORE_CACHE_MAX      Max session stores held in the in-process LRU cache
+                            (DOCBOT-2311). Default: 64. Evicted sessions stay
+                            on disk and are lazy-loaded on the next request.
 VECTOR_STORE_RETENTION_DAYS Inactivity window (days) after which a session's
                             vector store is eligible for automatic deletion.
                             Default: 30. Keyed off sessions.updated_at (the
@@ -45,20 +51,43 @@ fix storage-layer encryption, which is a Railway infrastructure property.
 
 from __future__ import annotations
 
+import json
 import logging
 import os
 import tempfile
+from collections import OrderedDict
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
-from typing import Any
+from typing import Any, AsyncIterator
 
 logger = logging.getLogger(__name__)
 
-# DOCBOT-1633: default resolved via tempfile (honours TMPDIR; /tmp on Linux)
-# rather than a hardcoded /tmp literal. Point CHROMA_PERSIST_DIR at a mounted
-# volume for durable storage.
-_PERSIST_DIR = Path(
-    os.getenv("CHROMA_PERSIST_DIR") or Path(tempfile.gettempdir()) / "docbot_chroma"
+def _resolve_persist_dir() -> Path:
+    """DOCBOT-2311: CHROMA_DIR > CHROMA_PERSIST_DIR (legacy) > tempdir default.
+
+    DOCBOT-1633: the default is resolved via tempfile (honours TMPDIR; /tmp on
+    Linux) rather than a hardcoded /tmp literal. Point CHROMA_DIR at a mounted
+    volume for durable storage.
+    """
+    configured = os.getenv("CHROMA_DIR") or os.getenv("CHROMA_PERSIST_DIR")
+    if configured:
+        return Path(configured)
+    return Path(tempfile.gettempdir()) / "docbot_chroma"
+
+
+_PERSIST_DIR = _resolve_persist_dir()
+
+# DOCBOT-2311: bounded in-process cache of loaded session stores.
+_DEFAULT_CACHE_MAX = 64
+VECTOR_STORE_CACHE_MAX = max(
+    1, int(os.getenv("VECTOR_STORE_CACHE_MAX", str(_DEFAULT_CACHE_MAX)))
+)
+
+# DOCBOT-2311: user-facing copy when a session's vectors are gone from disk.
+DOCUMENTS_EXPIRED_MESSAGE = (
+    "Your uploaded documents have expired and are no longer available "
+    "(this can happen after a server update). Please re-upload your documents "
+    "to include them in answers."
 )
 
 # DOCBOT-1525: default inactivity window before a session's vector store
@@ -80,6 +109,96 @@ def _collection_name(session_id: str) -> str:
 
 def get_persist_dir() -> Path:
     return _PERSIST_DIR
+
+
+class SessionStoreCache(OrderedDict):
+    """DOCBOT-2311: LRU-capped ``{session_id: store}`` map.
+
+    Drop-in replacement for the plain ``VECTOR_STORES`` dict. Reads and writes
+    mark an entry most-recently-used; inserting past ``maxsize`` evicts the
+    least-recently-used entry from memory only. Its Chroma collection stays on
+    disk and :func:`get_or_load_store` lazy-loads it on the next request.
+    """
+
+    def __init__(self, maxsize: int | None = None) -> None:
+        super().__init__()
+        self.maxsize = maxsize if maxsize is not None else VECTOR_STORE_CACHE_MAX
+
+    def __getitem__(self, key: str) -> Any:
+        value = super().__getitem__(key)
+        self.move_to_end(key)
+        return value
+
+    def __setitem__(self, key: str, value: Any) -> None:
+        super().__setitem__(key, value)
+        self.move_to_end(key)
+        while len(self) > self.maxsize:
+            evicted, _ = self.popitem(last=False)
+            logger.info("vector_store: evicted session %s from in-memory LRU cache", evicted)
+
+
+def get_or_load_store(
+    session_id: str,
+    vector_stores: dict,
+    embeddings_fn: Any = None,
+) -> Any | None:
+    """DOCBOT-2311: return the session's store, lazy-loading from disk on miss.
+
+    ``vector_stores`` is the process cache (``VECTOR_STORES``). On a miss the
+    Chroma collection for ``session_id`` is loaded from ``CHROMA_DIR`` and put
+    back in the cache. Returns ``None`` when no vectors exist on disk either;
+    callers must then surface :func:`documents_expired_event` rather than
+    answering silently without documents.
+
+    Ownership: collections are keyed purely by session id. Callers pass a
+    session id that has already been owner-checked, so this never crosses
+    owners.
+    """
+    if not session_id:
+        return None
+    if session_id in vector_stores:
+        return vector_stores[session_id]
+    if embeddings_fn is None:
+        from api.utils.embeddings_provider import get_embeddings as embeddings_fn
+    try:
+        store = load_store(session_id, embeddings_fn())
+    except Exception as exc:  # chromadb raises assorted error types on a corrupt dir
+        logger.warning(
+            "vector_store: lazy-load failed for session %s (%s)",
+            session_id, type(exc).__name__,
+        )
+        return None
+    if store is None:
+        return None
+    vector_stores[session_id] = store
+    logger.info("vector_store: lazy-loaded session %s from disk", session_id)
+    return store
+
+
+def documents_expired_event(session_id: str) -> dict:
+    """DOCBOT-2311: payload for the ``documents_expired`` SSE event."""
+    return {
+        "type": "documents_expired",
+        "session_id": session_id,
+        "message": DOCUMENTS_EXPIRED_MESSAGE,
+    }
+
+
+def documents_expired_sse(session_id: str) -> str:
+    """SSE-framed :func:`documents_expired_event`."""
+    return f"data: {json.dumps(documents_expired_event(session_id))}\n\n"
+
+
+async def documents_expired_stream(session_id: str) -> AsyncIterator[str]:
+    """Complete doc-chat SSE reply for a session whose vectors are gone.
+
+    Emits the ``documents_expired`` event, the user-facing message as a token
+    (so the chat bubble is never blank), empty citations, and ``done``.
+    """
+    yield documents_expired_sse(session_id)
+    yield f"data: {json.dumps({'type': 'token', 'content': DOCUMENTS_EXPIRED_MESSAGE})}\n\n"
+    yield f"data: {json.dumps({'type': 'citations', 'citations': []})}\n\n"
+    yield f"data: {json.dumps({'type': 'done'})}\n\n"
 
 
 def create_store(session_id: str, documents: list, embeddings: Any) -> Any:
