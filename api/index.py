@@ -62,6 +62,8 @@ app.add_middleware(
 )
 
 from api.utils import request_guard
+from api.utils import caller_scope
+from api.utils.caller_scope import CallerScope, get_caller_scope, owner_values, resolve_caller_scope
 from api.utils.pdf_io import open_pdf_bytes
 
 
@@ -97,7 +99,16 @@ async def abuse_guard(request: Request, call_next):
                     headers=exc.headers or {},
                 )
 
+    # DOCBOT-1601: give anonymous browsers a stable owner identity so the
+    # sessions they create are visible to them (and only them).
+    new_anon_cookie = (
+        caller_scope.prime_anon_cookie(request) if path.startswith("/api/") else None
+    )
+
     response = await call_next(request)
+
+    if new_anon_cookie:
+        caller_scope.attach_anon_cookie(response, new_anon_cookie)
 
     # Persist owner status as an HttpOnly cookie so an initial ?owner_key=<key>
     # link unlocks the whole browser session without re-passing the key.
@@ -164,6 +175,8 @@ sessions_table = Table(
     Column("source", String, server_default="upload"),  # upload | edgar
     # ── DOCBOT-1524: org/workspace scoping (nullable FK → organizations.id) ──
     Column("org_id", String, index=True),
+    # ── DOCBOT-1601: SHA-256 of the anonymous owner cookie (docbot_anon) ──────
+    Column("anon_owner", String, index=True),
 )
 
 messages_table = Table(
@@ -443,6 +456,9 @@ async def init_db() -> None:
         # DOCBOT-1524: org_id columns on pre-existing tables (no-op on a fresh
         # DB, where the Table definitions above already declare org_id).
         for col_ddl in ORG_ID_COLUMN_MIGRATIONS:
+            await conn.execute(text(col_ddl))
+        # DOCBOT-1601: anonymous owner column on sessions.
+        for col_ddl in caller_scope.ANON_OWNER_COLUMN_MIGRATIONS:
             await conn.execute(text(col_ddl))
         # DOCBOT-1524: idempotent — creates the default org only if none
         # exists yet, and backfills org_id on rows that still lack one.
@@ -807,7 +823,7 @@ def get_tools(category: Optional[str] = None):
 
 # DOCBOT-1612: IP-limited (per-IP + global sliding hour, owner bypass).
 @app.post("/api/demo/init", dependencies=[Depends(request_guard.check_demo_init_limit)])
-async def init_demo(dataset: str = "quickbite"):
+async def init_demo(request: Request, dataset: str = "quickbite"):
     """Initialize a sandbox demo session with pre-loaded data.
 
     Query param `dataset`: "quickbite" (Docs+DB discrepancy) or "fuel"
@@ -823,6 +839,7 @@ async def init_demo(dataset: str = "quickbite"):
         schema_cache_table=schema_cache_table,
         async_session_factory=async_session_factory,
         dataset=dataset if dataset in ("quickbite", "fuel") else "quickbite",
+        owner=owner_values(await resolve_caller_scope(request)),
     )
     return result
 
@@ -942,9 +959,9 @@ async def upload_documents(
                     logger.info("upload: stored %d extracted fields for session=%s", len(fields), sid)
             asyncio.create_task(_run_extraction(session_id, full_text))
 
-        # Store session in database — link to logged-in user if present
-        _session_owner = await get_optional_user(request)
-        _session_user_id = _session_owner.id if _session_owner else None
+        # Store session in database — stamp the owner (DOCBOT-1601):
+        # user + org when logged in, the anon owner cookie digest otherwise.
+        _owner_scope = await resolve_caller_scope(request)
         async with engine.begin() as conn:
             await conn.execute(
                 insert(sessions_table).values(
@@ -952,7 +969,7 @@ async def upload_documents(
                     persona="Generalist",
                     file_count=len(files_info),
                     files_info=json.dumps(files_info),
-                    user_id=_session_user_id,
+                    **owner_values(_owner_scope),
                 )
             )
         
@@ -1370,198 +1387,75 @@ async def chat(raw_request: Request, request: ChatRequest, _user=_rbac_viewer):
     return StreamingResponse(event_stream(), media_type="text/event-stream")
 
 # ===== Phase 1 Features: Session History & Export =====
+# DOCBOT-1601 (SEC-02): every route is scoped to the caller (owner + org).
+# A session owned by someone else returns 404, exactly like a missing one.
 
-@app.get("/api/sessions")
-async def list_sessions():
-    """List all sessions"""
+from api import session_service  # noqa: E402
+from api.session_models import (  # noqa: E402
+    SessionDeleteResponse, SessionDetailResponse, SessionListResponse,
+)
+
+_caller_scope = Depends(get_caller_scope)
+_SESSION_NOT_FOUND = "Session not found"
+
+
+def _drop_vector_store(session_id: str) -> None:
+    VECTOR_STORES.pop(session_id, None)
+    # DOCBOT-1001: remove persisted Chroma collection
+    from api.utils.vector_store import delete_store
+    delete_store(session_id)
+
+
+@app.get("/api/sessions", response_model=SessionListResponse)
+async def list_sessions(scope: CallerScope = _caller_scope):
+    """List the caller's own sessions (most recent first)."""
+    sessions = await session_service.list_sessions(scope, sessions_table, async_session_factory)
+    return {"sessions": sessions}
+
+
+@app.get("/api/session/{session_id}", response_model=SessionDetailResponse)
+async def get_session(session_id: str, scope: CallerScope = _caller_scope):
+    """Get one of the caller's sessions with its messages."""
     try:
-        async with engine.connect() as conn:
-            result = await conn.execute(
-                select(sessions_table)
-                .order_by(sessions_table.c.updated_at.desc())
-                .limit(50)
-            )
-            rows = result.fetchall()
-        sessions = [
-            {
-                "session_id": row.session_id,
-                "created_at": row.created_at.isoformat() if row.created_at else None,
-                "updated_at": row.updated_at.isoformat() if row.updated_at else None,
-                "persona": row.persona,
-                "file_count": row.file_count,
-                "files_info": json.loads(row.files_info) if row.files_info else [],
-            }
-            for row in rows
-        ]
-        return {"sessions": sessions}
-    except Exception as e:
-        logger.error(f"Error listing sessions: {e}")
-        return {"sessions": [], "error": safe_error_message(e)}
+        return await session_service.get_session_detail(
+            session_id, scope, sessions_table, messages_table, async_session_factory
+        )
+    except session_service.SessionNotFound:
+        raise HTTPException(status_code=404, detail=_SESSION_NOT_FOUND)
 
-@app.get("/api/session/{session_id}")
-async def get_session(session_id: str):
-    """Get session details and messages"""
+
+@app.delete("/api/session/{session_id}", response_model=SessionDeleteResponse)
+async def delete_session(session_id: str, scope: CallerScope = _caller_scope):
+    """Delete one of the caller's sessions (ownership checked before any delete)."""
     try:
-        async with engine.connect() as conn:
-            session_result = await conn.execute(
-                select(sessions_table).where(sessions_table.c.session_id == session_id)
-            )
-            session_row = session_result.fetchone()
+        await session_service.delete_owned_session(
+            session_id, scope, sessions_table, messages_table, async_session_factory,
+            on_deleted=_drop_vector_store,
+        )
+    except session_service.SessionNotFound:
+        raise HTTPException(status_code=404, detail=_SESSION_NOT_FOUND)
+    return {"message": "Session deleted successfully"}
 
-            if not session_row:
-                raise HTTPException(status_code=404, detail="Session not found")
-
-            msg_result = await conn.execute(
-                select(messages_table)
-                .where(messages_table.c.session_id == session_id)
-                .order_by(messages_table.c.timestamp.asc())
-            )
-            message_rows = msg_result.fetchall()
-
-        session_info = {
-            "session_id": session_row.session_id,
-            "created_at": session_row.created_at.isoformat() if session_row.created_at else None,
-            "updated_at": session_row.updated_at.isoformat() if session_row.updated_at else None,
-            "persona": session_row.persona,
-            "file_count": session_row.file_count,
-            "files_info": json.loads(session_row.files_info) if session_row.files_info else [],
-        }
-        messages = [
-            {
-                "role": row.role,
-                "content": row.content,
-                "sources": json.loads(row.sources) if row.sources else [],
-                "timestamp": row.timestamp.isoformat() if row.timestamp else None,
-            }
-            for row in message_rows
-        ]
-        return {"session": session_info, "messages": messages}
-    except HTTPException:
-        raise
-    except Exception as e:
-        logger.error(f"Error getting session: {e}")
-        raise HTTPException(status_code=500, detail=safe_error_message(e))
-
-@app.delete("/api/session/{session_id}")
-async def delete_session(session_id: str):
-    """Delete a session and its messages"""
-    try:
-        if session_id in VECTOR_STORES:
-            del VECTOR_STORES[session_id]
-        # DOCBOT-1001: remove persisted Chroma collection
-        from api.utils.vector_store import delete_store
-        delete_store(session_id)
-
-        async with engine.begin() as conn:
-            await conn.execute(
-                delete(messages_table).where(messages_table.c.session_id == session_id)
-            )
-            await conn.execute(
-                delete(sessions_table).where(sessions_table.c.session_id == session_id)
-            )
-
-        return {"message": "Session deleted successfully"}
-    except Exception as e:
-        logger.error(f"Error deleting session: {e}")
-        raise HTTPException(status_code=500, detail=safe_error_message(e))
 
 @app.get("/api/export/{session_id}")
-async def export_session(session_id: str, format: str = "txt"):
-    """Export session conversation"""
+async def export_session(session_id: str, format: str = "txt", scope: CallerScope = _caller_scope):
+    """Export one of the caller's sessions as txt, json or markdown."""
+    if format not in session_service.EXPORT_FORMATS:
+        raise HTTPException(status_code=400, detail="Unsupported format. Use: txt, json, or markdown")
     try:
-        async with engine.connect() as conn:
-            sess_result = await conn.execute(
-                select(sessions_table).where(sessions_table.c.session_id == session_id)
-            )
-            sess_row = sess_result.fetchone()
-
-            if not sess_row:
-                raise HTTPException(status_code=404, detail="Session not found")
-
-            msg_result = await conn.execute(
-                select(messages_table)
-                .where(messages_table.c.session_id == session_id)
-                .order_by(messages_table.c.timestamp.asc())
-            )
-            message_rows = msg_result.fetchall()
-
-        session_info = {
-            "session_id": sess_row.session_id,
-            "persona": sess_row.persona,
-            "files_info": json.loads(sess_row.files_info) if sess_row.files_info else [],
-        }
-        messages = [
-            {
-                "role": row.role,
-                "content": row.content,
-                "sources": json.loads(row.sources) if row.sources else [],
-                "timestamp": row.timestamp.isoformat() if row.timestamp else None,
-            }
-            for row in message_rows
-        ]
-        
-        if format == "json":
-            return {
-                "session": session_info,
-                "messages": messages
-            }
-        elif format == "txt":
-            # Plain text export
-            output = f"""DocBot Conversation Export
-=============================
-Session ID: {session_info['session_id']}
-Persona: {session_info['persona']}
-Files: {', '.join([f['filename'] for f in session_info['files_info']])}
-Exported: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}
-
-"""
-            for msg in messages:
-                role = "You" if msg['role'] == "user" else "DocBot"
-                output += f"\n--- {role} ---\n{msg['content']}"
-                if msg['sources']:
-                    output += "\nSources:"
-                    for src in msg['sources']:
-                        output += f"\n  - {src['source']}, Page {src['page']}"
-                output += "\n"
-            
-            return StreamingResponse(
-                BytesIO(output.encode('utf-8')),
-                media_type='text/plain',
-                headers={'Content-Disposition': f'attachment; filename="docbot_{session_id[:8]}.txt"'}
-            )
-        elif format == "markdown":
-            # Markdown export
-            output = f"""# DocBot Conversation Export
-
-**Session ID:** {session_info['session_id']}
-**Persona:** {session_info['persona']}
-**Files:** {', '.join([f['filename'] for f in session_info['files_info']])}
-**Exported:** {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}
-
----
-"""
-            for msg in messages:
-                role = "**You**" if msg['role'] == "user" else "**DocBot**"
-                output += f"\n### {role}\n\n{msg['content']}\n"
-                if msg['sources']:
-                    output += "\n**Sources:**\n"
-                    for src in msg['sources']:
-                        output += f"- {src['source']}, Page {src['page']}\n"
-                output += "\n---\n"
-            
-            return StreamingResponse(
-                BytesIO(output.encode('utf-8')),
-                media_type='text/markdown',
-                headers={'Content-Disposition': f'attachment; filename="docbot_{session_id[:8]}.md"'}
-            )
-        else:
-            raise HTTPException(status_code=400, detail="Unsupported format. Use: txt, json, or markdown")
-            
-    except HTTPException:
-        raise
-    except Exception as e:
-        logger.error(f"Error exporting session: {e}")
-        raise HTTPException(status_code=500, detail=safe_error_message(e))
+        detail = await session_service.get_session_detail(
+            session_id, scope, sessions_table, messages_table, async_session_factory
+        )
+    except session_service.SessionNotFound:
+        raise HTTPException(status_code=404, detail=_SESSION_NOT_FOUND)
+    if format == "json":
+        return detail
+    export = session_service.render_export(detail, format)
+    return StreamingResponse(
+        BytesIO(export.body),
+        media_type=export.media_type,
+        headers={"Content-Disposition": f'attachment; filename="{export.filename}"'},
+    )
 
 @app.post("/api/session/{session_id}/update-persona")
 async def update_session_persona(session_id: str, persona: str):
@@ -3388,8 +3282,7 @@ async def edgar_ingest_filing(request: Request, body: EdgarIngestRequest):
     """Download a single SEC filing and ingest into the RAG pipeline."""
     from api.edgar_service import ingest_edgar_filing
 
-    user = await get_optional_user(request)
-    user_id = user.id if user else None
+    scope = await resolve_caller_scope(request)
 
     result = await ingest_edgar_filing(
         cik=body.cik,
@@ -3399,7 +3292,7 @@ async def edgar_ingest_filing(request: Request, body: EdgarIngestRequest):
         filing_date=body.filing_date,
         company_name=body.company_name,
         ticker=body.ticker,
-        user_id=user_id,
+        owner=owner_values(scope),
         sessions_table=sessions_table,
         async_session_factory=async_session_factory,
         vector_stores=VECTOR_STORES,
@@ -3414,8 +3307,7 @@ async def edgar_ingest_batch(request: Request, body: EdgarBatchIngestRequest):
     """Ingest multiple years of SEC filings at once."""
     from api.edgar_service import ingest_multiple_filings
 
-    user = await get_optional_user(request)
-    user_id = user.id if user else None
+    scope = await resolve_caller_scope(request)
 
     results = await ingest_multiple_filings(
         cik=body.cik,
@@ -3423,7 +3315,7 @@ async def edgar_ingest_batch(request: Request, body: EdgarBatchIngestRequest):
         company_name=body.company_name,
         filing_type=body.filing_type,
         count=body.count,
-        user_id=user_id,
+        owner=owner_values(scope),
         sessions_table=sessions_table,
         async_session_factory=async_session_factory,
         vector_stores=VECTOR_STORES,
