@@ -124,6 +124,15 @@ async def abuse_guard(request: Request, call_next):
 
     return response
 
+
+# DOCBOT-1619: security headers (CSP, HSTS, frame/nosniff/referrer/permissions).
+# Registered after abuse_guard so it is the outermost layer and also covers the
+# guard's own 403/429 short-circuit responses and CORS preflights.
+from api.utils.security_headers import SecurityHeadersMiddleware  # noqa: E402
+
+app.add_middleware(SecurityHeadersMiddleware)
+
+
 def safe_error_message(error: Exception) -> str:
     """Sanitize error messages for client responses"""
     return "An internal error occurred. Please try again later."
