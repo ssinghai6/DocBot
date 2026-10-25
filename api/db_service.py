@@ -24,7 +24,7 @@ from typing import Any, AsyncGenerator, Dict, List, Optional
 from pydantic import BaseModel, RootModel, ValidationError, field_validator, model_validator
 from sqlalchemy import (
     Column, DateTime, Integer, MetaData, String, Table, Text,
-    and_, func, insert, or_, select, text, true, update, delete,
+    func, insert, or_, select, text, true, update, delete,
 )
 from sqlalchemy.sql.elements import ColumnElement
 from sqlalchemy.ext.asyncio import AsyncSession, create_async_engine
@@ -237,14 +237,17 @@ class ConnectionNotFoundError(Exception):
 
 
 def _unowned_clause(db_connections_table: Table) -> ColumnElement[bool]:
-    """Rows with no owner at all (anonymous/demo connections)."""
+    """Connections created by an anonymous caller (no owning user).
+
+    ``org_id`` is deliberately ignored: DOCBOT-1524's startup backfill stamps
+    the default org on rows that lack one, so an anonymous connection may
+    carry an org without having an owner. Every logged-in create path stamps
+    ``user_id``, so ``user_id IS NULL`` identifies anonymous/demo rows.
+    """
     cols = db_connections_table.c
-    parts = []
     if "user_id" in cols:
-        parts.append(cols.user_id.is_(None))
-    if "org_id" in cols:
-        parts.append(cols.org_id.is_(None))
-    return and_(*parts) if parts else true()
+        return cols.user_id.is_(None)
+    return true()
 
 
 def connection_access_clause(
@@ -261,8 +264,9 @@ def connection_access_clause(
     if scope is None:
         return true()
     if scope.user_id is None and scope.org_id:
-        return scope_filter(db_connections_table, scope)
-    if scope.is_anonymous:
+        # Org-only (API-key) scope: strictly the key's org.
+        return db_connections_table.c.org_id == scope.org_id
+    if scope.user_id is None:
         return _unowned_clause(db_connections_table)
     return or_(scope_filter(db_connections_table, scope), _unowned_clause(db_connections_table))
 
@@ -409,23 +413,23 @@ async def get_schema_cache_times(
 
 async def stamp_connection_owner(
     connection_id: str,
-    user_id: Optional[str],
+    scope: CallerScope,
     db_connections_table: Table,
     async_session_factory,
 ) -> None:
-    """Record the owning user on a freshly created connection row.
+    """Record the owning user (and their org) on a freshly created connection.
 
-    No-op for anonymous callers or tables without a ``user_id`` column.
-    Used by file-upload paths that do not go through ``connect_database``.
+    No-op for anonymous callers. Used by file-upload paths that do not go
+    through ``connect_database``.
     """
-    if not user_id or "user_id" not in db_connections_table.c:
+    if scope.user_id is None:
         return
     async with async_session_factory() as session:
         async with session.begin():
             await session.execute(
                 update(db_connections_table)
                 .where(db_connections_table.c.id == connection_id)
-                .values(user_id=user_id)
+                .values(user_id=scope.user_id, org_id=scope.org_id)
             )
 
 

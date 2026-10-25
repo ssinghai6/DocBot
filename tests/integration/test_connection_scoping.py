@@ -290,11 +290,11 @@ async def test_v1_own_ids_pass_scope_check(db, v1_key_org_a):
 # --- predicate unit checks ----------------------------------------------------
 
 def test_scope_filter_anonymous_only_unowned():
-    clause = str(scope_filter(idx.db_connections_table, CallerScope()))
+    clause = str(scope_filter(idx.db_connections_table, CallerScope(user_id=None, org_id=None, anon_token=None)))
     assert "user_id IS NULL" in clause and "org_id IS NULL" in clause
 
 
 def test_api_key_scope_is_strict_org():
-    clause = str(connection_access_clause(idx.db_connections_table, CallerScope(org_id=ORG_A)))
+    clause = str(connection_access_clause(idx.db_connections_table, CallerScope(user_id=None, org_id=ORG_A, anon_token=None)))
     assert "IS NULL" not in clause
     assert "org_id" in clause

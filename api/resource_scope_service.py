@@ -53,7 +53,7 @@ async def v1_resources_in_org(
             connection_id,
             db_connections_table,
             async_session_factory,
-            CallerScope(org_id=org_id),
+            CallerScope(user_id=None, org_id=org_id, anon_token=None),
         )
         if row is None:
             return False

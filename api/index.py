@@ -1699,7 +1699,7 @@ from api.db_service import (
     run_sql_pipeline,
     stamp_connection_owner,
 )
-from api.utils.caller_scope import CallerScope, get_caller_scope, scope_from_api_key
+from api.utils.caller_scope import CallerScope, get_caller_scope
 
 # DOCBOT-1603 (SEC-06): every connection-keyed route resolves the caller's
 # org+owner scope; foreign connection ids are reported as 404.
@@ -1749,14 +1749,14 @@ async def db_connect(
         )
     try:
         # DOCBOT-1529: scope the stored credential blob's encryption to the
-        # requesting user's org (None in open/demo mode — falls back to the
-        # legacy scheme, which self-migrates once an org is known).
+        # requesting user's org (from the caller scope even in open mode, so the
+        # row is visible under the org+owner predicate; None for anonymous).
         result = await connect_database(
             request,
             db_connections_table,
             schema_cache_table,
             async_session_factory,
-            org_id=get_user_org_id(_user),
+            org_id=get_user_org_id(_user) or scope.org_id,
             # Persistent Workspace / DOCBOT-1603: stamp the owning user.
             user_id=scope.user_id,
         )
@@ -2038,7 +2038,7 @@ async def db_upload_sqlite(
             async_session_factory=async_session_factory,
         )
         await stamp_connection_owner(
-            result["connection_id"], scope.user_id, db_connections_table, async_session_factory
+            result["connection_id"], scope, db_connections_table, async_session_factory
         )
         return result
     except ValueError as exc:
@@ -2072,7 +2072,7 @@ async def db_upload_csv(
             async_session_factory=async_session_factory,
         )
         await stamp_connection_owner(
-            result["connection_id"], scope.user_id, db_connections_table, async_session_factory
+            result["connection_id"], scope, db_connections_table, async_session_factory
         )
         return result
     except ValueError as exc:
@@ -3481,7 +3481,7 @@ async def _require_v1_resources(key: Any, session_id: str, connection_id: Option
     """DOCBOT-1603: body-supplied session/connection ids must be in the key's org → else 404."""
     from api.resource_scope_service import v1_resources_in_org
     ok = await v1_resources_in_org(
-        scope_from_api_key(key).org_id,
+        getattr(key, "org_id", None),
         session_id,
         connection_id,
         sessions_table,
