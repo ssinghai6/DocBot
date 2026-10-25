@@ -23,6 +23,7 @@ import hmac
 import logging
 import re
 from typing import Any
+from urllib.parse import urlsplit
 
 import httpx
 
@@ -44,6 +45,40 @@ _PAGE_SIZE = 250  # Shopify max per page for orders
 
 # Shopify REST rate limit: 2 requests/second (bucket leak)
 _RATE_LIMIT_RPS = 2.0
+
+# DOCBOT-1602 (SEC-03): the shop domain is interpolated into the request URL,
+# so it is the SSRF boundary. Only canonical ``<store>.myshopify.com`` hosts
+# are allowed — no custom domains, IPs, ports, paths, userinfo or suffixes.
+SHOP_DOMAIN_RE = re.compile(r"^[a-z0-9][a-z0-9-]*\.myshopify\.com$")
+_API_VERSION_RE = re.compile(r"^(\d{4}-\d{2}|unstable)$")
+
+
+class InvalidShopDomainError(ValueError):
+    """Raised when a Shopify shop domain is not a canonical *.myshopify.com host."""
+
+
+def validate_shop_domain(value: object) -> str:
+    """Return the normalized (stripped, lower-cased) shop domain or raise.
+
+    Uses ``fullmatch`` so a trailing newline cannot slip past ``$``. The
+    error message never echoes the rejected value.
+    """
+    if not isinstance(value, str):
+        raise InvalidShopDomainError("shop_domain must be a string like 'mystore.myshopify.com'.")
+    normalized = value.strip().lower()
+    if len(normalized) > 255 or not SHOP_DOMAIN_RE.fullmatch(normalized):
+        raise InvalidShopDomainError(
+            "shop_domain must be a Shopify domain like 'mystore.myshopify.com'."
+        )
+    return normalized
+
+
+def validate_api_version(value: object) -> str:
+    """Return a Shopify API version (``YYYY-MM`` or ``unstable``) or raise ValueError."""
+    if not isinstance(value, str) or not _API_VERSION_RE.fullmatch(value.strip()):
+        raise ValueError("api_version must look like '2024-01'.")
+    return value.strip()
+
 
 # Link header pagination regex
 _NEXT_PAGE_RE = re.compile(r'<([^>]+)>;\s*rel="next"')
@@ -103,9 +138,13 @@ class ShopifyConnector(BaseConnector):
     def connector_type(self) -> str:
         return "shopify"
 
+    def _shop_domain(self) -> str:
+        return validate_shop_domain(self._creds.require("shop_domain"))
+
     def _base_url(self) -> str:
-        shop = self._creds.require("shop_domain")
-        return f"https://{shop}/admin/api/{self._api_version}"
+        shop = self._shop_domain()
+        version = validate_api_version(self._api_version)
+        return f"https://{shop}/admin/api/{version}"
 
     def _headers(self) -> dict[str, str]:
         token = self._creds.require("access_token")
@@ -155,7 +194,16 @@ class ShopifyConnector(BaseConnector):
         """Parse cursor-based pagination from Shopify Link header."""
         link = headers.get("link", "")
         match = _NEXT_PAGE_RE.search(link)
-        return match.group(1) if match else None
+        if not match:
+            return None
+        url = match.group(1)
+        # DOCBOT-1602: only follow pagination links back to the same shop
+        # over HTTPS — never let a response steer us to another host.
+        parts = urlsplit(url)
+        if parts.scheme != "https" or parts.hostname != self._shop_domain() or parts.port is not None:
+            logger.warning("Shopify pagination link pointed off-shop; stopping pagination")
+            return None
+        return url
 
     async def _shopify_get_paginated(
         self,

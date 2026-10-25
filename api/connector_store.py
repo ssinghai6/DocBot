@@ -24,6 +24,7 @@ from sqlalchemy import (
     String,
     Table,
     Text,
+    and_,
     func,
     select,
     update,
@@ -276,19 +277,26 @@ async def load_all_active_connectors() -> list[dict[str, Any]]:
     return connectors
 
 
-async def delete_connector(connector_id: str) -> bool:
+async def delete_connector(connector_id: str, *, org_id: Optional[str] = None) -> bool:
     """Soft-delete a connector (set is_active=False).
+
+    DOCBOT-1602: when ``org_id`` is given, only a connector in that org is
+    affected (the predicate is part of the UPDATE, not a prior read).
 
     Returns True if a row was affected, False otherwise.
     """
     if _connections_table is None or _async_session_factory is None:
         return False
 
+    conds = [_connections_table.c.id == connector_id]
+    if org_id is not None:
+        conds.append(_connections_table.c.org_id == org_id)
+
     async with _async_session_factory() as session:
         async with session.begin():
             result = await session.execute(
                 update(_connections_table)
-                .where(_connections_table.c.id == connector_id)
+                .where(and_(*conds))
                 .values(
                     is_active=False,
                     updated_at=datetime.now(timezone.utc),
@@ -297,8 +305,12 @@ async def delete_connector(connector_id: str) -> bool:
     return result.rowcount > 0
 
 
-async def list_active_connectors() -> list[dict[str, Any]]:
-    """Return metadata for all active connectors (no credentials)."""
+async def list_active_connectors(*, org_id: Optional[str] = None) -> list[dict[str, Any]]:
+    """Return metadata for active connectors (no credentials).
+
+    DOCBOT-1602: pass ``org_id`` to restrict the listing to one org. Omitting
+    it lists every org's connectors and is reserved for internal callers.
+    """
     if _connections_table is None or _async_session_factory is None:
         return []
 
@@ -315,6 +327,8 @@ async def list_active_connectors() -> list[dict[str, Any]]:
         )
         .where(_connections_table.c.is_active == True)  # noqa: E712
     )
+    if org_id is not None:
+        stmt = stmt.where(_connections_table.c.org_id == org_id)
 
     async with _async_session_factory() as session:
         result = await session.execute(stmt)
@@ -333,6 +347,27 @@ async def list_active_connectors() -> list[dict[str, Any]]:
         }
         for r in rows
     ]
+
+
+async def connector_in_org(connector_id: str, org_id: str) -> bool:
+    """True when ``connector_id`` is an ACTIVE connector owned by ``org_id`` — DOCBOT-1602.
+
+    Fails closed: unwired store, unknown id, inactive row, NULL org_id or a
+    different org all return False (route handlers answer 404 so another
+    org's connector ids are not disclosed).
+    """
+    if _connections_table is None or _async_session_factory is None or not org_id:
+        return False
+    stmt = select(_connections_table.c.id).where(
+        and_(
+            _connections_table.c.id == connector_id,
+            _connections_table.c.org_id == org_id,
+            _connections_table.c.is_active == True,  # noqa: E712
+        )
+    )
+    async with _async_session_factory() as session:
+        result = await session.execute(stmt)
+        return result.first() is not None
 
 
 async def get_connector_info(connector_id: str) -> Optional[dict[str, Any]]:

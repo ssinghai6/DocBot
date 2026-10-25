@@ -3118,246 +3118,25 @@ async def get_admin_metrics(llm_days: int = 7, _user=_rbac_platform_admin):
 
 
 # ---------------------------------------------------------------------------
-# Commerce Connectors — EPIC-07
+# Commerce Connectors — EPIC-07. DOCBOT-1602: routes live in
+# api/routes/connector_routes.py (analyst+ in every mode, org-scoped).
 # ---------------------------------------------------------------------------
 
-class ConnectorRegisterRequest(BaseModel):
-    """Register a new commerce connector with encrypted credentials."""
-    connector_type: str  # e.g. "amazon"
-    credentials: Dict[str, str]  # client_id, client_secret, refresh_token, marketplace_id
+from api.routes.connector_routes import (  # noqa: E402
+    ConnectorDateRangeRequest,
+    router as connector_router,
+)
 
-
-class ConnectorDateRangeRequest(BaseModel):
-    """Date range for fetching orders or financials."""
-    start_date: str  # ISO 8601 date, e.g. "2024-01-01"
-    end_date: str    # ISO 8601 date, e.g. "2024-01-31"
-
-
-@app.post("/api/connectors/register")
-async def register_connector(body: ConnectorRegisterRequest):
-    """Register and test a commerce connector. Returns connector_id on success."""
-    from api.connectors.registry import get_connector_class
-    from api.connectors.base import ConnectorCredentials
-
-    try:
-        cls = get_connector_class(body.connector_type)
-    except KeyError as exc:
-        raise HTTPException(status_code=400, detail=str(exc))
-
-    creds = ConnectorCredentials(
-        connector_type=body.connector_type,
-        credentials=body.credentials,
-    )
-    connector = cls(creds)
-
-    try:
-        ok = await connector.test_connection()
-    except Exception as exc:
-        logger.warning("Connector test_connection failed: %s", exc)
-        raise HTTPException(
-            status_code=502,
-            detail=f"Connection test failed: {exc}",
-        )
-
-    if not ok:
-        raise HTTPException(
-            status_code=502,
-            detail="Connector test_connection returned False — check credentials.",
-        )
-
-    connector_id = str(uuid.uuid4())
-    # In-memory cache for fast lookups
-    if not hasattr(app.state, "connectors"):
-        app.state.connectors = {}
-    app.state.connectors[connector_id] = connector
-
-    # DOCBOT-706: persist to PostgreSQL with encrypted credentials
-    from api.connector_store import save_connector
-    await save_connector(connector_id, body.connector_type, body.credentials)
-
-    # DOCBOT-704: register background sync schedules
-    from api.connectors.sync_jobs import register_sync_schedules
-    register_sync_schedules(connector_id)
-
-    logger.info(
-        "Registered %s connector: %s",
-        body.connector_type,
-        connector_id,
-    )
-    return {"connector_id": connector_id, "connector_type": body.connector_type, "status": "connected"}
+app.include_router(connector_router)
 
 
 def _get_connector(connector_id: str):
-    """Retrieve a registered connector by ID or raise 404."""
+    """Retrieve a registered connector by ID or raise 404 (used by /v1 routes)."""
     connectors = getattr(app.state, "connectors", {})
     connector = connectors.get(connector_id)
     if connector is None:
-        raise HTTPException(status_code=404, detail=f"Connector '{connector_id}' not found.")
+        raise HTTPException(status_code=404, detail="Connector not found.")
     return connector
-
-
-@app.get("/api/connectors")
-async def list_connectors():
-    """List all active connectors from DB (survives restarts)."""
-    from api.connector_store import list_active_connectors
-    connectors = await list_active_connectors()
-    return {"connectors": connectors}
-
-
-@app.delete("/api/connectors/{connector_id}")
-async def disconnect_connector(connector_id: str):
-    """Soft-delete a connector — removes from memory, DB, and sync schedules."""
-    from api.connector_store import delete_connector
-    from api.connectors.sync_jobs import deregister_sync_schedules
-    connectors = getattr(app.state, "connectors", {})
-    connectors.pop(connector_id, None)
-    deregister_sync_schedules(connector_id)
-    deleted = await delete_connector(connector_id)
-    if not deleted:
-        raise HTTPException(status_code=404, detail=f"Connector '{connector_id}' not found.")
-    logger.info("Disconnected connector: %s", connector_id)
-    return {"status": "disconnected", "connector_id": connector_id}
-
-
-@app.post("/api/connectors/{connector_id}/orders")
-async def fetch_connector_orders(connector_id: str, body: ConnectorDateRangeRequest):
-    """Fetch orders from a registered commerce connector."""
-    connector = _get_connector(connector_id)
-    try:
-        orders = await connector.fetch_orders(body.start_date, body.end_date)
-    except Exception as exc:
-        logger.error("fetch_orders failed for %s: %s", connector_id, exc)
-        raise HTTPException(status_code=502, detail=f"Failed to fetch orders: {exc}")
-    return {"connector_id": connector_id, "order_count": len(orders), "orders": orders}
-
-
-@app.post("/api/connectors/{connector_id}/financials")
-async def fetch_connector_financials(connector_id: str, body: ConnectorDateRangeRequest):
-    """Fetch financial events from a registered commerce connector."""
-    connector = _get_connector(connector_id)
-    try:
-        financials = await connector.fetch_financials(body.start_date, body.end_date)
-    except Exception as exc:
-        logger.error("fetch_financials failed for %s: %s", connector_id, exc)
-        raise HTTPException(status_code=502, detail=f"Failed to fetch financials: {exc}")
-    return {"connector_id": connector_id, "financials": financials}
-
-
-@app.get("/api/connectors/types")
-async def list_connector_types():
-    """Return all registered connector type identifiers."""
-    from api.connectors.registry import list_connector_types as _list_types
-    return {"types": _list_types()}
-
-
-# ---------------------------------------------------------------------------
-# DOCBOT-702: Commerce Data Sync + Query (persisted commerce schema)
-# ---------------------------------------------------------------------------
-
-@app.post("/api/connectors/{connector_id}/sync")
-async def sync_connector(connector_id: str, body: ConnectorDateRangeRequest):
-    """Fetch orders + financials from connector and persist to commerce tables."""
-    from api.commerce_service import sync_connector_data
-
-    connector = _get_connector(connector_id)
-    try:
-        summary = await sync_connector_data(
-            connector_id, connector, body.start_date, body.end_date,
-        )
-    except Exception as exc:
-        logger.error("sync failed for %s: %s", connector_id, exc)
-        raise HTTPException(status_code=502, detail=f"Sync failed: {exc}")
-
-    # DOCBOT-706: track last successful sync timestamp
-    from api.connector_store import update_last_sync
-    await update_last_sync(connector_id)
-
-    return summary
-
-
-@app.get("/api/commerce/{connector_id}/orders")
-async def get_commerce_orders(
-    connector_id: str,
-    limit: int = 50,
-    offset: int = 0,
-    status: Optional[str] = None,
-):
-    """Query persisted orders for a connection (RLS-filtered by connector_id)."""
-    from api.commerce_service import query_orders
-    orders = await query_orders(connector_id, limit=limit, offset=offset, status=status)
-    return {"connector_id": connector_id, "order_count": len(orders), "orders": orders}
-
-
-@app.get("/api/commerce/{connector_id}/financials")
-async def get_commerce_financials(
-    connector_id: str,
-    limit: int = 50,
-    offset: int = 0,
-):
-    """Query persisted financials for a connection (RLS-filtered by connector_id)."""
-    from api.commerce_service import query_financials
-    financials = await query_financials(connector_id, limit=limit, offset=offset)
-    return {"connector_id": connector_id, "financials": financials}
-
-
-# ---------------------------------------------------------------------------
-# DOCBOT-705: Shopify Webhook Receiver
-# ---------------------------------------------------------------------------
-
-
-@app.post("/api/marketplace/webhook/shopify")
-async def shopify_webhook(request: Request):
-    """Handle incoming Shopify webhook with HMAC-SHA256 verification.
-
-    Triggers an incremental sync for the affected connector.
-    """
-    import json as _json
-
-    body = await request.body()
-    hmac_header = request.headers.get("X-Shopify-Hmac-SHA256", "")
-    shop_domain = request.headers.get("X-Shopify-Shop-Domain", "")
-    topic = request.headers.get("X-Shopify-Topic", "")
-
-    if not hmac_header or not shop_domain:
-        raise HTTPException(status_code=401, detail="Missing Shopify webhook headers")
-
-    # Find the connector for this shop domain
-    connector_id = None
-    for cid, conn in _connectors.items():
-        if conn.connector_type == "shopify":
-            cred_domain = conn._creds.credentials.get("shop_domain", "")
-            if cred_domain == shop_domain:
-                connector_id = cid
-                break
-
-    if not connector_id:
-        raise HTTPException(status_code=404, detail=f"No connector for shop {shop_domain}")
-
-    connector = _connectors[connector_id]
-    webhook_secret = connector._creds.credentials.get("webhook_secret", "")
-    if not webhook_secret:
-        raise HTTPException(status_code=401, detail="No webhook_secret configured for this connector")
-
-    from api.connectors.shopify_connector import verify_shopify_hmac
-    if not verify_shopify_hmac(body, webhook_secret, hmac_header):
-        raise HTTPException(status_code=401, detail="Invalid HMAC signature")
-
-    logger.info("Shopify webhook received: topic=%s shop=%s", topic, shop_domain)
-
-    # Trigger incremental sync in background (last 24 hours)
-    from datetime import datetime, timedelta, timezone
-    now = datetime.now(timezone.utc)
-    start = (now - timedelta(hours=24)).isoformat()
-    end = now.isoformat()
-
-    from api.commerce_service import sync_connector_data
-    try:
-        summary = await sync_connector_data(connector_id, connector, start, end)
-        logger.info("Shopify webhook sync complete: %s", summary)
-    except Exception as exc:
-        logger.error("Shopify webhook sync failed: %s", exc)
-
-    return {"status": "ok", "topic": topic}
 
 
 # ── SEC EDGAR Routes ─────────────────────────────────────────────────────────

@@ -44,6 +44,14 @@ from fastapi.dependencies.models import Dependant  # noqa: E402
 from fastapi.routing import APIRoute  # noqa: E402
 from fastapi.testclient import TestClient  # noqa: E402
 
+try:
+    # fastapi >= 0.162 wraps include_router() output in a private _IncludedRouter
+    # entry instead of flattening every sub-route into app.routes. Older
+    # fastapi versions flatten directly, so the class may not exist.
+    from fastapi.routing import _IncludedRouter  # noqa: E402
+except ImportError:  # pragma: no cover — only hit on fastapi < 0.162
+    _IncludedRouter = ()
+
 import api.index as idx  # noqa: E402
 
 RouteKey = tuple[str, str]  # (METHOD, path)
@@ -100,14 +108,31 @@ def _has_guard(route: APIRoute) -> bool:
 
 
 def _api_routes() -> dict[RouteKey, APIRoute]:
+    """Flatten every reachable HTTP route, including nested included routers.
+
+    fastapi >= 0.162 keeps ``include_router()`` output behind an
+    ``_IncludedRouter`` wrapper instead of appending each sub-route directly to
+    ``app.routes``, so a plain iteration only sees top-level routes. Descend
+    into the wrapped router and apply the include prefix; guard detection still
+    uses each sub-route's own dependency (include-level ``Depends`` ratchets the
+    manifest test's "guarded" signal, never loosens it).
+    """
     routes: dict[RouteKey, APIRoute] = {}
-    for route in idx.app.routes:
-        if not isinstance(route, APIRoute):
-            continue  # /openapi.json, /docs, /redoc — FastAPI built-ins
-        for method in route.methods:
-            if method in ("HEAD", "OPTIONS"):
+
+    def _collect(items: Iterable[object], prefix: str) -> None:
+        for route in items:
+            if isinstance(route, _IncludedRouter):
+                ctx = route.include_context
+                _collect(route.original_router.routes, prefix + ctx.prefix)
                 continue
-            routes[(method, route.path)] = route
+            if not isinstance(route, APIRoute):
+                continue  # /openapi.json, /docs, /redoc — FastAPI built-ins
+            for method in route.methods:
+                if method in ("HEAD", "OPTIONS"):
+                    continue
+                routes[(method, prefix + route.path)] = route
+
+    _collect(idx.app.routes, "")
     return routes
 
 
@@ -133,8 +158,10 @@ PUBLIC_ROUTES: dict[RouteKey, str] = {
     ("POST", "/api/auth/register"): "Email/password sign-up (abuse controls: DOCBOT-1622, 1701).",
     ("POST", "/api/auth/login"): "Email/password login (throttling: DOCBOT-1622).",
     ("POST", "/api/auth/logout"): "Clears the caller's own session cookie; no-op when anonymous.",
-    ("POST", "/api/marketplace/webhook/shopify"): "Shopify server-to-server webhook; authenticated by "
-                                                  "HMAC-SHA256 in the handler (fix: DOCBOT-1627).",
+    ("POST", "/api/marketplace/webhook/shopify"): "Shopify server-to-server webhook; no browser session. "
+                                                  "Authenticated by HMAC-SHA256 over the raw body with the "
+                                                  "connector's webhook_secret; shop domain header validated "
+                                                  "against *.myshopify.com (DOCBOT-1602; further: DOCBOT-1627).",
 }
 
 # Handler rejects anonymous callers itself (no Depends guard). Verified by
@@ -156,16 +183,6 @@ DEV_ONLY: dict[RouteKey, str] = {
 KNOWN_UNGUARDED: dict[RouteKey, str] = {
     # Uploads: gate_uploads only enforces when GATE_UPLOADS=true.
     ("POST", "/api/upload"): "DOCBOT-1711",
-    # Connector + commerce RBAC (SEC-03).
-    ("POST", "/api/connectors/register"): "DOCBOT-1602",
-    ("GET", "/api/connectors"): "DOCBOT-1602",
-    ("DELETE", "/api/connectors/{connector_id}"): "DOCBOT-1602",
-    ("POST", "/api/connectors/{connector_id}/orders"): "DOCBOT-1602",
-    ("POST", "/api/connectors/{connector_id}/financials"): "DOCBOT-1602",
-    ("GET", "/api/connectors/types"): "DOCBOT-1602",
-    ("POST", "/api/connectors/{connector_id}/sync"): "DOCBOT-1602",
-    ("GET", "/api/commerce/{connector_id}/orders"): "DOCBOT-1602",
-    ("GET", "/api/commerce/{connector_id}/financials"): "DOCBOT-1602",
     # EDGAR: outbound SEC calls + embedding cost, unmetered (SEC-21).
     ("POST", "/api/edgar/search"): "DOCBOT-1623",
     ("POST", "/api/edgar/filings"): "DOCBOT-1623",

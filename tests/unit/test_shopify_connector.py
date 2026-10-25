@@ -398,7 +398,7 @@ class TestFetchOrders:
 
         always_next_headers = MagicMock()
         always_next_headers.get = lambda key, default="": (
-            '<https://test.myshopify.com/orders.json?page_info=always>; rel="next"'
+            '<https://testshop.myshopify.com/orders.json?page_info=always>; rel="next"'
             if key == "link" else default
         )
 
