@@ -43,6 +43,8 @@ from typing import Annotated, Any, AsyncGenerator, Optional
 
 from typing_extensions import TypedDict
 
+from api.utils.sandbox_paths import sandbox_csv_path
+
 from langgraph.graph import END, START, StateGraph
 
 logger = logging.getLogger(__name__)
@@ -722,7 +724,7 @@ def make_executor_node(
                                 else ""
                             )
 
-                            _csv_path = f"/tmp/{_table_name}.csv"
+                            _csv_path = sandbox_csv_path(_table_name)
                             _csv_code = await generate_csv_analysis_code(
                                 csv_path_in_sandbox=_csv_path,
                                 column_names=_column_names,

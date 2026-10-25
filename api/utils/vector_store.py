@@ -47,13 +47,19 @@ from __future__ import annotations
 
 import logging
 import os
+import tempfile
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any
 
 logger = logging.getLogger(__name__)
 
-_PERSIST_DIR = Path(os.getenv("CHROMA_PERSIST_DIR", "/tmp/docbot_chroma"))
+# DOCBOT-1633: default resolved via tempfile (honours TMPDIR; /tmp on Linux)
+# rather than a hardcoded /tmp literal. Point CHROMA_PERSIST_DIR at a mounted
+# volume for durable storage.
+_PERSIST_DIR = Path(
+    os.getenv("CHROMA_PERSIST_DIR") or Path(tempfile.gettempdir()) / "docbot_chroma"
+)
 
 # DOCBOT-1525: default inactivity window before a session's vector store
 # becomes eligible for automatic deletion. 30 days mirrors common SaaS

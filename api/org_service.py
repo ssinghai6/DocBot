@@ -40,7 +40,23 @@ from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from typing import Any, Iterable, Optional
 
-from sqlalchemy import Column, DateTime, String, Table, func, text
+from sqlalchemy import (
+    Column,
+    DateTime,
+    String,
+    Table,
+    and_,
+    column,
+    func,
+    literal,
+    or_,
+    select,
+    text,
+    update,
+)
+from sqlalchemy import table as table_clause
+from sqlalchemy.sql import ColumnElement, Executable
+from sqlalchemy.sql.expression import TableClause
 
 logger = logging.getLogger(__name__)
 
@@ -187,6 +203,17 @@ async def get_user_org(conn: Any, user_id: str) -> Optional[str]:
     return row[0] if row is not None else None
 
 
+def _org_table(name: str, *extra_columns: str) -> TableClause:
+    """Lightweight Core construct for an org-scoped table (DOCBOT-1633).
+
+    Table names come only from this module's fixed allowlists
+    (``_BACKFILL_TABLES`` / ``_USER_OWNED_TABLES`` / literals); building the
+    statements with SQLAlchemy Core instead of f-string SQL keeps identifiers
+    out of string interpolation and every value a bound parameter.
+    """
+    return table_clause(name, column("org_id"), *(column(c) for c in extra_columns))
+
+
 def _rowcount(result: Any) -> int:
     try:
         return int(result.rowcount or 0)
@@ -247,14 +274,28 @@ async def backfill_default_organization(conn: Any) -> str:
         logger.info("org_service: backfilled org_id on %d legacy user(s)", affected)
 
     # 2) User-owned rows inherit their owner's org.
+    owner = _org_table("users", "id").alias("u")
     for table_name in _USER_OWNED_TABLES:
-        affected = _rowcount(await conn.execute(text(
-            f"UPDATE {table_name} SET org_id = ("
-            f"SELECT u.org_id FROM users u WHERE u.id = {table_name}.user_id"
-            f") WHERE org_id IS NULL AND user_id IS NOT NULL AND EXISTS ("
-            f"SELECT 1 FROM users u WHERE u.id = {table_name}.user_id "
-            f"AND u.org_id IS NOT NULL)"
-        )))
+        target = _org_table(table_name, "user_id")
+        owner_org = (
+            select(owner.c.org_id)
+            .where(owner.c.id == target.c.user_id)
+            .scalar_subquery()
+        )
+        owner_has_org = (
+            select(literal(1))
+            .where(owner.c.id == target.c.user_id, owner.c.org_id.is_not(None))
+            .exists()
+        )
+        affected = _rowcount(await conn.execute(
+            update(target)
+            .values(org_id=owner_org)
+            .where(
+                target.c.org_id.is_(None),
+                target.c.user_id.is_not(None),
+                owner_has_org,
+            )
+        ))
         if affected > 0:
             logger.info(
                 "org_service: assigned owner org_id on %d row(s) in %s", affected, table_name
@@ -262,9 +303,9 @@ async def backfill_default_organization(conn: Any) -> str:
 
     # 3) Everything still unowned → default org.
     for table_name in _BACKFILL_TABLES:
+        target = _org_table(table_name)
         affected = _rowcount(await conn.execute(
-            text(f"UPDATE {table_name} SET org_id = :org_id WHERE org_id IS NULL"),
-            {"org_id": org_id},
+            update(target).values(org_id=org_id).where(target.c.org_id.is_(None))
         ))
         if affected > 0:
             logger.info(
@@ -364,21 +405,34 @@ def _as_utc(value: Any) -> Optional[datetime]:
     return value.astimezone(timezone.utc)
 
 
-async def _count(conn: Any, sql: str, params: dict[str, Any]) -> int:
-    result = await conn.execute(text(sql), params)
-    row = result.fetchone()
+async def _count(conn: Any, stmt: Executable) -> int:
+    """Execute a ``SELECT COUNT(*)`` Core statement and return the integer."""
+    row = (await conn.execute(stmt)).fetchone()
     return int(row[0]) if row is not None and row[0] is not None else 0
+
+
+def _count_where(target: TableClause, *conditions: ColumnElement[bool]) -> Executable:
+    return select(func.count()).select_from(target).where(*conditions)
+
+
+def _owned_by(
+    target: TableClause, user_id: str, default_org_id: str
+) -> ColumnElement[bool]:
+    """Rows owned by ``user_id`` that sit in the default org (or no org)."""
+    return and_(
+        target.c.user_id == user_id,
+        or_(target.c.org_id == default_org_id, target.c.org_id.is_(None)),
+    )
 
 
 async def _count_optional_table(conn: Any, table_name: str, org_id: str) -> int:
     """COUNT(*) rows for ``org_id`` in a table that may not exist yet."""
     from sqlalchemy.exc import DBAPIError
 
+    target = _org_table(table_name)
     try:
         async with conn.begin_nested():
-            return await _count(
-                conn, f"SELECT COUNT(*) FROM {table_name} WHERE org_id = :org", {"org": org_id}
-            )
+            return await _count(conn, _count_where(target, target.c.org_id == org_id))
     except DBAPIError:
         return 0
 
@@ -451,48 +505,46 @@ async def remediate_personal_orgs(
         selected.append(row)
 
     env_prefix = f"ENV1:{default_org_id}:%"
-    owned_filter = "user_id = :uid AND (org_id = :org OR org_id IS NULL)"
+    sessions_t = _org_table("sessions", "user_id")
+    connections_t = _org_table("db_connections", "user_id", "credentials_blob")
+    users_t = _org_table("users", "id", "role")
     for row in selected:
-        owned = {"uid": row.id, "org": default_org_id}
         move = UserMove(
             user_id=row.id,
             new_org_id=None,
-            sessions=await _count(
-                conn, f"SELECT COUNT(*) FROM sessions WHERE {owned_filter}", owned
-            ),
-            db_connections=await _count(
-                conn, f"SELECT COUNT(*) FROM db_connections WHERE {owned_filter}", owned
-            ),
-            connections_on_default_dek=await _count(
-                conn,
-                f"SELECT COUNT(*) FROM db_connections WHERE {owned_filter} "
-                "AND credentials_blob LIKE :prefix",
-                {**owned, "prefix": env_prefix},
-            ),
+            sessions=await _count(conn, _count_where(
+                sessions_t, _owned_by(sessions_t, row.id, default_org_id)
+            )),
+            db_connections=await _count(conn, _count_where(
+                connections_t, _owned_by(connections_t, row.id, default_org_id)
+            )),
+            connections_on_default_dek=await _count(conn, _count_where(
+                connections_t,
+                _owned_by(connections_t, row.id, default_org_id),
+                connections_t.c.credentials_blob.like(env_prefix),
+            )),
         )
         if apply:
             new_org_id = await create_personal_org(conn, row.name)
             move.new_org_id = new_org_id
-            user_vals: dict[str, Any] = {"new_org": new_org_id, "uid": row.id}
-            role_sql = ""
+            user_vals: dict[str, Any] = {"org_id": new_org_id}
             if promote_to_admin:
-                role_sql = ", role = :role"
                 user_vals["role"] = PERSONAL_ORG_CREATOR_ROLE
             await conn.execute(
-                text(f"UPDATE users SET org_id = :new_org{role_sql} WHERE id = :uid"),
-                user_vals,
+                update(users_t).values(**user_vals).where(users_t.c.id == row.id)
             )
             for table_name in _USER_OWNED_TABLES:
+                target = _org_table(table_name, "user_id")
                 await conn.execute(
-                    text(f"UPDATE {table_name} SET org_id = :new_org WHERE {owned_filter}"),
-                    {**owned, "new_org": new_org_id},
+                    update(target)
+                    .values(org_id=new_org_id)
+                    .where(_owned_by(target, row.id, default_org_id))
                 )
         report.moves.append(move)
 
+    marketplace_t = _org_table("marketplace_connections")
     report.unattributable_marketplace_connections = await _count(
-        conn,
-        "SELECT COUNT(*) FROM marketplace_connections WHERE org_id = :org",
-        {"org": default_org_id},
+        conn, _count_where(marketplace_t, marketplace_t.c.org_id == default_org_id)
     )
     report.default_org_api_keys = await _count_optional_table(conn, "api_keys", default_org_id)
     return report

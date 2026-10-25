@@ -19,6 +19,8 @@ from typing import AsyncGenerator, List, Optional
 import groq as groq_module
 from pydantic import BaseModel, ValidationError
 
+from api.utils.sandbox_paths import sandbox_csv_path
+
 logger = logging.getLogger(__name__)
 
 # DOCBOT-305: supported chart types for validate + prompt routing
@@ -1350,7 +1352,7 @@ async def run_csv_query_on_e2b(
             .get("persona_def", "You are a helpful data analyst.")
         )
 
-        csv_path_in_sandbox = f"/tmp/{table_name}.csv"
+        csv_path_in_sandbox = sandbox_csv_path(table_name)
 
         # Detect complex queries for adaptive timeout
         is_complex = bool(_COMPLEX_QUERY_RE.search(question))

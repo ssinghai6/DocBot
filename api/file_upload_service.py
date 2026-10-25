@@ -14,6 +14,7 @@ import base64
 import json
 import logging
 import os
+import tempfile
 import uuid
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
@@ -29,14 +30,17 @@ logger = logging.getLogger(__name__)
 # Constants
 # ---------------------------------------------------------------------------
 
-_TMP_DIR = Path("/tmp/docbot_uploads")
+# DOCBOT-1633: resolved via tempfile (honours TMPDIR) instead of a hardcoded
+# /tmp literal. Must stay a stable directory, not mkdtemp(): stored
+# db_connections reference these files until the 2-hour TTL sweep.
+_TMP_DIR = Path(tempfile.gettempdir()) / "docbot_uploads"
 _SQLITE_MAX_BYTES = 100 * 1024 * 1024   # 100 MB
 _CSV_MAX_BYTES = 50 * 1024 * 1024        # 50 MB
 _FILE_TTL_SECONDS = 2 * 60 * 60         # 2 hours
 
 
 def _ensure_tmp_dir() -> None:
-    _TMP_DIR.mkdir(parents=True, exist_ok=True)
+    _TMP_DIR.mkdir(mode=0o700, parents=True, exist_ok=True)
 
 
 # ---------------------------------------------------------------------------
