@@ -309,8 +309,18 @@ async def jit_provision_user(
 
     attrs keys: email, name, provider, provider_id (optional), password_hash (optional)
     Providers: saml | okta | azure_ad | github | google | email
+
+    This is the ONLY user-creation path: SAML ACS, GitHub/Google OAuth
+    callbacks and email/password registration in api/index.py all call it.
+
+    DOCBOT-1702: a NEW user gets their own personal organization and is its
+    admin. The org INSERT and the user INSERT share one transaction, so no
+    user can exist without an org (a failed user insert — e.g. a concurrent
+    duplicate-email race — rolls the org back too). Returning users are
+    untouched: their org_id and role are never modified on re-login.
     """
     from sqlalchemy import select as sa_select, insert as sa_insert, update as sa_update
+    from api.org_service import PERSONAL_ORG_CREATOR_ROLE, create_personal_org
     email = attrs["email"]
 
     async with async_session_factory() as session:
@@ -337,14 +347,16 @@ async def jit_provision_user(
                 logger.info("Auth login: returning user %s (%s)", email, existing.id)
                 return existing.id
 
-            # First login — provision
+            # First login — provision a personal org + the user, atomically.
+            org_id = await create_personal_org(session, attrs["name"])
             user_id = str(uuid.uuid4())
             insert_vals: dict[str, Any] = {
                 "id": user_id,
                 "email": email,
                 "name": attrs["name"],
                 "provider": attrs["provider"],
-                "role": "analyst",  # default role
+                "role": PERSONAL_ORG_CREATOR_ROLE,  # creator = admin of own org
+                "org_id": org_id,
                 "last_login_at": datetime.now(timezone.utc),
             }
             if attrs.get("provider_id"):
@@ -353,5 +365,8 @@ async def jit_provision_user(
                 insert_vals["password_hash"] = attrs["password_hash"]
 
             await session.execute(sa_insert(users_table).values(**insert_vals))
-            logger.info("Auth JIT provision: new user %s (%s) via %s", email, user_id, attrs["provider"])
+            logger.info(
+                "Auth JIT provision: new user %s in personal org %s via %s",
+                user_id, org_id, attrs["provider"],
+            )
             return user_id
