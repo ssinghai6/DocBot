@@ -17,11 +17,14 @@ from __future__ import annotations
 import logging
 import time
 from contextlib import contextmanager
-from typing import Any, Iterator, Literal, Optional
+from typing import TYPE_CHECKING, Any, Iterator, Literal, Optional
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, model_validator
 
 from api.utils.pii_masking import mask_pii
+
+if TYPE_CHECKING:
+    from api.utils.discrepancy_detector import DiscrepancyItem
 
 logger = logging.getLogger(__name__)
 
@@ -66,12 +69,68 @@ class LineageSql(BaseModel):
     result_preview: list[dict[str, Any]] = Field(default_factory=list)
 
 
+class DiscrepancyDocCitation(BaseModel):
+    file: Optional[str] = None
+    page: Optional[int] = None
+
+
+class DiscrepancyDbCitation(BaseModel):
+    table: Optional[str] = None
+    query: Optional[str] = None
+
+
+DiscrepancySeverity = Literal["low", "medium", "high"]
+DiscrepancyUnit = Literal["currency", "percent", "number"]
+
+_LEGACY_DISCREPANCY_KEYS = {
+    "label": "metric",
+    "doc_value": "report_value",
+    "db_value": "books_value",
+    "pct": "delta_pct",
+}
+
+
 class LineageDiscrepancy(BaseModel):
-    label: str
-    doc_value: Optional[float] = None
-    db_value: Optional[float] = None
+    """DOCBOT-2002: structured report-vs-books tie-out (one TieOutCard).
+
+    ``report_value`` is the figure in the document (filing / report);
+    ``books_value`` the one in the connected database. ``delta`` =
+    books - report, ``delta_pct`` is relative to the report figure.
+    Mirrored by ``src/lib/schemas/tieout.ts``.
+    """
+
+    id: str
+    metric: str
+    period: Optional[str] = None
+    report_value: Optional[float] = None
+    books_value: Optional[float] = None
     delta: Optional[float] = None
-    pct: Optional[float] = None
+    delta_pct: Optional[float] = None
+    severity: DiscrepancySeverity = "medium"
+    unit: DiscrepancyUnit = "number"
+    doc_citation: DiscrepancyDocCitation = Field(default_factory=DiscrepancyDocCitation)
+    db_citation: DiscrepancyDbCitation = Field(default_factory=DiscrepancyDbCitation)
+
+    @model_validator(mode="before")
+    @classmethod
+    def _upgrade_legacy(cls, data: Any) -> Any:
+        """Accept pre-2002 persisted rows ({label, doc_value, db_value, pct})."""
+        if not isinstance(data, dict):
+            return data
+        upgraded = dict(data)
+        for old_key, new_key in _LEGACY_DISCREPANCY_KEYS.items():
+            if old_key in upgraded and new_key not in upgraded:
+                upgraded[new_key] = upgraded.pop(old_key)
+        if not upgraded.get("id"):
+            from api.utils.discrepancy_detector import discrepancy_id
+
+            upgraded["id"] = discrepancy_id(
+                str(upgraded.get("metric") or ""),
+                upgraded.get("period"),
+                float(upgraded.get("report_value") or 0.0),
+                float(upgraded.get("books_value") or 0.0),
+            )
+        return upgraded
 
 
 class LineageModelCall(BaseModel):
@@ -290,21 +349,29 @@ class LineageCollector:
             self.add_source(kind="sql_table", label=table, snippet=None)
 
     # -- discrepancies -----------------------------------------------------
-    def add_discrepancy(
-        self,
-        label: str,
-        doc_value: Optional[float],
-        db_value: Optional[float],
-        delta: Optional[float] = None,
-        pct: Optional[float] = None,
-    ) -> None:
+    def add_discrepancy(self, item: "DiscrepancyItem") -> None:
+        """Record one detector ``DiscrepancyItem`` as a structured tie-out."""
+        if any(d.id == item.id for d in self._data.discrepancies):
+            return
         self._data.discrepancies.append(
             LineageDiscrepancy(
-                label=label[:120],
-                doc_value=doc_value,
-                db_value=db_value,
-                delta=delta,
-                pct=pct,
+                id=item.id,
+                metric=item.label[:120],
+                period=item.period,
+                report_value=item.doc_value,
+                books_value=item.db_value,
+                delta=item.delta,
+                delta_pct=item.pct,
+                severity=item.severity,
+                unit=item.unit,
+                doc_citation=DiscrepancyDocCitation(
+                    file=item.doc_file[:200] if item.doc_file else None,
+                    page=item.doc_page,
+                ),
+                db_citation=DiscrepancyDbCitation(
+                    table=item.db_table[:200] if item.db_table else None,
+                    query=item.db_query[:2000] if item.db_query else None,
+                ),
             )
         )
 
