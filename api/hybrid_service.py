@@ -938,13 +938,13 @@ async def hybrid_chat(
 
                 if corrected and corrected.strip():
                     masked_corrected = normalize_markdown(mask_pii(corrected))
-                    # Appended (not replacing the already-streamed tokens) so
-                    # the SSE "token" event contract is unchanged for existing
-                    # clients; _answer_parts is updated in place so log_trace's
-                    # final_answer below reflects the corrected text too.
-                    correction_chunk = f"\n\n{masked_corrected}"
-                    _answer_parts.append(correction_chunk)
-                    yield f"data: {json.dumps({'type': 'token', 'content': correction_chunk})}\n\n"
+                    # DOCBOT-2004: the rewrite is a FULL answer, so swap it in
+                    # via a "replace" event instead of appending (which showed
+                    # the answer twice). Clients that ignore "replace" keep the
+                    # original streamed answer. _answer_parts is replaced so
+                    # lineage/log_trace persist the corrected text.
+                    _answer_parts[:] = [masked_corrected]
+                    yield f"data: {json.dumps({'type': 'replace', 'content': masked_corrected})}\n\n"
                     lineage.add_step(
                         "verify_discrepancy_addressed",
                         tool="llm",
@@ -968,9 +968,9 @@ async def hybrid_chat(
         # label when nothing matches), then append a one-line tail badge for
         # every card the answer never referenced so each TieOutCard has a
         # badge in the text. Only the appended tail streams to the client
-        # (append-only SSE contract); the rewritten text is what lineage and
-        # the agent trace persist, and the renderer also rewrites at display
-        # time for already-streamed chunks.
+        # (as a token, after any DOCBOT-2004 "replace"); the rewritten text
+        # is what lineage and the agent trace persist, and the renderer also
+        # rewrites at display time for already-streamed chunks.
         _tieout_items = list(discrepancy_report.discrepancies) if discrepancy_report else []
         if _tieout_items:
             from api.utils.tieout import missing_marker_tail, replace_discrepancy_tags

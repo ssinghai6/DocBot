@@ -536,6 +536,12 @@ export function useChatSubmit(params: UseChatSubmitParams) {
                 setMessages(prev => prev.map((m, i) =>
                   i === prev.length - 1 ? { ...m, content: m.content + chunk.content } : m
                 ));
+              } else if (chunk.type === "replace" && typeof chunk.content === "string") {
+                // DOCBOT-2004: discrepancy correction swaps in the full rewritten answer.
+                const replacement: string = chunk.content;
+                setMessages(prev => prev.map((m, i) =>
+                  i === prev.length - 1 ? { ...m, content: replacement } : m
+                ));
               } else if (chunk.type === "lineage") {
                 applyLineageEvent(chunk, setMessages);
               } else if (chunk.type === "metadata") {
