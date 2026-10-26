@@ -19,6 +19,7 @@ import { PanelGroup, Panel, ResizeHandle, type PanelImperativeHandle } from "@/c
 import { useUIStore } from "@/store/uiStore"
 import { useBreakpoint } from "@/lib/useBreakpoint"
 import { resolveChatMode, createAnonymousSessionId, type ChatMode } from "@/lib/chatSession"
+import { VerifyRequestSchema, VerifyResponseSchema } from "@/lib/schemas/emailVerify"
 
 import {
   AuthMeSchema,
@@ -185,6 +186,12 @@ export default function Home() {
   const [authName, setAuthName] = useState("");
   const [authSubmitting, setAuthSubmitting] = useState(false);
   const [authError, setAuthError] = useState<string | null>(null);
+  // DOCBOT-1713: Turnstile bot-check on signup (widget only when the
+  // NEXT_PUBLIC_TURNSTILE_SITE_KEY is set; token verified server-side).
+  const turnstileSiteKey = process.env.NEXT_PUBLIC_TURNSTILE_SITE_KEY ?? "";
+  const [turnstileToken, setTurnstileToken] = useState("");
+  const [turnstileResetSignal, setTurnstileResetSignal] = useState(0);
+  const bumpTurnstileReset = useCallback(() => setTurnstileResetSignal((n) => n + 1), []);
 
   // Persistent Workspace state
   const [workspaceConnections, setWorkspaceConnections] = useState<WorkspaceConnection[]>([]);
@@ -284,6 +291,8 @@ export default function Home() {
     liveDbForm,
     entraToken,
     fileInputRef,
+    turnstileToken,
+    bumpTurnstileReset,
 
     setMessages,
     setInput,
@@ -388,6 +397,36 @@ export default function Home() {
 
         if (typeof window !== "undefined") {
           const params = new URLSearchParams(window.location.search);
+          // DOCBOT-1713: emailed verification link lands here with
+          // ?verify_token=... — POST it once, toast the result, then clean
+          // the URL so a refresh/revisit can't replay the link.
+          const verifyToken = params.get("verify_token");
+          if (verifyToken) {
+            try {
+              const parse = VerifyRequestSchema.safeParse({ token: verifyToken });
+              const vRes = await fetch("/api/auth/verify", {
+                method: "POST",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify(parse.success ? parse.data : { token: verifyToken }),
+              });
+              const vData = await vRes.json();
+              const vParsed = VerifyResponseSchema.safeParse(vData);
+              if (vRes.ok && vParsed.success) {
+                showToast("success", `Email verified for ${vParsed.data.email} — sign in to continue.`);
+              } else {
+                showToast(
+                  "error",
+                  (vData && typeof vData.detail === "string" ? vData.detail : "")
+                    || "That verification link is invalid or has expired. Sign in to get a new one.",
+                );
+              }
+            } catch {
+              showToast("error", "Verification failed — please sign in and request a new link.");
+            }
+            window.history.replaceState({}, "", window.location.pathname);
+            setAuthChecked(true);
+            return;
+          }
           if (params.get("auth_success")) {
             const meRes = await fetch("/api/auth/me", { credentials: "include" });
             if (meRes.ok) {
@@ -710,6 +749,10 @@ export default function Home() {
           authError={authError}
           setAuthError={setAuthError}
           handleEmailAuth={handlers.handleEmailAuth}
+          turnstileSiteKey={turnstileSiteKey}
+          turnstileToken={turnstileToken}
+          setTurnstileToken={setTurnstileToken}
+          turnstileResetSignal={turnstileResetSignal}
           onClose={() => setAuthModalOpen(false)}
         />
       )}

@@ -327,6 +327,10 @@ from api.identity_service import (
 )
 user_identities_table = register_user_identities_table(metadata)
 
+# ── DOCBOT-1713: email verification tokens (dormant without RESEND keys) ──────
+from api.email_verification_service import register_email_verification_tokens_table
+email_verification_tokens_table = register_email_verification_tokens_table(metadata)
+
 # ── DOCBOT-1529: per-org envelope encryption (wrapped DEK per org) ────────────
 from api.utils.envelope_encryption import register_org_encryption_keys_table
 org_encryption_keys_table = register_org_encryption_keys_table(metadata)
@@ -2669,6 +2673,9 @@ class RegisterRequest(BaseModel):
     email: str
     password: str
     name: Optional[str] = None
+    # DOCBOT-1713: widget token, present only when NEXT_PUBLIC_TURNSTILE_SITE_KEY
+    # is configured (and TURNSTILE_SECRET_KEY is set server-side).
+    turnstile_token: Optional[str] = None
 
 
 class LoginRequest(BaseModel):
@@ -2677,11 +2684,12 @@ class LoginRequest(BaseModel):
 
 
 @app.post("/api/auth/register")
-async def auth_register(body: RegisterRequest, response: Response):
+async def auth_register(body: RegisterRequest, response: Response, request: Request):
     """Register a new user with email + password."""
     from api.oauth_service import hash_password, validate_password_strength
     from api.auth_service import create_user_session
     from api.identity_service import EmailAlreadyRegistered, register_password_user
+    from api import email_verification_service as evs
     from api.audit_service import log_event, AuditEventType
     import re
 
@@ -2693,6 +2701,14 @@ async def auth_register(body: RegisterRequest, response: Response):
     if err:
         raise HTTPException(status_code=422, detail=err)
 
+    # DOCBOT-1713: dormant unless TURNSTILE_SECRET_KEY is set; on failure → 400.
+    try:
+        await evs.enforce_turnstile(
+            body.turnstile_token, request.client.host if request.client else None
+        )
+    except evs.TurnstileValidationError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from None
+
     # DOCBOT-1617: insert-only — never returns or attaches to an existing
     # (OAuth, SAML or password) account, even under a concurrent race.
     try:
@@ -2703,16 +2719,27 @@ async def auth_register(body: RegisterRequest, response: Response):
     except EmailAlreadyRegistered:
         raise HTTPException(status_code=409, detail="An account with this email already exists.")
 
+    log_event(
+        AuditEventType.login, audit_log_table, async_session_factory,
+        user_id=user_id, detail=email, metadata={"provider": "email", "action": "register"},
+    )
+
+    # DOCBOT-1713: with Resend configured the account starts unverified; mint
+    # + email a single-use link and do NOT hand out a session. Keys unset →
+    # dormant: skip sending, keep today's flow (immediate session cookie).
+    if evs.is_email_verification_enabled():
+        await evs.issue_verification_token_and_send(
+            user_id, email, email_verification_tokens_table, async_session_factory,
+        )
+        return JSONResponse(
+            {"status": "verification_required", "email": email}, status_code=202,
+        )
+
     try:
         token = await create_user_session(user_id, user_sessions_table, async_session_factory)
     except Exception as exc:
         logger.error("Registration failed: %s", exc)
         raise HTTPException(status_code=500, detail="Registration failed. Please try again.")
-
-    log_event(
-        AuditEventType.login, audit_log_table, async_session_factory,
-        user_id=user_id, detail=email, metadata={"provider": "email", "action": "register"},
-    )
 
     resp = JSONResponse({"status": "registered", "email": email})
     resp.set_cookie(
@@ -2748,6 +2775,20 @@ async def auth_login(body: LoginRequest, response: Response):
 
     if not verify_password(body.password, user.password_hash):
         raise HTTPException(status_code=401, detail="Invalid email or password.")
+
+    # DOCBOT-1713: with Resend configured, an email/password account whose
+    # address was never verified may not sign in yet. The 403 carries a clear
+    # message; a fresh verification link is re-sent at most once per cooldown
+    # so the user is never dead-ended. Dormant config → zero change.
+    from api import email_verification_service as evs
+    if evs.login_requires_verification(user):
+        await evs.resend_verification_if_due(
+            user.id, email, email_verification_tokens_table, async_session_factory,
+        )
+        raise HTTPException(
+            status_code=403,
+            detail="Verify your email before signing in — check your inbox for the verification link.",
+        )
 
     token = await create_user_session(user.id, user_sessions_table, async_session_factory)
 
@@ -3128,6 +3169,15 @@ from api.routes.connector_routes import (  # noqa: E402
 )
 
 app.include_router(connector_router)
+
+# ── DOCBOT-1713: email verification (Resend) + Turnstile bot protection ───────
+from api.routes.email_verify_routes import (  # noqa: E402
+    router as email_verify_router,
+    wire_email_verification,
+)
+
+app.include_router(email_verify_router)
+wire_email_verification(users_table, email_verification_tokens_table, async_session_factory)
 
 
 def _get_connector(connector_id: str):
