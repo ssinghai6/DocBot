@@ -629,6 +629,11 @@ _LABEL_SYNONYMS: dict[str, str] = {
 }
 
 
+_SYNONYMS_OF: dict[str, list[str]] = {}
+for _src, _dst in _LABEL_SYNONYMS.items():
+    _SYNONYMS_OF.setdefault(_dst, []).append(_src)
+
+
 def _normalize_label(label: str) -> str:
     label = label.lower().strip()
     label = re.sub(r"[^a-z0-9 ]", " ", label)
@@ -665,7 +670,12 @@ def _canonical_label(doc_label: str, db_label: str, doc_raw: str = "") -> str:
         return db_label
     if doc_raw:
         words = doc_label.split()
-        pattern = r"\W+".join(re.escape(w) for w in words)
+        # Match synonym-normalized words back to the original wording
+        # ("revenue and marketing" -> "Sales and marketing").
+        pattern = r"\W+".join(
+            "(?:" + "|".join(re.escape(x) for x in [w, *_SYNONYMS_OF.get(w, ())]) + ")"
+            for w in words
+        )
         m = re.search(pattern, doc_raw, re.IGNORECASE)
         if m:
             return m.group(0)

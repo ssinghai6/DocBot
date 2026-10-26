@@ -902,7 +902,8 @@ async def init_demo(request: Request, dataset: str = "quickbite"):
     """Initialize a sandbox demo session with pre-loaded data.
 
     Query param `dataset`: "quickbite" (Docs+DB discrepancy) or "fuel"
-    (real crude-oil series + policy PDF for forecasting).
+    (real crude-oil series + policy PDF for forecasting) or "tieout"
+    (draft 10-K vs trial balance, DOCBOT-2212).
     """
     from api.demo_service import init_demo_session
 
@@ -913,7 +914,7 @@ async def init_demo(request: Request, dataset: str = "quickbite"):
         db_connections_table=db_connections_table,
         schema_cache_table=schema_cache_table,
         async_session_factory=async_session_factory,
-        dataset=dataset if dataset in ("quickbite", "fuel") else "quickbite",
+        dataset=dataset if dataset in ("quickbite", "fuel", "tieout") else "quickbite",
         owner=owner_values(await resolve_caller_scope(request)),
     )
     return result

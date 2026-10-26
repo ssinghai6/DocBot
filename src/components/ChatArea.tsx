@@ -121,7 +121,7 @@ export interface ChatAreaProps {
   onUploadClick?: () => void
   onConnectDatabase?: () => void
   onBrowseEdgar?: () => void
-  onTryDemo?: (dataset?: "quickbite" | "fuel") => void
+  onTryDemo?: (dataset?: "quickbite" | "fuel" | "tieout") => void
   demoLoading?: boolean
 
   // DOCBOT-1514: explicit tool picker (additive power-user feature)
@@ -186,7 +186,8 @@ export default function ChatArea(props: ChatAreaProps) {
   // Detect which one-click demo is active so the empty state can explain the
   // two sources and suggest questions tailored to that dataset.
   const isFuelDemo = dbFileName === "FuelPrices-1970-2026.db";
-  const isDemo = dbFileName === "QuickBite-Financials.db" || isFuelDemo;
+  const isTieoutDemo = dbFileName === "Tidewell-TrialBalance-FY2025.db";
+  const isDemo = dbFileName === "QuickBite-Financials.db" || isFuelDemo || isTieoutDemo;
 
   // DOCBOT-2311: banner while the active session's documents are expired.
   const expiredSessionId = useUIStore((s) => s.expiredSessionId);
@@ -345,7 +346,7 @@ export default function ChatArea(props: ChatAreaProps) {
           >
             {/* Primary CTA: one-click demo — the fastest path to seeing DocBot's
                 hybrid Docs+DB discrepancy detection, so it leads, not trails. */}
-            <div className="flex flex-col sm:flex-row items-center gap-2.5 max-w-xl w-full mb-5">
+            <div className="flex flex-col sm:flex-row sm:flex-wrap justify-center items-center gap-2.5 max-w-xl w-full mb-5">
               <Button
                 variant="amber"
                 size="lg"
@@ -367,6 +368,17 @@ export default function ChatArea(props: ChatAreaProps) {
               >
                 {!demoLoading && <Sparkles className="w-4 h-4 text-[var(--color-cyan-500)]" />}
                 Fuel Prices — forecast trends
+              </Button>
+              <Button
+                variant="secondary"
+                size="lg"
+                onClick={() => onTryDemo?.("tieout")}
+                disabled={demoLoading}
+                loading={demoLoading}
+                className="w-full sm:w-auto"
+              >
+                {!demoLoading && <Sparkles className="w-4 h-4 text-[var(--color-cyan-500)]" />}
+                Tie-out — draft 10-K vs trial balance
               </Button>
             </div>
 
@@ -421,10 +433,12 @@ export default function ChatArea(props: ChatAreaProps) {
         ) : messages.length === 0 && (sessionId || isDbConnected) ? (
           <ChatEmptyState
             icon={<MessageSquare className="w-5 h-5 text-[var(--color-cyan-500)]" />}
-            headline={isFuelDemo ? "Fuel Prices — Policy Report + 1970–2026 Data" : isDemo ? "QuickBite — 2025 Annual Report + Database" : isDbConnected ? "Database connected" : "Ready to analyze"}
+            headline={isFuelDemo ? "Fuel Prices — Policy Report + 1970–2026 Data" : isTieoutDemo ? "Tidewell — Draft 10-K + Trial Balance" : isDemo ? "QuickBite — 2025 Annual Report + Database" : isDbConnected ? "Database connected" : "Ready to analyze"}
             subcopy={
               isFuelDemo
                 ? "Two sources: a policy report on rising fuel prices (a document) and 56 years of monthly crude-oil prices (a database). DocBot reads both — ask it to forecast prices with a real model, explain the trend, or summarize what the report recommends."
+                : isTieoutDemo
+                ? "Tidewell Instruments is a made-up company. You have its draft 10-K (a document) and its FY2025 trial balance (the books). DocBot ties every figure in the draft to the books and flags the ones that don't agree."
                 : isDemo
                 ? "QuickBite is a made-up food-delivery company. Its “10-K” is an annual report (a document); it also has a financial database. DocBot reads both at once — ask it to compare them, explain a figure, spot mismatches, or forecast."
                 : isDbConnected
@@ -441,6 +455,12 @@ export default function ChatArea(props: ChatAreaProps) {
                   "What policies does the report recommend for responding to rising fuel prices?",
                   "How have crude oil prices changed since 1970, and what does the report say about the effects?",
                   "How do rising fuel prices affect consumer behavior and the environment?",
+                ]
+                : isTieoutDemo
+                ? [
+                  "Tie out the draft 10-K against the trial balance",
+                  "Does segment revenue in Note 12 agree with the books?",
+                  "Do the operating expense figures in the MD&A match the general ledger?",
                 ]
                 : isDemo
                 ? [

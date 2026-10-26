@@ -328,25 +328,214 @@ FUEL_SUGGESTED_QUESTIONS = [
 
 
 # ---------------------------------------------------------------------------
+# Third dataset — Tie-out (DOCBOT-2212): draft 10-K vs trial balance
+# Tidewell Instruments, Inc. is entirely fictional. The draft report's primary
+# income statement ties to the books; three figures in the MD&A and segment
+# note do not. Every other figure in the draft ties exactly.
+#
+# PLANTED DISCREPANCIES (report vs books, FY2025, USD):
+#   | # | Figure                         | Where in draft         | Report       | Books        | Delta      | Delta % |
+#   |---|--------------------------------|------------------------|--------------|--------------|------------|---------|
+#   | 1 | Total revenue                  | MD&A (p.4)             | 418,200,000  | 412,600,000  | -5,600,000 | -1.34%  |
+#   | 2 | Lab Services segment revenue   | Segment note (p.9)     | 104,900,000  | 102,700,000  | -2,200,000 | -2.10%  |
+#   | 3 | Sales and marketing expense    | MD&A (p.5)             |  54,900,000  |  55,200,000  |   +300,000 | +0.55%  |
+# #3 is the small-but-material one: $0.3M, just above the 0.5% tie-out band.
+# ---------------------------------------------------------------------------
+
+TIEOUT_COMPANY = "Tidewell Instruments, Inc. (fictional)"
+TIEOUT_FILING = "DRAFT Annual Report (10-K) — Fiscal Year 2025"
+_TIEOUT_DOC = "Tidewell-Draft-10K-FY2025.pdf"
+
+# Expected discrepancies: label -> (report value, books value). Tests assert the
+# detector flags exactly these and nothing else.
+TIEOUT_EXPECTED_DISCREPANCIES: Dict[str, tuple[float, float]] = {
+    "Total revenue": (418_200_000, 412_600_000),
+    "Lab Services": (104_900_000, 102_700_000),
+    "Sales and marketing expense": (54_900_000, 55_200_000),
+}
+
+TIEOUT_DOCUMENT_CHUNKS = [
+    Document(
+        page_content=(
+            "Tidewell Instruments, Inc. (a fictional company) — DRAFT Annual Report on "
+            "Form 10-K for the Fiscal Year Ended December 31, 2025. DRAFT — NOT FOR "
+            "DISTRIBUTION. Subject to completion of the year-end close.\n\n"
+            "PART I — BUSINESS\n\n"
+            "Tidewell designs and sells precision measurement instruments to industrial and "
+            "research laboratories, operates calibration and testing labs, and licenses data "
+            "analytics software. The company reports three segments: Commercial Instruments, "
+            "Lab Services, and Software and Analytics."
+        ),
+        metadata={"source": _TIEOUT_DOC, "page": 1},
+    ),
+    Document(
+        page_content=(
+            "MANAGEMENT'S DISCUSSION AND ANALYSIS — RESULTS OF OPERATIONS FY2025\n\n"
+            "Total revenue: $418.2 million, driven by instrument shipments to "
+            "semiconductor customers and higher calibration volumes.\n"
+            "Gross profit: $241.3 million.\n"
+            "Operating income: $109.0 million.\n"
+            "Net income: $82.5 million."
+        ),
+        metadata={"source": _TIEOUT_DOC, "page": 4},
+    ),
+    Document(
+        page_content=(
+            "MANAGEMENT'S DISCUSSION AND ANALYSIS — OPERATING EXPENSES FY2025\n\n"
+            "Research and development expense: $41.2 million, reflecting continued "
+            "investment in the next-generation spectrometer platform.\n"
+            "Sales and marketing expense: $54.9 million.\n"
+            "General and administrative expense: $35.9 million."
+        ),
+        metadata={"source": _TIEOUT_DOC, "page": 5},
+    ),
+    Document(
+        page_content=(
+            "CONSOLIDATED STATEMENT OF OPERATIONS — FY2025 (in millions)\n\n"
+            "Revenue: $412.6M\n"
+            "Cost of revenue: $171.3M\n"
+            "Gross profit: $241.3M\n"
+            "Research and development: $41.2M\n"
+            "Sales and marketing: $55.2M\n"
+            "General and administrative: $35.9M\n"
+            "Total operating expenses: $132.3M\n"
+            "Operating income: $109.0M\n"
+            "Interest expense: $4.6M\n"
+            "Income before income taxes: $104.4M\n"
+            "Income tax expense: $21.9M\n"
+            "Net income: $82.5M"
+        ),
+        metadata={"source": _TIEOUT_DOC, "page": 7},
+    ),
+    Document(
+        page_content=(
+            "NOTE 12 — SEGMENT INFORMATION — FY2025\n\n"
+            "Segment revenue (in millions):\n"
+            "Commercial Instruments: $248.4M\n"
+            "Lab Services: $104.9M\n"
+            "Software and Analytics: $61.5M\n\n"
+            "Segments are managed by product line. Intersegment sales are not material."
+        ),
+        metadata={"source": _TIEOUT_DOC, "page": 9},
+    ),
+]
+
+# Books: amounts in whole USD. trial_balance is the source of truth; the two
+# detail tables agree with it; income_statement is a view rolled up from it.
+TIEOUT_SQL_SCHEMA = """
+CREATE TABLE IF NOT EXISTS trial_balance (
+    account TEXT NOT NULL,
+    account_type TEXT NOT NULL,
+    period TEXT NOT NULL,
+    debit REAL NOT NULL DEFAULT 0,
+    credit REAL NOT NULL DEFAULT 0,
+    PRIMARY KEY (account, period)
+);
+
+CREATE TABLE IF NOT EXISTS revenue_by_segment (
+    period TEXT NOT NULL,
+    segment TEXT NOT NULL,
+    amount REAL NOT NULL,
+    PRIMARY KEY (period, segment)
+);
+
+CREATE TABLE IF NOT EXISTS opex (
+    period TEXT NOT NULL,
+    category TEXT NOT NULL,
+    amount REAL NOT NULL,
+    PRIMARY KEY (period, category)
+);
+
+CREATE VIEW IF NOT EXISTS income_statement AS
+SELECT period, line_item, amount FROM (
+    SELECT period, 1 AS ord, 'Revenue' AS line_item,
+           SUM(CASE WHEN account_type = 'revenue' THEN credit - debit ELSE 0 END) AS amount
+      FROM trial_balance GROUP BY period
+    UNION ALL
+    SELECT period, 2, 'Cost of revenue',
+           SUM(CASE WHEN account_type = 'cogs' THEN debit - credit ELSE 0 END)
+      FROM trial_balance GROUP BY period
+    UNION ALL
+    SELECT period, 3, 'Gross profit',
+           SUM(CASE WHEN account_type = 'revenue' THEN credit - debit
+                    WHEN account_type = 'cogs' THEN credit - debit ELSE 0 END)
+      FROM trial_balance GROUP BY period
+    UNION ALL
+    SELECT period, 4, 'Total operating expenses',
+           SUM(CASE WHEN account_type = 'opex' THEN debit - credit ELSE 0 END)
+      FROM trial_balance GROUP BY period
+    UNION ALL
+    SELECT period, 5, 'Operating income',
+           SUM(CASE WHEN account_type IN ('revenue', 'cogs', 'opex') THEN credit - debit ELSE 0 END)
+      FROM trial_balance GROUP BY period
+    UNION ALL
+    SELECT period, 6, 'Income before income taxes',
+           SUM(CASE WHEN account_type IN ('revenue', 'cogs', 'opex', 'other') THEN credit - debit ELSE 0 END)
+      FROM trial_balance GROUP BY period
+    UNION ALL
+    SELECT period, 7, 'Net income',
+           SUM(CASE WHEN account_type IN ('revenue', 'cogs', 'opex', 'other', 'tax') THEN credit - debit ELSE 0 END)
+      FROM trial_balance GROUP BY period
+) ORDER BY period, ord;
+"""
+
+TIEOUT_SQL_DATA = """
+INSERT INTO trial_balance VALUES ('1000 Cash', 'asset', 'FY2025', 120000000, 0);
+INSERT INTO trial_balance VALUES ('1200 Accounts receivable', 'asset', 'FY2025', 58400000, 0);
+INSERT INTO trial_balance VALUES ('1500 Property and equipment', 'asset', 'FY2025', 75000000, 0);
+INSERT INTO trial_balance VALUES ('2000 Accounts payable', 'liability', 'FY2025', 0, 27600000);
+INSERT INTO trial_balance VALUES ('3000 Common stock and APIC', 'equity', 'FY2025', 0, 50000000);
+INSERT INTO trial_balance VALUES ('3100 Retained earnings (opening)', 'equity', 'FY2025', 0, 93300000);
+INSERT INTO trial_balance VALUES ('4000 Revenue - Commercial Instruments', 'revenue', 'FY2025', 0, 248400000);
+INSERT INTO trial_balance VALUES ('4100 Revenue - Lab Services', 'revenue', 'FY2025', 0, 102700000);
+INSERT INTO trial_balance VALUES ('4200 Revenue - Software and Analytics', 'revenue', 'FY2025', 0, 61500000);
+INSERT INTO trial_balance VALUES ('5000 Cost of revenue', 'cogs', 'FY2025', 171300000, 0);
+INSERT INTO trial_balance VALUES ('6000 Research and development', 'opex', 'FY2025', 41200000, 0);
+INSERT INTO trial_balance VALUES ('6100 Sales and marketing', 'opex', 'FY2025', 55200000, 0);
+INSERT INTO trial_balance VALUES ('6200 General and administrative', 'opex', 'FY2025', 35900000, 0);
+INSERT INTO trial_balance VALUES ('7000 Interest expense', 'other', 'FY2025', 4600000, 0);
+INSERT INTO trial_balance VALUES ('8000 Income tax expense', 'tax', 'FY2025', 21900000, 0);
+
+INSERT INTO revenue_by_segment VALUES ('FY2025', 'Commercial Instruments', 248400000);
+INSERT INTO revenue_by_segment VALUES ('FY2025', 'Lab Services', 102700000);
+INSERT INTO revenue_by_segment VALUES ('FY2025', 'Software and Analytics', 61500000);
+
+INSERT INTO opex VALUES ('FY2025', 'Research and development', 41200000);
+INSERT INTO opex VALUES ('FY2025', 'Sales and marketing', 55200000);
+INSERT INTO opex VALUES ('FY2025', 'General and administrative', 35900000);
+"""
+
+TIEOUT_SUGGESTED_QUESTIONS = [
+    "Tie out the draft 10-K against the trial balance",
+    "Does segment revenue in Note 12 agree with the books?",
+    "Do the operating expense figures in the MD&A match the general ledger?",
+]
+
+
+# ---------------------------------------------------------------------------
 # Demo initialization
 # ---------------------------------------------------------------------------
 
 
-def _create_demo_sqlite() -> Path:
-    """Create a temporary SQLite database with sample financial data."""
-    tmp = tempfile.NamedTemporaryFile(
-        suffix=".sqlite", prefix="docbot_demo_", delete=False
-    )
+def _create_demo_sqlite(
+    schema: str = DEMO_SQL_SCHEMA, data: str = DEMO_SQL_DATA, prefix: str = "docbot_demo_"
+) -> Path:
+    """Create a temporary SQLite database from a schema + data script."""
+    tmp = tempfile.NamedTemporaryFile(suffix=".sqlite", prefix=prefix, delete=False)
     tmp.close()
     db_path = Path(tmp.name)
 
     conn = sqlite3.connect(str(db_path))
-    conn.executescript(DEMO_SQL_SCHEMA)
-    conn.executescript(DEMO_SQL_DATA)
+    conn.executescript(schema)
+    conn.executescript(data)
     conn.close()
 
     logger.info("demo: created SQLite at %s", db_path)
     return db_path
+
+
+def _create_tieout_sqlite() -> Path:
+    return _create_demo_sqlite(TIEOUT_SQL_SCHEMA, TIEOUT_SQL_DATA, "docbot_tieout_")
 
 
 def _create_fuel_sqlite() -> Path:
@@ -397,6 +586,16 @@ _DATASETS: Dict[str, Dict[str, Any]] = {
         "filing": FUEL_FILING,
         "suggested_questions": FUEL_SUGGESTED_QUESTIONS,
     },
+    "tieout": {
+        "chunks": TIEOUT_DOCUMENT_CHUNKS,
+        "sqlite_builder": _create_tieout_sqlite,
+        "doc_filename": _TIEOUT_DOC,
+        "db_filename": "Tidewell-TrialBalance-FY2025.db",
+        "persona": "Finance Expert",
+        "company": TIEOUT_COMPANY,
+        "filing": TIEOUT_FILING,
+        "suggested_questions": TIEOUT_SUGGESTED_QUESTIONS,
+    },
 }
 
 
@@ -416,6 +615,7 @@ async def init_demo_session(
     `dataset` selects which one-click demo to load:
       - "quickbite": synthetic food-delivery 10-K + DB with planted discrepancies
       - "fuel": VTPI fuel-price policy PDF + real 1970–2026 crude oil series
+      - "tieout": fictional draft 10-K vs trial balance, 3 planted mismatches
 
     Returns dict with session_id, connection_id, and suggested questions.
     """
