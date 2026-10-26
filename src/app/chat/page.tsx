@@ -69,6 +69,29 @@ function ToastContainer({ toasts, onDismiss }: { toasts: Toast[]; onDismiss: (id
   )
 }
 
+type DemoDataset = "quickbite" | "fuel" | "tieout";
+
+const DEMO_UI: Record<DemoDataset, { db: string; doc: string; persona: string; toast: string }> = {
+  quickbite: {
+    db: "QuickBite-Financials.db",
+    doc: "QuickBite-10K-2025.pdf",
+    persona: "Finance Expert",
+    toast: "Demo loaded — QuickBite 10-K + financial database ready",
+  },
+  fuel: {
+    db: "FuelPrices-1970-2026.db",
+    doc: "fuelprice.pdf",
+    persona: "Data Analyst",
+    toast: "Demo loaded — fuel-price report + 1970–2026 crude oil data ready",
+  },
+  tieout: {
+    db: "Tidewell-TrialBalance-FY2025.db",
+    doc: "Tidewell-Draft-10K-FY2025.pdf",
+    persona: "Finance Expert",
+    toast: "Demo loaded — draft 10-K + trial balance ready to tie out",
+  },
+};
+
 export default function Home() {
   // UI store (cross-cutting UI state)
   const inspectorOpen = useUIStore((s) => s.inspectorOpen);
@@ -532,29 +555,25 @@ export default function Home() {
     return () => window.removeEventListener('keydown', handleKeyDown);
   }, [input, sessionId, isDbConnected, isLoading, inspectorOpen]); // eslint-disable-line react-hooks/exhaustive-deps
 
-  // Demo mode handler — dataset: "quickbite" (discrepancy) or "fuel" (forecasting)
-  const handleTryDemo = useCallback(async (dataset: "quickbite" | "fuel" = "quickbite") => {
+  // Demo mode handler — dataset: "quickbite" (discrepancy), "fuel" (forecasting),
+  // or "tieout" (draft 10-K vs trial balance, DOCBOT-2212)
+  const handleTryDemo = useCallback(async (dataset: DemoDataset = "quickbite") => {
     setDemoLoading(true);
     try {
       const res = await fetch(`/api/demo/init?dataset=${dataset}`, { method: "POST" });
       if (!res.ok) throw new Error("Demo initialization failed");
       const data = await res.json();
-      const isFuel = dataset === "fuel";
+      const demo = DEMO_UI[dataset];
       setSessionId(data.session_id);
       setConnectionId(data.connection_id);
       setIsDbConnected(true);
-      setDbFileName(isFuel ? "FuelPrices-1970-2026.db" : "QuickBite-Financials.db");
+      setDbFileName(demo.db);
       setChatMode("hybrid");
-      setSelectedPersona(isFuel ? "Data Analyst" : "Finance Expert");
+      setSelectedPersona(demo.persona);
       setIsAutoMode(false);
-      setUploadedFiles([new File([], isFuel ? "fuelprice.pdf" : "QuickBite-10K-2025.pdf")]);
+      setUploadedFiles([new File([], demo.doc)]);
       setMessages([]);
-      showToast(
-        "success",
-        isFuel
-          ? "Demo loaded — fuel-price report + 1970–2026 crude oil data ready"
-          : "Demo loaded — QuickBite 10-K + financial database ready",
-      );
+      showToast("success", demo.toast);
     } catch {
       showToast("error", "Failed to load demo. Please try again.");
     } finally {
