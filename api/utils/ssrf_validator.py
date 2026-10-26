@@ -203,8 +203,12 @@ def resolve_and_validate(host: str, port: Optional[int] = None) -> List[str]:
 
 
 def resolve_pinned_ip(host: str, port: Optional[int] = None) -> str:
-    """Resolve + validate *host* and return the single address to pin the connect to."""
-    return resolve_and_validate(host, port)[0]
+    """Resolve + validate *host* and return the single address to pin the connect to.
+
+    Prefers IPv4: pinning removes libpq's address fallback and some hosts (Railway) lack outbound IPv6.
+    """
+    addresses = resolve_and_validate(host, port)
+    return next((a for a in addresses if ":" not in a), addresses[0])
 
 
 def validate_ssrf(host: str) -> List[str]:
