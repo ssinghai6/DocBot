@@ -3,6 +3,7 @@
 import React from "react"
 import { ShieldCheck } from "lucide-react"
 import { Dialog, DialogContent } from "@/components/ui"
+import TurnstileWidget from "@/components/TurnstileWidget"
 
 interface AuthConfig {
   email: boolean
@@ -26,6 +27,12 @@ interface AuthModalProps {
   setAuthError: (v: string | null) => void
   handleEmailAuth: (e: React.FormEvent) => void
   onClose: () => void
+  // DOCBOT-1713: Turnstile on the register tab (rendered only when the
+  // NEXT_PUBLIC_TURNSTILE_SITE_KEY is set; token sent with the signup POST).
+  turnstileSiteKey: string
+  turnstileToken: string
+  setTurnstileToken: (v: string) => void
+  turnstileResetSignal: number
 }
 
 const inputCx =
@@ -46,7 +53,13 @@ export default function AuthModal({
   setAuthError,
   handleEmailAuth,
   onClose,
+  turnstileSiteKey,
+  turnstileToken,
+  setTurnstileToken,
+  turnstileResetSignal,
 }: AuthModalProps) {
+  const turnstileRequired = turnstileSiteKey.length > 0
+  const botCheckMissing = turnstileRequired && authModalTab === "register" && !turnstileToken
   return (
     <Dialog open onOpenChange={(o) => { if (!o) onClose() }}>
       <DialogContent className="max-w-[420px]">
@@ -147,6 +160,15 @@ export default function AuthModal({
               required
               className={inputCx}
             />
+            {turnstileRequired && authModalTab === "register" && (
+              <div className="flex justify-center py-0.5">
+                <TurnstileWidget
+                  siteKey={turnstileSiteKey}
+                  onToken={setTurnstileToken}
+                  resetSignal={turnstileResetSignal}
+                />
+              </div>
+            )}
             {authError && (
               <p className="text-[11px] text-[var(--color-danger-500)] bg-[var(--color-danger-500)]/10 border border-[var(--color-danger-500)]/30 rounded-[5px] px-2.5 py-1.5">
                 {authError}
@@ -154,7 +176,7 @@ export default function AuthModal({
             )}
             <button
               type="submit"
-              disabled={authSubmitting || !authEmail || !authPassword}
+              disabled={authSubmitting || !authEmail || !authPassword || botCheckMissing}
               className="w-full h-9 rounded-[5px] bg-[var(--color-cyan-500)] hover:bg-[var(--color-cyan-600)] disabled:opacity-40 disabled:cursor-not-allowed text-[var(--color-bg-base)] text-[13px] font-semibold transition-colors"
             >
               {authSubmitting ? "Please wait…" : authModalTab === "register" ? "Create account" : "Sign in"}

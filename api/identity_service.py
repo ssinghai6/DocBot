@@ -369,7 +369,10 @@ async def register_password_user(
                 )).fetchone()
                 if taken is not None:
                     raise EmailAlreadyRegistered(email)
-                # No verification flow exists for password signups.
+                # DOCBOT-1713: the signup route mints + emails a verification
+                # link (endpoint changes this flag once proven). Until then
+                # the account stays unverified — exactly what the verified-
+                # --email policy above keys off.
                 return await insert_new_user(session, users_table, attrs, email_verified=False)
     except IntegrityError as exc:
         raise EmailAlreadyRegistered(email) from exc

@@ -157,6 +157,9 @@ PUBLIC_ROUTES: dict[RouteKey, str] = {
     ("GET", "/api/auth/google/callback"): "Google OAuth callback; validated via state + code exchange.",
     ("POST", "/api/auth/register"): "Email/password sign-up (abuse controls: DOCBOT-1622, 1701).",
     ("POST", "/api/auth/login"): "Email/password login (throttling: DOCBOT-1622).",
+    ("POST", "/api/auth/verify"): "DOCBOT-1713: consumes the single-use emailed verification "
+                                  "token (SHA-256-hashed at rest; the token itself IS the "
+                                  "credential; expiry + single-use enforced atomically).",
     ("POST", "/api/auth/logout"): "Clears the caller's own session cookie; no-op when anonymous.",
     ("POST", "/api/marketplace/webhook/shopify"): "Shopify server-to-server webhook; no browser session. "
                                                   "Authenticated by HMAC-SHA256 over the raw body with the "

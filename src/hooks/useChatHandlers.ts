@@ -11,6 +11,10 @@ import {
   ApiKeysListResponseSchema,
   ApiKeyCreateResponseSchema,
 } from "@/components/types"
+import {
+  RegisterRequestSchema,
+  RegisterResponseSchema,
+} from "@/lib/schemas/emailVerify"
 import type {
   AuthUser,
   AdminUser,
@@ -45,6 +49,9 @@ interface UseChatHandlersParams {
   liveDbForm: LiveDbForm
   entraToken: string | null
   fileInputRef: React.RefObject<HTMLInputElement | null>
+  // DOCBOT-1713: Turnstile bot-check state for the signup POST.
+  turnstileToken: string
+  bumpTurnstileReset: () => void
 
   setMessages: React.Dispatch<React.SetStateAction<import("@/components/types").Message[]>>
   setInput: React.Dispatch<React.SetStateAction<string>>
@@ -108,6 +115,8 @@ export function useChatHandlers(params: UseChatHandlersParams) {
     liveDbForm,
     entraToken,
     fileInputRef,
+    turnstileToken,
+    bumpTurnstileReset,
 
     setMessages,
     setInput,
@@ -383,38 +392,65 @@ export function useChatHandlers(params: UseChatHandlersParams) {
     setAuthError(null);
     try {
       const endpoint = authModalTab === "register" ? "/api/auth/register" : "/api/auth/login";
-      const body: Record<string, string> = { email: authEmail, password: authPassword };
-      if (authModalTab === "register" && authName) body.name = authName;
+      // DOCBOT-1713: register carries the Turnstile bot-check token
+      // (single-use — bump the reset so a failed attempt re-mints it).
+      const isRegister = authModalTab === "register";
+      const parsed = RegisterRequestSchema.safeParse({
+        email: authEmail,
+        password: authPassword,
+        ...(isRegister && authName ? { name: authName } : {}),
+        ...(isRegister && turnstileToken ? { turnstile_token: turnstileToken } : {}),
+      });
+      if (!parsed.success) {
+        setAuthError("Please fill in a valid email and password.");
+        if (isRegister) bumpTurnstileReset();
+        return;
+      }
 
       const res = await fetch(endpoint, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         credentials: "include",
-        body: JSON.stringify(body),
+        body: JSON.stringify(parsed.data),
       });
       const data = await res.json();
       if (!res.ok) {
         setAuthError(data.detail ?? "Something went wrong.");
+        if (isRegister) bumpTurnstileReset();
+        return;
+      }
+      // DOCBOT-1713: server created the account but holds it until the
+      // emailed verification link is confirmed — no session is opened.
+      const registerResult = isRegister ? RegisterResponseSchema.safeParse(data) : null;
+      if (registerResult?.success && registerResult.data.status === "verification_required") {
+        setAuthModalOpen(false);
+        setAuthEmail("");
+        setAuthPassword("");
+        setAuthName("");
+        bumpTurnstileReset();
+        showToast("info", "Account created — check your inbox to verify your email, then sign in.");
         return;
       }
       const meRes = await fetch("/api/auth/me", { credentials: "include" });
       if (meRes.ok) {
         const me = await meRes.json();
-        const parsed = AuthMeSchema.safeParse(me);
-        if (parsed.success) setAuthUser(parsed.data);
+        const parsedMe = AuthMeSchema.safeParse(me);
+        if (parsedMe.success) setAuthUser(parsedMe.data);
       }
       setAuthModalOpen(false);
       setAuthEmail("");
       setAuthPassword("");
       setAuthName("");
-      showToast("success", authModalTab === "register" ? "Account created!" : "Welcome back!");
+      if (isRegister) bumpTurnstileReset();
+      showToast("success", isRegister ? "Account created!" : "Welcome back!");
       fetchWorkspace();
     } catch {
       setAuthError("Network error. Please try again.");
+      if (authModalTab === "register") bumpTurnstileReset();
     } finally {
       setAuthSubmitting(false);
     }
-  }, [authModalTab, authEmail, authPassword, authName, showToast, fetchWorkspace, setAuthSubmitting, setAuthError, setAuthUser, setAuthModalOpen, setAuthEmail, setAuthPassword, setAuthName]);
+  }, [authModalTab, authEmail, authPassword, authName, turnstileToken, bumpTurnstileReset, showToast, fetchWorkspace, setAuthSubmitting, setAuthError, setAuthUser, setAuthModalOpen, setAuthEmail, setAuthPassword, setAuthName]);
 
   const loadAdminUsers = useCallback(async () => {
     setAdminUsersLoading(true);
