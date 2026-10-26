@@ -2082,12 +2082,14 @@ async def _stream_answer(
     # DOCBOT-2003: line-buffered masking so PII split across tokens is caught.
     masker = StreamingPIIMasker()
     emitted: list[str] = []
+    finish_info: dict = {}
     for token in chat_completion_stream(
         [{"role": "user", "content": prompt}],
         temperature=0.2,
-        max_tokens=800,
+        max_tokens=1500,
         caller="sql_answer_gen",
         prompt_version=PROMPT_VERSION_SQL_ANSWER_GEN,
+        finish_info=finish_info,
     ):
         masked = masker.feed(token)
         if masked:
@@ -2099,6 +2101,9 @@ async def _stream_answer(
         yield tail
     # DOCBOT-2001: append-only close of a dangling code fence.
     fence_tail = unclosed_fence_suffix("".join(emitted))
+    # DOCBOT-2008: mark answers cut off at max_tokens.
+    if finish_info.get("finish_reason") == "length":
+        fence_tail += "\n\n_(truncated)_"
     if fence_tail:
         yield fence_tail
 
