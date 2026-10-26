@@ -44,6 +44,8 @@ Client IP (DOCBOT-1612, groundwork for DOCBOT-1606):
 
 from __future__ import annotations
 
+import hashlib
+import hmac
 import os
 import time
 from collections import defaultdict, deque
@@ -95,11 +97,13 @@ GATE_UPLOADS: bool = _env_bool("GATE_UPLOADS")
 # Per-authenticated-user daily weighted budget. 0 disables. Resets at UTC midnight.
 USER_DAILY_BUDGET: int = _env_int("USER_DAILY_BUDGET", 0)
 
-# Owner bypass: when OWNER_KEY is set, a request presenting it (header, query
-# param, or cookie) skips ALL guards — demo blocking, rate limit, and session
-# budget. Lets the owner keep full access to a locked-down public deployment.
+# Owner bypass: when OWNER_KEY is set, a browser holding the docbot_owner cookie
+# skips ALL guards — demo blocking, rate limit, and session budget. The raw key
+# is only ever accepted in the X-Owner-Key header of POST /api/auth/owner-unlock
+# (DOCBOT-1605); the cookie holds an HMAC of the key, never the key itself.
 OWNER_KEY: str = os.getenv("OWNER_KEY", "").strip()
 OWNER_COOKIE_NAME = "docbot_owner"
+OWNER_HEADER_NAME = "x-owner-key"
 
 # POST paths disabled when PUBLIC_DEMO_MODE is on. Matched by prefix so that
 # parametrised routes (e.g. /api/connectors/{id}/sync) are covered.
@@ -164,21 +168,32 @@ def client_ip(request: Request) -> str:
     return request.client.host if request.client else "unknown"
 
 
+def owner_cookie_value() -> str:
+    """HMAC-SHA256 of OWNER_KEY — what the docbot_owner cookie stores. "" when unset."""
+    if not OWNER_KEY:
+        return ""
+    return hmac.new(OWNER_KEY.encode(), b"docbot-owner-cookie-v1", hashlib.sha256).hexdigest()
+
+
+def verify_owner_key(presented: str | None) -> bool:
+    """Constant-time check of a raw key (from the unlock header) against OWNER_KEY."""
+    if not OWNER_KEY or not presented:
+        return False
+    return hmac.compare_digest(presented.encode(), OWNER_KEY.encode())
+
+
 def is_owner(request: Request) -> bool:
-    """True if the request presents the OWNER_KEY via header, query, or cookie.
+    """True if the request carries a valid docbot_owner cookie.
 
     Owner requests bypass every guard. Returns False when OWNER_KEY is unset, so
-    a deployment with no owner key configured never grants a bypass.
+    a deployment with no owner key configured never grants a bypass. The raw
+    key is NOT accepted here (no header, no query param) — see verify_owner_key.
     """
-    if not OWNER_KEY:
+    expected = owner_cookie_value()
+    cookie = request.cookies.get(OWNER_COOKIE_NAME)
+    if not expected or not cookie:
         return False
-    if request.headers.get("x-owner-key") == OWNER_KEY:
-        return True
-    if request.query_params.get("owner_key") == OWNER_KEY:
-        return True
-    if request.cookies.get(OWNER_COOKIE_NAME) == OWNER_KEY:
-        return True
-    return False
+    return hmac.compare_digest(cookie.encode(), expected.encode())
 
 
 def is_demo_blocked(method: str, path: str) -> bool:

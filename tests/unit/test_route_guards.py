@@ -147,7 +147,7 @@ PUBLIC_ROUTES: dict[RouteKey, str] = {
     ("GET", "/api/auth/config"): "Lists enabled login methods; the login screen needs it pre-auth.",
     ("POST", "/api/demo/init"): "One-click anonymous demo (EPIC-13). Abuse controls: IP rate limit "
                                 "(DOCBOT-1612) and metering (DOCBOT-1623), not auth.",
-    ("GET", "/api/auth/owner-unlock"): "Checks OWNER_KEY itself and returns 403 on mismatch (hardening: DOCBOT-1605).",
+    ("POST", "/api/auth/owner-unlock"): "Checks the X-Owner-Key header itself (compare_digest) and returns 403 on mismatch (DOCBOT-1605).",
     ("GET", "/api/auth/saml/metadata"): "SAML SP metadata must be fetchable by the IdP.",
     ("GET", "/api/auth/saml/login"): "Starts the SAML login redirect.",
     ("POST", "/api/auth/saml/acs"): "SAML Assertion Consumer Service; the signed assertion is the credential.",

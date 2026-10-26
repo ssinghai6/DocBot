@@ -162,7 +162,8 @@ class TestMetering:
     def test_owner_bypasses(self, monkeypatch):
         monkeypatch.setattr(request_guard, "OWNER_KEY", "k")
         monkeypatch.setattr(request_guard, "SANDBOX_RUNS_PER_HOUR", 1)
-        req = _plain_request({"x-owner-key": "k"})
+        req = _plain_request()
+        req.cookies = {request_guard.OWNER_COOKIE_NAME: request_guard.owner_cookie_value()}
         for _ in range(3):
             request_guard.enforce_sandbox_quota(req, _analyst())
 

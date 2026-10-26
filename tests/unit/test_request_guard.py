@@ -172,21 +172,44 @@ def test_is_owner_false_when_key_unset(monkeypatch):
     assert request_guard.is_owner(req) is False
 
 
-def test_is_owner_via_header(monkeypatch):
+def test_is_owner_ignores_raw_key_header(monkeypatch):
+    # DOCBOT-1605: the raw key only unlocks via POST /api/auth/owner-unlock.
     monkeypatch.setattr(request_guard, "OWNER_KEY", "s3cret")
-    assert request_guard.is_owner(_FakeRequest(headers={"x-owner-key": "s3cret"})) is True
-    assert request_guard.is_owner(_FakeRequest(headers={"x-owner-key": "wrong"})) is False
+    assert request_guard.is_owner(_FakeRequest(headers={"x-owner-key": "s3cret"})) is False
 
 
-def test_is_owner_via_query_param(monkeypatch):
+def test_is_owner_ignores_query_param(monkeypatch):
     monkeypatch.setattr(request_guard, "OWNER_KEY", "s3cret")
-    assert request_guard.is_owner(_FakeRequest(query_params={"owner_key": "s3cret"})) is True
+    assert request_guard.is_owner(_FakeRequest(query_params={"owner_key": "s3cret"})) is False
 
 
-def test_is_owner_via_cookie(monkeypatch):
+def test_is_owner_via_hmac_cookie(monkeypatch):
     monkeypatch.setattr(request_guard, "OWNER_KEY", "s3cret")
-    cookies = {request_guard.OWNER_COOKIE_NAME: "s3cret"}
-    assert request_guard.is_owner(_FakeRequest(cookies=cookies)) is True
+    cookie = request_guard.owner_cookie_value()
+    assert cookie and "s3cret" not in cookie
+    assert request_guard.is_owner(_FakeRequest(cookies={request_guard.OWNER_COOKIE_NAME: cookie})) is True
+
+
+def test_is_owner_rejects_raw_key_or_forged_cookie(monkeypatch):
+    monkeypatch.setattr(request_guard, "OWNER_KEY", "s3cret")
+    for bad in ("s3cret", "0" * 64, ""):
+        assert request_guard.is_owner(_FakeRequest(cookies={request_guard.OWNER_COOKIE_NAME: bad})) is False
+
+
+def test_owner_cookie_changes_with_key(monkeypatch):
+    monkeypatch.setattr(request_guard, "OWNER_KEY", "k1")
+    old_cookie = request_guard.owner_cookie_value()
+    monkeypatch.setattr(request_guard, "OWNER_KEY", "k2")  # key rotation invalidates old cookies
+    assert request_guard.is_owner(_FakeRequest(cookies={request_guard.OWNER_COOKIE_NAME: old_cookie})) is False
+
+
+def test_verify_owner_key(monkeypatch):
+    monkeypatch.setattr(request_guard, "OWNER_KEY", "s3cret")
+    assert request_guard.verify_owner_key("s3cret") is True
+    assert request_guard.verify_owner_key("wrong") is False
+    assert request_guard.verify_owner_key(None) is False
+    monkeypatch.setattr(request_guard, "OWNER_KEY", "")
+    assert request_guard.verify_owner_key("") is False
 
 
 def test_is_owner_no_credentials(monkeypatch):

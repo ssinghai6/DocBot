@@ -103,18 +103,6 @@ async def abuse_guard(request: Request, call_next):
     if new_anon_cookie:
         caller_scope.attach_anon_cookie(response, new_anon_cookie)
 
-    # Persist owner status as an HttpOnly cookie so an initial ?owner_key=<key>
-    # link unlocks the whole browser session without re-passing the key.
-    if owner and request.cookies.get(request_guard.OWNER_COOKIE_NAME) != request_guard.OWNER_KEY:
-        response.set_cookie(
-            key=request_guard.OWNER_COOKIE_NAME,
-            value=request_guard.OWNER_KEY,
-            httponly=True,
-            secure=os.getenv("APP_BASE_URL", "").startswith("https"),
-            samesite="lax",
-            max_age=int(os.getenv("SESSION_TTL_HOURS", "8")) * 3600,
-        )
-
     return response
 
 
@@ -2587,18 +2575,30 @@ async def auth_config():
     }
 
 
-@app.get("/api/auth/owner-unlock")
-async def owner_unlock(raw_request: Request):
-    """Set the owner-bypass cookie if the request carries a valid OWNER_KEY.
+class OwnerUnlockResponse(BaseModel):
+    owner: bool
 
-    The owner key is passed as ?owner_key= on the /chat page URL; the frontend
-    forwards it here on load. On match, the abuse-guard middleware sets the
-    docbot_owner cookie on this response (same-origin via the Vercel /api proxy),
-    unlocking all guards for the browser session. Returns 403 on mismatch.
+
+@app.post("/api/auth/owner-unlock", response_model=OwnerUnlockResponse)
+async def owner_unlock(raw_request: Request):
+    """Exchange the X-Owner-Key header for the HMAC'd docbot_owner cookie (DOCBOT-1605).
+
+    The key is accepted ONLY in this header on this POST route — never as a
+    query param. On match the cookie (HMAC of the key, HttpOnly) unlocks all
+    guards for the browser session. Returns 403 on mismatch.
     """
-    if request_guard.is_owner(raw_request):
-        return JSONResponse({"owner": True})
-    return JSONResponse({"owner": False}, status_code=403)
+    if not request_guard.verify_owner_key(raw_request.headers.get(request_guard.OWNER_HEADER_NAME)):
+        return JSONResponse({"owner": False}, status_code=403)
+    response = JSONResponse({"owner": True})
+    response.set_cookie(
+        key=request_guard.OWNER_COOKIE_NAME,
+        value=request_guard.owner_cookie_value(),
+        httponly=True,
+        secure=os.getenv("APP_BASE_URL", "").startswith("https"),
+        samesite="lax",
+        max_age=int(os.getenv("SESSION_TTL_HOURS", "8")) * 3600,
+    )
+    return response
 
 
 @app.get("/api/auth/github")

@@ -152,7 +152,7 @@ class TestDemoInitLimit:
     def test_owner_bypasses(self, monkeypatch):
         monkeypatch.setattr(request_guard, "OWNER_KEY", "owner-secret")
         monkeypatch.setattr(request_guard, "DEMO_INIT_PER_IP_PER_HOUR", 1)
-        req = _FakeRequest(headers={"x-owner-key": "owner-secret"})
+        req = _FakeRequest(cookies={request_guard.OWNER_COOKIE_NAME: request_guard.owner_cookie_value()})
         for _ in range(10):
             request_guard.check_demo_init_limit(req)
 
