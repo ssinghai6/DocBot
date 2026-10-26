@@ -17,7 +17,7 @@ apscheduler==3.11.3
 groq==0.37.1
 pydantic==2.14.1
 langchain==1.4.7
-langchain-core==1.6.13
+langchain-core==1.7.0
 langchain-community==0.4.2
 langchain-text-splitters==1.1.3
 langchain-groq==1.1.3
@@ -36,7 +36,7 @@ sqlglot==30.24.0
 # DOCBOT-205: MySQL connector (not mysqlclient — build issues on Railway)
 pymysql==1.2.3
 # DOCBOT-207: CSV parsing and type inference
-pandas==3.0.6
+pandas==3.1.0
 # df.to_markdown() requires tabulate
 tabulate==0.10.0
 # DOCBOT-301: Python code generation via openai/gpt-oss-120b on Groq (uses existing groq package)
