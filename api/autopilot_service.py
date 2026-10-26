@@ -892,6 +892,17 @@ def make_executor_node(
                         explanation=result_entry.get("explanation"),
                         artifact_id=None,
                     )
+                    # DOCBOT-2002: structured inputs for the tie-out detection
+                    # (rows mirror data_result sample_rows so both detection
+                    # passes agree on item ids; sources/sql feed the db citation).
+                    result_entry["tieout_sql"] = {
+                        "result_preview": [
+                            r for r in (preview[:10] if isinstance(preview, list) else [])
+                            if isinstance(r, dict)
+                        ],
+                        "sources": [str(s) for s in (sql_meta.get("sources") or []) if s],
+                        "sql_query": result_entry.get("sql"),
+                    }
                     # Persist artifact for potential python_analysis in a later step
                     if preview and session_artifacts_table is not None:
                         from api.artifact_service import save_artifact
@@ -953,6 +964,11 @@ def make_executor_node(
                             for doc in docs
                         )
                         result_entry["result"] = wrap_untrusted(context[:800])
+                        # DOCBOT-2002: full (untruncated) chunk text with its
+                        # "Source: X, Page N" headers — the doc side of the
+                        # tie-out detection (doc citations + period extraction
+                        # need the real headers, not the 800-char preview).
+                        result_entry["tieout_doc_context"] = context
 
                         # DOCBOT-1510: keep the sub-questions deep_retrieve used
                         result_entry["sub_questions"] = list(sub_questions or [])
@@ -1607,13 +1623,19 @@ def _build_data_results_summary(state: AutopilotState) -> tuple[str, int, bool]:
 
 def _collect_doc_context(state: AutopilotState) -> str:
     """Join successful doc_search step outputs — the document side for the
-    P2(3) doc-vs-data discrepancy cross-check."""
-    doc_parts = [
-        str(s.get("result", ""))
-        for s in state.get("steps_completed", [])
-        if s.get("tool") == "doc_search" and not s.get("error") and s.get("result")
-    ]
-    return "\n\n".join(part for part in doc_parts if part)
+    P2(3) doc-vs-data discrepancy cross-check.
+
+    DOCBOT-2002: prefer the full untruncated ``tieout_doc_context`` (with its
+    "Source: X, Page N" headers) so detection sees every value and can build
+    doc citations; fall back to the 800-char preview for older steps."""
+    doc_parts = []
+    for s in state.get("steps_completed", []):
+        if s.get("tool") != "doc_search" or s.get("error"):
+            continue
+        part = str(s.get("tieout_doc_context") or s.get("result") or "")
+        if part and part != "No relevant documents found.":
+            doc_parts.append(part)
+    return "\n\n".join(doc_parts)
 
 
 def _executed_rows_preview(state: AutopilotState) -> list[dict]:
@@ -1651,23 +1673,20 @@ def _detect_data_doc_discrepancies(state: AutopilotState):
 
 def _ensure_discrepancies_in_answer(answer: str, report) -> str:
     """P2(3) deterministic backstop: if pre-computed discrepancies exist, the
-    final answer MUST contain them — even when the LLM omits them."""
+    final answer MUST reference them — even when the LLM omits them.
+
+    DOCBOT-2002: the backstop appends a one-line "Tie-out:" footer carrying
+    each item's inline marker token instead of a literal "[DISCREPANCY]"
+    bullet block. The interface renders a full TieOutCard from the structured
+    lineage payload, so the numbers live on the card and the answer only
+    carries the badge."""
     if report is None or not getattr(report, "has_discrepancies", False):
         return answer
     if "discrepan" in (answer or "").lower():
         return answer
-    lines = ["", "---", "**Detected discrepancies (document vs database):**"]
-    for d in report.discrepancies:
-        sign = "+" if d.delta >= 0 else ""
-        pct_str = f" ({sign}{d.pct:.1f}%)" if d.pct is not None else ""
-        doc_val = int(d.doc_value) if d.doc_value == int(d.doc_value) else d.doc_value
-        db_val = int(d.db_value) if d.db_value == int(d.db_value) else d.db_value
-        delta_val = int(d.delta) if d.delta == int(d.delta) else d.delta
-        lines.append(
-            f"- [DISCREPANCY] {d.label}: document says {doc_val:,} vs database {db_val:,} "
-            f"(delta {sign}{delta_val:,}{pct_str})"
-        )
-    return (answer or "").rstrip() + "\n" + "\n".join(lines)
+    from api.utils.tieout import missing_marker_tail
+
+    return (answer or "").rstrip() + missing_marker_tail("", report.discrepancies)
 
 
 def _degradation_label(state: AutopilotState) -> str:
@@ -2384,7 +2403,35 @@ async def run_autopilot(
                 elif node_name == "verifier":
                     from api.utils.pii_masking import mask_pii
                     from api.utils.response_format import normalize_markdown
+                    from api.utils.tieout import (
+                        detect_from_autopilot_steps,
+                        missing_marker_tail,
+                        replace_discrepancy_tags,
+                    )
                     final_answer = normalize_markdown(mask_pii(updates.get("final_answer", "")))
+
+                    # DOCBOT-2002: turn the doc-vs-data cross-check into
+                    # structured TieOutCards. Detection is deterministic (no
+                    # LLM) and re-runs over the full stashed doc context +
+                    # sql metadata so the cards carry both citations; item ids
+                    # match the markers the synthesizer prompt placed because
+                    # both passes see identical inputs. Legacy "[DISCREPANCY]"
+                    # tags the model echoed are rewritten to markers, and a
+                    # tail badge is appended for cards the answer never
+                    # referenced — every card gets a badge in the text.
+                    try:
+                        _tieout_report = detect_from_autopilot_steps(all_step_results)
+                    except Exception as exc:
+                        logger.warning("autopilot tie-out detection failed (non-fatal): %s", exc)
+                        _tieout_report = None
+                    if _tieout_report is not None and _tieout_report.has_discrepancies:
+                        for item in _tieout_report.discrepancies:
+                            lineage.add_discrepancy(item)
+                        final_answer = replace_discrepancy_tags(final_answer, _tieout_report.discrepancies)
+                        _tail = missing_marker_tail(final_answer, _tieout_report.discrepancies)
+                        if _tail:
+                            final_answer += _tail
+
                     yield _sse({"type": "answer", "content": final_answer})
                     for cit in all_citations:
                         lineage.add_source(

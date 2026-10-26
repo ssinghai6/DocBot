@@ -457,12 +457,19 @@ class TestDiscrepancyInclusion:
             result = asyncio.run(_synthesizer_node(state))
 
         answer = result["final_answer"]
-        assert "[DISCREPANCY]" in answer
-        assert "330" in answer and "325" in answer
+        # DOCBOT-2002: the backstop appends a marker-based Tie-out footer —
+        # the literal [DISCREPANCY] tag must never reach the answer text.
+        assert "[[discrepancy:d-" in answer
+        assert "**Tie-out:**" in answer
+        assert "Net Income" in answer
+        assert "[DISCREPANCY]" not in answer
         mock_chat.assert_called_once()
-        # The system prompt must have carried the pre-computed discrepancy block
+        # The system prompt must have carried the pre-computed marker block
         sent_system = mock_chat.call_args.args[0][0]["content"]
-        assert "[DISCREPANCY]" in sent_system
+        assert "[[discrepancy:d-" in sent_system
+        assert "[DISCREPANCY]" not in sent_system.replace(
+            "NEVER write the literal text [DISCREPANCY]", ""
+        )
 
 
 # ---------------------------------------------------------------------------

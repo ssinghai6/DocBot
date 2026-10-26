@@ -13,7 +13,7 @@
  *   images only rendered for `data:image/` and `blob:` sources.
  */
 
-import React, { memo, useCallback, useEffect, useRef, useState } from "react"
+import React, { memo, useCallback, useEffect, useMemo, useRef, useState } from "react"
 import ReactMarkdown, {
   defaultUrlTransform,
   type Components,
@@ -25,9 +25,12 @@ import remarkGfm from "remark-gfm"
 import remarkMath from "remark-math"
 import rehypeKatex from "rehype-katex"
 import { Highlight, themes } from "prism-react-renderer"
-import { Check, Copy } from "lucide-react"
+import { Check, Copy, TriangleAlert } from "lucide-react"
 
 import { normalizeLatexDelimiters } from "@/lib/latex"
+import { tieOutMetric, type TieOutCard } from "@/lib/schemas/tieout"
+import { useUIStore } from "@/store/uiStore"
+import type { Lineage } from "./types"
 
 // ── Plugins (module scope → stable identity across renders) ────────────────
 
@@ -51,6 +54,59 @@ const urlTransform: UrlTransform = (url, key, node) => {
     return isSafeImageSrc(url) ? url : ""
   }
   return defaultUrlTransform(url)
+}
+
+// ── DOCBOT-2002: inline TieOutCard badges ──────────────────────────────────
+
+// Marker tokens the synthesis prompts place in the answer text; each maps to
+// a structured TieOutCard in the lineage payload.
+const TIE_OUT_MARKER_RE = /\[\[discrepancy:(d-[0-9a-f]{8})\]\]/g
+// Legacy literal tags (pre-2002 answers) never render as raw text.
+const LEGACY_TAG_RE = /\[\s*\/?\s*DISCREPANCY\s*\]/gi
+const TIE_OUT_HREF = "#tieout-"
+
+/**
+ * Rewrite marker tokens into fragment links (rendered as badges by the `a`
+ * override, inline within the paragraph) and strip legacy literal tags.
+ */
+function preprocessTieOut(content: string, discrepancies?: TieOutCard[]): string {
+  if (!content || !content.toLowerCase().includes("discrepan")) return content
+  let out = content.replace(LEGACY_TAG_RE, "**Discrepancy:**")
+  const hasCards = !!discrepancies?.length
+  out = out.replace(TIE_OUT_MARKER_RE, (_m, id: string) => {
+    const card = hasCards ? discrepancies?.find((d) => d.id === id) : undefined
+    const label = card
+      ? `${tieOutMetric(card)}${card.period ? ` (${card.period})` : ""}`
+      : "Tie-out"
+    return `[${label.replace(/[[\]]/g, "")}](${TIE_OUT_HREF}${id})`
+  })
+  return out
+}
+
+function TieOutBadge({ id, lineage }: { id: string; lineage?: Lineage | null }) {
+  const selectLineage = useUIStore((s) => s.selectLineage)
+  const setInspectorOpen = useUIStore((s) => s.setInspectorOpen)
+  const card = lineage?.discrepancies.find((d) => d.id === id)
+  const label = card ? tieOutMetric(card) : "Tie-out"
+  const title = card
+    ? `${label} — report ${card.report_value ?? card.doc_value ?? "?"} vs books ${card.books_value ?? card.db_value ?? "?"}`
+    : "Doc vs books tie-out"
+  return (
+    <button
+      type="button"
+      disabled={!lineage}
+      onClick={() => {
+        if (!lineage) return
+        selectLineage(lineage, { tab: "lineage", focusDiscrepancyId: id })
+        setInspectorOpen(true)
+      }}
+      title={title}
+      className="md-tieout-badge"
+    >
+      <TriangleAlert className="w-2.5 h-2.5" aria-hidden />
+      <span className="max-w-[180px] truncate">{label}</span>
+    </button>
+  )
 }
 
 // ── hast helpers ───────────────────────────────────────────────────────────
@@ -171,25 +227,30 @@ function Table({ children }: React.ComponentPropsWithoutRef<"table"> & ExtraProp
   )
 }
 
-function Anchor({ children, href, title }: React.ComponentPropsWithoutRef<"a"> & ExtraProps) {
-  return (
-    <a href={href} title={title} target="_blank" rel="noopener noreferrer">
-      {children}
-    </a>
-  )
-}
-
 function Image({ src, alt, title }: React.ComponentPropsWithoutRef<"img"> & ExtraProps) {
   if (!isSafeImageSrc(src)) return null
   // eslint-disable-next-line @next/next/no-img-element -- inline data:/blob: images, next/image can't optimize these
   return <img src={src} title={title} alt={alt ?? ""} loading="lazy" />
 }
 
-const components: Components = {
-  pre: Pre,
-  table: Table,
-  a: Anchor,
-  img: Image,
+function buildComponents(lineage: Lineage | null): Components {
+  return {
+    pre: Pre,
+    table: Table,
+    a: ({ children, href, title }) => {
+      // DOCBOT-2002: fragment links produced by preprocessTieOut render as
+      // inline badges that focus their TieOutCard in the inspector.
+      if (typeof href === "string" && href.startsWith(TIE_OUT_HREF)) {
+        return <TieOutBadge id={href.slice(TIE_OUT_HREF.length)} lineage={lineage} />
+      }
+      return (
+        <a href={href} title={title} target="_blank" rel="noopener noreferrer">
+          {children}
+        </a>
+      )
+    },
+    img: Image,
+  }
 }
 
 // ── Component ──────────────────────────────────────────────────────────────
@@ -200,9 +261,16 @@ export interface MarkdownRendererProps {
   /** `compact` = denser type scale for autopilot steps / inspector panes. */
   variant?: "default" | "compact"
   className?: string
+  /**
+   * DOCBOT-2002: lineage of the answer being rendered — its structured
+   * discrepancies turn inline `[[discrepancy:<id>]]` markers into TieOutCard
+   * badges that focus the card in the inspector. Omit for non-answer text.
+   */
+  lineage?: Lineage | null
 }
 
-function MarkdownRenderer({ content, variant = "default", className }: MarkdownRendererProps) {
+function MarkdownRenderer({ content, variant = "default", className, lineage }: MarkdownRendererProps) {
+  const components = useMemo(() => buildComponents(lineage ?? null), [lineage])
   const classes = ["prose", "max-w-none", variant === "compact" ? "prose-compact" : "", className ?? ""]
     .filter(Boolean)
     .join(" ")
@@ -215,7 +283,7 @@ function MarkdownRenderer({ content, variant = "default", className }: MarkdownR
         urlTransform={urlTransform}
         skipHtml
       >
-        {normalizeLatexDelimiters(content)}
+        {normalizeLatexDelimiters(preprocessTieOut(content, lineage?.discrepancies))}
       </ReactMarkdown>
     </div>
   )

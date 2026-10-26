@@ -38,7 +38,12 @@ interface UIState {
   selectedLineage: Lineage | null;
   /** Source id (LineageSource.id) to highlight in the Sources tab */
   focusSourceId: string | null;
-  selectLineage: (lineage: Lineage | null, opts?: { tab?: InspectorTab; focusSourceId?: string | null }) => void;
+  /** DOCBOT-2002: TieOutCard id to highlight in the lineage tab */
+  focusDiscrepancyId: string | null;
+  selectLineage: (
+    lineage: Lineage | null,
+    opts?: { tab?: InspectorTab; focusSourceId?: string | null; focusDiscrepancyId?: string | null }
+  ) => void;
 
   // Command palette
   commandPaletteOpen: boolean;
@@ -74,10 +79,12 @@ export const useUIStore = create<UIState>()(
 
       selectedLineage: null,
       focusSourceId: null,
+      focusDiscrepancyId: null,
       selectLineage: (lineage, opts) =>
         set((s) => ({
           selectedLineage: lineage,
           focusSourceId: opts?.focusSourceId ?? null,
+          focusDiscrepancyId: opts?.focusDiscrepancyId ?? null,
           inspectorTab: opts?.tab ?? s.inspectorTab,
         })),
 
