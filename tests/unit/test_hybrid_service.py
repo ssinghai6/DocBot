@@ -404,26 +404,47 @@ class TestHybridChatActiveDiscrepancyGate:
         ) as mock_correction, patch(
             "api.trace_service.log_trace",
             new=AsyncMock(return_value="trace-id-1"),
-        ), patch(
+        ) as mock_trace, patch(
             "api.lineage_service.emit_lineage",
             new=MagicMock(return_value=None),
         ):
             events = asyncio.run(_drain_hybrid_chat())
+        self.mock_trace = mock_trace
         return events, mock_stream, mock_correction
 
     def test_discrepancy_not_addressed_triggers_one_resynthesis(self):
         """detect_discrepancies finds a real delta, the streamed answer never
         mentions it -> exactly one corrective re-synthesis call is made and
-        its output is appended as an extra token event."""
+        DOCBOT-2004: its output REPLACES the answer via a "replace" event
+        rather than being appended as another token (no duplicated answer)."""
+        from api.utils.response_format import normalize_markdown
+        from api.utils.tieout import missing_marker_tail, replace_discrepancy_tags
+
+        original = "Revenue grew to $330M in Q4."
+        corrected = normalize_markdown(
+            "Revenue was $330M per the filing. [DISCREPANCY] DB shows $325M."
+        )
         events, mock_stream, mock_correction = self._run(
             has_discrepancy=True,
-            stream_tokens=["Revenue grew to $330M in Q4."],
+            stream_tokens=[original],
         )
 
         mock_correction.assert_called_once()
-        token_events = [e for e in events if e.get("type") == "token"]
-        combined = "".join(e["content"] for e in token_events)
-        assert "[DISCREPANCY]" in combined
+        replace_events = [e for e in events if e.get("type") == "replace"]
+        assert [e["content"] for e in replace_events] == [corrected]
+        # The corrected answer is never streamed as a token on top of the original.
+        tokens_after_replace = events[events.index(replace_events[0]) + 1:]
+        token_text = "".join(e["content"] for e in tokens_after_replace if e.get("type") == "token")
+        assert corrected not in token_text
+        tokens_before = events[: events.index(replace_events[0])]
+        assert "".join(e["content"] for e in tokens_before if e.get("type") == "token") == original
+
+        items = _make_discrepancy_report(True).discrepancies
+        rewritten = replace_discrepancy_tags(corrected, items)
+        tail = missing_marker_tail(rewritten, items)
+        assert token_text == tail
+        final_answer = self.mock_trace.await_args.kwargs["final_answer"]
+        assert final_answer == normalize_markdown(rewritten + tail)
 
     def test_discrepancy_already_addressed_is_unchanged(self):
         """The streamed answer already surfaces the discrepancy -> no
