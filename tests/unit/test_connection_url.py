@@ -23,6 +23,7 @@ from api.utils.ssrf_validator import (
     is_public_address,
     odbc_escape,
     resolve_and_validate,
+    resolve_pinned_ip,
     validate_db_identifier,
     validate_hostname,
 )
@@ -279,6 +280,19 @@ class TestResolveAndValidate:
     def test_public_v4_and_v6_allowed(self):
         with patch(GAI, side_effect=_gai(PUBLIC_V4, PUBLIC_V6, PUBLIC_V4)):
             assert resolve_and_validate("db.example.com") == [PUBLIC_V4, PUBLIC_V6]
+
+    def test_pinned_ip_prefers_ipv4(self):
+        with patch(GAI, side_effect=_gai(PUBLIC_V6, PUBLIC_V4)):
+            assert resolve_pinned_ip("db.example.com") == PUBLIC_V4
+
+    def test_pinned_ip_ipv6_only(self):
+        with patch(GAI, side_effect=_gai(PUBLIC_V6)):
+            assert resolve_pinned_ip("db.example.com") == PUBLIC_V6
+
+    def test_pinned_ip_private_record_still_poisons(self):
+        with patch(GAI, side_effect=_gai(PUBLIC_V6, PUBLIC_V4, "10.0.0.5")):
+            with pytest.raises(ValueError, match="not allowed"):
+                resolve_pinned_ip("db.example.com")
 
     def test_zone_id_stripped(self):
         with patch(GAI, side_effect=_gai("fe80::1%en0")):
