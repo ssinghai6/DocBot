@@ -22,6 +22,11 @@
 //   Analytics and the MSAL (Azure SQL Entra sign-in) token endpoint are allowed.
 // - Vercel preview deployments inject the vercel.live feedback toolbar; its
 //   origins are allowed only when VERCEL_ENV === "preview".
+// - Cloudflare Turnstile (DOCBOT-1713/2315): TurnstileWidget loads
+//   challenges.cloudflare.com/turnstile/v0/api.js and the widget renders an
+//   iframe from the same origin, so it is in script-src and frame-src (prod and
+//   preview). No connect-src entry: the widget talks to Cloudflare from inside
+//   its own iframe, not from our page.
 
 const VERCEL_ANALYTICS = ["https://va.vercel-scripts.com"]
 const VERCEL_INSIGHTS = ["https://vitals.vercel-insights.com"]
@@ -29,6 +34,7 @@ const MSAL_LOGIN = ["https://login.microsoftonline.com"]
 const VERCEL_LIVE_SCRIPT = ["https://vercel.live"]
 const VERCEL_LIVE_CONNECT = ["https://vercel.live", "wss://ws-us3.pusher.com"]
 const VERCEL_LIVE_IMG = ["https://vercel.live", "https://vercel.com"]
+const TURNSTILE = ["https://challenges.cloudflare.com"]
 
 export const HSTS_VALUE = "max-age=31536000; includeSubDomains"
 export const PERMISSIONS_POLICY =
@@ -66,6 +72,7 @@ export function buildCsp({ isDev, isPreview = false, backendUrl = null }) {
       "'unsafe-inline'",
       ...(isDev ? ["'unsafe-eval'"] : []),
       ...VERCEL_ANALYTICS,
+      ...TURNSTILE,
       ...(live ? VERCEL_LIVE_SCRIPT : []),
     ],
     "style-src": ["'self'", "'unsafe-inline'"],
@@ -82,7 +89,7 @@ export function buildCsp({ isDev, isPreview = false, backendUrl = null }) {
       // Next dev server HMR websocket.
       ...(isDev ? ["ws:", "http://127.0.0.1:8000", "http://localhost:8000"] : []),
     ],
-    "frame-src": ["'self'", ...MSAL_LOGIN, ...(live ? VERCEL_LIVE_SCRIPT : [])],
+    "frame-src": ["'self'", ...MSAL_LOGIN, ...TURNSTILE, ...(live ? VERCEL_LIVE_SCRIPT : [])],
     "worker-src": ["'self'", "blob:"],
     "object-src": ["'none'"],
     "base-uri": ["'self'"],

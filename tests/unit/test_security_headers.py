@@ -179,6 +179,18 @@ def test_frontend_prod_csp() -> None:
 
 
 @needs_node
+@pytest.mark.parametrize("preview", [False, True])
+def test_frontend_csp_allows_turnstile(preview: bool) -> None:
+    # DOCBOT-2315: TurnstileWidget script + challenge iframe must not be blocked.
+    d = _directives(
+        _frontend_headers({"isDev": False, "isPreview": preview})["Content-Security-Policy"]
+    )
+    assert "https://challenges.cloudflare.com" in d["script-src"]
+    assert "https://challenges.cloudflare.com" in d["frame-src"]
+    assert "'unsafe-eval'" not in d["script-src"]
+
+
+@needs_node
 def test_frontend_dev_csp_allows_eval_and_hmr() -> None:
     d = _directives(_frontend_headers({"isDev": True})["Content-Security-Policy"])
     assert "'unsafe-eval'" in d["script-src"]
