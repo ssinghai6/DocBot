@@ -12,13 +12,17 @@ like the other services, so tests can run against SQLite.
 from __future__ import annotations
 
 import json
+import logging
 from dataclasses import dataclass
 from datetime import datetime
 from typing import Any, Callable, Optional
 
-from sqlalchemy import and_, delete, select
+from sqlalchemy import and_, delete, select, update
+from sqlalchemy.exc import SQLAlchemyError
 
-from api.utils.caller_scope import CallerScope, scope_filter
+from api.utils.caller_scope import CallerScope, _raw_anon_cookie, anon_token_digest, scope_filter
+
+logger = logging.getLogger(__name__)
 
 SESSION_LIST_LIMIT = 50
 EXPORT_FORMATS = ("txt", "json", "markdown")
@@ -225,3 +229,43 @@ def render_export(detail: dict[str, Any], fmt: str, now: Optional[datetime] = No
         return ExportFile(out.encode("utf-8"), "text/markdown", f"docbot_{short_id}.md")
 
     raise ValueError(f"Unsupported export format: {fmt}")
+
+
+async def claim_anonymous_resources(
+    request: Any,
+    user_id: str,
+    users_table: Any,
+    owned_tables: list[Any],
+    async_session_factory: Any,
+) -> int:
+    """DOCBOT-2316: hand the caller's anonymous rows to ``user_id`` on sign-in.
+
+    Rows stamped with this browser's ``docbot_anon`` digest (and no user yet)
+    in each of ``owned_tables`` (``sessions``, ``db_connections``) are moved to
+    the user and their org, so the demo / uploads a visitor made before
+    signing up stay visible. No valid anon cookie → no-op. A DB error is
+    logged and swallowed: claiming must never fail the login itself.
+    Returns the number of rows claimed.
+    """
+    raw = _raw_anon_cookie(request)
+    if not raw:
+        return 0
+    digest = anon_token_digest(raw)
+    claimed = 0
+    try:
+        async with async_session_factory() as db:
+            org_id = (
+                await db.execute(select(users_table.c.org_id).where(users_table.c.id == user_id))
+            ).scalar_one_or_none()
+            for table in owned_tables:
+                result = await db.execute(
+                    update(table)
+                    .where(and_(table.c.anon_owner == digest, table.c.user_id.is_(None)))
+                    .values(user_id=user_id, org_id=org_id, anon_owner=None)
+                )
+                claimed += result.rowcount or 0
+            await db.commit()
+    except SQLAlchemyError as exc:
+        logger.warning("Claiming anonymous resources failed for user %s: %s", user_id, type(exc).__name__)
+        return 0
+    return claimed

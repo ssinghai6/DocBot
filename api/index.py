@@ -2482,6 +2482,14 @@ async def saml_login(request: Request):
         raise HTTPException(status_code=500, detail="SSO initiation failed.")
 
 
+async def _claim_anon_work(request: Request, user_id: str) -> None:
+    """DOCBOT-2316: move this browser's anonymous sessions/connections to the user."""
+    from api.session_service import claim_anonymous_resources
+    await claim_anonymous_resources(
+        request, user_id, users_table, [sessions_table, db_connections_table], async_session_factory,
+    )
+
+
 @app.post("/api/auth/saml/acs")
 async def saml_acs(request: Request, response: Response):
     """Assertion Consumer Service — IdP POSTs the SAML response here.
@@ -2523,6 +2531,7 @@ async def saml_acs(request: Request, response: Response):
     except Exception as exc:
         logger.error("Session creation failed after SSO: %s", exc)
         raise HTTPException(status_code=500, detail="Session creation failed.")
+    await _claim_anon_work(request, user_id)
 
     frontend_url = os.getenv("FRONTEND_URL", "http://localhost:3000")
     redirect = RedirectResponse(url=f"{frontend_url}/chat?sso=success", status_code=302)
@@ -2609,7 +2618,7 @@ async def github_login():
 
 
 @app.get("/api/auth/github/callback")
-async def github_callback(code: str, state: str, response: Response):
+async def github_callback(code: str, state: str, response: Response, request: Request):
     """Handle GitHub OAuth callback: exchange code → provision user → set cookie."""
     from api.oauth_service import github_exchange_code, validate_oauth_state, oauth_success_redirect
     from api.auth_service import create_user_session
@@ -2641,6 +2650,7 @@ async def github_callback(code: str, state: str, response: Response):
     except Exception as exc:
         logger.error("GitHub user provisioning failed: %s", exc)
         return RedirectResponse(url=f"{frontend_url.split('?')[0]}?auth_error=provision_failed")
+    await _claim_anon_work(request, user_id)
 
     log_event(
         AuditEventType.login, audit_log_table, async_session_factory,
@@ -2667,7 +2677,7 @@ async def google_login():
 
 
 @app.get("/api/auth/google/callback")
-async def google_callback(code: str, state: str, response: Response):
+async def google_callback(code: str, state: str, response: Response, request: Request):
     """Handle Google OAuth callback: exchange code → provision user → set cookie."""
     from api.oauth_service import google_exchange_code, validate_oauth_state, _frontend_url
     from api.auth_service import create_user_session
@@ -2697,6 +2707,7 @@ async def google_callback(code: str, state: str, response: Response):
     except Exception as exc:
         logger.error("Google user provisioning failed: %s", exc)
         return RedirectResponse(url=f"{_frontend_url()}/chat?auth_error=provision_failed")
+    await _claim_anon_work(request, user_id)
 
     log_event(
         AuditEventType.login, audit_log_table, async_session_factory,
@@ -2782,6 +2793,7 @@ async def auth_register(body: RegisterRequest, response: Response, request: Requ
     except Exception as exc:
         logger.error("Registration failed: %s", exc)
         raise HTTPException(status_code=500, detail="Registration failed. Please try again.")
+    await _claim_anon_work(request, user_id)
 
     resp = JSONResponse({"status": "registered", "email": email})
     resp.set_cookie(
@@ -2792,7 +2804,7 @@ async def auth_register(body: RegisterRequest, response: Response, request: Requ
 
 
 @app.post("/api/auth/login")
-async def auth_login(body: LoginRequest, response: Response):
+async def auth_login(body: LoginRequest, response: Response, request: Request):
     """Login with email + password."""
     from api.oauth_service import verify_password
     from api.auth_service import create_user_session
@@ -2833,6 +2845,7 @@ async def auth_login(body: LoginRequest, response: Response):
         )
 
     token = await create_user_session(user.id, user_sessions_table, async_session_factory)
+    await _claim_anon_work(request, user.id)
 
     log_event(
         AuditEventType.login, audit_log_table, async_session_factory,
