@@ -3,8 +3,11 @@
 Centralises how every E2B sandbox is created so no code path can forget the
 hardening flags:
 
-- ``timeout=SANDBOX_LIFETIME_SECONDS`` (60 s) on ``Sandbox.create`` — E2B
-  kills the VM server-side even if our process dies before ``kill()``.
+- ``timeout=<lifetime>`` on ``Sandbox.create`` — E2B kills the VM
+  server-side even if our process dies before ``kill()``. Raw user code gets
+  ``SANDBOX_LIFETIME_SECONDS`` (60 s). Internal LLM-codegen paths get their
+  exec timeout plus ``INSTALL_BUDGET_SECONDS`` so boot, CSV upload and a
+  runtime pip install don't eat into the run (DOCBOT-2318, ``lifetime_seconds``).
 - ``allow_internet_access=False`` by default (when the installed SDK
   supports the kwarg). Arbitrary user code (``POST /api/sandbox/execute``)
   NEVER gets network egress.
@@ -22,7 +25,9 @@ only when ALL of the following hold:
 1. the caller is an internal LLM-codegen path (CSV query, autopilot, SQL
    chart analysis) — never raw user code;
 2. ``SANDBOX_PIP_INTERNET`` is not disabled (default on);
-3. the generated code imports a package that is not pre-baked.
+3. the generated code imports a package that is not pre-baked — or the run
+   hit ``ModuleNotFoundError``, in which case it is retried once in a fresh
+   sandbox with egress (DOCBOT-2318).
 
 Set ``SANDBOX_PIP_INTERNET=false`` (and point ``E2B_SANDBOX_TEMPLATE`` at a
 template with statsmodels etc.) to remove egress entirely. Domain-scoped
@@ -41,6 +46,8 @@ from typing import Any, Callable, Dict, Iterable, Optional
 logger = logging.getLogger(__name__)
 
 SANDBOX_LIFETIME_SECONDS = 60
+# Extra seconds for internal codegen runs: boot + upload + pip install (20-40 s) + module retry.
+INSTALL_BUDGET_SECONDS = 90
 
 # Packages baked into E2B's default code-interpreter template
 # (e2b-dev/code-interpreter template/requirements.txt). Never pip-installed.
@@ -69,6 +76,19 @@ def internet_allowed(*, allow_pip_egress: bool, install_packages: Iterable[str])
     return bool(allow_pip_egress and pip_egress_enabled() and list(install_packages))
 
 
+def install_budget(*, allow_pip_egress: bool) -> int:
+    """Extra seconds an internal codegen run may spend on pip installs (0 if no egress)."""
+    return INSTALL_BUDGET_SECONDS if allow_pip_egress and pip_egress_enabled() else 0
+
+
+def lifetime_seconds(*, allow_pip_egress: bool, exec_timeout_seconds: float) -> int:
+    """E2B VM lifetime: 60 s for raw user code; exec timeout + install budget for codegen."""
+    if not allow_pip_egress:
+        return SANDBOX_LIFETIME_SECONDS
+    budget = install_budget(allow_pip_egress=True)
+    return max(SANDBOX_LIFETIME_SECONDS, int(exec_timeout_seconds) + budget)
+
+
 def _accepted_kwargs(create: Callable[..., Any]) -> Optional[set[str]]:
     """Kwarg names ``create`` accepts, or None if it takes ``**kwargs``."""
     try:
@@ -83,10 +103,15 @@ def _accepted_kwargs(create: Callable[..., Any]) -> Optional[set[str]]:
     return names
 
 
-def create_kwargs(create: Callable[..., Any], *, allow_internet: bool) -> Dict[str, Any]:
+def create_kwargs(
+    create: Callable[..., Any],
+    *,
+    allow_internet: bool,
+    lifetime_seconds: int = SANDBOX_LIFETIME_SECONDS,
+) -> Dict[str, Any]:
     """Hardened kwargs for ``Sandbox.create``, filtered to what the SDK supports."""
     wanted: Dict[str, Any] = {
-        "timeout": SANDBOX_LIFETIME_SECONDS,
+        "timeout": lifetime_seconds,
         "allow_internet_access": allow_internet,
     }
     template = os.getenv("E2B_SANDBOX_TEMPLATE", "").strip()
@@ -102,9 +127,18 @@ def create_kwargs(create: Callable[..., Any], *, allow_internet: bool) -> Dict[s
     return kept
 
 
-def create_sandbox(sandbox_cls: Any, *, allow_internet: bool) -> Any:
+def create_sandbox(
+    sandbox_cls: Any,
+    *,
+    allow_internet: bool,
+    lifetime_seconds: int = SANDBOX_LIFETIME_SECONDS,
+) -> Any:
     """Create an E2B sandbox with the lockdown kwargs applied."""
-    return sandbox_cls.create(**create_kwargs(sandbox_cls.create, allow_internet=allow_internet))
+    return sandbox_cls.create(
+        **create_kwargs(
+            sandbox_cls.create, allow_internet=allow_internet, lifetime_seconds=lifetime_seconds
+        )
+    )
 
 
 class SandboxHolder:

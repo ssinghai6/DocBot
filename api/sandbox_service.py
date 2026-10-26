@@ -14,7 +14,7 @@ import logging
 import os
 import re as _re_module
 import time
-from typing import AsyncGenerator, List, Optional
+from typing import Any, AsyncGenerator, Callable, List, Optional
 
 import groq as groq_module
 from pydantic import BaseModel, ValidationError
@@ -395,6 +395,38 @@ def _pip_install_in_sandbox(sandbox, package_name: str) -> bool:
     return True
 
 
+def _retry_module_with_egress(
+    sandbox_cls: Any,
+    old_sandbox: Any,
+    holder: sandbox_policy.SandboxHolder,
+    package_name: str,
+    full_code: str,
+    lifetime_seconds: int,
+    prepare: Optional[Callable[[Any], None]] = None,
+) -> tuple[Any, Any]:
+    """DOCBOT-2318: a no-egress codegen sandbox hit ModuleNotFoundError.
+
+    Kill it, create a fresh sandbox WITH egress, run ``prepare`` (e.g. CSV
+    upload), pip install the package and re-run once. Internal codegen
+    callers only — the caller gates on ``sandbox_policy.internet_allowed``.
+    Returns ``(new_sandbox, execution)``; execution is None if install failed.
+    """
+    try:
+        old_sandbox.kill()
+    except Exception as err:  # teardown must never raise
+        logger.warning("Failed to kill sandbox before egress retry: %s", type(err).__name__)
+    sandbox = sandbox_policy.create_sandbox(
+        sandbox_cls, allow_internet=True, lifetime_seconds=lifetime_seconds
+    )
+    holder.set(sandbox)
+    if prepare is not None:
+        prepare(sandbox)
+    if not _pip_install_in_sandbox(sandbox, package_name):
+        return sandbox, None
+    logger.info("Retrying sandbox execution in egress sandbox after installing %s", package_name)
+    return sandbox, sandbox.run_code(full_code)
+
+
 def _extract_charts(
     stdout_lines: list[str],
 ) -> tuple[list[str], list[str], list[ChartMetadata]]:
@@ -443,16 +475,19 @@ def _run_in_sandbox(
     *,
     allow_pip_egress: bool = False,
     holder: Optional[sandbox_policy.SandboxHolder] = None,
+    lifetime_seconds: int = sandbox_policy.SANDBOX_LIFETIME_SECONDS,
 ) -> SandboxResult:
     """Synchronous execution block — called from a thread via asyncio.
 
     Kept synchronous because the E2B SDK's Sandbox class is synchronous.
     We offload it to a thread pool so the event loop stays unblocked.
 
-    DOCBOT-1607: the sandbox is created via ``sandbox_policy`` (60 s
-    lifetime, internet off). ``allow_pip_egress`` is True only for internal
-    LLM-codegen callers; raw user code (``/api/sandbox/execute``) never gets
-    egress, so runtime pip installs are skipped for it.
+    DOCBOT-1607: the sandbox is created via ``sandbox_policy`` (internet off,
+    ``lifetime_seconds`` VM lifetime — 60 s unless ``run_python`` widened it
+    for a codegen caller, DOCBOT-2318). ``allow_pip_egress`` is True only for
+    internal LLM-codegen callers; raw user code (``/api/sandbox/execute``)
+    never gets egress, so runtime pip installs and the egress
+    ModuleNotFoundError retry are skipped for it.
     """
     # Import here to defer the dependency until first use; also makes
     # import errors surfaceable at call-time rather than module-load-time.
@@ -475,7 +510,9 @@ def _run_in_sandbox(
     holder = holder or sandbox_policy.SandboxHolder()
 
     try:
-        sandbox = sandbox_policy.create_sandbox(Sandbox, allow_internet=allow_internet)
+        sandbox = sandbox_policy.create_sandbox(
+            Sandbox, allow_internet=allow_internet, lifetime_seconds=lifetime_seconds
+        )
         holder.set(sandbox)
         if allow_internet:
             _install_sandbox_packages(sandbox, install_packages)
@@ -490,9 +527,18 @@ def _run_in_sandbox(
             pkg = _parse_missing_module(
                 getattr(execution.error, "value", str(execution.error))
             )
-            if pkg and allow_internet and _pip_install_in_sandbox(sandbox, pkg):
-                logger.info("Retrying sandbox execution after installing %s", pkg)
-                execution = sandbox.run_code(full_code)
+            if pkg and allow_internet:
+                if _pip_install_in_sandbox(sandbox, pkg):
+                    logger.info("Retrying sandbox execution after installing %s", pkg)
+                    execution = sandbox.run_code(full_code)
+            elif pkg and sandbox_policy.internet_allowed(
+                allow_pip_egress=allow_pip_egress, install_packages=[pkg]
+            ):
+                sandbox, retry_exec = _retry_module_with_egress(
+                    Sandbox, sandbox, holder, pkg, full_code, lifetime_seconds
+                )
+                if retry_exec is not None:
+                    execution = retry_exec
 
         # Join all stdout chunks then split by newline — handles SDKs that
         # buffer output in chunks rather than line-by-line
@@ -762,6 +808,9 @@ async def run_python(
         False (default) for arbitrary user code — the sandbox has no
         internet.  Internal LLM-codegen callers pass True so a missing
         non-pre-baked package (e.g. statsmodels) can be pip-installed.
+        For those callers the deadline and VM lifetime also get
+        ``sandbox_policy.install_budget`` on top of ``timeout_seconds``
+        (DOCBOT-2318); raw user code keeps a 60 s VM lifetime.
 
     Returns
     -------
@@ -772,16 +821,24 @@ async def run_python(
     """
     loop = asyncio.get_running_loop()
     holder = sandbox_policy.SandboxHolder()
+    deadline = timeout_seconds + sandbox_policy.install_budget(allow_pip_egress=allow_pip_egress)
+    lifetime = sandbox_policy.lifetime_seconds(
+        allow_pip_egress=allow_pip_egress, exec_timeout_seconds=timeout_seconds
+    )
 
     try:
         result = await asyncio.wait_for(
             loop.run_in_executor(
                 None,
                 copy_ctx_run(
-                    _run_in_sandbox, code, allow_pip_egress=allow_pip_egress, holder=holder
+                    _run_in_sandbox,
+                    code,
+                    allow_pip_egress=allow_pip_egress,
+                    holder=holder,
+                    lifetime_seconds=lifetime,
                 ),
             ),
-            timeout=float(timeout_seconds),
+            timeout=float(deadline),
         )
     except asyncio.TimeoutError:
         logger.error(
@@ -1152,11 +1209,13 @@ def _run_csv_in_sandbox_sync(
     csv_path: str,
     csv_bytes: bytes,
     holder: Optional[sandbox_policy.SandboxHolder] = None,
+    lifetime_seconds: int = sandbox_policy.SANDBOX_LIFETIME_SECONDS,
 ) -> SandboxResult:
     """Synchronous: upload CSV bytes to E2B sandbox, run code, return result.
 
     LLM-generated code (internal path) — pip egress allowed only when a
-    non-pre-baked package is imported (DOCBOT-1607, see sandbox_policy).
+    non-pre-baked package is imported, or on a ModuleNotFoundError retry in a
+    fresh egress sandbox (DOCBOT-1607/2318, see sandbox_policy).
     """
     from e2b_code_interpreter import Sandbox
 
@@ -1174,7 +1233,9 @@ def _run_csv_in_sandbox_sync(
     holder = holder or sandbox_policy.SandboxHolder()
 
     try:
-        sandbox = sandbox_policy.create_sandbox(Sandbox, allow_internet=allow_internet)
+        sandbox = sandbox_policy.create_sandbox(
+            Sandbox, allow_internet=allow_internet, lifetime_seconds=lifetime_seconds
+        )
         holder.set(sandbox)
         if allow_internet:
             _install_sandbox_packages(sandbox, install_packages)
@@ -1191,9 +1252,19 @@ def _run_csv_in_sandbox_sync(
             pkg = _parse_missing_module(
                 getattr(execution.error, "value", str(execution.error))
             )
-            if pkg and allow_internet and _pip_install_in_sandbox(sandbox, pkg):
-                logger.info("Retrying CSV sandbox execution after installing %s", pkg)
-                execution = sandbox.run_code(full_code)
+            if pkg and allow_internet:
+                if _pip_install_in_sandbox(sandbox, pkg):
+                    logger.info("Retrying CSV sandbox execution after installing %s", pkg)
+                    execution = sandbox.run_code(full_code)
+            elif pkg and sandbox_policy.internet_allowed(
+                allow_pip_egress=True, install_packages=[pkg]
+            ):
+                sandbox, retry_exec = _retry_module_with_egress(
+                    Sandbox, sandbox, holder, pkg, full_code, lifetime_seconds,
+                    prepare=lambda sb: sb.files.write(csv_path, csv_bytes),
+                )
+                if retry_exec is not None:
+                    execution = retry_exec
 
         raw_stdout_joined = "".join(execution.logs.stdout or [])
         raw_stdout: list[str] = raw_stdout_joined.splitlines()
@@ -1237,15 +1308,26 @@ async def _run_csv_in_sandbox(
     csv_bytes: bytes,
     timeout_seconds: int = 30,
 ) -> SandboxResult:
-    """Async wrapper around _run_csv_in_sandbox_sync with configurable timeout."""
+    """Async wrapper around _run_csv_in_sandbox_sync with configurable timeout.
+
+    DOCBOT-2318: ``timeout_seconds`` is the run budget; the deadline and E2B
+    VM lifetime add ``sandbox_policy.install_budget`` for boot/upload/pip.
+    """
     loop = asyncio.get_running_loop()
     holder = sandbox_policy.SandboxHolder()
+    deadline = timeout_seconds + sandbox_policy.install_budget(allow_pip_egress=True)
+    lifetime = sandbox_policy.lifetime_seconds(
+        allow_pip_egress=True, exec_timeout_seconds=timeout_seconds
+    )
     try:
         return await asyncio.wait_for(
             loop.run_in_executor(
-                None, copy_ctx_run(_run_csv_in_sandbox_sync, code, csv_path, csv_bytes, holder)
+                None,
+                copy_ctx_run(
+                    _run_csv_in_sandbox_sync, code, csv_path, csv_bytes, holder, lifetime
+                ),
             ),
-            timeout=float(timeout_seconds),
+            timeout=float(deadline),
         )
     except asyncio.TimeoutError:
         logger.error("CSV sandbox timed out after %d seconds.", timeout_seconds)
