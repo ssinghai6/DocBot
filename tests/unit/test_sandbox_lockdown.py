@@ -183,14 +183,20 @@ class _Execution:
         self.error = None
 
 
+class _MissingModule:
+    name = "ModuleNotFoundError"
+    value = "No module named 'prophet'"
+
+
 class _FakeSandbox:
     created: List[dict] = []
     instances: List["_FakeSandbox"] = []
-    mode = "ok"  # ok | boom | hang
+    mode = "ok"  # ok | boom | hang | missing
     release = threading.Event()
 
     def __init__(self):
         self.killed = 0
+        self.installed = False
 
     @classmethod
     def create(cls, template=None, timeout=None, allow_internet_access=True, **opts):
@@ -207,7 +213,10 @@ class _FakeSandbox:
             raise RuntimeError("boom")
         if _FakeSandbox.mode == "hang":
             _FakeSandbox.release.wait(5)
-        return _Execution()
+        ex = _Execution()
+        if _FakeSandbox.mode == "missing" and not self.installed:
+            ex.error = _MissingModule()
+        return ex
 
     def kill(self):
         self.killed += 1
@@ -287,8 +296,9 @@ class TestLifecycle:
         assert _FakeSandbox.instances[0].killed == 1  # finally kill is idempotent
         assert len(metered) == 1
 
-    def test_csv_kill_on_timeout(self, fake_e2b):
+    def test_csv_kill_on_timeout(self, fake_e2b, monkeypatch):
         svc, _ = fake_e2b
+        monkeypatch.setenv("SANDBOX_PIP_INTERNET", "false")  # no install budget on the deadline
         _FakeSandbox.mode = "hang"
 
         async def _main():
@@ -331,6 +341,82 @@ class TestLifecycle:
         monkeypatch.setenv("E2B_SANDBOX_TEMPLATE", "docbot-ml")
         svc._run_in_sandbox("print(1)")
         assert _FakeSandbox.created[0]["template"] == "docbot-ml"
+
+
+class TestLifetimeAndModuleRetry:
+    """DOCBOT-2318: lifetime covers install + run; codegen module retry gets egress."""
+
+    @pytest.fixture
+    def pip(self, fake_e2b, monkeypatch):
+        svc, _ = fake_e2b
+        installs: List[str] = []
+
+        def _fake_pip(sb, pkg):
+            installs.append(pkg)
+            sb.installed = True
+            return True
+
+        monkeypatch.setattr(svc, "_pip_install_in_sandbox", _fake_pip)
+        return installs
+
+    def test_raw_user_code_lifetime_60_no_internet(self, fake_e2b):
+        svc, _ = fake_e2b
+        asyncio.run(svc.run_python("print(1)", timeout_seconds=25, allow_pip_egress=False))
+        assert _FakeSandbox.created == [_DEFAULT_KW]
+
+    def test_codegen_lifetime_exceeds_exec_timeout(self, fake_e2b):
+        svc, _ = fake_e2b
+        asyncio.run(svc.run_python("print(1)", timeout_seconds=60, allow_pip_egress=True))
+        asyncio.run(svc._run_csv_in_sandbox("print(1)", "/home/user/x.csv", b"a\n", timeout_seconds=60))
+        assert [c["timeout"] for c in _FakeSandbox.created] == [150, 150]
+        assert all(c["allow_internet_access"] is False for c in _FakeSandbox.created)
+
+    def test_policy_lifetime(self, monkeypatch):
+        assert sandbox_policy.lifetime_seconds(allow_pip_egress=False, exec_timeout_seconds=120) == 60
+        assert sandbox_policy.lifetime_seconds(allow_pip_egress=True, exec_timeout_seconds=30) == 120
+        monkeypatch.setenv("SANDBOX_PIP_INTERNET", "false")
+        assert sandbox_policy.lifetime_seconds(allow_pip_egress=True, exec_timeout_seconds=30) == 60
+        assert sandbox_policy.lifetime_seconds(allow_pip_egress=True, exec_timeout_seconds=75) == 75
+
+    def test_codegen_module_retry_uses_fresh_egress_sandbox(self, fake_e2b, pip):
+        svc, metered = fake_e2b
+        _FakeSandbox.mode = "missing"
+        res = svc._run_in_sandbox("print(1)", allow_pip_egress=True, lifetime_seconds=115)
+        assert res.error is None
+        assert _FakeSandbox.created == [
+            {"timeout": 115, "allow_internet_access": False},
+            {"timeout": 115, "allow_internet_access": True},
+        ]
+        assert pip == ["prophet"]
+        assert [sb.killed for sb in _FakeSandbox.instances] == [1, 1]
+        assert len(metered) == 1
+
+    def test_csv_module_retry_uses_fresh_egress_sandbox(self, fake_e2b, pip):
+        svc, _ = fake_e2b
+        _FakeSandbox.mode = "missing"
+        res = svc._run_csv_in_sandbox_sync("print(1)", "/home/user/x.csv", b"a\n1\n")
+        assert res.error is None
+        assert [c["allow_internet_access"] for c in _FakeSandbox.created] == [False, True]
+        assert [sb.killed for sb in _FakeSandbox.instances] == [1, 1]
+
+    def test_raw_user_code_never_gets_module_retry(self, fake_e2b, pip):
+        svc, _ = fake_e2b
+        _FakeSandbox.mode = "missing"
+        res = svc._run_in_sandbox("print(1)", allow_pip_egress=False)
+        assert "ModuleNotFoundError" in (res.error or "")
+        assert _FakeSandbox.created == [_DEFAULT_KW]
+        assert pip == []
+
+    def test_module_retry_respects_kill_switch(self, fake_e2b, pip, monkeypatch):
+        svc, _ = fake_e2b
+        monkeypatch.setenv("SANDBOX_PIP_INTERNET", "false")
+        _FakeSandbox.mode = "missing"
+        res = svc._run_in_sandbox("print(1)", allow_pip_egress=True)
+        res_csv = svc._run_csv_in_sandbox_sync("print(1)", "/home/user/x.csv", b"a\n")
+        assert "ModuleNotFoundError" in (res.error or "")
+        assert "ModuleNotFoundError" in (res_csv.error or "")
+        assert [c["allow_internet_access"] for c in _FakeSandbox.created] == [False, False]
+        assert pip == []
 
 
 class TestPolicy:
