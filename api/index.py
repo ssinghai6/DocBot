@@ -37,17 +37,10 @@ from api.sandbox_service import SandboxResult
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
-# Thin observability — DOCBOT-1401. Error tracking only, no APM/tracing spend
-# (traces_sample_rate=0.0): single Railway container, nothing to distributed-
-# trace across. No-op unless SENTRY_DSN is set, so local dev needs no DSN.
-if _sentry_dsn := os.getenv("SENTRY_DSN"):
-    import sentry_sdk
-    sentry_sdk.init(
-        dsn=_sentry_dsn,
-        traces_sample_rate=0.0,
-        environment=os.getenv("RAILWAY_ENVIRONMENT", "local"),
-    )
-    logger.info("Sentry error tracking enabled (environment=%s)", os.getenv("RAILWAY_ENVIRONMENT", "local"))
+# Thin observability — DOCBOT-1401/1618. Error tracking only, secrets scrubbed.
+# No-op unless SENTRY_DSN is set, so local dev needs no DSN.
+from api.utils.sentry_setup import init_sentry
+init_sentry()
 
 app = FastAPI(title="DocBot API", version="2.0.0")
 
