@@ -3,8 +3,8 @@
 After DOCBOT-1603 a connection with no ``user_id`` was reachable by anyone who
 knew its id. Now anonymous connections carry ``anon_owner`` (sha256 of the
 anon cookie) and only that cookie's holder can use them. Legacy rows (no
-``user_id``, no ``anon_owner``) are hidden from everyone except an org admin,
-and org-scoped API keys (``/v1``) never match anonymous rows even after the
+``user_id``, no ``anon_owner``) are hidden from everyone, org admins included
+(DOCBOT-2317), and org-scoped API keys (``/v1``) never match anonymous rows even after the
 startup default-org backfill stamped an ``org_id`` on them.
 
 Runs the real route handlers against an in-memory SQLite DB (no network).
@@ -219,12 +219,22 @@ async def test_legacy_row_hidden_from_anon_and_members(db):
         assert (await c.get(f"/api/db/schema/{CONN_LEGACY}")).status_code == 404
 
 
-async def test_legacy_row_reachable_by_org_admin(db):
-    """Documented escape hatch: the admin of the org the backfill homed it into."""
+async def test_legacy_row_hidden_from_org_admin(db):
+    """DOCBOT-2317: the backfill homed it into the default org, but admins see user rows only."""
     async with _client(user="admin") as c:
-        resp = await c.get(f"/api/db/schema/{CONN_LEGACY}")
-    assert resp.status_code == 200
-    assert resp.json()["tables"] == SCHEMA_LEGACY
+        assert (await c.get(f"/api/db/schema/{CONN_LEGACY}")).status_code == 404
+
+
+async def test_default_org_admin_never_sees_anon_connections(db):
+    """DOCBOT-2317: anon rows carry the backfilled default org_id; admin gets nothing."""
+    async with _client(user="admin") as c:
+        listed = (await c.get("/api/db/sessions")).json()["connections"]
+        assert {r["connection_id"] for r in listed} == set()
+        for conn_id in (CONN_A, CONN_B):
+            assert (await c.get(f"/api/db/schema/{conn_id}")).status_code == 404
+            assert (await c.get(f"/api/db/history/{conn_id}")).status_code == 404
+    async with _client(anon=COOKIE_A) as c:
+        assert (await c.get(f"/api/db/schema/{CONN_A}")).status_code == 200
 
 
 # --- /v1 default-org API key -----------------------------------------------------

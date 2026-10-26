@@ -240,14 +240,15 @@ class ConnectionNotFoundError(Exception):
 # every HTTP route passes an explicit CallerScope.
 #
 # DOCBOT-1635: ownership is exactly ``caller_scope.scope_filter``:
-#   * logged-in user  -> own rows (org admin: every row in their org);
+#   * logged-in user  -> own rows (org admin: every user-owned row in their
+#                        org, never anonymous rows -- DOCBOT-2317);
 #   * anonymous       -> ``anon_owner = sha256(docbot_anon cookie)`` AND
 #                        ``user_id IS NULL`` (stamped on connect / CSV /
 #                        SQLite upload / demo init);
 #   * legacy anonymous rows (``user_id`` AND ``anon_owner`` NULL, created
-#     before 1635) match no anonymous or non-admin caller. They remain
-#     reachable only by an admin of the org the DOCBOT-1524 startup backfill
-#     homed them into (the default org).
+#     before 1635) match no caller. The DOCBOT-1524 startup backfill homes
+#     them (and all anonymous rows) into the default org, but org admins only
+#     see user-owned rows, so they are unreachable (DOCBOT-2317).
 # Knowing a connection UUID is no longer a capability.
 
 
@@ -273,7 +274,7 @@ def connection_access_clause(
     - ``scope is None``              -> internal caller, no restriction.
     - API-key scope (org, no user)   -> user-owned rows of the key's org.
     - browser caller (user or anon)  -> ``scope_filter`` (rows it owns; org
-      admins see their org). Anonymous callers without an owner cookie
+      admins see their org's user-owned rows, never anonymous ones). Anonymous callers without an owner cookie
       match nothing.
     """
     if scope is None:
