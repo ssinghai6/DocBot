@@ -219,14 +219,12 @@ export const LineageSqlSchema = z.object({
 })
 export type LineageSql = z.infer<typeof LineageSqlSchema>
 
-export const LineageDiscrepancySchema = z.object({
-  label: z.string(),
-  doc_value: z.number().nullish(),
-  db_value: z.number().nullish(),
-  delta: z.number().nullish(),
-  pct: z.number().nullish(),
-})
-export type LineageDiscrepancy = z.infer<typeof LineageDiscrepancySchema>
+// DOCBOT-2002: the TieOutCard contract lives in its own mirror module.
+import {
+  TieOutCardSchema as LineageDiscrepancySchema,
+  type TieOutCard,
+} from "@/lib/schemas/tieout"
+export type LineageDiscrepancy = TieOutCard
 
 export const LineageModelCallSchema = z.object({
   caller: z.string().nullish(),

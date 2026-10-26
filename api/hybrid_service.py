@@ -495,18 +495,17 @@ async def _collect_sql_result(
 def _answer_addresses_discrepancies(answer: str) -> bool:
     """Cheap, deterministic check for whether an answer surfaced a discrepancy.
 
-    No LLM call — hybrid_chat's synthesis prompt explicitly instructs the
-    model to tag every known discrepancy with the literal "[DISCREPANCY]"
-    marker (see DiscrepancyReport.to_prompt_block()), so a substring check
-    for that marker (or the word "discrepan[cy/t]") is a reliable, cheap
-    signal that the model actually surfaced it rather than silently dropping
-    it. This intentionally does not try to match discrepancies one-by-one —
-    the goal is a fast yes/no gate, not another LLM call.
+    No LLM call — hybrid_chat's synthesis prompt pre-computes each discrepancy
+    with an inline marker token ``[[discrepancy:<id>]]`` (see
+    DiscrepancyReport.to_prompt_block()), so the word "discrepan[cy/t]" —
+    present in every marker and in any plain-language flag — is a reliable,
+    cheap signal that the model actually surfaced it rather than silently
+    dropping it. This intentionally does not try to match discrepancies
+    one-by-one — the goal is a fast yes/no gate, not another LLM call.
     """
     if not answer:
         return False
-    lowered = answer.lower()
-    return "[discrepancy]" in lowered or "discrepan" in lowered
+    return "discrepan" in answer.lower()
 
 
 # ---------------------------------------------------------------------------
@@ -798,18 +797,20 @@ async def hybrid_chat(
             report = detect_discrepancies(doc_context, sql_metadata)
             discrepancy_report = report
             for item in report.discrepancies:
-                lineage.add_discrepancy(
-                    item.label, item.doc_value, item.db_value, item.delta, item.pct
-                )
+                lineage.add_discrepancy(item)
             discrepancy_instruction = report.to_prompt_block()
             if not discrepancy_instruction:
                 # No numeric discrepancies found by code — tell LLM to flag only
-                # non-numeric inconsistencies it observes (time periods, categories, etc.)
+                # non-numeric inconsistencies it observes (time periods,
+                # categories, etc.) in plain language. There are no structured
+                # tie-out items here, so no marker tokens exist — and the
+                # literal "[DISCREPANCY]" tag is reserved for the detector's
+                # own prompt block (DOCBOT-2002) and must never be taught.
                 discrepancy_instruction = (
                     "\n\nDISCREPANCY CHECK: No numeric value conflicts were detected between "
                     "the document and database results. If you observe non-numeric "
                     "inconsistencies (e.g. different time periods, mismatched categories), "
-                    "flag them with [DISCREPANCY]. Otherwise synthesize normally."
+                    "flag them clearly in your own words. Otherwise synthesize normally."
                 )
 
         from api.utils.prompt_guard import PROMPT_INJECTION_DEFENSE_NOTICE
@@ -909,8 +910,11 @@ async def hybrid_chat(
                         "Your previous answer below did not explicitly surface a known "
                         "discrepancy between the document and database values. Rewrite "
                         "the FULL answer, keeping everything that was already correct, "
-                        "and add a clear note identifying each discrepancy below, tagged "
-                        "with [DISCREPANCY], with its exact numbers.\n"
+                        "and for EACH discrepancy below add one short sentence naming "
+                        "the metric and ending with its marker token copied exactly. "
+                        "The interface renders a full tie-out card from the marker; do "
+                        "not repeat the breakdown and NEVER write the literal text "
+                        "[DISCREPANCY].\n"
                         f"{format_block}\n"
                         f"{discrepancy_report.to_prompt_block()}\n\n"
                         f"Question: {question}\n\n"
@@ -956,6 +960,29 @@ async def hybrid_chat(
                     )
             else:
                 lineage.add_step("verify_discrepancy_addressed", tool="none", detail="already addressed")
+
+        # DOCBOT-2002: marker hygiene before the lineage/trace persist. The
+        # model was told to place ``[[discrepancy:<id>]]`` markers and never
+        # write the literal "[DISCREPANCY]" tag — but it sometimes does both
+        # wrong. Rewrite legacy tags/echoed blocks into markers (or a neutral
+        # label when nothing matches), then append a one-line tail badge for
+        # every card the answer never referenced so each TieOutCard has a
+        # badge in the text. Only the appended tail streams to the client
+        # (append-only SSE contract); the rewritten text is what lineage and
+        # the agent trace persist, and the renderer also rewrites at display
+        # time for already-streamed chunks.
+        _tieout_items = list(discrepancy_report.discrepancies) if discrepancy_report else []
+        if _tieout_items:
+            from api.utils.tieout import missing_marker_tail, replace_discrepancy_tags
+
+            _final_text = replace_discrepancy_tags("".join(_answer_parts), _tieout_items)
+            _tail = missing_marker_tail(_final_text, _tieout_items)
+            if _tail:
+                _final_text += _tail
+                yield f"data: {json.dumps({'type': 'token', 'content': _tail})}\n\n"
+            # log_trace below persists the rewritten text too.
+            _answer_parts.clear()
+            _answer_parts.append(_final_text)
 
         lineage.add_step(
             "synthesize",

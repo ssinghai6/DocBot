@@ -1,7 +1,8 @@
 "use client"
 
+import { useEffect, useRef } from "react"
 import { TriangleAlert, Database, FileText, GitBranch, Layers, MessageSquare, Search, Sparkles } from "lucide-react"
-import type { Lineage, LineageSource, LineageStep } from "@/components/types"
+import type { Lineage, LineageDiscrepancy, LineageSource, LineageStep } from "@/components/types"
 import { useUIStore } from "@/store/uiStore"
 import { Chip, EmptyTab, SectionLabel, fmtMs, fmtNum } from "./shared"
 
@@ -108,7 +109,98 @@ function Connector({ label }: { label?: string }) {
   )
 }
 
+// ── DOCBOT-2002: TieOutCards (report vs books, both citations) ──────────────
+
+const SEVERITY_DOT: Record<LineageDiscrepancy["severity"], string> = {
+  high: "bg-red-400",
+  medium: "bg-[var(--color-amber-500)]",
+  low: "bg-[var(--color-text-quaternary)]",
+}
+
+function fmtValue(n: number | null | undefined, unit: LineageDiscrepancy["unit"]): string {
+  if (n == null) return "–"
+  const base = fmtNum(n)
+  if (unit === "currency") return `$${base}`
+  if (unit === "percent") return `${base}%`
+  return base
+}
+
+function fmtDelta(
+  n: number | null | undefined,
+  pct: number | null | undefined,
+  unit: LineageDiscrepancy["unit"],
+): string {
+  if (n == null) return "–"
+  const sign = n > 0 ? "+" : ""
+  const pctStr = pct != null ? ` (${sign}${pct.toFixed(1)}%)` : ""
+  return `${sign}${fmtValue(n, unit)}${pctStr}`
+}
+
+function TieOutCard({ card, focus }: { card: LineageDiscrepancy; focus: boolean }) {
+  const ref = useRef<HTMLDivElement>(null)
+  useEffect(() => {
+    if (focus && ref.current) {
+      ref.current.scrollIntoView({ block: "nearest", behavior: "smooth" })
+    }
+  }, [focus])
+  // Legacy (pre-2002) rows carry label/doc_value/db_value/pct instead.
+  const metric = card.metric ?? card.label ?? "Discrepancy"
+  const report = card.report_value ?? card.doc_value
+  const books = card.books_value ?? card.db_value
+  const deltaPct = card.delta_pct ?? card.pct
+  const doc = card.doc_citation
+  const db = card.db_citation
+  return (
+    <div
+      ref={ref}
+      className={`rounded-[5px] border bg-[var(--color-bg-base)] p-2.5 text-[11px] ${focus ? "border-[var(--color-amber-500)]" : "border-[var(--color-border-subtle)]"}`}
+    >
+      <div className="flex items-center gap-1.5">
+        <span className={`w-[7px] h-[7px] rounded-full flex-none ${SEVERITY_DOT[card.severity]}`} aria-hidden />
+        <span className="font-medium text-[var(--color-text-primary)] truncate">{metric}</span>
+        {card.period && (
+          <span className="text-[var(--color-text-quaternary)] tabular-nums flex-none">{card.period}</span>
+        )}
+      </div>
+      <div className="grid grid-cols-3 gap-2 mt-1 text-[var(--color-text-secondary)] tabular-nums">
+        <span>
+          <span className="text-[9px] uppercase text-[var(--color-text-quaternary)] block">Report</span>
+          {fmtValue(report, card.unit)}
+        </span>
+        <span>
+          <span className="text-[9px] uppercase text-[var(--color-text-quaternary)] block">Books</span>
+          {fmtValue(books, card.unit)}
+        </span>
+        <span>
+          <span className="text-[9px] uppercase text-[var(--color-text-quaternary)] block">Delta</span>
+          {fmtDelta(card.delta, deltaPct, card.unit)}
+        </span>
+      </div>
+      {(doc.file || doc.page != null || db.table || db.query) && (
+        <div className="mt-1.5 pt-1.5 border-t border-[var(--color-border-subtle)] space-y-0.5">
+          {(doc.file || doc.page != null) && (
+            <p className="text-[10px] text-[var(--color-text-tertiary)] flex items-center gap-1">
+              <FileText className="w-2.5 h-2.5 flex-none text-[var(--color-cyan-500)]" />
+              <span className="truncate">
+                {doc.file ?? "document"}
+                {doc.page != null ? ` · p${doc.page}` : ""}
+              </span>
+            </p>
+          )}
+          {(db.table || db.query) && (
+            <p className="text-[10px] text-[var(--color-text-tertiary)] flex items-center gap-1" title={db.query ?? db.table ?? ""}>
+              <Database className="w-2.5 h-2.5 flex-none text-[var(--color-cyan-500)]" />
+              <span className="truncate">{db.table ?? db.query}</span>
+            </p>
+          )}
+        </div>
+      )}
+    </div>
+  )
+}
+
 export default function LineageTab({ lineage }: { lineage: Lineage | null }) {
+  const focusDiscrepancyId = useUIStore((s) => s.focusDiscrepancyId)
   if (!lineage) {
     return (
       <div className="p-4">
@@ -208,14 +300,7 @@ export default function LineageTab({ lineage }: { lineage: Lineage | null }) {
             </div>
             <div className="space-y-2">
               {lineage.discrepancies.map((d, i) => (
-                <div key={i} className="text-[11px]">
-                  <div className="font-medium text-[var(--color-text-primary)]">{d.label}</div>
-                  <div className="grid grid-cols-3 gap-2 mt-0.5 text-[var(--color-text-secondary)] tabular-nums">
-                    <span><span className="text-[9px] uppercase text-[var(--color-text-quaternary)] block">Doc</span>{fmtNum(d.doc_value)}</span>
-                    <span><span className="text-[9px] uppercase text-[var(--color-text-quaternary)] block">DB</span>{fmtNum(d.db_value)}</span>
-                    <span><span className="text-[9px] uppercase text-[var(--color-text-quaternary)] block">Delta</span>{fmtNum(d.delta)}{d.pct != null ? ` (${d.pct.toFixed(1)}%)` : ""}</span>
-                  </div>
-                </div>
+                <TieOutCard key={d.id || `disc-${i}`} card={d} focus={focusDiscrepancyId === d.id} />
               ))}
             </div>
           </div>

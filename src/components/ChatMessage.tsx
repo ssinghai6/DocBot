@@ -322,21 +322,24 @@ function FeedbackButtons({ traceId }: { traceId: string }) {
 
 // ── Agent formatting helpers ──────────────────────────────────────────────────
 
-function renderMessageContent(content: string): React.ReactNode[] | null {
+function renderMessageContent(content: string, lineage?: Lineage): React.ReactNode[] | null {
+  // Legacy [DISCREPANCY]…[/DISCREPANCY] blocks (pre-DOCBOT-2002 answers) are
+  // split into dedicated blocks; inline [[discrepancy:id]] markers and stray
+  // literal tags are rewritten inside MarkdownRenderer (preprocessTieOut).
   const parts = content.split(/\[DISCREPANCY\]([\s\S]*?)\[\/DISCREPANCY\]/g)
   if (parts.length === 1) return null
   return parts.map((part, i) =>
     i % 2 === 0
       ? part.trim()
-        ? <MarkdownRenderer key={i} content={part} />
+        ? <MarkdownRenderer key={i} content={part} lineage={lineage} />
         : null
       : <DiscrepancyBlock key={i} content={part} />
   ).filter(Boolean) as React.ReactNode[]
 }
 
 function AgentMessageContent({ msg }: { msg: Message }) {
-  const split = renderMessageContent(msg.content)
-  return split ? <div>{split}</div> : <MarkdownRenderer content={msg.content} />
+  const split = renderMessageContent(msg.content, msg.lineage)
+  return split ? <div>{split}</div> : <MarkdownRenderer content={msg.content} lineage={msg.lineage} />
 }
 
 // ── Props ─────────────────────────────────────────────────────────────────────

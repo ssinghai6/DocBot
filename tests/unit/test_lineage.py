@@ -85,10 +85,67 @@ class TestCollector:
         assert any(s.kind == "sql_table" and s.label == "orders" for s in built.sources)
 
     def test_discrepancy_recorded(self):
+        # DOCBOT-2002: add_discrepancy takes a detector DiscrepancyItem and
+        # stores the structured tie-out (id/metric/report/books/citations).
+        from api.utils.discrepancy_detector import DiscrepancyItem
+
         c = LineageCollector("r1", "hybrid")
-        c.add_discrepancy("Net income", 325.0, 330.0, 5.0, 1.5)
+        item = DiscrepancyItem(
+            label="Net income",
+            doc_value=330.0,
+            db_value=325.0,
+            delta=-5.0,
+            pct=-1.5,
+            doc_snippet="Net income: $330M",
+            db_snippet="net_income=325",
+            period="Q4 2025",
+            unit="currency",
+            doc_file="10-K.pdf",
+            doc_page=42,
+            db_table="financials",
+            db_query="SELECT net_income FROM financials",
+        )
+        c.add_discrepancy(item)
         d = c.build().discrepancies[0]
-        assert (d.doc_value, d.db_value, d.delta) == (325.0, 330.0, 5.0)
+        assert (d.report_value, d.books_value, d.delta) == (330.0, 325.0, -5.0)
+        assert d.id == item.id
+        assert d.metric == "Net income"
+        assert d.period == "Q4 2025"
+        assert d.severity == "high"  # |pct| = 1.5 >= 1.0 band
+        assert d.unit == "currency"
+        assert d.doc_citation.file == "10-K.pdf" and d.doc_citation.page == 42
+        assert d.db_citation.table == "financials"
+        assert d.db_citation.query == "SELECT net_income FROM financials"
+
+    def test_discrepancy_deduped_by_id(self):
+        from api.utils.discrepancy_detector import DiscrepancyItem, discrepancy_id
+
+        c = LineageCollector("r1", "hybrid")
+        item = DiscrepancyItem(
+            label="Net income", doc_value=330.0, db_value=325.0,
+            delta=-5.0, pct=-1.5, doc_snippet="d", db_snippet="b",
+        )
+        c.add_discrepancy(item)
+        c.add_discrepancy(item)
+        built = c.build()
+        assert len(built.discrepancies) == 1
+        assert built.discrepancies[0].id == discrepancy_id("net income", None, 330.0, 325.0)
+
+    def test_discrepancy_legacy_row_upgrade(self):
+        """Pre-2002 persisted rows ({label, doc_value, ...}) validate + get an id."""
+        from api.utils.lineage import LineageDiscrepancy
+
+        d = LineageDiscrepancy.model_validate(
+            {"label": "net income", "doc_value": 330.0, "db_value": 325.0, "pct": -1.5, "delta": -5.0}
+        )
+        assert d.metric == "net income"
+        assert d.report_value == 330.0 and d.books_value == 325.0
+        assert d.delta_pct == -1.5
+        assert d.id.startswith("d-")
+        # Round-trips through the SSE JSON payload
+        import json as _json
+
+        assert _json.loads(d.model_dump_json())["id"] == d.id
 
     def test_build_attaches_model_calls_and_skips_malformed(self):
         c = LineageCollector("r1", "hybrid")

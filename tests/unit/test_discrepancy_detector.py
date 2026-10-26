@@ -183,15 +183,21 @@ class TestDetectDiscrepancies:
         assert not report.has_discrepancies
 
     def test_prompt_block_format(self):
+        # DOCBOT-2002: each discrepancy carries an inline marker token instead
+        # of a literal [DISCREPANCY] tag.
         doc = "Revenue: $1,000,000"
         sql = self._make_sql_meta(rows=[{"revenue": 1_200_000}])
         report = detect_discrepancies(doc, sql)
         block = report.to_prompt_block()
-        assert "[DISCREPANCY]" in block
+        assert "[[discrepancy:d-" in block
         assert "1,000,000" in block
         assert "1,200,000" in block
         assert "200,000" in block
         assert "20.0%" in block
+        # The literal tag only appears in the "never write this" instruction,
+        # never as a per-item prefix.
+        item_lines = [l for l in block.splitlines() if l.strip().startswith("[[discrepancy:")]
+        assert item_lines and all("[DISCREPANCY]" not in l for l in item_lines)
 
     def test_empty_doc_context(self):
         report = detect_discrepancies("", {"result_preview": [{"revenue": 1_000}]})
@@ -220,3 +226,110 @@ class TestDetectDiscrepancies:
         sql = self._make_sql_meta(rows=[{"revenue": 1_000_000}])
         report = detect_discrepancies(doc, sql)
         assert report.to_prompt_block() == ""
+
+
+# ---------------------------------------------------------------------------
+# DOCBOT-2002 — periods, citations, severity, tie-out semantics
+# ---------------------------------------------------------------------------
+
+
+class TestPeriodAwareness:
+
+    def test_quarter_mismatch_not_compared(self):
+        """A Q1 report figure never ties out against a Q4 books row."""
+        doc = "Q1 2025 revenue: $1,000,000"
+        sql = {"result_preview": [{"quarter": "Q4 2025", "revenue": 1_200_000}]}
+        report = detect_discrepancies(doc, sql)
+        assert not report.has_discrepancies
+
+    def test_quarter_match_compared(self):
+        doc = "Q4 2025 revenue: $1,000,000"
+        sql = {"result_preview": [{"quarter": "Q4 2025", "revenue": 1_100_000}]}
+        report = detect_discrepancies(doc, sql)
+        assert report.has_discrepancies
+        assert report.discrepancies[0].period == "Q4 2025"
+
+    def test_period_extracted_from_line_prefix(self):
+        doc = "Q4 2025: Net Income $330M, Revenue $1,440M"
+        values = _extract_from_text(doc, source="doc")
+        by_label = {v.label: v for v in values}
+        assert any(v.period == "Q4 2025" for v in by_label.values())
+
+    def test_fy_mention_after_figure_not_misread(self):
+        """'(up 18% from $4.4B in FY2024)' must not set FY2024 on the figure."""
+        doc = "Revenue: $1,440M (up 18% from $4.4 billion in FY2024)"
+        values = _extract_from_text(doc, source="doc")
+        revenue = [v for v in values if "revenue" in v.label and abs(v.value - 1_440_000_000) < 1]
+        assert revenue and revenue[0].period is None
+
+
+class TestCitationsAndSeverity:
+
+    def test_doc_citation_from_source_header(self):
+        doc = "Source: 10-K.pdf, Page 42\nNet income: $330M"
+        sql = {"result_preview": [{"net_income": 325}]}
+        report = detect_discrepancies(doc, sql)
+        assert report.has_discrepancies
+        item = report.discrepancies[0]
+        assert item.doc_file == "10-K.pdf"
+        assert item.doc_page == 42
+
+    def test_db_citation_from_sources_and_query(self):
+        doc = "Net income: $330M"
+        sql = {
+            "result_preview": [{"net_income": 325}],
+            "sources": ["financials", "quarters"],
+            "sql_query": "SELECT net_income FROM financials",
+        }
+        report = detect_discrepancies(doc, sql)
+        item = report.discrepancies[0]
+        assert item.db_table == "financials, quarters"
+        assert item.db_query == "SELECT net_income FROM financials"
+
+    def test_severity_bands(self):
+        from api.utils.discrepancy_detector import severity_for
+
+        assert severity_for(None) == "high"
+        assert severity_for(0.2) == "low"
+        assert severity_for(-0.7) == "medium"
+        assert severity_for(1.5) == "high"
+        assert severity_for(-3.0) == "high"
+
+    def test_item_ids_stable_and_marker_shaped(self):
+        from api.utils.discrepancy_detector import DiscrepancyItem, discrepancy_id
+
+        a = DiscrepancyItem(label="revenue", doc_value=100.0, db_value=105.0,
+                            delta=5.0, pct=5.0, doc_snippet="d", db_snippet="b")
+        b = DiscrepancyItem(label="revenue", doc_value=100.0, db_value=105.0,
+                            delta=5.0, pct=5.0, doc_snippet="d", db_snippet="b")
+        assert a.id == b.id == discrepancy_id("revenue", None, 100.0, 105.0)
+        import re as _re
+
+        assert _re.fullmatch(r"d-[0-9a-f]{8}", a.id)
+        assert a.marker == f"[[discrepancy:{a.id}]]"
+
+    def test_currency_never_ties_out_against_percent(self):
+        doc = "Revenue: $1,000,000"
+        sql = {"result_preview": [{"growth_rate": 20}]}
+        report = detect_discrepancies(doc, sql)
+        assert not report.has_discrepancies
+
+    def test_plausible_value_ties_out(self):
+        """If ANY books row agrees with the report figure, no card is raised."""
+        doc = "Revenue: $1,000,000"
+        sql = {"result_preview": [{"revenue": 1_000_000}, {"revenue": 1_800_000}]}
+        report = detect_discrepancies(doc, sql)
+        assert not report.has_discrepancies
+
+    def test_dimension_qualified_label(self):
+        """SQL rows with a segment dimension match that segment's doc figure."""
+        doc = "Restaurant advertising revenue: $890M"
+        sql = {"result_preview": [
+            {"segment": "Delivery", "advertising_revenue": 700_000_000},
+            {"segment": "Restaurant", "advertising_revenue": 860_000_000},
+        ]}
+        report = detect_discrepancies(doc, sql)
+        assert report.has_discrepancies
+        item = report.discrepancies[0]
+        assert abs(item.db_value - 860_000_000) < 1
+        assert "restaurant" in item.label.lower()
