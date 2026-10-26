@@ -695,6 +695,7 @@ def _gemini_completion_stream(
     messages: List[dict],
     temperature: float = 0,
     max_tokens: int = 800,
+    finish_info: Optional[dict] = None,
 ) -> Iterator[str]:
     """Streaming Gemini completion via google-generativeai SDK."""
     import google.generativeai as genai
@@ -728,6 +729,10 @@ def _gemini_completion_stream(
     )
     response = model.generate_content(contents, stream=True)
     for chunk in response:
+        if finish_info is not None and getattr(chunk, "candidates", None):
+            reason = chunk.candidates[0].finish_reason
+            if getattr(reason, "name", reason) in ("MAX_TOKENS", 2):
+                finish_info["finish_reason"] = "length"
         if chunk.text:
             yield chunk.text
 
@@ -811,6 +816,7 @@ def chat_completion_stream(
     caller: Optional[str] = None,
     run_id: Optional[str] = None,
     prompt_version: Optional[str] = None,
+    finish_info: Optional[dict] = None,
 ) -> Iterator[str]:
     """Streaming chat completion with Groq → Gemini fallback.
 
@@ -822,6 +828,9 @@ def chat_completion_stream(
         structured llm_call log line. Token counts aren't logged for
         streaming calls (not consistently available per-chunk); latency,
         provider, and fallback status still are.
+    finish_info : dict, optional
+        DOCBOT-2008: when passed, ``finish_info["finish_reason"]`` is set to
+        ``"length"`` if the stream stopped at max_tokens (Groq or Gemini).
     """
     # Try Groq first
     start = time.monotonic()
@@ -839,6 +848,8 @@ def chat_completion_stream(
             stream=True,
         )
         for chunk in stream:
+            if finish_info is not None and chunk.choices[0].finish_reason:
+                finish_info["finish_reason"] = chunk.choices[0].finish_reason
             delta = chunk.choices[0].delta
             if delta and delta.content:
                 yield delta.content
@@ -857,7 +868,7 @@ def chat_completion_stream(
     # Fallback to Gemini streaming
     start = time.monotonic()
     try:
-        yield from _gemini_completion_stream(messages, temperature, max_tokens)
+        yield from _gemini_completion_stream(messages, temperature, max_tokens, finish_info)
         _log_llm_call(
             provider="gemini", model=GEMINI_MODEL, latency_ms=(time.monotonic() - start) * 1000,
             success=True, fallback_triggered=True, caller=caller, run_id=run_id,

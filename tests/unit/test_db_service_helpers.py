@@ -608,3 +608,88 @@ class TestOntologyPrefilterFallbackSafety:
 
         assert len(received_schemas) == 1
         assert received_schemas[0] == self._SCHEMA  # unnarrowed — identical to prior behavior
+
+
+@pytest.mark.unit
+class TestStreamAnswerTruncation:
+    """DOCBOT-2008: max_tokens 1500; finish_reason=length closes fences + marks truncation."""
+
+    @staticmethod
+    def _fake_stream(tokens, finish_reason, calls):
+        def _stream(messages, **kwargs):
+            calls.append(kwargs)
+            yield from tokens
+            kwargs["finish_info"]["finish_reason"] = finish_reason
+        return _stream
+
+    async def _run(self, tokens, finish_reason):
+        from api import db_service
+        calls: list = []
+        with patch(
+            "api.utils.llm_provider.chat_completion_stream",
+            side_effect=self._fake_stream(tokens, finish_reason, calls),
+        ):
+            out = [t async for t in db_service._stream_answer("q", "SELECT 1", [{"a": 1}], "persona")]
+        return "".join(out), calls
+
+    async def test_normal_finish_no_suffix(self):
+        text, calls = await self._run(["Revenue was **$5M**.\n"], "stop")
+        assert text == "Revenue was **$5M**.\n"
+        assert calls[0]["max_tokens"] == 1500
+
+    async def test_length_finish_closes_fence_and_marks_truncated(self):
+        text, _ = await self._run(["Here:\n", "```python\n", "x = 1\n"], "length")
+        assert text == "Here:\n```python\nx = 1\n```\n\n_(truncated)_"
+
+    async def test_length_finish_without_fence(self):
+        text, _ = await self._run(["| a |\n|---|\n| 1 |"], "length")
+        assert text.endswith("| 1 |\n\n_(truncated)_")
+
+
+@pytest.mark.unit
+class TestChatCompletionStreamFinishInfo:
+    """DOCBOT-2008: finish_info plumbing for Groq and the Gemini fallback."""
+
+    def test_groq_length_reported(self, monkeypatch):
+        from api.utils import llm_provider
+        monkeypatch.setenv("groq_api_key", "k")
+        chunk = MagicMock()
+        chunk.choices[0].delta.content = "hi"
+        chunk.choices[0].finish_reason = "length"
+        client = MagicMock()
+        client.chat.completions.create.return_value = [chunk]
+        info: dict = {}
+        with patch("groq.Groq", return_value=client), patch.object(llm_provider, "_log_llm_call"):
+            out = list(llm_provider.chat_completion_stream([{"role": "user", "content": "x"}], finish_info=info))
+        assert out == ["hi"] and info == {"finish_reason": "length"}
+
+    def test_gemini_max_tokens_reported(self, monkeypatch):
+        from api.utils import llm_provider
+        monkeypatch.delenv("groq_api_key", raising=False)
+        info: dict = {}
+
+        def _gemini(messages, temperature, max_tokens, finish_info):
+            finish_info["finish_reason"] = "length"
+            yield "hi"
+
+        with patch.object(llm_provider, "_gemini_completion_stream", side_effect=_gemini), \
+                patch.object(llm_provider, "_log_llm_call"):
+            out = list(llm_provider.chat_completion_stream([{"role": "user", "content": "x"}], finish_info=info))
+        assert out == ["hi"] and info == {"finish_reason": "length"}
+
+    def test_gemini_stream_maps_max_tokens(self, monkeypatch):
+        import sys
+        import types
+        from api.utils import llm_provider
+        monkeypatch.setenv("GEMINI_API_KEY", "k")
+        reason = types.SimpleNamespace(name="MAX_TOKENS")
+        chunk = types.SimpleNamespace(text="hi", candidates=[types.SimpleNamespace(finish_reason=reason)])
+        genai = MagicMock()
+        genai.GenerativeModel.return_value.generate_content.return_value = [chunk]
+        google_pkg = types.ModuleType("google")
+        google_pkg.generativeai = genai
+        monkeypatch.setitem(sys.modules, "google", google_pkg)
+        monkeypatch.setitem(sys.modules, "google.generativeai", genai)
+        info: dict = {}
+        out = list(llm_provider._gemini_completion_stream([{"role": "user", "content": "x"}], 0, 10, info))
+        assert out == ["hi"] and info == {"finish_reason": "length"}
