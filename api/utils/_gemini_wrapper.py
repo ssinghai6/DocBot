@@ -84,8 +84,14 @@ class GeminiChatModel(BaseChatModel):
         stop: Optional[List[str]] = None,
         **kwargs: Any,
     ) -> ChatResult:
-        """Async generation — delegates to sync in a thread."""
+        """Async generation — delegates to sync in a thread.
+
+        ``copy_ctx_run`` carries the billing ContextVars (Principal, KeyContext,
+        RequestMeter) into the worker so Gemini fallback calls are attributed
+        and metered like Groq calls (DOCBOT-1802).
+        """
         import asyncio
+        from api.utils.billing_context import copy_ctx_run
         return await asyncio.get_running_loop().run_in_executor(
-            None, self._generate, messages, stop,
+            None, copy_ctx_run(self._generate, messages, stop),
         )
