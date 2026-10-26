@@ -63,7 +63,7 @@ app.add_middleware(
 
 from api.utils import request_guard
 from api.utils import caller_scope
-from api.utils.caller_scope import CallerScope, get_caller_scope, owner_values, resolve_caller_scope
+from api.utils.caller_scope import CallerScope, get_caller_scope, owner_values, resolve_caller_scope, scope_from_user
 from api.utils.pdf_io import open_pdf_bytes
 
 
@@ -343,8 +343,12 @@ from api.llm_trace_service import register_llm_calls_table
 llm_calls_table = register_llm_calls_table(metadata)
 
 # ── DOCBOT-1801: usage ledger (per-org metering) ──────────────────────────────
-from api.usage_service import register_usage_events_table, bind_billing_stream, meter_upload
+from api.usage_service import register_usage_events_table, meter_upload
 usage_events_table = register_usage_events_table(metadata)
+
+# ── DOCBOT-1802: credit balances, reservations + append-only ledger ───────────
+from api import credit_service
+credit_tables = credit_service.register_credit_tables(metadata)
 
 # ── DOCBOT-1510: per-answer lineage (Inspector lineage trace) ────────────────
 from api.lineage_service import register_lineage_table
@@ -519,6 +523,9 @@ async def init_db() -> None:
         from api.usage_service import LLM_CALLS_BILLING_MIGRATIONS
         for col_ddl in LLM_CALLS_BILLING_MIGRATIONS:
             await conn.execute(text(col_ddl))
+        # DOCBOT-1802: credit_ledger is append-only (immutability trigger)
+        for stmt in credit_service.LEDGER_IMMUTABILITY_STATEMENTS:
+            await conn.execute(text(stmt))
     logger.info(
         "Database tables verified / created "
         "(sessions, messages, db_connections, schema_cache, query_history, "
@@ -566,6 +573,10 @@ async def lifespan(app: FastAPI):
     from api.usage_service import wire_usage_store, start_writer as start_usage_writer
     wire_usage_store(usage_events_table, async_session_factory)
     start_usage_writer()
+    # DOCBOT-1802: credit reserve/settle store; release reservations orphaned
+    # by a previous process before serving traffic.
+    credit_service.wire_credit_store(credit_tables, async_session_factory, engine.dialect.name)
+    await credit_service.run_reaper_job()
     from api.lineage_service import wire_lineage_store
     wire_lineage_store(answer_lineage_table, async_session_factory)
     # DOCBOT-1506: wire the exact-match LLM response cache (SQL gen + intent
@@ -636,6 +647,8 @@ async def lifespan(app: FastAPI):
     # same scheduler instance as the DOCBOT-704 background sync worker.
     from api.commerce_service import register_retention_cleanup_job
     register_retention_cleanup_job(scheduler)
+    # DOCBOT-1802: periodic stale-reservation reaper on the same scheduler.
+    credit_service.register_reaper_job(scheduler)
     scheduler.start()
     if registered:
         logger.info("Startup: background sync scheduled for %d connector(s).", registered)
@@ -1470,7 +1483,11 @@ async def chat(
             logger.exception("Error in chat stream:")
             yield f"data: {json.dumps({'type': 'error', 'detail': safe_error_message(e)})}\n\n"
 
-    return StreamingResponse(bind_billing_stream(event_stream()), media_type="text/event-stream")
+    # DOCBOT-1802: reserve credits (402 only when BILLING_ENFORCE); settles on stream end.
+    billing = await credit_service.begin_billing(
+        raw_request, "chat", session_id=request.session_id, session_exists=True, scope=scope,
+    )
+    return StreamingResponse(billing.stream(event_stream()), media_type="text/event-stream")
 
 # ===== Phase 1 Features: Session History & Export =====
 # DOCBOT-1601 (SEC-02): every route is scoped to the caller (owner + org).
@@ -1936,7 +1953,12 @@ async def db_chat(
             logger.error("db_chat pipeline error: %s — %s", type(exc).__name__, exc, exc_info=True)
             yield f"data: {json.dumps({'type': 'error', 'error_type': 'InternalError', 'detail': 'An internal error occurred.'})}\n\n"
 
-    return StreamingResponse(bind_billing_stream(event_stream()), media_type="text/event-stream")
+    # DOCBOT-1802: reserve credits (402 only when BILLING_ENFORCE); settles on stream end.
+    billing = await credit_service.begin_billing(
+        raw_request, "db_chat", session_id=request.session_id, connection_id=request.connection_id,
+        session_exists=request.session_id in VECTOR_STORES, scope=scope,
+    )
+    return StreamingResponse(billing.stream(event_stream()), media_type="text/event-stream")
 
 
 @app.get("/api/db/sessions")
@@ -2110,8 +2132,18 @@ async def execute_sandbox(
         len(request.code),
     )
 
+    # DOCBOT-1802: reserve credits (402 only when BILLING_ENFORCE) outside the
+    # try so the 402 is not rewritten to a 500; settles in __aexit__ even on error.
+    # The route's auth dependency already resolved the caller — derive the
+    # billing scope from it instead of a second cookie lookup.
+    billing = await credit_service.begin_billing(
+        raw_request, "sandbox",
+        scope=scope_from_user(user) if user is not None
+        else CallerScope(user_id=None, org_id=None, anon_token=None),
+    )
     try:
-        result = await sandbox_service.run_python(code=request.code, allow_pip_egress=False)
+        async with billing:
+            result = await sandbox_service.run_python(code=request.code, allow_pip_egress=False)
     except EnvironmentError as env_err:
         # E2B_API_KEY not configured — surface clearly to the caller
         logger.error("%s Sandbox environment error: %s", log_prefix, env_err)
@@ -2276,7 +2308,12 @@ async def hybrid_chat_route(
             logger.error("hybrid_chat_route error: %s", type(exc).__name__)
             yield f"data: {json.dumps({'type': 'error', 'detail': 'An internal error occurred.'})}\n\n"
 
-    return StreamingResponse(bind_billing_stream(event_stream()), media_type="text/event-stream")
+    # DOCBOT-1802: reserve credits (402 only when BILLING_ENFORCE); settles on stream end.
+    billing = await credit_service.begin_billing(
+        raw_request, "hybrid", session_id=request.session_id, connection_id=request.connection_id,
+        session_exists=request.session_id in VECTOR_STORES, scope=scope,
+    )
+    return StreamingResponse(billing.stream(event_stream()), media_type="text/event-stream")
 
 
 # ---------------------------------------------------------------------------
@@ -2381,7 +2418,12 @@ async def autopilot_run(
             logger.error("autopilot_run error: %s", type(exc).__name__)
             yield f"data: {json.dumps({'type': 'error', 'content': 'An internal error occurred.'})}\n\n"
 
-    return StreamingResponse(bind_billing_stream(event_stream()), media_type="text/event-stream")
+    # DOCBOT-1802: reserve credits (402 only when BILLING_ENFORCE); settles on stream end.
+    billing = await credit_service.begin_billing(
+        raw_request, "autopilot", session_id=request.session_id, connection_id=request.connection_id,
+        session_exists=request.session_id in VECTOR_STORES, scope=scope,
+    )
+    return StreamingResponse(billing.stream(event_stream()), media_type="text/event-stream")
 
 
 # ── EPIC-06: SSO / SAML Auth routes (DOCBOT-601) ─────────────────────────────
