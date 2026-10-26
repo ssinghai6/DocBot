@@ -22,22 +22,23 @@ scoping, DOCBOT-1611 session-bound routes) import exactly these names:
 
 ``owner_values(scope)``
     Column values to stamp on INSERT so the row is later visible to its
-    creator (and only its creator / org admin).
+    creator (and only its creator / its org's admin for user-owned rows).
 
 Ownership rules (``scope_filter``)
 ----------------------------------
 * Logged-in non-admin: ``user_id = me`` AND (when the caller has an org)
   ``org_id = my org``.
-* Logged-in admin with an org: every row in their org (``org_id = my org``),
-  including unowned legacy rows backfilled into that org. Never cross-org.
+* Logged-in admin with an org: every USER-owned row in their org
+  (``org_id = my org`` AND ``user_id IS NOT NULL``). Anonymous rows the
+  default-org backfill stamped with an ``org_id`` are never visible to an
+  admin (DOCBOT-2317). Never cross-org.
   An admin without an org falls back to the non-admin rule.
 * Anonymous with an owner cookie: ``anon_owner = digest(cookie)`` AND
   ``user_id IS NULL``. Tables without an ``anon_owner`` column match nothing.
 * Anonymous without an owner cookie: matches nothing (``false()``).
 
 NULL-owner rows (created before DOCBOT-1601: ``user_id`` and ``anon_owner``
-both NULL) therefore match no anonymous or non-admin caller; they are only
-visible to an admin of the org they were backfilled into.
+both NULL) therefore match no caller at all.
 
 Anonymous owner cookie
 ----------------------
@@ -219,7 +220,9 @@ def scope_filter(table: Any, scope: CallerScope) -> ColumnElement[bool]:
     cols = table.c
     if scope.user_id is not None:
         if scope.is_admin and scope.org_id:
-            return cols.org_id == scope.org_id
+            # DOCBOT-2317: the default-org backfill stamps org_id on anonymous
+            # rows; admins must never see them (anon rows: anon_owner only).
+            return and_(cols.org_id == scope.org_id, cols.user_id.is_not(None))
         if scope.org_id:
             return and_(cols.user_id == scope.user_id, cols.org_id == scope.org_id)
         return cols.user_id == scope.user_id

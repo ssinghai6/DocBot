@@ -49,6 +49,7 @@ USERS: dict[str, Any] = {
     "tok-bob": SimpleNamespace(id="bob", org_id=ORG_Y, role="analyst"),
     "tok-carol": SimpleNamespace(id="carol", org_id=ORG_X, role="analyst"),
     "tok-admin-x": SimpleNamespace(id="admin-x", org_id=ORG_X, role="admin"),
+    "tok-admin-default": SimpleNamespace(id="admin-d", org_id="default-org", role="admin"),
 }
 
 
@@ -74,7 +75,7 @@ def test_scope_filter_user_without_org_is_owner_only() -> None:
 
 def test_scope_filter_admin_is_whole_org_never_unscoped() -> None:
     sql = _sql(scope_filter(idx.sessions_table, CallerScope("adm", ORG_X, None, True)))
-    assert sql == "sessions.org_id = 'org-x'"
+    assert sql == "sessions.org_id = 'org-x' AND sessions.user_id IS NOT NULL"
     # Admin without an org falls back to their own rows, never everything.
     sql = _sql(scope_filter(idx.sessions_table, CallerScope("adm", None, None, True)))
     assert sql == "sessions.user_id = 'adm'"
@@ -262,8 +263,21 @@ def test_list_is_scoped_per_caller(db: str) -> None:
     assert _listed(user("tok-bob")) == {"s-bob"}
 
 
-def test_admin_sees_own_org_including_unowned_but_not_other_orgs(db: str) -> None:
-    assert _listed(user("tok-admin-x")) == {"s-alice", "s-carol", "s-legacy-x"}
+def test_admin_sees_own_org_users_only_not_unowned_or_other_orgs(db: str) -> None:
+    assert _listed(user("tok-admin-x")) == {"s-alice", "s-carol"}
+    assert user("tok-admin-x").get("/api/session/s-carol").status_code == 200
+
+
+def test_default_org_admin_never_sees_backfilled_anonymous_sessions(db: str) -> None:
+    """DOCBOT-2317: backfill stamps default-org on anon rows; admin must not see them."""
+    admin = user("tok-admin-default")
+    assert _listed(admin) == set()
+    for sid in ("s-anon-a", "s-anon-b"):
+        assert admin.get(f"/api/session/{sid}").status_code == 404
+        assert admin.get(f"/api/export/{sid}").status_code == 404
+        assert admin.delete(f"/api/session/{sid}").status_code == 404
+        assert _row_exists(db, sid)
+    assert anon_a().get("/api/session/s-anon-a").status_code == 200
 
 
 def test_null_owner_rows_are_not_visible_to_non_admins(db: str) -> None:
@@ -273,6 +287,7 @@ def test_null_owner_rows_are_not_visible_to_non_admins(db: str) -> None:
         assert c.get("/api/session/s-legacy-x").status_code == 404
         assert c.get("/api/session/s-legacy-null").status_code == 404
     assert user("tok-admin-x").get("/api/session/s-legacy-null").status_code == 404
+    assert user("tok-admin-x").get("/api/session/s-legacy-x").status_code == 404
 
 
 def test_first_anonymous_request_gets_anon_owner_cookie(db: str) -> None:
