@@ -15,8 +15,8 @@ from fastapi.responses import JSONResponse, StreamingResponse
 from pydantic import BaseModel
 from sqlalchemy.ext.asyncio import create_async_engine, AsyncSession, async_sessionmaker
 from sqlalchemy import (
-    MetaData, Table, Column, String, Text, Integer, DateTime,
-    func, select, insert, update, delete, text, Boolean,
+    MetaData, Table, Column, String, Text, Integer, BigInteger, DateTime,
+    PrimaryKeyConstraint, func, select, insert, update, delete, text, Boolean,
 )
 from typing import List, Dict, Any, Optional, Literal
 import os
@@ -84,7 +84,7 @@ async def abuse_guard(request: Request, call_next):
         # Rate-limit only the cost-bearing API surface; leave health/static alone.
         if request.method in ("POST", "DELETE") and path.startswith("/api/"):
             try:
-                request_guard.check_ip_rate_limit(request)
+                await request_guard.check_ip_rate_limit(request)
             except HTTPException as exc:
                 return JSONResponse(
                     status_code=exc.status_code,
@@ -294,6 +294,19 @@ session_artifacts_table = Table(
     Column("created_at", DateTime(timezone=True), server_default=func.now(), nullable=False),
 )
 
+# ── DOCBOT-1606: durable fixed-window rate-limit counters ───────────────────
+# Created idempotently by metadata.create_all in init_db. Epoch-second ints keep
+# the same upsert working on PostgreSQL and SQLite (see request_guard).
+rate_limit_counters_table = Table(
+    request_guard.COUNTER_TABLE, metadata,
+    Column("bucket", String, nullable=False),
+    Column("counter_key", String, nullable=False),
+    Column("window_start", BigInteger, nullable=False),
+    Column("count", Integer, nullable=False),
+    Column("expires_at", BigInteger, nullable=False, index=True),
+    PrimaryKeyConstraint("bucket", "counter_key", "window_start"),
+)
+
 # ── DOCBOT-702: Commerce Schema ────────────────────────────────────────────────
 from api.commerce_service import register_commerce_tables
 commerce_orders_table, commerce_financials_table = register_commerce_tables(metadata)
@@ -421,9 +434,9 @@ async def charge_budget(request: Request, session_id: str, endpoint: str) -> Non
         return
     user = await get_optional_user(request)
     if user is not None:
-        request_guard.enforce_user_budget(str(user.id), endpoint)
+        await request_guard.enforce_user_budget(str(user.id), endpoint)
     else:
-        request_guard.enforce_session_budget(session_id or "", endpoint)
+        await request_guard.enforce_session_budget(session_id or "", endpoint)
 
 
 _gate_uploads = Depends(gate_uploads)
@@ -528,6 +541,8 @@ async def lifespan(app: FastAPI):
     from api.rbac_service import assert_safe_auth_config
     assert_safe_auth_config()
     await init_db()
+    # DOCBOT-1606: abuse-guard counters live in Postgres from here on.
+    request_guard.use_counter_store(request_guard.SqlCounterStore(engine))
     # DOCBOT-1514: populate the tool/capability registry (pipelines,
     # autopilot tools, personas, connectors) for the frontend tool picker.
     from api.tools.builtin import register_builtin_tools
@@ -2109,7 +2124,7 @@ async def execute_sandbox(
     error            : Human-readable error message, or null on success
     execution_time_ms: Wall-clock time for the sandbox run
     """
-    request_guard.enforce_sandbox_quota(raw_request, user)
+    await request_guard.enforce_sandbox_quota(raw_request, user)
 
     log_prefix = f"[session={request.session_id}]" if request.session_id else "[anonymous]"
     logger.info(

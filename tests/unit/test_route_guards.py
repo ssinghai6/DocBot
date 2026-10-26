@@ -27,6 +27,8 @@ handler runs, and the TestClient is built without running the app lifespan
 
 from __future__ import annotations
 
+from unittest.mock import AsyncMock
+
 import os
 import re
 from typing import Callable, Iterable, Iterator
@@ -306,7 +308,7 @@ def test_anonymous_requests_get_401_under_auth_required(
     monkeypatch.setenv("AUTH_REQUIRED", "true")
     # Keep the abuse-guard middleware from short-circuiting with 403/429.
     monkeypatch.setattr(idx.request_guard, "is_demo_blocked", lambda *_a, **_k: False)
-    monkeypatch.setattr(idx.request_guard, "check_ip_rate_limit", lambda *_a, **_k: None)
+    monkeypatch.setattr(idx.request_guard, "check_ip_rate_limit", AsyncMock(return_value=None))
 
     resp = client.request(method, _concrete(path), json={})
     assert resp.status_code == 401, (

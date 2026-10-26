@@ -6,6 +6,7 @@ the app lifespan is not run.
 
 from __future__ import annotations
 
+from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
@@ -45,7 +46,7 @@ def _env(monkeypatch):
     monkeypatch.setattr(request_guard, "SESSION_BUDGET", 0)
     monkeypatch.setattr(request_guard, "USER_DAILY_BUDGET", 0)
     monkeypatch.setattr(request_guard, "OWNER_KEY", "")
-    monkeypatch.setattr(request_guard, "TRUSTED_PROXY_HOPS", 0)
+    monkeypatch.setattr(request_guard, "TRUSTED_PROXY_HOPS", 1)
     request_guard.reset_state()
     yield
     request_guard.reset_state()
@@ -61,9 +62,13 @@ def client():
 # ---------------------------------------------------------------------------
 
 class TestClientIp:
-    def test_default_is_legacy_left_most(self):
-        req = _FakeRequest(ip="10.0.0.1", forwarded="203.0.113.7, 198.51.100.9")
-        assert request_guard.client_ip(req) == "203.0.113.7"
+    def test_default_is_one_trusted_hop(self):
+        assert request_guard.TRUSTED_PROXY_HOPS == 1  # fixture mirrors the env default
+
+    def test_zero_hops_ignores_header(self, monkeypatch):
+        monkeypatch.setattr(request_guard, "TRUSTED_PROXY_HOPS", 0)
+        req = _FakeRequest(ip="10.0.0.1", forwarded="203.0.113.7")
+        assert request_guard.client_ip(req) == "10.0.0.1"
 
     def test_one_trusted_hop_takes_right_most(self, monkeypatch):
         monkeypatch.setattr(request_guard, "TRUSTED_PROXY_HOPS", 1)
@@ -74,6 +79,14 @@ class TestClientIp:
         monkeypatch.setattr(request_guard, "TRUSTED_PROXY_HOPS", 2)
         req = _FakeRequest(forwarded="6.6.6.6, 203.0.113.7, 76.76.21.1")
         assert request_guard.client_ip(req) == "203.0.113.7"
+
+    def test_spoofed_left_most_entries_never_used(self, monkeypatch):
+        for hops, chain, want in [
+            (1, "1.1.1.1, 2.2.2.2, 203.0.113.7", "203.0.113.7"),
+            (2, "1.1.1.1, 2.2.2.2, 203.0.113.7, 76.76.21.1", "203.0.113.7"),
+        ]:
+            monkeypatch.setattr(request_guard, "TRUSTED_PROXY_HOPS", hops)
+            assert request_guard.client_ip(_FakeRequest(forwarded=chain)) == want
 
     def test_hops_larger_than_chain_clamps_to_left_most(self, monkeypatch):
         monkeypatch.setattr(request_guard, "TRUSTED_PROXY_HOPS", 5)
@@ -95,66 +108,66 @@ class TestDemoInitLimit:
         assert request_guard.DEMO_INIT_PER_IP_PER_HOUR > 0
         assert request_guard.DEMO_INIT_GLOBAL_PER_HOUR > 0
 
-    def test_per_ip_limit(self, monkeypatch):
+    async def test_per_ip_limit(self, monkeypatch):
         monkeypatch.setattr(request_guard, "DEMO_INIT_PER_IP_PER_HOUR", 3)
         monkeypatch.setattr(request_guard, "DEMO_INIT_GLOBAL_PER_HOUR", 0)
         req = _FakeRequest(ip="9.9.9.9")
         for _ in range(3):
-            request_guard.check_demo_init_limit(req)
+            await request_guard.check_demo_init_limit(req)
         with pytest.raises(HTTPException) as exc:
-            request_guard.check_demo_init_limit(req)
+            await request_guard.check_demo_init_limit(req)
         assert exc.value.status_code == 429
         assert int(exc.value.headers["Retry-After"]) >= 1
 
-    def test_other_ip_unaffected(self, monkeypatch):
+    async def test_other_ip_unaffected(self, monkeypatch):
         monkeypatch.setattr(request_guard, "DEMO_INIT_PER_IP_PER_HOUR", 1)
         monkeypatch.setattr(request_guard, "DEMO_INIT_GLOBAL_PER_HOUR", 0)
-        request_guard.check_demo_init_limit(_FakeRequest(ip="9.9.9.9"))
-        request_guard.check_demo_init_limit(_FakeRequest(ip="8.8.8.8"))  # no raise
+        await request_guard.check_demo_init_limit(_FakeRequest(ip="9.9.9.9"))
+        await request_guard.check_demo_init_limit(_FakeRequest(ip="8.8.8.8"))  # no raise
 
-    def test_global_cap_stops_xff_rotation(self, monkeypatch):
+    async def test_global_cap_stops_xff_rotation(self, monkeypatch):
         monkeypatch.setattr(request_guard, "DEMO_INIT_PER_IP_PER_HOUR", 100)
         monkeypatch.setattr(request_guard, "DEMO_INIT_GLOBAL_PER_HOUR", 5)
         for i in range(5):
-            request_guard.check_demo_init_limit(_FakeRequest(forwarded=f"10.1.0.{i}"))
+            await request_guard.check_demo_init_limit(_FakeRequest(forwarded=f"10.1.0.{i}"))
         with pytest.raises(HTTPException) as exc:
-            request_guard.check_demo_init_limit(_FakeRequest(forwarded="10.1.0.99"))
+            await request_guard.check_demo_init_limit(_FakeRequest(forwarded="10.1.0.99"))
         assert exc.value.status_code == 429
 
-    def test_rejected_call_does_not_consume_global_quota(self, monkeypatch):
+    async def test_rejected_call_does_not_consume_global_quota(self, monkeypatch):
         monkeypatch.setattr(request_guard, "DEMO_INIT_PER_IP_PER_HOUR", 1)
         monkeypatch.setattr(request_guard, "DEMO_INIT_GLOBAL_PER_HOUR", 2)
         noisy = _FakeRequest(ip="9.9.9.9")
-        request_guard.check_demo_init_limit(noisy)
+        await request_guard.check_demo_init_limit(noisy)
         for _ in range(5):
             with pytest.raises(HTTPException):
-                request_guard.check_demo_init_limit(noisy)
-        request_guard.check_demo_init_limit(_FakeRequest(ip="8.8.8.8"))  # global slot still free
+                await request_guard.check_demo_init_limit(noisy)
+        await request_guard.check_demo_init_limit(_FakeRequest(ip="8.8.8.8"))  # global slot still free
 
-    def test_window_expiry(self, monkeypatch):
+    async def test_window_expiry(self, monkeypatch):
         monkeypatch.setattr(request_guard, "DEMO_INIT_PER_IP_PER_HOUR", 1)
         monkeypatch.setattr(request_guard, "DEMO_INIT_GLOBAL_PER_HOUR", 0)
-        clock = [1000.0]
-        monkeypatch.setattr(request_guard.time, "monotonic", lambda: clock[0])
+        clock = [3600.0 * 1000]
+        monkeypatch.setattr(request_guard, "time", SimpleNamespace(time=lambda: clock[0]))
         req = _FakeRequest()
-        request_guard.check_demo_init_limit(req)
+        await request_guard.check_demo_init_limit(req)
         with pytest.raises(HTTPException):
-            request_guard.check_demo_init_limit(req)
+            await request_guard.check_demo_init_limit(req)
         clock[0] += request_guard.DEMO_INIT_WINDOW_SEC + 1
-        request_guard.check_demo_init_limit(req)  # window rolled over
+        await request_guard.check_demo_init_limit(req)  # window rolled over
 
-    def test_disabled_at_zero(self, monkeypatch):
+    async def test_disabled_at_zero(self, monkeypatch):
         monkeypatch.setattr(request_guard, "DEMO_INIT_PER_IP_PER_HOUR", 0)
         monkeypatch.setattr(request_guard, "DEMO_INIT_GLOBAL_PER_HOUR", 0)
         for _ in range(500):
-            request_guard.check_demo_init_limit(_FakeRequest())
+            await request_guard.check_demo_init_limit(_FakeRequest())
 
-    def test_owner_bypasses(self, monkeypatch):
+    async def test_owner_bypasses(self, monkeypatch):
         monkeypatch.setattr(request_guard, "OWNER_KEY", "owner-secret")
         monkeypatch.setattr(request_guard, "DEMO_INIT_PER_IP_PER_HOUR", 1)
         req = _FakeRequest(cookies={request_guard.OWNER_COOKIE_NAME: request_guard.owner_cookie_value()})
         for _ in range(10):
-            request_guard.check_demo_init_limit(req)
+            await request_guard.check_demo_init_limit(req)
 
     def test_route_returns_429_after_limit(self, client, monkeypatch):
         monkeypatch.setattr(request_guard, "DEMO_INIT_PER_IP_PER_HOUR", 2)

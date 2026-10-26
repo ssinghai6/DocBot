@@ -9,6 +9,8 @@ No network, no PostgreSQL.
 
 from __future__ import annotations
 
+from unittest.mock import AsyncMock
+
 import os
 from pathlib import Path
 from types import SimpleNamespace
@@ -211,7 +213,7 @@ def db(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, fake_users: None) -> Ite
     monkeypatch.setattr(idx, "async_session_factory", async_sessionmaker(async_engine, expire_on_commit=False))
     monkeypatch.delenv("AUTH_REQUIRED", raising=False)
     monkeypatch.setattr(idx.request_guard, "is_demo_blocked", lambda *_a, **_k: False)
-    monkeypatch.setattr(idx.request_guard, "check_ip_rate_limit", lambda *_a, **_k: None)
+    monkeypatch.setattr(idx.request_guard, "check_ip_rate_limit", AsyncMock(return_value=None))
     import api.utils.vector_store as vs
     monkeypatch.setattr(vs, "delete_store", DELETED_STORES.append)
     DELETED_STORES.clear()
