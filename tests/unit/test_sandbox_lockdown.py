@@ -443,3 +443,33 @@ class TestPolicy:
         sb.kill.side_effect = RuntimeError("net down")
         holder.set(sb)
         holder.kill()  # must not raise
+
+
+class TestSseKeepalive:
+    """DOCBOT-2318: long CSV sandbox runs keep the SSE stream alive."""
+
+    def test_yields_keepalives_until_task_done(self):
+        from api import sandbox_service as svc
+
+        async def _run():
+            task = asyncio.ensure_future(asyncio.sleep(0.05, result="ok"))
+            chunks = [c async for c in svc._keepalive_until(task, interval=0.01)]
+            return chunks, task.result()
+
+        chunks, result = asyncio.run(_run())
+        assert result == "ok"
+        assert chunks and all(c == svc.SSE_KEEPALIVE for c in chunks)
+        assert not svc.SSE_KEEPALIVE.startswith("data:")  # clients ignore it
+
+    def test_closing_stream_cancels_task(self):
+        from api import sandbox_service as svc
+
+        async def _run():
+            task = asyncio.ensure_future(asyncio.sleep(10))
+            gen = svc._keepalive_until(task, interval=0.01)
+            await gen.__anext__()
+            await gen.aclose()
+            await asyncio.sleep(0)
+            return task.cancelled()
+
+        assert asyncio.run(_run())

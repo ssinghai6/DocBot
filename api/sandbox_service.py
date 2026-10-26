@@ -1339,6 +1339,27 @@ async def _run_csv_in_sandbox(
         )
 
 
+# DOCBOT-2318: SSE comment line sent while a long sandbox run is in flight so
+# proxies (Vercel rewrite, browsers) never see an idle stream. Clients skip it
+# (they only parse ``data:`` lines).
+SSE_KEEPALIVE = ": keepalive\n\n"
+SSE_KEEPALIVE_INTERVAL_SECONDS = 15.0
+
+
+async def _keepalive_until(
+    task: "asyncio.Future[Any]", interval: float = SSE_KEEPALIVE_INTERVAL_SECONDS
+) -> AsyncGenerator[str, None]:
+    """Yield SSE keepalives until ``task`` finishes; cancel it if the stream closes."""
+    try:
+        while not task.done():
+            done, _ = await asyncio.wait({task}, timeout=interval)
+            if not done:
+                yield SSE_KEEPALIVE
+    finally:
+        if not task.done():
+            task.cancel()
+
+
 def _format_stdout_as_markdown(text: str) -> str:
     """Best-effort formatting of pandas stdout output for markdown rendering.
 
@@ -1600,7 +1621,12 @@ async def run_csv_query_on_e2b(
             yield f"data: {error_chunk}\n\n"
             return
 
-        result = await _run_csv_in_sandbox(code, csv_path_in_sandbox, csv_bytes, timeout_seconds=sandbox_timeout)
+        _task = asyncio.ensure_future(
+            _run_csv_in_sandbox(code, csv_path_in_sandbox, csv_bytes, timeout_seconds=sandbox_timeout)
+        )
+        async for _ka in _keepalive_until(_task):
+            yield _ka
+        result = _task.result()
 
         # --- Task 3: Error retry with feedback ---
         _is_timeout = result.error and "timed out" in result.error.lower()
@@ -1638,9 +1664,12 @@ async def run_csv_query_on_e2b(
                 if _normalise_for_diff(retry_code) == _normalise_for_diff(code):
                     logger.info("CSV retry produced identical code — skipping")
                 else:
-                    retry_result = await _run_csv_in_sandbox(
+                    _retry_task = asyncio.ensure_future(_run_csv_in_sandbox(
                         retry_code, csv_path_in_sandbox, csv_bytes, timeout_seconds=sandbox_timeout
-                    )
+                    ))
+                    async for _ka in _keepalive_until(_retry_task):
+                        yield _ka
+                    retry_result = _retry_task.result()
                     if retry_result.error is None:
                         logger.info("CSV retry succeeded")
                         result = retry_result
