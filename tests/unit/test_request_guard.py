@@ -1,5 +1,8 @@
 """Unit tests for api.utils.request_guard — public-deployment abuse guards."""
 
+from datetime import datetime, timezone
+from types import SimpleNamespace
+
 import pytest
 from fastapi import HTTPException
 
@@ -41,8 +44,9 @@ def _clean_state():
 
 # --- client_ip -------------------------------------------------------------
 
-def test_client_ip_prefers_forwarded_header():
-    req = _FakeRequest(ip="10.0.0.1", forwarded="203.0.113.7, 10.0.0.1")
+def test_client_ip_uses_right_most_trusted_hop(monkeypatch):
+    monkeypatch.setattr(request_guard, "TRUSTED_PROXY_HOPS", 1)
+    req = _FakeRequest(ip="10.0.0.1", forwarded="6.6.6.6, 203.0.113.7")
     assert request_guard.client_ip(req) == "203.0.113.7"
 
 
@@ -53,87 +57,87 @@ def test_client_ip_falls_back_to_socket_peer():
 
 # --- per-IP rate limit -----------------------------------------------------
 
-def test_rate_limit_disabled_by_default(monkeypatch):
+async def test_rate_limit_disabled_by_default(monkeypatch):
     monkeypatch.setattr(request_guard, "RATE_LIMIT_PER_MIN", 0)
     for _ in range(1000):
-        request_guard.check_ip_rate_limit(_FakeRequest())  # never raises
+        await request_guard.check_ip_rate_limit(_FakeRequest())  # never raises
 
 
-def test_rate_limit_blocks_after_threshold(monkeypatch):
+async def test_rate_limit_blocks_after_threshold(monkeypatch):
     monkeypatch.setattr(request_guard, "RATE_LIMIT_PER_MIN", 3)
     req = _FakeRequest(ip="5.5.5.5")
     for _ in range(3):
-        request_guard.check_ip_rate_limit(req)
+        await request_guard.check_ip_rate_limit(req)
     with pytest.raises(HTTPException) as exc:
-        request_guard.check_ip_rate_limit(req)
+        await request_guard.check_ip_rate_limit(req)
     assert exc.value.status_code == 429
     assert "Retry-After" in exc.value.headers
 
 
-def test_rate_limit_is_per_ip(monkeypatch):
+async def test_rate_limit_is_per_ip(monkeypatch):
     monkeypatch.setattr(request_guard, "RATE_LIMIT_PER_MIN", 2)
     a, b = _FakeRequest(ip="1.1.1.1"), _FakeRequest(ip="2.2.2.2")
-    request_guard.check_ip_rate_limit(a)
-    request_guard.check_ip_rate_limit(a)
+    await request_guard.check_ip_rate_limit(a)
+    await request_guard.check_ip_rate_limit(a)
     # b has its own bucket — unaffected by a hitting the limit
-    request_guard.check_ip_rate_limit(b)
-    request_guard.check_ip_rate_limit(b)
+    await request_guard.check_ip_rate_limit(b)
+    await request_guard.check_ip_rate_limit(b)
     with pytest.raises(HTTPException):
-        request_guard.check_ip_rate_limit(a)
+        await request_guard.check_ip_rate_limit(a)
 
 
-def test_rate_limit_window_slides(monkeypatch):
+async def test_rate_limit_window_rolls_over(monkeypatch):
     monkeypatch.setattr(request_guard, "RATE_LIMIT_PER_MIN", 2)
     monkeypatch.setattr(request_guard, "RATE_LIMIT_WINDOW_SEC", 60)
-    fake_now = [1000.0]
-    monkeypatch.setattr(request_guard.time, "monotonic", lambda: fake_now[0])
+    fake_now = [6000.0]
+    monkeypatch.setattr(request_guard, "time", SimpleNamespace(time=lambda: fake_now[0]))
     req = _FakeRequest(ip="9.9.9.9")
-    request_guard.check_ip_rate_limit(req)
-    request_guard.check_ip_rate_limit(req)
+    await request_guard.check_ip_rate_limit(req)
+    await request_guard.check_ip_rate_limit(req)
     with pytest.raises(HTTPException):
-        request_guard.check_ip_rate_limit(req)
+        await request_guard.check_ip_rate_limit(req)
     # advance past the window — old hits expire
     fake_now[0] += 61
-    request_guard.check_ip_rate_limit(req)  # no raise
+    await request_guard.check_ip_rate_limit(req)  # no raise
 
 
 # --- per-session budget ----------------------------------------------------
 
-def test_budget_disabled_by_default(monkeypatch):
+async def test_budget_disabled_by_default(monkeypatch):
     monkeypatch.setattr(request_guard, "SESSION_BUDGET", 0)
     for _ in range(1000):
-        request_guard.enforce_session_budget("s1", "autopilot")  # never raises
+        await request_guard.enforce_session_budget("s1", "autopilot")  # never raises
 
 
-def test_budget_empty_session_is_noop(monkeypatch):
+async def test_budget_empty_session_is_noop(monkeypatch):
     monkeypatch.setattr(request_guard, "SESSION_BUDGET", 1)
     for _ in range(10):
-        request_guard.enforce_session_budget("", "autopilot")  # anonymous → skip
+        await request_guard.enforce_session_budget("", "autopilot")  # anonymous → skip
 
 
-def test_budget_exhausts_by_weight(monkeypatch):
+async def test_budget_exhausts_by_weight(monkeypatch):
     monkeypatch.setattr(request_guard, "SESSION_BUDGET", 5)
     # autopilot weight is 5 → one call consumes the whole budget
-    request_guard.enforce_session_budget("s1", "autopilot")
+    await request_guard.enforce_session_budget("s1", "autopilot")
     with pytest.raises(HTTPException) as exc:
-        request_guard.enforce_session_budget("s1", "chat")
+        await request_guard.enforce_session_budget("s1", "chat")
     assert exc.value.status_code == 429
 
 
-def test_budget_counts_cheap_ops(monkeypatch):
+async def test_budget_counts_cheap_ops(monkeypatch):
     monkeypatch.setattr(request_guard, "SESSION_BUDGET", 3)
     for _ in range(3):
-        request_guard.enforce_session_budget("s2", "chat")  # weight 1 each
+        await request_guard.enforce_session_budget("s2", "chat")  # weight 1 each
     with pytest.raises(HTTPException):
-        request_guard.enforce_session_budget("s2", "chat")
+        await request_guard.enforce_session_budget("s2", "chat")
 
 
-def test_budget_is_per_session(monkeypatch):
+async def test_budget_is_per_session(monkeypatch):
     monkeypatch.setattr(request_guard, "SESSION_BUDGET", 1)
-    request_guard.enforce_session_budget("sA", "chat")
+    await request_guard.enforce_session_budget("sA", "chat")
     with pytest.raises(HTTPException):
-        request_guard.enforce_session_budget("sA", "chat")
-    request_guard.enforce_session_budget("sB", "chat")  # separate bucket
+        await request_guard.enforce_session_budget("sA", "chat")
+    await request_guard.enforce_session_budget("sB", "chat")  # separate bucket
 
 
 # --- demo path blocking ----------------------------------------------------
@@ -172,21 +176,44 @@ def test_is_owner_false_when_key_unset(monkeypatch):
     assert request_guard.is_owner(req) is False
 
 
-def test_is_owner_via_header(monkeypatch):
+def test_is_owner_ignores_raw_key_header(monkeypatch):
+    # DOCBOT-1605: the raw key only unlocks via POST /api/auth/owner-unlock.
     monkeypatch.setattr(request_guard, "OWNER_KEY", "s3cret")
-    assert request_guard.is_owner(_FakeRequest(headers={"x-owner-key": "s3cret"})) is True
-    assert request_guard.is_owner(_FakeRequest(headers={"x-owner-key": "wrong"})) is False
+    assert request_guard.is_owner(_FakeRequest(headers={"x-owner-key": "s3cret"})) is False
 
 
-def test_is_owner_via_query_param(monkeypatch):
+def test_is_owner_ignores_query_param(monkeypatch):
     monkeypatch.setattr(request_guard, "OWNER_KEY", "s3cret")
-    assert request_guard.is_owner(_FakeRequest(query_params={"owner_key": "s3cret"})) is True
+    assert request_guard.is_owner(_FakeRequest(query_params={"owner_key": "s3cret"})) is False
 
 
-def test_is_owner_via_cookie(monkeypatch):
+def test_is_owner_via_hmac_cookie(monkeypatch):
     monkeypatch.setattr(request_guard, "OWNER_KEY", "s3cret")
-    cookies = {request_guard.OWNER_COOKIE_NAME: "s3cret"}
-    assert request_guard.is_owner(_FakeRequest(cookies=cookies)) is True
+    cookie = request_guard.owner_cookie_value()
+    assert cookie and "s3cret" not in cookie
+    assert request_guard.is_owner(_FakeRequest(cookies={request_guard.OWNER_COOKIE_NAME: cookie})) is True
+
+
+def test_is_owner_rejects_raw_key_or_forged_cookie(monkeypatch):
+    monkeypatch.setattr(request_guard, "OWNER_KEY", "s3cret")
+    for bad in ("s3cret", "0" * 64, ""):
+        assert request_guard.is_owner(_FakeRequest(cookies={request_guard.OWNER_COOKIE_NAME: bad})) is False
+
+
+def test_owner_cookie_changes_with_key(monkeypatch):
+    monkeypatch.setattr(request_guard, "OWNER_KEY", "k1")
+    old_cookie = request_guard.owner_cookie_value()
+    monkeypatch.setattr(request_guard, "OWNER_KEY", "k2")  # key rotation invalidates old cookies
+    assert request_guard.is_owner(_FakeRequest(cookies={request_guard.OWNER_COOKIE_NAME: old_cookie})) is False
+
+
+def test_verify_owner_key(monkeypatch):
+    monkeypatch.setattr(request_guard, "OWNER_KEY", "s3cret")
+    assert request_guard.verify_owner_key("s3cret") is True
+    assert request_guard.verify_owner_key("wrong") is False
+    assert request_guard.verify_owner_key(None) is False
+    monkeypatch.setattr(request_guard, "OWNER_KEY", "")
+    assert request_guard.verify_owner_key("") is False
 
 
 def test_is_owner_no_credentials(monkeypatch):
@@ -196,53 +223,44 @@ def test_is_owner_no_credentials(monkeypatch):
 
 # --- per-user daily budget -------------------------------------------------
 
-def test_user_budget_disabled_by_default(monkeypatch):
+async def test_user_budget_disabled_by_default(monkeypatch):
     monkeypatch.setattr(request_guard, "USER_DAILY_BUDGET", 0)
     for _ in range(1000):
-        request_guard.enforce_user_budget("u1", "autopilot")  # never raises
+        await request_guard.enforce_user_budget("u1", "autopilot")  # never raises
 
 
-def test_user_budget_empty_id_is_noop(monkeypatch):
+async def test_user_budget_empty_id_is_noop(monkeypatch):
     monkeypatch.setattr(request_guard, "USER_DAILY_BUDGET", 1)
     for _ in range(10):
-        request_guard.enforce_user_budget("", "autopilot")
+        await request_guard.enforce_user_budget("", "autopilot")
 
 
-def test_user_budget_exhausts_and_429(monkeypatch):
+async def test_user_budget_exhausts_and_429(monkeypatch):
     monkeypatch.setattr(request_guard, "USER_DAILY_BUDGET", 80)
     # 16 autopilot runs (weight 5) = 80 exactly; 17th exceeds
     for _ in range(16):
-        request_guard.enforce_user_budget("u1", "autopilot")
+        await request_guard.enforce_user_budget("u1", "autopilot")
     with pytest.raises(HTTPException) as exc:
-        request_guard.enforce_user_budget("u1", "autopilot")
+        await request_guard.enforce_user_budget("u1", "autopilot")
     assert exc.value.status_code == 429
 
 
-def test_user_budget_is_per_user(monkeypatch):
+async def test_user_budget_is_per_user(monkeypatch):
     monkeypatch.setattr(request_guard, "USER_DAILY_BUDGET", 1)
-    request_guard.enforce_user_budget("uA", "chat")
+    await request_guard.enforce_user_budget("uA", "chat")
     with pytest.raises(HTTPException):
-        request_guard.enforce_user_budget("uA", "chat")
-    request_guard.enforce_user_budget("uB", "chat")  # separate quota
+        await request_guard.enforce_user_budget("uA", "chat")
+    await request_guard.enforce_user_budget("uB", "chat")  # separate quota
 
 
-def test_user_budget_resets_on_new_day(monkeypatch):
+async def test_user_budget_resets_on_new_day(monkeypatch):
     monkeypatch.setattr(request_guard, "USER_DAILY_BUDGET", 1)
-    # Day 1: consume quota
-    class _D1:
-        @staticmethod
-        def now(tz=None):
-            import datetime as _dt
-            return _dt.datetime(2026, 7, 1, 12, 0, tzinfo=_dt.timezone.utc)
-    monkeypatch.setattr(request_guard, "datetime", _D1)
-    request_guard.enforce_user_budget("u1", "chat")
+    day1 = datetime(2026, 7, 1, 12, 0, tzinfo=timezone.utc).timestamp()
+    day2 = datetime(2026, 7, 2, 0, 5, tzinfo=timezone.utc).timestamp()
+    clock = [day1]
+    monkeypatch.setattr(request_guard, "time", SimpleNamespace(time=lambda: clock[0]))
+    await request_guard.enforce_user_budget("u1", "chat")
     with pytest.raises(HTTPException):
-        request_guard.enforce_user_budget("u1", "chat")
-    # Day 2: quota resets
-    class _D2:
-        @staticmethod
-        def now(tz=None):
-            import datetime as _dt
-            return _dt.datetime(2026, 7, 2, 0, 5, tzinfo=_dt.timezone.utc)
-    monkeypatch.setattr(request_guard, "datetime", _D2)
-    request_guard.enforce_user_budget("u1", "chat")  # no raise
+        await request_guard.enforce_user_budget("u1", "chat")
+    clock[0] = day2  # just past UTC midnight → new window
+    await request_guard.enforce_user_budget("u1", "chat")  # no raise

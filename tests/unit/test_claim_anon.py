@@ -6,6 +6,8 @@ logs in, must keep that work. SQLite only, no network.
 
 from __future__ import annotations
 
+from unittest.mock import AsyncMock
+
 import os
 from pathlib import Path
 from typing import Any, Iterator, Optional
@@ -72,7 +74,7 @@ def db(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Iterator[Any]:
     factory = async_sessionmaker(create_async_engine(f"sqlite+aiosqlite:///{path}"), expire_on_commit=False)
     monkeypatch.setattr(idx, "async_session_factory", factory)
     monkeypatch.setattr(idx.request_guard, "is_demo_blocked", lambda *_a, **_k: False)
-    monkeypatch.setattr(idx.request_guard, "check_ip_rate_limit", lambda *_a, **_k: None)
+    monkeypatch.setattr(idx.request_guard, "check_ip_rate_limit", AsyncMock(return_value=None))
     yield factory
 
 

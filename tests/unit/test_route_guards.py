@@ -27,6 +27,8 @@ handler runs, and the TestClient is built without running the app lifespan
 
 from __future__ import annotations
 
+from unittest.mock import AsyncMock
+
 import os
 import re
 from typing import Callable, Iterable, Iterator
@@ -147,7 +149,7 @@ PUBLIC_ROUTES: dict[RouteKey, str] = {
     ("GET", "/api/auth/config"): "Lists enabled login methods; the login screen needs it pre-auth.",
     ("POST", "/api/demo/init"): "One-click anonymous demo (EPIC-13). Abuse controls: IP rate limit "
                                 "(DOCBOT-1612) and metering (DOCBOT-1623), not auth.",
-    ("GET", "/api/auth/owner-unlock"): "Checks OWNER_KEY itself and returns 403 on mismatch (hardening: DOCBOT-1605).",
+    ("POST", "/api/auth/owner-unlock"): "Checks the X-Owner-Key header itself (compare_digest) and returns 403 on mismatch (DOCBOT-1605).",
     ("GET", "/api/auth/saml/metadata"): "SAML SP metadata must be fetchable by the IdP.",
     ("GET", "/api/auth/saml/login"): "Starts the SAML login redirect.",
     ("POST", "/api/auth/saml/acs"): "SAML Assertion Consumer Service; the signed assertion is the credential.",
@@ -306,7 +308,7 @@ def test_anonymous_requests_get_401_under_auth_required(
     monkeypatch.setenv("AUTH_REQUIRED", "true")
     # Keep the abuse-guard middleware from short-circuiting with 403/429.
     monkeypatch.setattr(idx.request_guard, "is_demo_blocked", lambda *_a, **_k: False)
-    monkeypatch.setattr(idx.request_guard, "check_ip_rate_limit", lambda *_a, **_k: None)
+    monkeypatch.setattr(idx.request_guard, "check_ip_rate_limit", AsyncMock(return_value=None))
 
     resp = client.request(method, _concrete(path), json={})
     assert resp.status_code == 401, (

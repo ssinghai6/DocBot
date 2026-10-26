@@ -153,18 +153,21 @@ class TestMetering:
         assert request_guard.sandbox_principal_key(_analyst(org_id=None, user_id="u"), req) == "user:u"
         assert request_guard.sandbox_principal_key(None, req) == "ip:9.9.9.9"
 
-    def test_user_daily_budget_charged(self, monkeypatch):
+    async def test_user_daily_budget_charged(self, monkeypatch):
         calls: List[tuple] = []
-        monkeypatch.setattr(request_guard, "enforce_user_budget", lambda uid, ep: calls.append((uid, ep)))
-        request_guard.enforce_sandbox_quota(_plain_request(), _analyst(user_id="u-7"))
+        async def _record(uid, ep):
+            calls.append((uid, ep))
+        monkeypatch.setattr(request_guard, "enforce_user_budget", _record)
+        await request_guard.enforce_sandbox_quota(_plain_request(), _analyst(user_id="u-7"))
         assert calls == [("u-7", "sandbox")]
 
-    def test_owner_bypasses(self, monkeypatch):
+    async def test_owner_bypasses(self, monkeypatch):
         monkeypatch.setattr(request_guard, "OWNER_KEY", "k")
         monkeypatch.setattr(request_guard, "SANDBOX_RUNS_PER_HOUR", 1)
-        req = _plain_request({"x-owner-key": "k"})
+        req = _plain_request()
+        req.cookies = {request_guard.OWNER_COOKIE_NAME: request_guard.owner_cookie_value()}
         for _ in range(3):
-            request_guard.enforce_sandbox_quota(req, _analyst())
+            await request_guard.enforce_sandbox_quota(req, _analyst())
 
 
 # ---------------------------------------------------------------------------

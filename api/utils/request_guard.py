@@ -4,7 +4,7 @@ Three independent, env-gated controls designed to make a *public* DocBot link
 (e.g. shared on LinkedIn) safe from runaway LLM/sandbox cost and from the
 live-DB connector attack surface:
 
-1. Per-IP sliding-window rate limit  — caps request bursts from one client so a
+1. Per-IP fixed-window rate limit    — caps request bursts from one client so a
    single visitor cannot spray the expensive LLM/sandbox endpoints.
 2. Per-session weighted budget       — caps cumulative expensive ops per chat
    session. Weight is a proxy for token/compute cost (autopilot >> chat).
@@ -12,14 +12,21 @@ live-DB connector attack surface:
    connector/EDGAR ingestion so a public demo can only exercise the hardcoded
    demo dataset. Zero external cost, no DB connector exposure.
 
-State is in-memory, which is correct for a single-container Railway deploy.
-For a multi-instance deploy, swap the module-level dicts for Redis.
+State (DOCBOT-1606): fixed-window counters in the ``rate_limit_counters``
+table, one row per (bucket, key, window_start), bumped with an atomic
+INSERT ... ON CONFLICT DO UPDATE ... RETURNING count. Counters therefore
+survive redeploys and are shared by every container. ``index.py`` wires the
+SQL store at startup; until then (tests, scripts) an in-memory store is used.
+On a DB error or timeout the guards FAIL OPEN with a warning — an outage of
+the counter table must never take chat down. Expired windows are deleted
+opportunistically every ``_CLEANUP_EVERY`` charges.
 
-All limits are OFF by default (open/dev mode). Enable per-env:
+Limits are ON by default with safe values (0 disables any of them):
 
-    PUBLIC_DEMO_MODE=true          # block uploads / live-DB / ingestion
-    RATE_LIMIT_PER_MIN=30          # 0 disables the per-IP limit
-    SESSION_BUDGET=40              # 0 disables the per-session budget
+    PUBLIC_DEMO_MODE=true          # block uploads / live-DB / ingestion (off by default)
+    RATE_LIMIT_PER_MIN=60          # per client IP, POST/DELETE /api/*
+    SESSION_BUDGET=100             # weighted ops per anonymous session per 7 days
+    USER_DAILY_BUDGET=500          # weighted ops per signed-in user per UTC day
 
 Exception — ON by default (DOCBOT-1612): POST /api/demo/init is IP-limited
 because every call builds a vector store + SQLite DB in memory:
@@ -34,23 +41,31 @@ client can mint freely:
 
     SANDBOX_RUNS_PER_HOUR=60       # per org (or user), sliding 1h window; 0 disables
 
-Client IP (DOCBOT-1612, groundwork for DOCBOT-1606):
+Client IP (DOCBOT-1606):
 
-    TRUSTED_PROXY_HOPS=0           # 0 = legacy: left-most X-Forwarded-For entry
-                                   #     (client-controlled — spoofable)
-                                   # N = take the entry appended by the N-th
-                                   #     trusted proxy from the right
+    TRUSTED_PROXY_HOPS=1           # number of trusted proxies that APPEND to
+                                   # X-Forwarded-For. Client IP = parts[-N]
+                                   # (never the client-controlled left-most).
+                                   # 0 = ignore the header, use the socket peer.
 """
 
 from __future__ import annotations
 
+import asyncio
+import hashlib
+import hmac
+import logging
+import math
 import os
 import time
-from collections import defaultdict, deque
-from datetime import datetime, timezone
-from typing import Deque, Dict, Tuple
+from typing import Dict, Optional, Protocol, Tuple
 
 from fastapi import HTTPException, Request
+from sqlalchemy import text
+from sqlalchemy.exc import SQLAlchemyError
+from sqlalchemy.ext.asyncio import AsyncEngine
+
+logger = logging.getLogger(__name__)
 
 
 # ---------------------------------------------------------------------------
@@ -69,9 +84,10 @@ def _env_int(name: str, default: int) -> int:
 
 
 PUBLIC_DEMO_MODE: bool = _env_bool("PUBLIC_DEMO_MODE")
-RATE_LIMIT_PER_MIN: int = _env_int("RATE_LIMIT_PER_MIN", 0)
+RATE_LIMIT_PER_MIN: int = _env_int("RATE_LIMIT_PER_MIN", 60)
 RATE_LIMIT_WINDOW_SEC: int = 60
-SESSION_BUDGET: int = _env_int("SESSION_BUDGET", 0)
+SESSION_BUDGET: int = _env_int("SESSION_BUDGET", 100)
+SESSION_BUDGET_WINDOW_SEC: int = 7 * 86400
 
 # DOCBOT-1612: /api/demo/init limits — non-zero by default (safe default).
 DEMO_INIT_WINDOW_SEC: int = 3600
@@ -83,8 +99,8 @@ SANDBOX_WINDOW_SEC: int = 3600
 SANDBOX_RUNS_PER_HOUR: int = _env_int("SANDBOX_RUNS_PER_HOUR", 60)
 
 # Number of trusted reverse proxies that APPEND to X-Forwarded-For in front of
-# the app. 0 keeps the legacy left-most behaviour (see client_ip()).
-TRUSTED_PROXY_HOPS: int = _env_int("TRUSTED_PROXY_HOPS", 0)
+# the app (see client_ip()). 0 ignores the header entirely.
+TRUSTED_PROXY_HOPS: int = _env_int("TRUSTED_PROXY_HOPS", 1)
 
 # Sign-in gate: when on, upload / live-DB routes require a logged-in user (or
 # owner). Anonymous visitors keep demo + chat access but must sign in (free
@@ -92,14 +108,17 @@ TRUSTED_PROXY_HOPS: int = _env_int("TRUSTED_PROXY_HOPS", 0)
 # model — it lets people actually try uploads while capturing identity and
 # capping cost per real user.
 GATE_UPLOADS: bool = _env_bool("GATE_UPLOADS")
-# Per-authenticated-user daily weighted budget. 0 disables. Resets at UTC midnight.
-USER_DAILY_BUDGET: int = _env_int("USER_DAILY_BUDGET", 0)
+USER_DAILY_BUDGET: int = _env_int("USER_DAILY_BUDGET", 500)
+# Epoch-aligned 86400s windows start at UTC midnight.
+USER_BUDGET_WINDOW_SEC: int = 86400
 
-# Owner bypass: when OWNER_KEY is set, a request presenting it (header, query
-# param, or cookie) skips ALL guards — demo blocking, rate limit, and session
-# budget. Lets the owner keep full access to a locked-down public deployment.
+# Owner bypass: when OWNER_KEY is set, a browser holding the docbot_owner cookie
+# skips ALL guards — demo blocking, rate limit, and session budget. The raw key
+# is only ever accepted in the X-Owner-Key header of POST /api/auth/owner-unlock
+# (DOCBOT-1605); the cookie holds an HMAC of the key, never the key itself.
 OWNER_KEY: str = os.getenv("OWNER_KEY", "").strip()
 OWNER_COOKIE_NAME = "docbot_owner"
+OWNER_HEADER_NAME = "x-owner-key"
 
 # POST paths disabled when PUBLIC_DEMO_MODE is on. Matched by prefix so that
 # parametrised routes (e.g. /api/connectors/{id}/sync) are covered.
@@ -123,62 +142,157 @@ _ENDPOINT_WEIGHTS: Dict[str, int] = {
 
 
 # ---------------------------------------------------------------------------
-# In-memory state
+# Counter store (DOCBOT-1606)
 # ---------------------------------------------------------------------------
 
-_ip_hits: Dict[str, Deque[float]] = defaultdict(deque)
-_session_spend: Dict[str, int] = defaultdict(int)
-# user_id -> (utc_date_str, spent_today)
-_user_spend: Dict[str, Tuple[str, int]] = {}
-# DOCBOT-1612: /api/demo/init sliding windows (per-IP and global).
-_demo_init_ip_hits: Dict[str, Deque[float]] = defaultdict(deque)
-_demo_init_global_hits: Deque[float] = deque()
-# DOCBOT-1607: sandbox sliding windows keyed by "org:<id>" / "user:<id>".
-_sandbox_principal_hits: Dict[str, Deque[float]] = defaultdict(deque)
-# Upper bound on tracked IPs before expired entries are swept (memory guard).
-_MAX_TRACKED_IPS = 10_000
+COUNTER_TABLE = "rate_limit_counters"
+_STORE_TIMEOUT_SEC = 2.0
+_CLEANUP_EVERY = 500
+
+_UPSERT_SQL = text(
+    "INSERT INTO rate_limit_counters (bucket, counter_key, window_start, count, expires_at) "
+    "VALUES (:bucket, :key, :window_start, :amount, :expires_at) "
+    "ON CONFLICT (bucket, counter_key, window_start) "
+    "DO UPDATE SET count = rate_limit_counters.count + excluded.count "
+    "RETURNING count"
+)
+_CLEANUP_SQL = text("DELETE FROM rate_limit_counters WHERE expires_at < :now")
+
+
+class CounterStore(Protocol):
+    async def incr(self, bucket: str, key: str, window_start: int, expires_at: int, amount: int) -> int: ...
+    async def cleanup(self, now: int) -> None: ...
+
+
+class MemoryCounterStore:
+    """Per-process fallback used before the SQL store is wired (tests, scripts)."""
+
+    def __init__(self) -> None:
+        self._rows: Dict[Tuple[str, str, int], Tuple[int, int]] = {}
+
+    async def incr(self, bucket: str, key: str, window_start: int, expires_at: int, amount: int) -> int:
+        count = self._rows.get((bucket, key, window_start), (0, expires_at))[0] + amount
+        self._rows[(bucket, key, window_start)] = (count, expires_at)
+        return count
+
+    async def cleanup(self, now: int) -> None:
+        self._rows = {k: v for k, v in self._rows.items() if v[1] >= now}
+
+
+class SqlCounterStore:
+    """Durable counters in Postgres (SQLite in tests) — one atomic upsert per charge."""
+
+    def __init__(self, engine: AsyncEngine) -> None:
+        self._engine = engine
+
+    async def incr(self, bucket: str, key: str, window_start: int, expires_at: int, amount: int) -> int:
+        async with self._engine.begin() as conn:
+            result = await conn.execute(_UPSERT_SQL, {
+                "bucket": bucket, "key": key, "window_start": window_start,
+                "amount": amount, "expires_at": expires_at,
+            })
+            return int(result.scalar_one())
+
+    async def cleanup(self, now: int) -> None:
+        async with self._engine.begin() as conn:
+            await conn.execute(_CLEANUP_SQL, {"now": now})
+
+
+_store: CounterStore = MemoryCounterStore()
+_charges_since_cleanup = 0
+_STORE_ERRORS = (SQLAlchemyError, OSError, asyncio.TimeoutError)
+
+
+def use_counter_store(store: CounterStore) -> None:
+    """Swap the counter backend (index.py wires SqlCounterStore at startup)."""
+    global _store
+    _store = store
+
+
+async def _maybe_cleanup(now: int) -> None:
+    global _charges_since_cleanup
+    _charges_since_cleanup += 1
+    if _charges_since_cleanup < _CLEANUP_EVERY:
+        return
+    _charges_since_cleanup = 0
+    try:
+        await asyncio.wait_for(_store.cleanup(now), _STORE_TIMEOUT_SEC)
+    except _STORE_ERRORS as exc:
+        logger.warning("rate-limit counter cleanup failed: %s", type(exc).__name__)
+
+
+async def _charge(bucket: str, key: str, window_sec: int, limit: int, amount: int = 1) -> Optional[int]:
+    """Charge ``amount`` against a fixed window. Returns None if allowed, else Retry-After seconds.
+
+    A rejected charge is refunded so it does not consume quota. Fails OPEN
+    (returns None) when the store errors or times out.
+    """
+    now = time.time()
+    window_start = int(now // window_sec) * window_sec
+    expires_at = window_start + window_sec
+    try:
+        count = await asyncio.wait_for(
+            _store.incr(bucket, key, window_start, expires_at, amount), _STORE_TIMEOUT_SEC
+        )
+    except _STORE_ERRORS as exc:
+        logger.warning("rate-limit store unavailable (%s) — failing open for %s", type(exc).__name__, bucket)
+        return None
+    if count > limit:
+        try:
+            await asyncio.wait_for(
+                _store.incr(bucket, key, window_start, expires_at, -amount), _STORE_TIMEOUT_SEC
+            )
+        except _STORE_ERRORS as exc:
+            logger.warning("rate-limit refund failed: %s", type(exc).__name__)
+        return max(math.ceil(expires_at - now), 1)
+    await _maybe_cleanup(int(now))
+    return None
 
 
 def client_ip(request: Request) -> str:
-    """Best-effort client IP, honouring the proxy hop Railway/Vercel add.
+    """Client IP from the right-most trusted X-Forwarded-For hop (DOCBOT-1606).
 
-    X-Forwarded-For is a comma-separated list. Each proxy APPENDS the address
-    it received the request from, so only the right-most entries are written
-    by infrastructure we trust; anything to their left is client-supplied.
-
-    - TRUSTED_PROXY_HOPS=0 (default, legacy): left-most entry. Spoofable — a
-      client can send its own X-Forwarded-For. Kept so existing behaviour does
-      not change until the proxy chain is verified (DOCBOT-1606).
-    - TRUSTED_PROXY_HOPS=N: the entry appended by the outermost of N trusted
-      proxies, i.e. ``parts[-N]`` (clamped to the left-most entry).
-
-    Falls back to the socket peer when the header is absent or empty.
+    Each proxy APPENDS the address it received the request from, so only the
+    right-most TRUSTED_PROXY_HOPS entries are written by infrastructure we
+    trust; anything to their left is client-supplied and never used. With N
+    hops the client is ``parts[-N]`` (clamped to the left-most entry when the
+    header is shorter — then every entry was proxy-written). With
+    TRUSTED_PROXY_HOPS=0 the header is ignored and the socket peer is used.
     """
-    fwd = request.headers.get("x-forwarded-for")
+    fwd = request.headers.get("x-forwarded-for") if TRUSTED_PROXY_HOPS > 0 else None
     if fwd:
         parts = [p.strip() for p in fwd.split(",") if p.strip()]
         if parts:
-            if TRUSTED_PROXY_HOPS > 0:
-                return parts[max(len(parts) - TRUSTED_PROXY_HOPS, 0)]
-            return parts[0]
+            return parts[max(len(parts) - TRUSTED_PROXY_HOPS, 0)]
     return request.client.host if request.client else "unknown"
 
 
+def owner_cookie_value() -> str:
+    """HMAC-SHA256 of OWNER_KEY — what the docbot_owner cookie stores. "" when unset."""
+    if not OWNER_KEY:
+        return ""
+    return hmac.new(OWNER_KEY.encode(), b"docbot-owner-cookie-v1", hashlib.sha256).hexdigest()
+
+
+def verify_owner_key(presented: str | None) -> bool:
+    """Constant-time check of a raw key (from the unlock header) against OWNER_KEY."""
+    if not OWNER_KEY or not presented:
+        return False
+    return hmac.compare_digest(presented.encode(), OWNER_KEY.encode())
+
+
 def is_owner(request: Request) -> bool:
-    """True if the request presents the OWNER_KEY via header, query, or cookie.
+    """True if the request carries a valid docbot_owner cookie.
 
     Owner requests bypass every guard. Returns False when OWNER_KEY is unset, so
-    a deployment with no owner key configured never grants a bypass.
+    a deployment with no owner key configured never grants a bypass. The raw
+    key is NOT accepted here (no header, no query param) — see verify_owner_key.
     """
-    if not OWNER_KEY:
+    expected = owner_cookie_value()
+    cookie = request.cookies.get(OWNER_COOKIE_NAME)
+    if not expected or not cookie:
         return False
-    if request.headers.get("x-owner-key") == OWNER_KEY:
-        return True
-    if request.query_params.get("owner_key") == OWNER_KEY:
-        return True
-    if request.cookies.get(OWNER_COOKIE_NAME) == OWNER_KEY:
-        return True
-    return False
+    return hmac.compare_digest(cookie.encode(), expected.encode())
 
 
 def is_demo_blocked(method: str, path: str) -> bool:
@@ -190,48 +304,20 @@ def is_demo_blocked(method: str, path: str) -> bool:
     return any(path.startswith(prefix) for prefix in _DEMO_BLOCKED_PREFIXES)
 
 
-def check_ip_rate_limit(request: Request) -> None:
-    """Sliding-window per-IP limit. Raises HTTP 429 when exceeded. No-op if disabled."""
+async def check_ip_rate_limit(request: Request) -> None:
+    """Fixed-window per-IP limit. Raises HTTP 429 when exceeded. No-op if disabled."""
     if RATE_LIMIT_PER_MIN <= 0:
         return
-
-    ip = client_ip(request)
-    now = time.monotonic()
-    window_start = now - RATE_LIMIT_WINDOW_SEC
-    hits = _ip_hits[ip]
-
-    # Drop timestamps outside the window.
-    while hits and hits[0] < window_start:
-        hits.popleft()
-
-    if len(hits) >= RATE_LIMIT_PER_MIN:
-        retry_after = int(hits[0] + RATE_LIMIT_WINDOW_SEC - now) + 1
+    retry_after = await _charge("ip", client_ip(request), RATE_LIMIT_WINDOW_SEC, RATE_LIMIT_PER_MIN)
+    if retry_after is not None:
         raise HTTPException(
             status_code=429,
             detail=f"Rate limit exceeded ({RATE_LIMIT_PER_MIN}/min). Retry in {retry_after}s.",
-            headers={"Retry-After": str(max(retry_after, 1))},
+            headers={"Retry-After": str(retry_after)},
         )
 
-    hits.append(now)
 
-
-def _prune_window(hits: Deque[float], window_start: float) -> None:
-    while hits and hits[0] < window_start:
-        hits.popleft()
-
-
-def _sweep_expired_ips(table: Dict[str, Deque[float]], window_start: float) -> None:
-    """Drop IPs whose hits have all expired once the table grows too large."""
-    if len(table) <= _MAX_TRACKED_IPS:
-        return
-    for ip in list(table.keys()):
-        _prune_window(table[ip], window_start)
-        if not table[ip]:
-            del table[ip]
-
-
-def _too_many(limit: int, hits: Deque[float], now: float, scope: str) -> HTTPException:
-    retry_after = max(int(hits[0] + DEMO_INIT_WINDOW_SEC - now) + 1, 1)
+def _too_many(limit: int, retry_after: int, scope: str) -> HTTPException:
     return HTTPException(
         status_code=429,
         detail=(
@@ -242,37 +328,30 @@ def _too_many(limit: int, hits: Deque[float], now: float, scope: str) -> HTTPExc
     )
 
 
-def check_demo_init_limit(request: Request) -> None:
+async def check_demo_init_limit(request: Request) -> None:
     """IP-based limit for POST /api/demo/init — DOCBOT-1612.
 
-    Two sliding 1-hour windows: per client IP (``DEMO_INIT_PER_IP_PER_HOUR``)
-    and global (``DEMO_INIT_GLOBAL_PER_HOUR``). The global cap bounds total
-    cost even when a client rotates spoofed X-Forwarded-For values. Owner
-    requests bypass. Either limit set to 0 disables that window. Raises 429
-    with Retry-After. A rejected call does not consume quota.
+    Two 1-hour windows: per client IP (``DEMO_INIT_PER_IP_PER_HOUR``) and
+    global (``DEMO_INIT_GLOBAL_PER_HOUR``). The global cap bounds total cost
+    even when a client rotates spoofed X-Forwarded-For values. Owner requests
+    bypass. Either limit set to 0 disables that window. Raises 429 with
+    Retry-After. A rejected call does not consume quota.
     """
     if is_owner(request):
         return
 
-    now = time.monotonic()
-    window_start = now - DEMO_INIT_WINDOW_SEC
-
-    ip_hits = None
+    ip = client_ip(request)
     if DEMO_INIT_PER_IP_PER_HOUR > 0:
-        _sweep_expired_ips(_demo_init_ip_hits, window_start)
-        ip_hits = _demo_init_ip_hits[client_ip(request)]
-        _prune_window(ip_hits, window_start)
-        if len(ip_hits) >= DEMO_INIT_PER_IP_PER_HOUR:
-            raise _too_many(DEMO_INIT_PER_IP_PER_HOUR, ip_hits, now, "per client")
+        retry = await _charge("demo_init_ip", ip, DEMO_INIT_WINDOW_SEC, DEMO_INIT_PER_IP_PER_HOUR)
+        if retry is not None:
+            raise _too_many(DEMO_INIT_PER_IP_PER_HOUR, retry, "per client")
 
     if DEMO_INIT_GLOBAL_PER_HOUR > 0:
-        _prune_window(_demo_init_global_hits, window_start)
-        if len(_demo_init_global_hits) >= DEMO_INIT_GLOBAL_PER_HOUR:
-            raise _too_many(DEMO_INIT_GLOBAL_PER_HOUR, _demo_init_global_hits, now, "across all visitors")
-        _demo_init_global_hits.append(now)
-
-    if ip_hits is not None:
-        ip_hits.append(now)
+        retry = await _charge("demo_init_global", "*", DEMO_INIT_WINDOW_SEC, DEMO_INIT_GLOBAL_PER_HOUR)
+        if retry is not None:
+            if DEMO_INIT_PER_IP_PER_HOUR > 0:  # give the per-IP slot back
+                await _charge("demo_init_ip", ip, DEMO_INIT_WINDOW_SEC, DEMO_INIT_PER_IP_PER_HOUR, -1)
+            raise _too_many(DEMO_INIT_GLOBAL_PER_HOUR, retry, "across all visitors")
 
 
 def sandbox_principal_key(user: object, request: Request) -> str:
@@ -290,10 +369,10 @@ def sandbox_principal_key(user: object, request: Request) -> str:
     return f"ip:{client_ip(request)}"
 
 
-def enforce_sandbox_quota(request: Request, user: object) -> None:
+async def enforce_sandbox_quota(request: Request, user: object) -> None:
     """Rate-limit + budget POST /api/sandbox/execute by org/user — DOCBOT-1607.
 
-    1. Sliding 1h window of ``SANDBOX_RUNS_PER_HOUR`` per org (or user).
+    1. Fixed 1h window of ``SANDBOX_RUNS_PER_HOUR`` per org (or user).
     2. The authenticated user's daily weighted budget (``USER_DAILY_BUDGET``).
 
     Owner requests bypass. A rejected call does not consume quota. Raises 429.
@@ -302,41 +381,35 @@ def enforce_sandbox_quota(request: Request, user: object) -> None:
         return
 
     if SANDBOX_RUNS_PER_HOUR > 0:
-        now = time.monotonic()
-        window_start = now - SANDBOX_WINDOW_SEC
-        _sweep_expired_ips(_sandbox_principal_hits, window_start)
-        hits = _sandbox_principal_hits[sandbox_principal_key(user, request)]
-        _prune_window(hits, window_start)
-        if len(hits) >= SANDBOX_RUNS_PER_HOUR:
-            retry_after = max(int(hits[0] + SANDBOX_WINDOW_SEC - now) + 1, 1)
+        retry = await _charge(
+            "sandbox", sandbox_principal_key(user, request), SANDBOX_WINDOW_SEC, SANDBOX_RUNS_PER_HOUR
+        )
+        if retry is not None:
             raise HTTPException(
                 status_code=429,
                 detail=(
                     f"Sandbox limit reached ({SANDBOX_RUNS_PER_HOUR}/hour for your "
-                    f"organization). Retry in {retry_after}s."
+                    f"organization). Retry in {retry}s."
                 ),
-                headers={"Retry-After": str(retry_after)},
+                headers={"Retry-After": str(retry)},
             )
-        hits.append(now)
 
     user_id = getattr(user, "id", None) if user is not None else None
     if user_id:
-        enforce_user_budget(str(user_id), "sandbox")
+        await enforce_user_budget(str(user_id), "sandbox")
 
 
-def enforce_session_budget(session_id: str, endpoint: str) -> None:
+async def enforce_session_budget(session_id: str, endpoint: str) -> None:
     """Charge the session's weighted budget for an expensive op.
 
-    Raises HTTP 429 once the session exceeds SESSION_BUDGET. No-op if disabled
-    or session_id is empty. Weight comes from ``_ENDPOINT_WEIGHTS`` (default 1).
+    Raises HTTP 429 once the session exceeds SESSION_BUDGET (per 7-day window).
+    No-op if disabled or session_id is empty. Weight comes from
+    ``_ENDPOINT_WEIGHTS`` (default 1).
     """
     if SESSION_BUDGET <= 0 or not session_id:
         return
-
     weight = _ENDPOINT_WEIGHTS.get(endpoint, 1)
-    spent = _session_spend[session_id]
-
-    if spent + weight > SESSION_BUDGET:
+    if await _charge("session", session_id, SESSION_BUDGET_WINDOW_SEC, SESSION_BUDGET, weight) is not None:
         raise HTTPException(
             status_code=429,
             detail=(
@@ -345,27 +418,17 @@ def enforce_session_budget(session_id: str, endpoint: str) -> None:
             ),
         )
 
-    _session_spend[session_id] = spent + weight
 
-
-def enforce_user_budget(user_id: str, endpoint: str) -> None:
+async def enforce_user_budget(user_id: str, endpoint: str) -> None:
     """Charge an authenticated user's daily weighted budget for an expensive op.
 
     Raises HTTP 429 once the user exceeds USER_DAILY_BUDGET for the current UTC
-    day. Counter resets automatically at midnight UTC. No-op if disabled or
-    user_id is empty.
+    day (window resets at midnight UTC). No-op if disabled or user_id is empty.
     """
     if USER_DAILY_BUDGET <= 0 or not user_id:
         return
-
-    today = datetime.now(timezone.utc).strftime("%Y-%m-%d")
     weight = _ENDPOINT_WEIGHTS.get(endpoint, 1)
-
-    day, spent = _user_spend.get(user_id, (today, 0))
-    if day != today:  # new UTC day → reset
-        spent = 0
-
-    if spent + weight > USER_DAILY_BUDGET:
+    if await _charge("user_day", user_id, USER_BUDGET_WINDOW_SEC, USER_DAILY_BUDGET, weight) is not None:
         raise HTTPException(
             status_code=429,
             detail=(
@@ -374,14 +437,9 @@ def enforce_user_budget(user_id: str, endpoint: str) -> None:
             ),
         )
 
-    _user_spend[user_id] = (today, spent + weight)
-
 
 def reset_state() -> None:
-    """Clear all in-memory counters. Test-only helper."""
-    _ip_hits.clear()
-    _session_spend.clear()
-    _user_spend.clear()
-    _demo_init_ip_hits.clear()
-    _demo_init_global_hits.clear()
-    _sandbox_principal_hits.clear()
+    """Reset to a fresh in-memory counter store. Test-only helper."""
+    global _charges_since_cleanup
+    use_counter_store(MemoryCounterStore())
+    _charges_since_cleanup = 0
