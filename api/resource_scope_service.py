@@ -10,9 +10,9 @@ from __future__ import annotations
 
 from typing import Optional
 
-from sqlalchemy import Table, select
+from sqlalchemy import Table, or_, select
 
-from api.db_service import get_connection_row
+from api.db_service import connection_access_clause, get_connection_row
 from api.utils.caller_scope import CallerScope
 
 
@@ -65,3 +65,41 @@ async def v1_resources_in_org(
         if row is None:
             return False
     return True
+
+
+async def run_row_accessible(
+    table: Table,
+    row_id: str,
+    scope: CallerScope,
+    sessions_table: Table,
+    db_connections_table: Table,
+    async_session_factory,
+    *,
+    id_column: str = "run_id",
+) -> bool:
+    """DOCBOT-1620: True iff the lineage/trace row exists and the caller may see it.
+
+    Accessible when the row's ``session_id`` is a session the caller can access
+    or its ``connection_id`` is a connection the caller can access, using the
+    same predicate as connection routes (``scope_filter`` for browser callers,
+    user-owned rows of the key's org for ``/v1`` API keys). Rows whose session
+    is only an unbound label (e.g. ``"anonymous"``) and that carry no
+    connection match nobody. Callers report False as 404.
+    """
+    owned_sessions = select(sessions_table.c.session_id).where(
+        connection_access_clause(sessions_table, scope)
+    )
+    owned_connections = select(db_connections_table.c.id).where(
+        connection_access_clause(db_connections_table, scope)
+    )
+    async with async_session_factory() as session:
+        result = await session.execute(
+            select(table.c[id_column]).where(
+                table.c[id_column] == row_id,
+                or_(
+                    table.c.session_id.in_(owned_sessions),
+                    table.c.connection_id.in_(owned_connections),
+                ),
+            )
+        )
+        return result.first() is not None

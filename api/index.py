@@ -514,6 +514,10 @@ async def init_db() -> None:
         # DOCBOT-1601 / DOCBOT-1635: anonymous owner column on sessions + db_connections.
         for col_ddl in caller_scope.ANON_OWNER_COLUMN_MIGRATIONS:
             await conn.execute(text(col_ddl))
+        # DOCBOT-1620: connection_id on answer_lineage + agent_traces.
+        from api.lineage_service import LINEAGE_COLUMN_MIGRATIONS
+        for col_ddl in LINEAGE_COLUMN_MIGRATIONS:
+            await conn.execute(text(col_ddl))
         # DOCBOT-1524: idempotent — creates the default org only if none
         # exists yet, and backfills org_id on rows that still lack one.
         default_org_id = await backfill_default_organization(conn)
@@ -2201,10 +2205,24 @@ async def get_artifact_detail(artifact_id: str, scope: CallerScope = _caller_sco
 # ---------------------------------------------------------------------------
 
 
+async def _run_row_accessible(table: Any, row_id: str, scope: CallerScope, id_column: str = "run_id") -> bool:
+    """DOCBOT-1620: lineage/trace row belongs to a session or connection ``scope`` can access."""
+    from api.resource_scope_service import run_row_accessible
+    return await run_row_accessible(
+        table, row_id, scope, sessions_table, db_connections_table, async_session_factory,
+        id_column=id_column,
+    )
+
+
 @app.get("/api/lineage/{run_id}", dependencies=[_rbac_viewer])
-async def get_answer_lineage(run_id: str):
-    """Return the persisted lineage for one answer, joined with llm_calls."""
+async def get_answer_lineage(run_id: str, scope: CallerScope = _caller_scope):
+    """Return the persisted lineage for one answer, joined with llm_calls.
+
+    DOCBOT-1620: 404 unless the run's session/connection is the caller's.
+    """
     from api.lineage_service import get_lineage
+    if not await _run_row_accessible(answer_lineage_table, run_id, scope):
+        raise HTTPException(status_code=404, detail="Lineage not found.")
     lineage = await get_lineage(run_id)
     if lineage is None:
         raise HTTPException(status_code=404, detail="Lineage not found.")
@@ -2221,9 +2239,13 @@ class TraceFeedbackRequest(BaseModel):
 
 
 @app.post("/api/traces/{trace_id}/feedback", dependencies=[_rbac_viewer])
-async def submit_trace_feedback(trace_id: str, request: TraceFeedbackRequest):
-    """Record a thumbs up/down for a logged agent trace."""
+async def submit_trace_feedback(
+    trace_id: str, request: TraceFeedbackRequest, scope: CallerScope = _caller_scope
+):
+    """Record a thumbs up/down for a logged agent trace (DOCBOT-1620: caller's runs only)."""
     from api.trace_service import record_feedback
+    if not await _run_row_accessible(agent_traces_table, trace_id, scope, id_column="id"):
+        raise HTTPException(status_code=404, detail="Trace not found.")
     found = await record_feedback(trace_id, request.feedback)
     if not found:
         raise HTTPException(status_code=404, detail="Trace not found.")
@@ -3657,6 +3679,10 @@ async def v1_autopilot_run(raw_request: Request, request: V1AutopilotRequest, _k
 )
 async def v1_get_lineage(run_id: str, _key=_v1_lineage_read):
     from api.lineage_service import get_lineage
+    # DOCBOT-1620: only runs on sessions/connections owned by users of the key's org.
+    key_scope = CallerScope(user_id=None, org_id=getattr(_key, "org_id", None), anon_token=None)
+    if not key_scope.org_id or not await _run_row_accessible(answer_lineage_table, run_id, key_scope):
+        raise HTTPException(status_code=404, detail="Lineage not found.")
     lineage = await get_lineage(run_id)
     if lineage is None:
         raise HTTPException(status_code=404, detail="Lineage not found.")
