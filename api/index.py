@@ -44,12 +44,15 @@ init_sentry()
 
 app = FastAPI(title="DocBot API", version="2.0.0")
 
-ALLOWED_ORIGINS = os.getenv("ALLOWED_ORIGINS", "http://localhost:3000").split(",")
+# DOCBOT-1624: normalized origins; lifespan refuses to boot on '*' + credentials.
+from api.utils.cors_config import assert_safe_cors_config, parse_allowed_origins
+ALLOWED_ORIGINS = parse_allowed_origins()
+CORS_ALLOW_CREDENTIALS = True
 
 app.add_middleware(
     CORSMiddleware,
     allow_origins=ALLOWED_ORIGINS,
-    allow_credentials=True,
+    allow_credentials=CORS_ALLOW_CREDENTIALS,
     allow_methods=["GET", "POST", "DELETE"],
     allow_headers=["Content-Type"],
 )
@@ -540,6 +543,7 @@ async def lifespan(app: FastAPI):
     # DOCBOT-1610: refuse to boot a multi-tenant deploy in open mode.
     from api.rbac_service import assert_safe_auth_config
     assert_safe_auth_config()
+    assert_safe_cors_config(ALLOWED_ORIGINS, CORS_ALLOW_CREDENTIALS)
     await init_db()
     # DOCBOT-1606: abuse-guard counters live in Postgres from here on.
     request_guard.use_counter_store(request_guard.SqlCounterStore(engine))
