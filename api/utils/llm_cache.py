@@ -30,6 +30,11 @@ Safety / correctness
   schema, few-shot examples, system prompt, etc.) plus the model name — a
   cache hit is only possible when the entire prompt is byte-identical, so
   stale/irrelevant hits are structurally impossible.
+* Tenant-scoped (DOCBOT-1604): the stored key is re-hashed with a version
+  prefix and the caller's billing org (``org:<id>`` / ``user:<id>`` /
+  ``anon``) read from the billing ``Principal`` ContextVar, so one org's
+  cached response is never served to another, and pre-1604 unscoped rows
+  never match.
 * TTL'd (``expires_at`` column) — a hit query filters on
   ``expires_at > now()``, so expired rows are simply never returned. A
   lazy sweep isn't implemented (row volume is small for a solo-deploy
@@ -63,6 +68,8 @@ from sqlalchemy import (
     select,
 )
 from sqlalchemy import insert as sa_insert
+
+from api.utils.billing_context import get_principal
 
 logger = logging.getLogger(__name__)
 
@@ -138,6 +145,29 @@ def hash_prompt(prompt_text: str) -> str:
     return hashlib.sha256(prompt_text.encode("utf-8")).hexdigest()
 
 
+# DOCBOT-1604 (SEC-25): bump to invalidate every stored key. v1 rows were
+# keyed on the bare prompt hash (shared across tenants) and can never match
+# a v2 key, so they are never served.
+_KEY_VERSION = "v2"
+
+
+def _caller_scope() -> str:
+    """Billing org of the current request: org, else ``user:<id>``, else ``anon``."""
+    principal = get_principal()
+    if principal is None:
+        return "anon"
+    if principal.org_id:
+        return f"org:{principal.org_id}"
+    if principal.user_id:
+        return f"user:{principal.user_id}"
+    return "anon"
+
+
+def _scoped_key(prompt_hash: str) -> str:
+    """Row key: the caller's prompt hash namespaced by key version + caller scope."""
+    return hash_prompt(f"{_KEY_VERSION}|{_caller_scope()}|{prompt_hash}")
+
+
 # ---------------------------------------------------------------------------
 # Read path
 # ---------------------------------------------------------------------------
@@ -156,6 +186,7 @@ async def get_cached_response(prompt_hash: str, model: str) -> Optional[str]:
         _misses += 1
         return None
 
+    prompt_hash = _scoped_key(prompt_hash)
     try:
         now = datetime.now(timezone.utc)
         async with _async_session_factory() as session:
@@ -210,6 +241,7 @@ async def set_cached_response(
     if _llm_cache_table is None or _async_session_factory is None:
         return
 
+    prompt_hash = _scoped_key(prompt_hash)
     try:
         now = datetime.now(timezone.utc)
         expires_at = now + timedelta(seconds=ttl_seconds)
