@@ -324,3 +324,31 @@ class TestDocumentsExpired:
 
         types = [e["type"] for e in events]
         assert types == ["documents_expired", "answer", "done"]
+
+
+def test_unwritable_chroma_dir_falls_back_to_tempdir(monkeypatch, tmp_path, caplog):
+    """A root-owned volume must degrade to tempdir, not 500 every upload."""
+    import os
+    import tempfile
+    from pathlib import Path
+
+    from api.utils.vector_store import _resolve_persist_dir
+
+    locked = tmp_path / "locked"
+    locked.mkdir()
+    os.chmod(locked, 0o500)
+    try:
+        monkeypatch.setenv("CHROMA_DIR", str(locked / "chroma"))
+        if os.access(locked, os.W_OK):  # running as root: chmod is not enforced
+            return
+        assert _resolve_persist_dir() == Path(tempfile.gettempdir()) / "docbot_chroma"
+        assert "not writable" in caplog.text
+    finally:
+        os.chmod(locked, 0o700)
+
+
+def test_chroma_dir_whitespace_is_stripped(monkeypatch, tmp_path):
+    from api.utils.vector_store import _resolve_persist_dir
+
+    monkeypatch.setenv("CHROMA_DIR", f"  {tmp_path / 'vol'}  ")
+    assert _resolve_persist_dir() == tmp_path / "vol"

@@ -69,10 +69,28 @@ def _resolve_persist_dir() -> Path:
     Linux) rather than a hardcoded /tmp literal. Point CHROMA_DIR at a mounted
     volume for durable storage.
     """
-    configured = os.getenv("CHROMA_DIR") or os.getenv("CHROMA_PERSIST_DIR")
-    if configured:
-        return Path(configured)
-    return Path(tempfile.gettempdir()) / "docbot_chroma"
+    configured = (os.getenv("CHROMA_DIR") or os.getenv("CHROMA_PERSIST_DIR") or "").strip()
+    default = Path(tempfile.gettempdir()) / "docbot_chroma"
+    if not configured:
+        return default
+    path = Path(configured)
+    # A volume mounted root-owned while the app runs as a non-root user would
+    # make every upload / demo init 500; degrade to tempdir (docs then do NOT
+    # survive redeploys) and say so loudly instead.
+    try:
+        path.mkdir(parents=True, exist_ok=True)
+        probe = path / ".write_probe"
+        probe.write_text("ok")
+        probe.unlink()
+    except OSError as exc:
+        logger.error(
+            "CHROMA_DIR %s is not writable (%s); falling back to %s — documents "
+            "will NOT survive redeploys. On Railway set RAILWAY_RUN_UID=0 or fix "
+            "the volume permissions.",
+            path, type(exc).__name__, default,
+        )
+        return default
+    return path
 
 
 _PERSIST_DIR = _resolve_persist_dir()
