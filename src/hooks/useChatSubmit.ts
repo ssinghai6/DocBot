@@ -11,6 +11,7 @@ import type {
   PickedTool,
 } from "@/components/types"
 import { useUIStore } from "@/store/uiStore"
+import { AutopilotStepEventSchema } from "@/lib/schemas/autopilotStep"
 
 /**
  * DOCBOT-1510: validate a `lineage` SSE event, attach it to the in-flight
@@ -294,17 +295,21 @@ export function useChatSubmit(params: UseChatSubmitParams) {
                 setAutopilotPlan(data.steps ?? []);
 
               } else if (data.type === "step") {
+                const parsedStep = AutopilotStepEventSchema.safeParse(data);
+                if (!parsedStep.success) continue;
+                const step = parsedStep.data;
                 const stepEntry: AutopilotStep = {
-                  step_num: data.step_num,
-                  tool: data.tool,
-                  step_label: data.step_label,
-                  content: data.content,
-                  artifact_id: data.artifact_id ?? null,
-                  chart_b64: data.chart_b64 ?? null,
-                  sql: data.sql ?? null,
-                  explanation: data.explanation ?? null,
-                  code: data.code ?? null,
-                  error: data.error ?? null,
+                  step_num: step.step_num,
+                  tool: step.tool,
+                  step_label: step.step_label ?? "",
+                  summary: step.summary ?? null,
+                  content: step.content ?? "",
+                  artifact_id: step.artifact_id ?? null,
+                  chart_b64: step.chart_b64 ?? null,
+                  sql: step.sql ?? null,
+                  explanation: step.explanation ?? null,
+                  code: step.code ?? null,
+                  error: step.error ?? null,
                 };
                 localSteps.push(stepEntry);
                 setAutopilotSteps(prev => [...prev, stepEntry]);

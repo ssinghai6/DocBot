@@ -3,6 +3,11 @@ Shared exception types for DocBot service layer.
 """
 
 
+def safe_error_message(error: BaseException | str | None = None) -> str:
+    """Sanitize error messages for client responses — never leak exception internals."""
+    return "An internal error occurred. Please try again later."
+
+
 class TokenExpiredError(Exception):
     """
     Raised when a stored entra_interactive access token is past or within 5

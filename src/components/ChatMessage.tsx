@@ -172,7 +172,21 @@ function AutopilotStepsList({ steps }: { steps: AutopilotStep[] }) {
             </span>
             <span className="text-[var(--color-text-tertiary)] truncate flex-1">{step.step_label}</span>
           </div>
-          {step.content && (
+          {step.summary ? (
+            <>
+              <MarkdownRenderer content={step.summary} variant="compact" />
+              {step.content && (
+                <details className="mt-1">
+                  <summary className="cursor-pointer text-[9px] font-semibold uppercase tracking-wider text-[var(--color-text-tertiary)] select-none">
+                    Details
+                  </summary>
+                  <div className="mt-1 max-h-48 overflow-auto">
+                    <MarkdownRenderer content={step.content} variant="compact" />
+                  </div>
+                </details>
+              )}
+            </>
+          ) : step.content && (
             <MarkdownRenderer content={step.content} variant="compact" />
           )}
           {step.code && (
@@ -188,7 +202,7 @@ function AutopilotStepsList({ steps }: { steps: AutopilotStep[] }) {
           {step.chart_b64 && (
             <img src={`data:image/png;base64,${step.chart_b64}`} alt="chart" className="mt-2 rounded-[3px] max-h-32 object-contain" />
           )}
-          {step.error && (
+          {step.error && !step.summary && (
             <p className="text-[var(--color-danger-500)] mt-1">⚠ {step.error}</p>
           )}
         </div>

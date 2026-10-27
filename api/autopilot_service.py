@@ -24,7 +24,9 @@ Exposes a single async generator, run_autopilot(), that:
 
 SSE event types yielded:
   {type: "plan",    steps: [...], content: "N steps planned"}
-  {type: "step",    step_num, tool, step_label, content, artifact_id?, chart_b64?, error?}
+  {type: "step",    step_num, tool, step_label, summary, content, artifact_id?, chart_b64?, error?}
+                     — summary: short deterministic line (DOCBOT-2005);
+                       content: cleaned raw tool output for the "details" toggle
   {type: "answer",  content: "<markdown answer>"}
   {type: "done",    citations: [...]}
   {type: "warning", content: "..."}  — non-fatal issues
@@ -70,13 +72,10 @@ PROMPT_VERSION_AUTOPILOT_SYNTHESIZER = "v2"
 # Internal step-result prefixes that signal a failed/empty step. These are
 # scrubbed from user-facing output and replaced with a calm generic message —
 # visitors should never see raw tracebacks or internal failure strings.
-_FAILURE_CONTENT_PREFIXES = (
-    "Step failed",
-    "CSV analysis failed",
-    "CSV code generation failed",
-    "No SQL result",
-    "No prior data",
-    "No data source",
+from api.utils.step_summary import (  # noqa: E402
+    FAILURE_CONTENT_PREFIXES as _FAILURE_CONTENT_PREFIXES,
+    build_step_summary,
+    clean_step_details,
 )
 
 # P1: machine-readable degradation reason codes. The planner and executor
@@ -880,6 +879,7 @@ def make_executor_node(
                         f"{row_count} rows returned. "
                         f"Preview: {json.dumps(preview[:3], default=str)}"
                     )
+                    result_entry["row_count"] = row_count
                     result_entry["sql"] = sql_meta.get("sql_query") or sql_meta.get("sql")
                     result_entry["explanation"] = sql_meta.get("explanation")
                     # P2: normalized data entry — the synthesizer and P3 claim
@@ -964,6 +964,11 @@ def make_executor_node(
                             for doc in docs
                         )
                         result_entry["result"] = wrap_untrusted(context[:800])
+                        # DOCBOT-2005: counts for the human step summary.
+                        result_entry["passages"] = len(docs)
+                        result_entry["doc_sources"] = list(dict.fromkeys(
+                            str(doc.metadata.get("source", "Unknown")) for doc in docs
+                        ))
                         # DOCBOT-2002: full (untruncated) chunk text with its
                         # "Source: X, Page N" headers — the doc side of the
                         # tie-out detection (doc citations + period extraction
@@ -2347,6 +2352,7 @@ async def run_autopilot(
                             friendly_error = "Couldn't complete this step — continued with the available data."
                         if content.startswith(_FAILURE_CONTENT_PREFIXES) or (raw_error and not content.strip()):
                             content = "This step didn't return usable data, so the investigation continued with the other findings."
+                        content = clean_step_details(content)
 
                         # Expose the exact code executed in E2B (python_analysis
                         # / forecast steps) so the UI shows real on-the-fly code,
@@ -2375,6 +2381,7 @@ async def run_autopilot(
                             "step_num": step_num,
                             "tool": step_result.get("tool", ""),
                             "step_label": step_result.get("step", ""),
+                            "summary": build_step_summary(step_result),
                             "content": content,
                             "artifact_id": step_result.get("artifact_id"),
                             "chart_b64": step_result.get("chart_b64"),
