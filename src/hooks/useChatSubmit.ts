@@ -11,6 +11,7 @@ import type {
   PickedTool,
 } from "@/components/types"
 import { useUIStore } from "@/store/uiStore"
+import { EMPTY_ANSWER_MESSAGE, StreamErrorEvent, fillEmptyAssistant } from "@/lib/chatStream"
 
 /**
  * DOCBOT-1510: validate a `lineage` SSE event, attach it to the in-flight
@@ -474,6 +475,7 @@ export function useChatSubmit(params: UseChatSubmitParams) {
             }
           }
         }
+        setMessages(prev => fillEmptyAssistant(prev, EMPTY_ANSWER_MESSAGE));
       } catch (error: unknown) {
         const msg = error instanceof Error ? error.message : "Unknown error";
         console.error("DB chat error:", error);
@@ -517,6 +519,7 @@ export function useChatSubmit(params: UseChatSubmitParams) {
         const reader = response.body.getReader();
         const decoder = new TextDecoder();
         let buffer = "";
+        let expired = false;
 
         while (true) {
           const { done, value } = await reader.read();
@@ -531,7 +534,7 @@ export function useChatSubmit(params: UseChatSubmitParams) {
             try {
               const chunk = JSON.parse(jsonStr);
               if (chunk.type === "documents_expired") {
-                applyDocumentsExpiredEvent(chunk, showToast);
+                expired = applyDocumentsExpiredEvent(chunk, showToast) || expired;
               } else if (chunk.type === "token") {
                 setMessages(prev => prev.map((m, i) =>
                   i === prev.length - 1 ? { ...m, content: m.content + chunk.content } : m
@@ -583,17 +586,21 @@ export function useChatSubmit(params: UseChatSubmitParams) {
                     : m
                 ));
               } else if (chunk.type === "error") {
-                throw new Error(chunk.detail || "Hybrid query failed");
+                throw new StreamErrorEvent(chunk.detail || "Hybrid query failed");
               }
-            } catch { /* skip malformed SSE lines */ }
+            } catch (e) {
+              if (e instanceof StreamErrorEvent) throw e;
+              /* skip malformed SSE lines */
+            }
           }
         }
+        if (!expired) setMessages(prev => fillEmptyAssistant(prev, EMPTY_ANSWER_MESSAGE));
       } catch (error: unknown) {
         const msg = error instanceof Error ? error.message : "Unknown error";
         showToast("error", `Error: ${msg}`);
         setMessages(prev => prev.map((m, i) =>
           i === prev.length - 1 && m.role === "assistant" && m.content === ""
-            ? { ...m, content: "I encountered an error with the hybrid query. Please try again." }
+            ? { ...m, content: error instanceof StreamErrorEvent ? msg : "I encountered an error with the hybrid query. Please try again." }
             : m
         ));
       } finally {
@@ -634,6 +641,7 @@ export function useChatSubmit(params: UseChatSubmitParams) {
       const reader = response.body.getReader();
       const decoder = new TextDecoder();
       let buffer = "";
+      let expired = false;
 
       while (true) {
         const { done, value } = await reader.read();
@@ -648,7 +656,7 @@ export function useChatSubmit(params: UseChatSubmitParams) {
           try {
             const chunk = JSON.parse(jsonStr);
             if (chunk.type === "documents_expired") {
-              applyDocumentsExpiredEvent(chunk, showToast);
+              expired = applyDocumentsExpiredEvent(chunk, showToast) || expired;
             } else if (chunk.type === "token") {
               setMessages(prev => prev.map((m, i) =>
                 i === prev.length - 1 ? { ...m, content: m.content + chunk.content } : m
@@ -666,18 +674,22 @@ export function useChatSubmit(params: UseChatSubmitParams) {
             } else if (chunk.type === "lineage") {
               applyLineageEvent(chunk, setMessages);
             } else if (chunk.type === "error") {
-              throw new Error(chunk.detail || "Chat failed");
+              throw new StreamErrorEvent(chunk.detail || "Chat failed");
             }
-          } catch { /* skip malformed SSE lines */ }
+          } catch (e) {
+            if (e instanceof StreamErrorEvent) throw e;
+            /* skip malformed SSE lines */
+          }
         }
       }
+      if (!expired) setMessages(prev => fillEmptyAssistant(prev, EMPTY_ANSWER_MESSAGE));
     } catch (error: unknown) {
       const msg = error instanceof Error ? error.message : "Unknown error";
       console.error("Chat error:", error);
       showToast("error", `Error: ${msg}`);
       setMessages(prev => prev.map((m, i) =>
         i === prev.length - 1 && m.role === "assistant" && m.content === ""
-          ? { ...m, content: "I encountered an error processing your request. Please try again." }
+          ? { ...m, content: error instanceof StreamErrorEvent ? msg : "I encountered an error processing your request. Please try again." }
           : m
       ));
     } finally {
