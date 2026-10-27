@@ -103,6 +103,7 @@ class UsageEventKind(str, Enum):
     llm = "llm"
     sandbox = "sandbox"
     upload = "upload"
+    request = "request"  # DOCBOT-1623: admitted call to a rate-limited route
 
 
 class KeySource(str, Enum):

@@ -330,7 +330,7 @@ export default function EdgarPanel({ onFilingIngested, showToast }: EdgarPanelPr
                   onChange={e => setFilingCount(Number(e.target.value))}
                   className="w-16 px-2 py-1.5 rounded-lg bg-[var(--color-bg-elevated)] border border-[var(--color-border-default)] text-gray-300 text-xs focus:outline-none focus:border-[var(--color-success-500)]/40"
                 >
-                  {[1, 2, 3, 5, 10].map(n => (
+                  {[1, 2, 3, 5].map(n => ( // max 5: EDGAR_BATCH_MAX (DOCBOT-1623)
                     <option key={n} value={n}>{n}</option>
                   ))}
                 </select>

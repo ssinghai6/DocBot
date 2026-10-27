@@ -42,7 +42,7 @@ export const LedgerEntryKindSchema = z.enum([
 ])
 export type LedgerEntryKind = z.infer<typeof LedgerEntryKindSchema>
 
-export const UsageEventKindSchema = z.enum(["llm", "sandbox", "upload"])
+export const UsageEventKindSchema = z.enum(["llm", "sandbox", "upload", "request"])
 export type UsageEventKind = z.infer<typeof UsageEventKindSchema>
 
 export const KeySourceSchema = z.enum(["platform", "byok"])

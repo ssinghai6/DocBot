@@ -33,6 +33,7 @@ class _FakeRequest:
         self.query_params = {}
         self.cookies = dict(cookies or {})
         self.client = _FakeClient(ip)
+        self.state = SimpleNamespace()
 
 
 @pytest.fixture(autouse=True)
