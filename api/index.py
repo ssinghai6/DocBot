@@ -60,7 +60,7 @@ app.add_middleware(
 from api.utils import request_guard
 from api.utils import caller_scope
 from api.utils.caller_scope import CallerScope, get_caller_scope, owner_values, resolve_caller_scope, scope_from_user
-from api.utils.pdf_io import open_pdf_bytes
+from api.utils.pdf_io import PdfPasswordProtectedError, open_pdf_bytes
 
 
 @app.middleware("http")
@@ -958,7 +958,13 @@ async def upload_documents(
                 # DOCBOT-1633: parse from memory; never write the upload to a
                 # predictable /tmp path built from the user's filename.
                 doc = open_pdf_bytes(content)
+            except PdfPasswordProtectedError as e:
+                raise HTTPException(status_code=400, detail=str(e)) from e
+            except Exception as e:
+                logger.error(f"Error opening PDF {file.filename}: {e}")
+                continue
 
+            try:
                 # Extract AcroForm widget values once for the whole document.
                 # LCA and other government forms store field values as PDF
                 # widget annotations, not as visible content text.  PyMuPDF's
@@ -984,18 +990,18 @@ async def upload_documents(
                                 metadata={"source": file.filename, "page": page_num + 1}
                             ))
                 page_count = len(doc)  # must be read before close(); len() on a closed doc raises
-                doc.close()
-
-                # Store file info
-                files_info.append({
-                    "filename": file.filename,
-                    "pages": page_count,
-                    "size": len(content)
-                })
-                meter_upload(len(content), pages=page_count, session_id=session_id)  # DOCBOT-1801
             except Exception as e:
                 logger.error(f"Error processing PDF {file.filename}: {e}")
                 continue
+            finally:
+                doc.close()
+
+            files_info.append({
+                "filename": file.filename,
+                "pages": page_count,
+                "size": len(content)
+            })
+            meter_upload(len(content), pages=page_count, session_id=session_id)  # DOCBOT-1801
         
         if not all_content:
             raise HTTPException(status_code=400, detail="No readable text found in documents. Please ensure PDFs contain text, not just images.")

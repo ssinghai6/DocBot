@@ -1,6 +1,7 @@
 "use client"
 
 import { useCallback } from "react"
+import { useUIStore } from "@/store/uiStore"
 import {
   AuthMeSchema,
   AdminUsersResponseSchema,
@@ -383,8 +384,22 @@ export function useChatHandlers(params: UseChatHandlersParams) {
     }
     setAuthUser(null);
     setWorkspaceConnections([]);
+    // DOCBOT-2313: drop the previous user's documents, connection and answers
+    // so the next visitor lands on the empty state. Session/connection ids
+    // live only in React state (the persisted UI store holds layout prefs).
+    handleDbDisconnect();
+    setSessionId(null);
+    setUploadedFiles([]);
+    setMessages([]);
+    setInput("");
+    setConnectors([]);
+    const ui = useUIStore.getState();
+    ui.selectLineage(null);
+    ui.selectArtifact(null);
+    ui.setExpiredSessionId(null);
+    ui.setPickedTool(null);
     showToast("info", "Signed out");
-  }, [showToast, setAuthUser, setWorkspaceConnections]);
+  }, [showToast, setAuthUser, setWorkspaceConnections, handleDbDisconnect, setSessionId, setUploadedFiles, setMessages, setInput, setConnectors]);
 
   const handleEmailAuth = useCallback(async (e: React.FormEvent) => {
     e.preventDefault();
