@@ -116,3 +116,21 @@ def test_write_nodes_anywhere_are_rejected(sql):
 
     with pytest.raises(QueryValidationError):
         validate_and_sanitize_sql(sql, "postgresql")
+
+
+@pytest.mark.parametrize(
+    "sql,dialect",
+    [
+        ("SELECT * INTO evil FROM t", "postgresql"),
+        ("SELECT * INTO evil FROM t", "sqlite"),
+        ("SELECT a INTO evil FROM t UNION ALL SELECT b FROM u", "postgresql"),
+        ("SELECT * FROM t INTO OUTFILE '/tmp/x'", "mysql"),
+        ("SELECT * INTO OUTFILE '/tmp/x' FROM t", "mysql"),
+    ],
+)
+def test_select_into_is_rejected(sql, dialect):
+    """SELECT ... INTO creates a table (Postgres) or writes a file (MySQL)."""
+    from api.utils.sql_validator import QueryValidationError, validate_and_sanitize_sql
+
+    with pytest.raises(QueryValidationError):
+        validate_and_sanitize_sql(sql, dialect)

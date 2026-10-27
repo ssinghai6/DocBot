@@ -16,7 +16,7 @@ _WRITE_NODES = tuple(
     t for t in (
         getattr(exp, name, None)
         for name in ("Insert", "Update", "Delete", "Merge", "Create", "Drop",
-                     "Alter", "AlterTable", "TruncateTable", "Command", "Copy")
+                     "Alter", "AlterTable", "TruncateTable", "Command", "Copy", "Into")
     ) if isinstance(t, type)
 )
 
