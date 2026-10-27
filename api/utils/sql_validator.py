@@ -11,6 +11,15 @@ class QueryValidationError(Exception):
 
 _DIALECT_ALIASES = {"postgresql": "postgres"}
 
+_READ_ROOTS = (exp.Select, exp.Union, exp.Intersect, exp.Except)
+_WRITE_NODES = tuple(
+    t for t in (
+        getattr(exp, name, None)
+        for name in ("Insert", "Update", "Delete", "Merge", "Create", "Drop",
+                     "Alter", "AlterTable", "TruncateTable", "Command", "Copy")
+    ) if isinstance(t, type)
+)
+
 
 def validate_and_sanitize_sql(sql: str, dialect: Optional[str] = None) -> str:
     """
@@ -35,8 +44,14 @@ def validate_and_sanitize_sql(sql: str, dialect: Optional[str] = None) -> str:
 
     stmt = statements[0]
 
-    # Root must be a SELECT (includes CTEs whose final clause is SELECT)
-    if not isinstance(stmt, exp.Select):
+    # Root must be a read query: SELECT (incl. CTEs) or a UNION / INTERSECT /
+    # EXCEPT of SELECTs — tie-out comparisons are naturally UNION ALL queries.
+    if not isinstance(stmt, _READ_ROOTS):
+        raise QueryValidationError(
+            "Only SELECT queries are permitted. Write operations are not allowed."
+        )
+    # No write / DDL node anywhere in the tree (e.g. a data-modifying CTE).
+    if any(isinstance(node, _WRITE_NODES) for node in stmt.walk()):
         raise QueryValidationError(
             "Only SELECT queries are permitted. Write operations are not allowed."
         )

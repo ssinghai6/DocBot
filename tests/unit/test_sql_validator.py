@@ -76,3 +76,43 @@ class TestSQLValidator:
     def test_multiple_statements_rejected(self):
         with pytest.raises(QueryValidationError):
             validate_and_sanitize_sql("SELECT 1; DROP TABLE users")
+
+
+# --- Tie-out comparisons: UNION read queries are allowed, writes never are ---
+
+def test_union_all_select_is_allowed_and_limited():
+    from api.utils.sql_validator import validate_and_sanitize_sql
+
+    out = validate_and_sanitize_sql(
+        "SELECT 'revenue' AS metric, SUM(credit) AS v FROM tb "
+        "UNION ALL SELECT 'opex', SUM(debit) FROM tb",
+        "sqlite",
+    )
+    assert "UNION ALL" in out and "LIMIT 500" in out
+
+
+def test_cte_with_union_is_allowed():
+    from api.utils.sql_validator import validate_and_sanitize_sql
+
+    out = validate_and_sanitize_sql(
+        "WITH a AS (SELECT 1 AS x) SELECT x FROM a UNION ALL SELECT 2", "postgresql"
+    )
+    assert out.upper().startswith("WITH")
+
+
+
+
+
+@pytest.mark.parametrize(
+    "sql",
+    [
+        "WITH d AS (DELETE FROM t RETURNING *) SELECT * FROM d",
+        "WITH u AS (UPDATE t SET a = 1 RETURNING *) SELECT * FROM u",
+        "INSERT INTO t SELECT 1 UNION SELECT 2",
+    ],
+)
+def test_write_nodes_anywhere_are_rejected(sql):
+    from api.utils.sql_validator import QueryValidationError, validate_and_sanitize_sql
+
+    with pytest.raises(QueryValidationError):
+        validate_and_sanitize_sql(sql, "postgresql")
