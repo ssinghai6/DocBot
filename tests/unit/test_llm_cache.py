@@ -16,6 +16,7 @@ from sqlalchemy import MetaData, select
 from sqlalchemy.ext.asyncio import create_async_engine, async_sessionmaker
 
 from api.utils import llm_cache
+from api.utils.billing_context import Principal, bind_principal
 
 
 @pytest.fixture
@@ -207,7 +208,7 @@ class TestTTLExpiry:
                 await session.execute(
                     sa_insert(table).values(
                         id=str(uuid.uuid4()),
-                        prompt_hash=prompt_hash,
+                        prompt_hash=llm_cache._scoped_key(prompt_hash),
                         model=model,
                         response="stale response",
                         expires_at=past,
@@ -281,3 +282,73 @@ class TestGetCacheMetrics:
         assert metrics["misses"] == 1
         assert metrics["hits"] == 2
         assert metrics["hit_rate"] == round(2 / 3, 4)
+
+
+# ---------------------------------------------------------------------------
+# Tenant scoping — DOCBOT-1604 (SEC-25)
+# ---------------------------------------------------------------------------
+
+_ORG_A = Principal(user_id="u-a", org_id="org-a", auth_method="session")
+_ORG_B = Principal(user_id="u-b", org_id="org-b", auth_method="session")
+
+
+class TestTenantScoping:
+    @pytest.mark.asyncio
+    async def test_other_org_misses(self, wired_cache):
+        h = llm_cache.hash_prompt("SELECT secret")
+        with bind_principal(_ORG_A):
+            await llm_cache.set_cached_response(h, "m", "org-a sql")
+        with bind_principal(_ORG_B):
+            assert await llm_cache.get_cached_response(h, "m") is None
+
+    @pytest.mark.asyncio
+    async def test_same_org_hits_across_users(self, wired_cache):
+        h = llm_cache.hash_prompt("SELECT shared")
+        with bind_principal(_ORG_A):
+            await llm_cache.set_cached_response(h, "m", "org-a sql")
+        teammate = Principal(user_id="u-a2", org_id="org-a", auth_method="session")
+        with bind_principal(teammate):
+            assert await llm_cache.get_cached_response(h, "m") == "org-a sql"
+
+    @pytest.mark.asyncio
+    async def test_anonymous_separated_from_orgs(self, wired_cache):
+        h = llm_cache.hash_prompt("intent q")
+        await llm_cache.set_cached_response(h, "m", "anon resp")  # no principal bound
+        with bind_principal(_ORG_A):
+            assert await llm_cache.get_cached_response(h, "m") is None
+            await llm_cache.set_cached_response(h, "m", "org resp")
+        assert await llm_cache.get_cached_response(h, "m") == "anon resp"
+        demo = Principal(user_id=None, org_id=None, auth_method="demo", is_demo=True)
+        with bind_principal(demo):
+            assert await llm_cache.get_cached_response(h, "m") == "anon resp"
+
+    @pytest.mark.asyncio
+    async def test_orgless_user_scoped_to_user(self, wired_cache):
+        h = llm_cache.hash_prompt("q")
+        with bind_principal(Principal(user_id="solo", org_id=None)):
+            await llm_cache.set_cached_response(h, "m", "solo resp")
+        with bind_principal(Principal(user_id="other", org_id=None)):
+            assert await llm_cache.get_cached_response(h, "m") is None
+        assert await llm_cache.get_cached_response(h, "m") is None  # not anon either
+
+    @pytest.mark.asyncio
+    async def test_legacy_unscoped_row_never_served(self, wired_cache):
+        from sqlalchemy import insert as sa_insert
+        import uuid
+
+        table, session_factory = wired_cache
+        h = llm_cache.hash_prompt("legacy prompt")
+        async with session_factory() as session:
+            async with session.begin():
+                await session.execute(
+                    sa_insert(table).values(
+                        id=str(uuid.uuid4()),
+                        prompt_hash=h,  # pre-1604 key: bare prompt hash
+                        model="m",
+                        response="leaked",
+                        expires_at=datetime.now(timezone.utc) + timedelta(hours=1),
+                    )
+                )
+        assert await llm_cache.get_cached_response(h, "m") is None
+        with bind_principal(_ORG_A):
+            assert await llm_cache.get_cached_response(h, "m") is None
