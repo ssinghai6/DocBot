@@ -141,7 +141,8 @@ async def test_init_tieout_dataset(app_db):
         )
     assert result["dataset"] == "tieout"
     assert result["company"] == d.TIEOUT_COMPANY
-    assert result["suggested_questions"][0] == "Tie out the draft 10-K against the trial balance"
+    assert result["suggested_questions"] == d.TIEOUT_SUGGESTED_QUESTIONS
+    assert len(result["suggested_questions"]) == len(d.TIEOUT_EXPECTED_DISCREPANCIES)
     assert {"trial_balance", "revenue_by_segment", "opex"} <= set(result["schema_summary"]["tables"])
     assert stores[result["session_id"]] == "store"
 

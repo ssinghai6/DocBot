@@ -505,10 +505,12 @@ INSERT INTO opex VALUES ('FY2025', 'Sales and marketing', 55200000);
 INSERT INTO opex VALUES ('FY2025', 'General and administrative', 35900000);
 """
 
+# One figure per question: each reliably runs the books query and flags its
+# planted mismatch on prod; broad "tie out everything" prompts often do not.
 TIEOUT_SUGGESTED_QUESTIONS = [
-    "Tie out the draft 10-K against the trial balance",
+    "Does total revenue in the draft 10-K agree with the books?",
     "Does segment revenue in Note 12 agree with the books?",
-    "Do the operating expense figures in the MD&A match the general ledger?",
+    "Does sales and marketing expense in the MD&A agree with the general ledger?",
 ]
 
 
