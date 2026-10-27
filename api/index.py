@@ -518,8 +518,8 @@ async def init_db() -> None:
         # exists yet, and backfills org_id on rows that still lack one.
         default_org_id = await backfill_default_organization(conn)
         # DOCBOT-1801: billing attribution columns on llm_calls (idempotent)
-        from api.usage_service import LLM_CALLS_BILLING_MIGRATIONS
-        for col_ddl in LLM_CALLS_BILLING_MIGRATIONS:
+        from api.usage_service import LLM_CALLS_BILLING_MIGRATIONS, USAGE_EVENTS_MIGRATIONS
+        for col_ddl in LLM_CALLS_BILLING_MIGRATIONS + USAGE_EVENTS_MIGRATIONS:
             await conn.execute(text(col_ddl))
         # DOCBOT-1802: credit_ledger is append-only (immutability trigger)
         for stmt in credit_service.LEDGER_IMMUTABILITY_STATEMENTS:
@@ -899,7 +899,7 @@ def get_tools(category: Optional[str] = None):
     ])
 
 
-# DOCBOT-1612: IP-limited (per-IP + global sliding hour, owner bypass).
+# DOCBOT-1612/1623: per-IP + per-user + global hourly limit (owner bypass), metered.
 @app.post("/api/demo/init", dependencies=[Depends(request_guard.check_demo_init_limit)])
 async def init_demo(request: Request, dataset: str = "quickbite"):
     """Initialize a sandbox demo session with pre-loaded data.
@@ -3284,7 +3284,7 @@ class EdgarBatchIngestRequest(BaseModel):
     count: int = 5
 
 
-@app.post("/api/edgar/search")
+@app.post("/api/edgar/search", dependencies=[Depends(request_guard.edgar_guard("edgar_search"))])
 async def edgar_search(body: EdgarSearchRequest):
     """Search SEC EDGAR for a company by ticker or name."""
     from api.connectors.edgar_connector import EdgarConnector
@@ -3294,7 +3294,7 @@ async def edgar_search(body: EdgarSearchRequest):
     return {"results": results, "count": len(results)}
 
 
-@app.post("/api/edgar/filings")
+@app.post("/api/edgar/filings", dependencies=[Depends(request_guard.edgar_guard("edgar_filings"))])
 async def edgar_list_filings(body: EdgarFilingsRequest):
     """List available filings for a CIK."""
     from api.connectors.edgar_connector import EdgarConnector
@@ -3304,7 +3304,7 @@ async def edgar_list_filings(body: EdgarFilingsRequest):
     return {"cik": body.cik, "filing_type": body.filing_type, "filings": filings}
 
 
-@app.post("/api/edgar/ingest")
+@app.post("/api/edgar/ingest", dependencies=[Depends(request_guard.edgar_guard("edgar_ingest"))])
 async def edgar_ingest_filing(request: Request, body: EdgarIngestRequest):
     """Download a single SEC filing and ingest into the RAG pipeline."""
     from api.edgar_service import ingest_edgar_filing
@@ -3333,6 +3333,14 @@ async def edgar_ingest_filing(request: Request, body: EdgarIngestRequest):
 async def edgar_ingest_batch(request: Request, body: EdgarBatchIngestRequest):
     """Ingest multiple years of SEC filings at once."""
     from api.edgar_service import ingest_multiple_filings
+
+    # DOCBOT-1623: cap per call, then charge one EDGAR unit per filing.
+    if not 1 <= body.count <= request_guard.EDGAR_BATCH_MAX:
+        raise HTTPException(
+            status_code=400,
+            detail=f"count must be between 1 and {request_guard.EDGAR_BATCH_MAX}.",
+        )
+    await request_guard.check_edgar_limit(request, "edgar_ingest_batch", amount=body.count)
 
     scope = await resolve_caller_scope(request)
 

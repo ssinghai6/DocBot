@@ -49,7 +49,7 @@ logger = logging.getLogger(__name__)
 _MAX_QUEUE_SIZE = 5000
 _SHUTDOWN_SENTINEL = object()
 
-USAGE_KINDS = ("llm", "sandbox", "upload")
+USAGE_KINDS = ("llm", "sandbox", "upload", "request")  # request: DOCBOT-1623 route metering
 
 # Approximate E2B list price for the default code-interpreter sandbox
 # (2 vCPU x $0.000014/vCPU-s). Integer micro-USD per second; margin data only,
@@ -69,6 +69,11 @@ LLM_CALLS_BILLING_MIGRATIONS: list[str] = [
     "CREATE INDEX IF NOT EXISTS ix_llm_calls_org_id ON llm_calls (org_id)",
 ]
 
+# DOCBOT-1623: route label for kind="request" rows. No-op on a fresh DB.
+USAGE_EVENTS_MIGRATIONS: list[str] = [
+    "ALTER TABLE usage_events ADD COLUMN IF NOT EXISTS route TEXT",
+]
+
 
 def register_usage_events_table(metadata: Any) -> Table:
     """Define ``usage_events`` on the shared metadata (created by create_all)."""
@@ -80,7 +85,8 @@ def register_usage_events_table(metadata: Any) -> Table:
         Column("user_id", String),
         Column("session_id", String),
         Column("run_id", String),  # joins to llm_calls.run_id
-        Column("kind", String, nullable=False),  # llm | sandbox | upload
+        Column("kind", String, nullable=False),  # llm | sandbox | upload | request
+        Column("route", String),  # kind="request" only, e.g. "edgar_ingest"
         Column("provider", String),
         Column("model", String),
         Column("prompt_tokens", Integer, nullable=False, server_default="0"),
@@ -201,19 +207,26 @@ def record_usage(
     pages: Optional[int] = None,
     session_id: Optional[str] = None,
     run_id: Optional[str] = None,
+    route: Optional[str] = None,
+    user_id: Optional[str] = None,
+    org_id: Optional[str] = None,
 ) -> None:
-    """Queue one ``usage_events`` row attributed from the ContextVars. Never raises."""
+    """Queue one ``usage_events`` row attributed from the ContextVars. Never raises.
+
+    Explicit ``user_id`` / ``org_id`` fill in when no billing principal is bound.
+    """
     if kind not in USAGE_KINDS:
         logger.warning("usage_service: unknown usage kind %r ignored", kind)
         return
     attr = billing_attribution()
     row = {
         "id": str(uuid.uuid4()),
-        "org_id": attr["org_id"],
-        "user_id": attr["user_id"],
+        "org_id": attr["org_id"] or org_id,
+        "user_id": attr["user_id"] or user_id,
         "session_id": session_id or attr["session_id"],
         "run_id": run_id,
         "kind": kind,
+        "route": route,
         "provider": provider,
         "model": model,
         "prompt_tokens": max(int(prompt_tokens or 0), 0),
@@ -287,6 +300,11 @@ def meter_upload(size_bytes: int, *, pages: Optional[int] = None, session_id: Op
     record_usage("upload", size_bytes=size, pages=pages, session_id=session_id)
 
 
+def meter_route(route: str, *, user_id: Optional[str] = None, org_id: Optional[str] = None) -> None:
+    """Record one admitted call to a rate-limited route (DOCBOT-1623). Never raises."""
+    record_usage("request", route=route, user_id=user_id, org_id=org_id)
+
+
 # ---------------------------------------------------------------------------
 # SSE generator rebind
 # ---------------------------------------------------------------------------
@@ -312,6 +330,8 @@ def bind_billing_stream(agen: AsyncIterator[Any]) -> AsyncIterator[Any]:
 __all__ = [
     "E2B_MICRO_USD_PER_SECOND",
     "LLM_CALLS_BILLING_MIGRATIONS",
+    "USAGE_EVENTS_MIGRATIONS",
+    "meter_route",
     "billing_attribution",
     "bind_billing_stream",
     "meter_llm_call",

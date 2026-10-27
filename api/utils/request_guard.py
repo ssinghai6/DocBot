@@ -34,6 +34,18 @@ because every call builds a vector store + SQLite DB in memory:
     DEMO_INIT_PER_IP_PER_HOUR=10   # per client IP, sliding 1h window; 0 disables
     DEMO_INIT_GLOBAL_PER_HOUR=300  # all clients combined; 0 disables. Bounds
                                    # total cost even if X-Forwarded-For is spoofed.
+    DEMO_INIT_PER_USER_PER_HOUR=10 # per signed-in user (DOCBOT-1623); 0 disables
+
+Exception — ON by default (DOCBOT-1623): EDGAR routes (search, filings,
+ingest, ingest-batch) share one hourly bucket per IP and per signed-in user.
+ingest-batch charges one unit per requested filing and is capped per call:
+
+    EDGAR_PER_IP_PER_HOUR=60       # per client IP; 0 disables
+    EDGAR_PER_USER_PER_HOUR=120    # per signed-in user; 0 disables
+    EDGAR_BATCH_MAX=5              # max filings per /api/edgar/ingest-batch call
+
+Admitted demo-init and EDGAR calls are metered into ``usage_events``
+(kind="request", route=<label>).
 
 Exception — ON by default (DOCBOT-1607): POST /api/sandbox/execute is
 metered per org (falling back to per user) — never per session_id, which a
@@ -93,6 +105,13 @@ SESSION_BUDGET_WINDOW_SEC: int = 7 * 86400
 DEMO_INIT_WINDOW_SEC: int = 3600
 DEMO_INIT_PER_IP_PER_HOUR: int = _env_int("DEMO_INIT_PER_IP_PER_HOUR", 10)
 DEMO_INIT_GLOBAL_PER_HOUR: int = _env_int("DEMO_INIT_GLOBAL_PER_HOUR", 300)
+DEMO_INIT_PER_USER_PER_HOUR: int = _env_int("DEMO_INIT_PER_USER_PER_HOUR", 10)
+
+# DOCBOT-1623: EDGAR routes — one shared hourly bucket per IP / per user.
+EDGAR_WINDOW_SEC: int = 3600
+EDGAR_PER_IP_PER_HOUR: int = _env_int("EDGAR_PER_IP_PER_HOUR", 60)
+EDGAR_PER_USER_PER_HOUR: int = _env_int("EDGAR_PER_USER_PER_HOUR", 120)
+EDGAR_BATCH_MAX: int = _env_int("EDGAR_BATCH_MAX", 5)
 
 # DOCBOT-1607: raw sandbox executions per org (or user) per hour.
 SANDBOX_WINDOW_SEC: int = 3600
@@ -317,6 +336,39 @@ async def check_ip_rate_limit(request: Request) -> None:
         )
 
 
+async def _charge_all(charges: list, window_sec: int, amount: int = 1) -> Optional[Tuple[int, int, str]]:
+    """Charge each (bucket, key, limit) in order; limit <= 0 skips that window.
+
+    On the first rejection the earlier charges are refunded and
+    ``(retry_after, limit, bucket)`` is returned; None when all were admitted.
+    """
+    done = []
+    for bucket, key, limit in charges:
+        if limit <= 0:
+            continue
+        retry = await _charge(bucket, key, window_sec, limit, amount)
+        if retry is not None:
+            for b, k, lim in done:
+                await _charge(b, k, window_sec, lim, -amount)
+            return retry, limit, bucket
+        done.append((bucket, key, limit))
+    return None
+
+
+async def _caller_scope(request: Request):
+    """Caller's user/org (None for anonymous). Lazy import avoids an import cycle."""
+    from api.utils.caller_scope import resolve_caller_scope
+    return await resolve_caller_scope(request)
+
+
+def _meter(route: str, scope: object) -> None:
+    from api.usage_service import meter_route
+    meter_route(route, user_id=getattr(scope, "user_id", None), org_id=getattr(scope, "org_id", None))
+
+
+_SCOPE_LABELS = {"ip": "per client", "user": "per account", "global": "across all visitors"}
+
+
 def _too_many(limit: int, retry_after: int, scope: str) -> HTTPException:
     return HTTPException(
         status_code=429,
@@ -329,29 +381,62 @@ def _too_many(limit: int, retry_after: int, scope: str) -> HTTPException:
 
 
 async def check_demo_init_limit(request: Request) -> None:
-    """IP-based limit for POST /api/demo/init — DOCBOT-1612.
+    """Limit + meter POST /api/demo/init — DOCBOT-1612 / DOCBOT-1623.
 
-    Two 1-hour windows: per client IP (``DEMO_INIT_PER_IP_PER_HOUR``) and
-    global (``DEMO_INIT_GLOBAL_PER_HOUR``). The global cap bounds total cost
-    even when a client rotates spoofed X-Forwarded-For values. Owner requests
-    bypass. Either limit set to 0 disables that window. Raises 429 with
-    Retry-After. A rejected call does not consume quota.
+    Three 1-hour windows: per client IP (``DEMO_INIT_PER_IP_PER_HOUR``), per
+    signed-in user (``DEMO_INIT_PER_USER_PER_HOUR``) and global
+    (``DEMO_INIT_GLOBAL_PER_HOUR``). The global cap bounds total cost even
+    when a client rotates spoofed X-Forwarded-For values. Owner requests
+    bypass the limits. Any limit set to 0 disables that window. Raises 429
+    with Retry-After. A rejected call does not consume quota. Admitted calls
+    are metered into usage_events (route="demo_init").
     """
-    if is_owner(request):
-        return
+    scope = await _caller_scope(request)
+    if not is_owner(request):
+        rejected = await _charge_all([
+            ("demo_init_ip", client_ip(request), DEMO_INIT_PER_IP_PER_HOUR),
+            ("demo_init_user", scope.user_id or "", DEMO_INIT_PER_USER_PER_HOUR if scope.user_id else 0),
+            ("demo_init_global", "*", DEMO_INIT_GLOBAL_PER_HOUR),
+        ], DEMO_INIT_WINDOW_SEC)
+        if rejected is not None:
+            retry, limit, bucket = rejected
+            raise _too_many(limit, retry, _SCOPE_LABELS[bucket.rsplit("_", 1)[1]])
+    _meter("demo_init", scope)
 
-    ip = client_ip(request)
-    if DEMO_INIT_PER_IP_PER_HOUR > 0:
-        retry = await _charge("demo_init_ip", ip, DEMO_INIT_WINDOW_SEC, DEMO_INIT_PER_IP_PER_HOUR)
-        if retry is not None:
-            raise _too_many(DEMO_INIT_PER_IP_PER_HOUR, retry, "per client")
 
-    if DEMO_INIT_GLOBAL_PER_HOUR > 0:
-        retry = await _charge("demo_init_global", "*", DEMO_INIT_WINDOW_SEC, DEMO_INIT_GLOBAL_PER_HOUR)
-        if retry is not None:
-            if DEMO_INIT_PER_IP_PER_HOUR > 0:  # give the per-IP slot back
-                await _charge("demo_init_ip", ip, DEMO_INIT_WINDOW_SEC, DEMO_INIT_PER_IP_PER_HOUR, -1)
-            raise _too_many(DEMO_INIT_GLOBAL_PER_HOUR, retry, "across all visitors")
+async def check_edgar_limit(request: Request, route: str, amount: int = 1) -> None:
+    """Limit + meter one EDGAR call — DOCBOT-1623.
+
+    All EDGAR routes share one hourly bucket per client IP
+    (``EDGAR_PER_IP_PER_HOUR``) and per signed-in user
+    (``EDGAR_PER_USER_PER_HOUR``); ``amount`` lets ingest-batch charge one
+    unit per filing. Owner bypasses the limits. Raises 429 with Retry-After;
+    a rejected call does not consume quota. Admitted calls are metered.
+    """
+    scope = await _caller_scope(request)
+    if not is_owner(request):
+        rejected = await _charge_all([
+            ("edgar_ip", client_ip(request), EDGAR_PER_IP_PER_HOUR),
+            ("edgar_user", scope.user_id or "", EDGAR_PER_USER_PER_HOUR if scope.user_id else 0),
+        ], EDGAR_WINDOW_SEC, amount)
+        if rejected is not None:
+            retry, limit, bucket = rejected
+            raise HTTPException(
+                status_code=429,
+                detail=(
+                    f"SEC EDGAR limit reached ({limit}/hour "
+                    f"{_SCOPE_LABELS[bucket.rsplit('_', 1)[1]]}). Retry in {retry}s."
+                ),
+                headers={"Retry-After": str(retry)},
+            )
+    _meter(route, scope)
+
+
+def edgar_guard(route: str):
+    """FastAPI dependency factory: ``Depends(edgar_guard("edgar_search"))``."""
+    async def _dep(request: Request) -> None:
+        await check_edgar_limit(request, route)
+    return _dep
 
 
 def sandbox_principal_key(user: object, request: Request) -> str:
