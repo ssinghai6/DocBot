@@ -2743,6 +2743,14 @@ class RegisterRequest(BaseModel):
     turnstile_token: Optional[str] = None
 
 
+# DOCBOT-1622: one body for every credential failure — no account enumeration.
+LOGIN_FAILED_DETAIL = "Invalid email or password."
+REGISTER_FAILED_DETAIL = (
+    "We couldn't create an account with those details. "
+    "If you already have an account, sign in instead."
+)
+
+
 class LoginRequest(BaseModel):
     email: str
     password: str
@@ -2751,7 +2759,9 @@ class LoginRequest(BaseModel):
 @app.post("/api/auth/register")
 async def auth_register(body: RegisterRequest, response: Response, request: Request):
     """Register a new user with email + password."""
-    from api.oauth_service import hash_password, validate_password_strength
+    from api.oauth_service import (
+        BREACHED_PASSWORD_MESSAGE, hash_password, is_password_breached, validate_password_strength,
+    )
     from api.auth_service import create_user_session
     from api.identity_service import EmailAlreadyRegistered, register_password_user
     from api import email_verification_service as evs
@@ -2765,6 +2775,9 @@ async def auth_register(body: RegisterRequest, response: Response, request: Requ
     err = validate_password_strength(body.password)
     if err:
         raise HTTPException(status_code=422, detail=err)
+    # DOCBOT-1622: HIBP k-anonymity check; fails open on network error.
+    if await is_password_breached(body.password):
+        raise HTTPException(status_code=422, detail=BREACHED_PASSWORD_MESSAGE)
 
     # DOCBOT-1713: dormant unless TURNSTILE_SECRET_KEY is set; on failure → 400.
     try:
@@ -2782,7 +2795,13 @@ async def auth_register(body: RegisterRequest, response: Response, request: Requ
             users_table, async_session_factory,
         )
     except EmailAlreadyRegistered:
-        raise HTTPException(status_code=409, detail="An account with this email already exists.")
+        # DOCBOT-1622: never confirm that an address is registered. With email
+        # verification on, mirror the new-account 202 exactly (nothing is sent).
+        if evs.is_email_verification_enabled():
+            return JSONResponse(
+                {"status": "verification_required", "email": email}, status_code=202,
+            )
+        raise HTTPException(status_code=400, detail=REGISTER_FAILED_DETAIL)
 
     log_event(
         AuditEventType.login, audit_log_table, async_session_factory,
@@ -2818,11 +2837,13 @@ async def auth_register(body: RegisterRequest, response: Response, request: Requ
 @app.post("/api/auth/login")
 async def auth_login(body: LoginRequest, response: Response, request: Request):
     """Login with email + password."""
-    from api.oauth_service import verify_password
+    from api.oauth_service import dummy_password_hash, verify_password
     from api.auth_service import create_user_session
     from api.audit_service import log_event, AuditEventType
 
     email = body.email.lower().strip()
+    # DOCBOT-1622: per-account throttle, checked before the password.
+    await request_guard.check_login_throttle(email)
 
     async with async_session_factory() as session:
         result = await session.execute(
@@ -2830,17 +2851,15 @@ async def auth_login(body: LoginRequest, response: Response, request: Request):
         )
         user = result.fetchone()
 
-    if not user:
-        raise HTTPException(status_code=401, detail="Invalid email or password.")
-
-    if user.provider != "email" or not user.password_hash:
-        raise HTTPException(
-            status_code=400,
-            detail=f"This account uses {user.provider} sign-in. Please use that method instead.",
-        )
-
-    if not verify_password(body.password, user.password_hash):
-        raise HTTPException(status_code=401, detail="Invalid email or password.")
+    # DOCBOT-1622: unknown account, OAuth/SAML-only account and wrong password
+    # all get the same 401 body, and bcrypt always runs so timing matches.
+    has_password = bool(user and user.provider == "email" and user.password_hash)
+    password_ok = verify_password(
+        body.password, user.password_hash if has_password else dummy_password_hash()
+    )
+    if not (has_password and password_ok):
+        await request_guard.record_login_failure(email)
+        raise HTTPException(status_code=401, detail=LOGIN_FAILED_DETAIL)
 
     # DOCBOT-1713: with Resend configured, an email/password account whose
     # address was never verified may not sign in yet. The 403 carries a clear

@@ -428,7 +428,7 @@ export function useChatHandlers(params: UseChatHandlersParams) {
         setAuthPassword("");
         setAuthName("");
         bumpTurnstileReset();
-        showToast("info", "Account created — check your inbox to verify your email, then sign in.");
+        showToast("info", "Check your inbox to verify your email, then sign in.");
         return;
       }
       const meRes = await fetch("/api/auth/me", { credentials: "include" });
