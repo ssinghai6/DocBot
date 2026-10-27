@@ -493,6 +493,9 @@ async def init_db() -> None:
         for col_ddl in USER_IDENTITY_COLUMN_MIGRATIONS:
             await conn.execute(text(col_ddl))
         await backfill_legacy_identities(conn)
+        # DOCBOT-1621: session tokens are stored hashed; rewrite legacy rows.
+        from api.auth_service import hash_legacy_session_tokens
+        await hash_legacy_session_tokens(conn, user_sessions_table)
         # DOCBOT-604: pii_masking_enabled column (added after initial deploy)
         await conn.execute(text(
             "ALTER TABLE db_connections ADD COLUMN IF NOT EXISTS pii_masking_enabled BOOLEAN DEFAULT false"
@@ -2670,7 +2673,7 @@ async def github_callback(code: str, state: str, response: Response, request: Re
     redirect = RedirectResponse(url=f"{_frontend_url()}/chat?auth_success=1")
     redirect.set_cookie(
         key="docbot_session", value=token, httponly=True, samesite="lax",
-        secure=os.getenv("APP_BASE_URL", "").startswith("https"), max_age=28800,
+        secure=os.getenv("APP_BASE_URL", "").startswith("https"), max_age=int(os.getenv("SESSION_TTL_HOURS", "8")) * 3600,
     )
     return redirect
 
@@ -2726,7 +2729,7 @@ async def google_callback(code: str, state: str, response: Response, request: Re
     redirect = RedirectResponse(url=f"{_frontend_url()}/chat?auth_success=1")
     redirect.set_cookie(
         key="docbot_session", value=token, httponly=True, samesite="lax",
-        secure=os.getenv("APP_BASE_URL", "").startswith("https"), max_age=28800,
+        secure=os.getenv("APP_BASE_URL", "").startswith("https"), max_age=int(os.getenv("SESSION_TTL_HOURS", "8")) * 3600,
     )
     return redirect
 
@@ -2807,7 +2810,7 @@ async def auth_register(body: RegisterRequest, response: Response, request: Requ
     resp = JSONResponse({"status": "registered", "email": email})
     resp.set_cookie(
         key="docbot_session", value=token, httponly=True, samesite="lax",
-        secure=os.getenv("APP_BASE_URL", "").startswith("https"), max_age=28800,
+        secure=os.getenv("APP_BASE_URL", "").startswith("https"), max_age=int(os.getenv("SESSION_TTL_HOURS", "8")) * 3600,
     )
     return resp
 
@@ -2864,7 +2867,7 @@ async def auth_login(body: LoginRequest, response: Response, request: Request):
     resp = JSONResponse({"status": "ok", "email": email})
     resp.set_cookie(
         key="docbot_session", value=token, httponly=True, samesite="lax",
-        secure=os.getenv("APP_BASE_URL", "").startswith("https"), max_age=28800,
+        secure=os.getenv("APP_BASE_URL", "").startswith("https"), max_age=int(os.getenv("SESSION_TTL_HOURS", "8")) * 3600,
     )
     return resp
 

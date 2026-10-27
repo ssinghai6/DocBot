@@ -23,6 +23,7 @@ import os
 import uuid
 import logging
 import hashlib
+import secrets
 from datetime import datetime, timezone, timedelta
 from typing import Any, Optional
 
@@ -231,8 +232,18 @@ def _detect_provider() -> str:
 # Session management (stateless token stored in DB)
 # ---------------------------------------------------------------------------
 
+# DOCBOT-1621: only SHA-256 digests are stored, so a DB leak yields no usable
+# cookies. The prefix lets the boot migration tell digests from legacy rows
+# (legacy plaintext tokens were also 64-char hex, so length alone can't).
+SESSION_TOKEN_HASH_PREFIX = "sha256:"
+
+
 def generate_session_token() -> str:
-    return hashlib.sha256(uuid.uuid4().bytes).hexdigest()
+    return secrets.token_hex(32)
+
+
+def hash_session_token(token: str) -> str:
+    return SESSION_TOKEN_HASH_PREFIX + hashlib.sha256(token.encode("utf-8")).hexdigest()
 
 
 async def create_user_session(
@@ -240,7 +251,7 @@ async def create_user_session(
     user_sessions_table: Any,
     async_session_factory: Any,
 ) -> str:
-    """Persist a new session token for user_id. Returns the token."""
+    """Persist a new session for user_id. Returns the raw token (cookie value); only its hash is stored."""
     from sqlalchemy import insert as sa_insert
     token = generate_session_token()
     expires_at = datetime.now(timezone.utc) + timedelta(hours=SESSION_TTL_HOURS)
@@ -250,7 +261,7 @@ async def create_user_session(
                 sa_insert(user_sessions_table).values(
                     id=str(uuid.uuid4()),
                     user_id=user_id,
-                    token=token,
+                    token=hash_session_token(token),
                     expires_at=expires_at,
                 )
             )
@@ -268,7 +279,7 @@ async def get_user_from_session(
     async with async_session_factory() as session:
         result = await session.execute(
             sa_select(user_sessions_table).where(
-                user_sessions_table.c.token == token,
+                user_sessions_table.c.token == hash_session_token(token),
                 user_sessions_table.c.expires_at > datetime.now(timezone.utc),
             )
         )
@@ -291,9 +302,31 @@ async def delete_session(
         async with session.begin():
             await session.execute(
                 sa_delete(user_sessions_table).where(
-                    user_sessions_table.c.token == token
+                    user_sessions_table.c.token == hash_session_token(token)
                 )
             )
+
+
+async def hash_legacy_session_tokens(conn: Any, user_sessions_table: Any) -> int:
+    """Boot migration (DOCBOT-1621): hash pre-1621 plaintext tokens in place.
+
+    Idempotent — rows already carrying the digest prefix are skipped. Live
+    sessions keep working (the cookie hashes to the new stored value);
+    expired rows are deleted instead of rewritten. Returns rows rewritten.
+    """
+    from sqlalchemy import delete as sa_delete, select as sa_select, update as sa_update
+    t = user_sessions_table
+    await conn.execute(sa_delete(t).where(t.c.expires_at <= datetime.now(timezone.utc)))
+    rows = (await conn.execute(
+        sa_select(t.c.id, t.c.token).where(~t.c.token.startswith(SESSION_TOKEN_HASH_PREFIX))
+    )).fetchall()
+    for row in rows:
+        await conn.execute(
+            sa_update(t).where(t.c.id == row.id).values(token=hash_session_token(row.token))
+        )
+    if rows:
+        logger.info("Hashed %d legacy plaintext session token(s) at rest", len(rows))
+    return len(rows)
 
 
 # ---------------------------------------------------------------------------
