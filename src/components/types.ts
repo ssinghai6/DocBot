@@ -289,7 +289,8 @@ export type AutopilotStep = {
   step_num: number
   tool: string
   step_label: string
-  content: string
+  summary?: string | null     // DOCBOT-2005: short human line; absent on old events
+  content: string             // raw tool output (shown behind "Details" when summary exists)
   artifact_id?: string | null
   chart_b64?: string | null
   sql?: string | null

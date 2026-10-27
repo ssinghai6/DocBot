@@ -117,9 +117,9 @@ from api.utils.security_headers import SecurityHeadersMiddleware  # noqa: E402
 app.add_middleware(SecurityHeadersMiddleware)
 
 
-def safe_error_message(error: Exception) -> str:
-    """Sanitize error messages for client responses"""
-    return "An internal error occurred. Please try again later."
+# DOCBOT-2005: moved to api/utils/exceptions.py so services can reuse it
+# without importing this entrypoint; re-exported here for existing callers.
+from api.utils.exceptions import safe_error_message  # noqa: E402,F401
 
 # ---------------------------------------------------------------------------
 # Database setup — PostgreSQL via asyncpg

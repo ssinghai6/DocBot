@@ -13,6 +13,7 @@ import {
   PanelRight,
 } from "lucide-react"
 import ChatMessage from "@/components/ChatMessage"
+import MarkdownRenderer from "@/components/MarkdownRenderer"
 import ChatEmptyState from "@/components/ChatEmptyState"
 import { Tooltip, Button } from "@/components/ui"
 import type { Message, AutopilotStep, Toast, PickedTool } from "@/components/types"
@@ -550,7 +551,21 @@ export default function ChatArea(props: ChatAreaProps) {
                             }`}>{step.tool.replace("_", " ")}</span>
                             <span className="text-[var(--color-text-tertiary)] truncate">{step.step_label}</span>
                           </div>
-                          {step.content && (
+                          {step.summary ? (
+                            <>
+                              <MarkdownRenderer content={step.summary} variant="compact" />
+                              {step.content && (
+                                <details className="mt-1">
+                                  <summary className="cursor-pointer text-[9px] font-semibold uppercase tracking-wider text-[var(--color-text-tertiary)] select-none">
+                                    Details
+                                  </summary>
+                                  <div className="mt-1 max-h-48 overflow-auto">
+                                    <MarkdownRenderer content={step.content} variant="compact" />
+                                  </div>
+                                </details>
+                              )}
+                            </>
+                          ) : step.content && (
                             <p className="text-[var(--color-text-tertiary)] line-clamp-2 leading-relaxed">{step.content}</p>
                           )}
                           {step.code && (
@@ -566,7 +581,7 @@ export default function ChatArea(props: ChatAreaProps) {
                           {step.chart_b64 && (
                             <img src={`data:image/png;base64,${step.chart_b64}`} alt="chart" className="mt-2 rounded-[3px] max-h-32 object-contain" />
                           )}
-                          {step.error && (
+                          {step.error && !step.summary && (
                             <p className="text-[var(--color-danger-500)] mt-1">⚠ {step.error}</p>
                           )}
                         </div>
