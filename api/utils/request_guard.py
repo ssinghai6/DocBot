@@ -98,6 +98,10 @@ DEMO_INIT_GLOBAL_PER_HOUR: int = _env_int("DEMO_INIT_GLOBAL_PER_HOUR", 300)
 SANDBOX_WINDOW_SEC: int = 3600
 SANDBOX_RUNS_PER_HOUR: int = _env_int("SANDBOX_RUNS_PER_HOUR", 60)
 
+# DOCBOT-1622: failed email/password logins per normalized email per window.
+LOGIN_FAILURE_WINDOW_SEC: int = 15 * 60
+LOGIN_FAILURES_PER_WINDOW: int = _env_int("LOGIN_FAILURES_PER_WINDOW", 5)
+
 # Number of trusted reverse proxies that APPEND to X-Forwarded-For in front of
 # the app (see client_ip()). 0 ignores the header entirely.
 TRUSTED_PROXY_HOPS: int = _env_int("TRUSTED_PROXY_HOPS", 1)
@@ -436,6 +440,32 @@ async def enforce_user_budget(user_id: str, endpoint: str) -> None:
                 "Thanks for testing DocBot!"
             ),
         )
+
+
+async def check_login_throttle(email: str) -> None:
+    """Raise 429 once ``email`` has LOGIN_FAILURES_PER_WINDOW failures this window — DOCBOT-1622.
+
+    Checked BEFORE the password is verified, so a correct password does not
+    bypass an active lockout. A zero-amount charge reads the count without
+    consuming anything. 0 disables. Fails open with the store (see _charge).
+    """
+    if LOGIN_FAILURES_PER_WINDOW <= 0:
+        return
+    retry = await _charge(
+        "login_fail", email, LOGIN_FAILURE_WINDOW_SEC, LOGIN_FAILURES_PER_WINDOW - 1, amount=0
+    )
+    if retry is not None:
+        raise HTTPException(
+            status_code=429,
+            detail=f"Too many failed sign-in attempts. Try again in {math.ceil(retry / 60)} minute(s).",
+            headers={"Retry-After": str(retry)},
+        )
+
+
+async def record_login_failure(email: str) -> None:
+    """Count one failed login against ``email`` (unknown accounts count too, so no enumeration)."""
+    if LOGIN_FAILURES_PER_WINDOW > 0:
+        await _charge("login_fail", email, LOGIN_FAILURE_WINDOW_SEC, LOGIN_FAILURES_PER_WINDOW)
 
 
 def reset_state() -> None:

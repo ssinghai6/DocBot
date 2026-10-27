@@ -28,8 +28,10 @@ Environment variables required per provider:
 
 from __future__ import annotations
 
+import functools
 import os
 import logging
+import secrets
 from typing import Optional
 from urllib.parse import urlencode
 
@@ -243,11 +245,47 @@ def verify_password(plain: str, hashed: str) -> bool:
     return bcrypt.checkpw(pw_bytes, hashed.encode("utf-8"))
 
 
+@functools.lru_cache(maxsize=1)
+def dummy_password_hash() -> str:
+    """bcrypt hash checked when the account is missing, so login timing doesn't reveal it."""
+    return hash_password(secrets.token_hex(16))
+
+
 def validate_password_strength(password: str) -> Optional[str]:
     """Return an error string if weak, None if acceptable."""
     if len(password) < 8:
         return "Password must be at least 8 characters."
     return None
+
+
+HIBP_RANGE_URL = "https://api.pwnedpasswords.com/range/"
+BREACHED_PASSWORD_MESSAGE = (
+    "This password has appeared in a known data breach. Please choose a different password."
+)
+
+
+async def is_password_breached(password: str) -> bool:
+    """HIBP k-anonymity check — DOCBOT-1622. Only the first 5 SHA-1 hex chars leave the server.
+
+    Fails OPEN (returns False) on any network/HTTP error so an HIBP outage
+    never blocks sign-up.
+    """
+    import hashlib
+    digest = hashlib.sha1(password.encode("utf-8")).hexdigest().upper()
+    prefix, suffix = digest[:5], digest[5:]
+    try:
+        async with httpx.AsyncClient(timeout=2.0) as client:
+            resp = await client.get(HIBP_RANGE_URL + prefix, headers={"Add-Padding": "true"})
+            resp.raise_for_status()
+    except httpx.HTTPError as exc:
+        logger.warning("HIBP range check unavailable (%s) — allowing password", type(exc).__name__)
+        return False
+    for line in resp.text.splitlines():
+        hash_suffix, _, count = line.partition(":")
+        if hash_suffix.strip().upper() == suffix:
+            # Padding rows carry count 0 and must not count as a breach.
+            return count.strip().isdigit() and int(count) > 0
+    return False
 
 
 # ---------------------------------------------------------------------------
