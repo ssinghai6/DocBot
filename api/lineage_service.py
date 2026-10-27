@@ -4,7 +4,7 @@ Public API
 ----------
 register_lineage_table(metadata) -> Table
 wire_lineage_store(table, async_session_factory) -> None
-emit_lineage(collector, session_id=None) -> str
+emit_lineage(collector, session_id=None, connection_id=None) -> str
     Build the lineage, persist it fire-and-forget, return the SSE line.
 get_lineage(run_id) -> Lineage | None
     Read the persisted record and join llm_calls by run_id.
@@ -38,10 +38,21 @@ def register_lineage_table(metadata) -> Table:
         metadata,
         Column("run_id", String, primary_key=True),
         Column("session_id", String, index=True),
+        # DOCBOT-1620: lets DB-only runs (unbound session label) be owner-checked.
+        Column("connection_id", String, index=True),
         Column("mode", String, nullable=False),
         Column("data_json", Text, nullable=False),
         Column("created_at", DateTime(timezone=True), server_default=func.now(), nullable=False),
     )
+
+
+# DOCBOT-1620: connection_id on lineage + trace rows for pre-existing DBs (run from init_db()).
+LINEAGE_COLUMN_MIGRATIONS: list[str] = [
+    "ALTER TABLE answer_lineage ADD COLUMN IF NOT EXISTS connection_id TEXT",
+    "CREATE INDEX IF NOT EXISTS ix_answer_lineage_connection_id ON answer_lineage (connection_id)",
+    "ALTER TABLE agent_traces ADD COLUMN IF NOT EXISTS connection_id TEXT",
+    "CREATE INDEX IF NOT EXISTS ix_agent_traces_connection_id ON agent_traces (connection_id)",
+]
 
 
 def wire_lineage_store(table: Table, async_session_factory: Any) -> None:
@@ -50,12 +61,13 @@ def wire_lineage_store(table: Table, async_session_factory: Any) -> None:
     _async_session_factory = async_session_factory
 
 
-async def _persist(lineage: Lineage, session_id: Optional[str]) -> None:
+async def _persist(lineage: Lineage, session_id: Optional[str], connection_id: Optional[str] = None) -> None:
     if _lineage_table is None or _async_session_factory is None:
         return
     values = {
         "run_id": lineage.run_id,
         "session_id": session_id,
+        "connection_id": connection_id,
         "mode": lineage.mode,
         "data_json": lineage.model_dump_json(),
     }
@@ -79,7 +91,11 @@ async def _persist(lineage: Lineage, session_id: Optional[str]) -> None:
         logger.warning("lineage_service: persist failed for %s: %s", lineage.run_id, exc)
 
 
-def emit_lineage(collector: LineageCollector, session_id: Optional[str] = None) -> str:
+def emit_lineage(
+    collector: LineageCollector,
+    session_id: Optional[str] = None,
+    connection_id: Optional[str] = None,
+) -> str:
     """Finalize ``collector``, persist in the background, return the SSE line.
 
     Never raises; on failure returns an empty string so callers can
@@ -88,7 +104,7 @@ def emit_lineage(collector: LineageCollector, session_id: Optional[str] = None) 
     try:
         lineage = collector.build()
         try:
-            task = asyncio.get_running_loop().create_task(_persist(lineage, session_id))
+            task = asyncio.get_running_loop().create_task(_persist(lineage, session_id, connection_id))
             _pending_writes.add(task)
             task.add_done_callback(_pending_writes.discard)
         except RuntimeError:

@@ -1386,7 +1386,7 @@ async def run_sql_pipeline(
                             latency_ms=(time.perf_counter() - _csv_t0) * 1000,
                         )
                         from api.lineage_service import emit_lineage
-                        _lin_evt = emit_lineage(lin, session_id)
+                        _lin_evt = emit_lineage(lin, session_id, connection_id)
                         if _lin_evt:
                             yield _lin_evt
                 yield _chunk
@@ -1680,7 +1680,7 @@ async def run_sql_pipeline(
 
         if emit_lineage_event:
             from api.lineage_service import emit_lineage
-            _lin_evt = emit_lineage(lin, session_id)
+            _lin_evt = emit_lineage(lin, session_id, connection_id)
             if _lin_evt:
                 yield _lin_evt
 

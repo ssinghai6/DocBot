@@ -74,6 +74,7 @@ def register_agent_traces_table(metadata: Any) -> Table:
         Column("id", String, primary_key=True),  # UUID, minted by log_trace()
         Column("run_id", String, index=True),  # shared trace id across a multi-step run
         Column("session_id", String, index=True),
+        Column("connection_id", String, index=True),  # DOCBOT-1620: owner check for DB-only runs
         Column("pipeline", String, nullable=False, index=True),  # autopilot | hybrid | db_chat | chat
         Column("question", Text, nullable=False),
         Column("intent_classified", String),
@@ -157,6 +158,7 @@ async def log_trace(
     latency_ms: Optional[float] = None,
     cost_usd: Optional[float] = None,
     error: Optional[str] = None,
+    connection_id: Optional[str] = None,
 ) -> str:
     """Fire-and-forget agent trace log. Never raises.
 
@@ -172,6 +174,7 @@ async def log_trace(
             "id": trace_id,
             "run_id": run_id,
             "session_id": session_id,
+            "connection_id": connection_id,
             "pipeline": pipeline,
             "question": truncated_question,
             "intent_classified": intent_classified,

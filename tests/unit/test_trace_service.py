@@ -55,7 +55,7 @@ class TestRegisterTable:
         table = trace_service.register_agent_traces_table(metadata)
         col_names = {c.name for c in table.columns}
         assert col_names == {
-            "id", "run_id", "session_id", "pipeline", "question",
+            "id", "run_id", "session_id", "connection_id", "pipeline", "question",
             "intent_classified", "tool_chosen", "plan_steps_json",
             "retrieved_refs_json", "final_answer", "latency_ms", "cost_usd",
             "error", "user_feedback", "implicit_signal", "created_at",

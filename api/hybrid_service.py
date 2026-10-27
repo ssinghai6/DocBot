@@ -990,7 +990,7 @@ async def hybrid_chat(
             latency_ms=(time.perf_counter() - _synth_start) * 1000,
         )
         from api.lineage_service import emit_lineage
-        lineage_event = emit_lineage(lineage, session_id)
+        lineage_event = emit_lineage(lineage, session_id, connection_id)
         if lineage_event:
             yield lineage_event
 
@@ -1002,6 +1002,7 @@ async def hybrid_chat(
         trace_id = await log_trace(
             run_id=run_id,
             session_id=session_id,
+            connection_id=connection_id,
             pipeline="hybrid",
             question=question,
             intent_classified=intent,

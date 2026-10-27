@@ -2443,7 +2443,7 @@ async def run_autopilot(
                         )
                     lineage.add_step("verify", tool="llm")
                     from api.lineage_service import emit_lineage
-                    _lin_evt = emit_lineage(lineage, session_id)
+                    _lin_evt = emit_lineage(lineage, session_id, connection_id)
                     if _lin_evt:
                         yield _lin_evt
 
@@ -2459,6 +2459,7 @@ async def run_autopilot(
                     trace_id = await log_trace(
                         run_id=run_id,
                         session_id=session_id,
+                        connection_id=connection_id,
                         pipeline="autopilot",
                         question=question,
                         tool_chosen=", ".join(_tools_used) or None,
