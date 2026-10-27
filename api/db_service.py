@@ -40,7 +40,7 @@ from api.utils.connection_url import (
     validate_sqlite_path,
 )
 from api.utils.encryption import encrypt_credentials, decrypt_credentials
-from api.utils.sql_validator import validate_and_sanitize_sql, QueryValidationError
+from api.utils.sql_validator import extract_sql, validate_and_sanitize_sql, QueryValidationError
 from api.utils.embeddings import find_similar_queries, embedding_to_json
 from api.utils.exceptions import TokenExpiredError
 from api.utils.caller_scope import CallerScope, scope_filter
@@ -133,7 +133,7 @@ async def _decrypt_conn_credentials_lazy(
 
 PROMPT_VERSION_SQL_REPHRASE = "v1"          # _rephrase_with_history
 PROMPT_VERSION_SQL_TABLE_SELECTOR = "v1"    # _select_relevant_tables (incl. retry)
-PROMPT_VERSION_SQL_GEN = "v1"               # _generate_sql
+PROMPT_VERSION_SQL_GEN = "v2"               # _generate_sql
 PROMPT_VERSION_SQL_ANSWER_GEN = "v1"        # _stream_answer
 
 
@@ -1877,7 +1877,10 @@ async def _generate_sql(
         "1. Read-only queries ONLY — no INSERT, UPDATE, DELETE, DROP, CREATE, or any DDL/DML.\n"
         "2. Use only the tables and columns listed in the schema.\n"
         "3. Include a LIMIT clause (max 500 rows).\n"
-        "4. Return ONLY the SQL query — no explanation, no markdown fences.\n\n"
+        "4. Return ONLY the SQL query — no explanation, no markdown fences.\n"
+        "5. If the question compares the database with a document (report, 10-K, note), "
+        "return the database side only: the relevant figures, e.g. one row per metric "
+        "via UNION ALL or a grouped query. Never answer in prose.\n\n"
         f"Schema:\n{schema_text}"
         f"{few_shot_text}\n\n"
         f"Question: {question}\n\n"
@@ -1896,18 +1899,12 @@ async def _generate_sql(
         sql = chat_completion(
             [{"role": "user", "content": prompt}],
             temperature=0,
-            max_tokens=500,
+            max_tokens=1200,
             caller="sql_gen",
             prompt_version=PROMPT_VERSION_SQL_GEN,
         )
         await llm_cache.set_cached_response(prompt_hash, GROQ_MODEL, sql)
-    # Strip markdown code fences if present
-    if sql.startswith("```"):
-        lines = sql.split("\n")
-        sql = "\n".join(
-            line for line in lines if not line.strip().startswith("```")
-        ).strip()
-    return sql
+    return extract_sql(sql)
 
 
 # ---------------------------------------------------------------------------

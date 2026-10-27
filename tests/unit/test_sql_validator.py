@@ -134,3 +134,29 @@ def test_select_into_is_rejected(sql, dialect):
 
     with pytest.raises(QueryValidationError):
         validate_and_sanitize_sql(sql, dialect)
+
+
+@pytest.mark.parametrize(
+    "reply,expected_start",
+    [
+        ("SELECT 1 LIMIT 5", "SELECT 1"),
+        ("```sql\nSELECT a FROM t\n```", "SELECT a FROM t"),
+        ("Here is the query:\n```sql\nSELECT a FROM t;\n```\nIt sums revenue.", "SELECT a FROM t"),
+        ("To compare the books:\nWITH x AS (SELECT 1 AS v) SELECT v FROM x;\nThis returns v.", "WITH x AS"),
+        ("SELECT 'rev' AS m, 1 AS v UNION ALL SELECT 'opex', 2;\n\nExplanation: ...", "SELECT 'rev'"),
+    ],
+)
+def test_extract_sql_strips_prose_and_fences(reply, expected_start):
+    from api.utils.sql_validator import extract_sql, validate_and_sanitize_sql
+
+    sql = extract_sql(reply)
+    assert sql.startswith(expected_start)
+    validate_and_sanitize_sql(sql, "sqlite")  # parses and passes SELECT-only
+
+
+def test_extract_sql_never_makes_prose_or_writes_valid():
+    from api.utils.sql_validator import QueryValidationError, extract_sql, validate_and_sanitize_sql
+
+    for reply in ("I cannot answer this from the schema.", "DELETE FROM t; SELECT 1"):
+        with pytest.raises(QueryValidationError):
+            validate_and_sanitize_sql(extract_sql(reply), "sqlite")

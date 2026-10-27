@@ -1,5 +1,6 @@
 """sqlglot-based SQL validation — AST-level, no regex."""
 
+import re
 from typing import Optional
 import sqlglot
 import sqlglot.expressions as exp
@@ -61,3 +62,28 @@ def validate_and_sanitize_sql(sql: str, dialect: Optional[str] = None) -> str:
         stmt = stmt.limit(500)
 
     return stmt.sql(dialect=dialect)
+
+
+_FENCE_RE = re.compile(r"```(?:sql)?\s*\n?(.*?)```", re.DOTALL | re.IGNORECASE)
+_SQL_START_RE = re.compile(r"^\s*(WITH|SELECT)\b", re.IGNORECASE | re.MULTILINE)
+
+
+def extract_sql(text: str) -> str:
+    """Pull the SQL statement out of an LLM reply.
+
+    Models sometimes wrap the query in a fence after a sentence, or add prose
+    before/after it. Prefer a fenced block; else start at the first line that
+    begins with SELECT/WITH and stop at the first semicolon. Parsing / the
+    SELECT-only check still happens in ``validate_and_sanitize_sql``; this
+    never makes a non-SELECT acceptable.
+    """
+    raw = (text or "").strip()
+    fenced = _FENCE_RE.search(raw)
+    if fenced:
+        raw = fenced.group(1).strip()
+    match = _SQL_START_RE.search(raw)
+    if match:
+        raw = raw[match.start():]
+    # shortcut: cuts at the first ";" even inside a string literal; LLM SQL rarely
+    # has one, upgrade to sqlglot tokenizing if that ever bites.
+    return raw.split(";", 1)[0].strip()
