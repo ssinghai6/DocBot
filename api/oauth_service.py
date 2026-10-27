@@ -271,7 +271,8 @@ async def is_password_breached(password: str) -> bool:
     never blocks sign-up.
     """
     import hashlib
-    digest = hashlib.sha1(password.encode("utf-8")).hexdigest().upper()
+    # HIBP range API is keyed by SHA-1 (k-anonymity lookup, not password storage).
+    digest = hashlib.sha1(password.encode("utf-8"), usedforsecurity=False).hexdigest().upper()
     prefix, suffix = digest[:5], digest[5:]
     try:
         async with httpx.AsyncClient(timeout=2.0) as client:
