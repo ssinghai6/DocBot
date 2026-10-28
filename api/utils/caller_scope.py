@@ -181,7 +181,7 @@ async def resolve_caller_scope(request: Request, *, require_auth: bool = False) 
     if user is not None:
         return scope_from_user(user)
     if require_auth:
-        raise HTTPException(status_code=401, detail="Authentication required.")
+        raise HTTPException(status_code=401, detail=SIGN_IN_REQUIRED_DETAIL)
     raw = _raw_anon_cookie(request)
     return CallerScope(
         user_id=None,
@@ -204,6 +204,90 @@ async def get_caller_scope(request: Request) -> CallerScope:
     from api.auth_service import is_auth_enforcement_active
 
     return await resolve_caller_scope(request, require_auth=is_auth_enforcement_active())
+
+
+# ---------------------------------------------------------------------------
+# DOCBOT-1711: require_principal — user, or anonymous demo, else 401
+# ---------------------------------------------------------------------------
+
+SIGN_IN_REQUIRED_DETAIL = (
+    "Sign in (free) to use your own documents, databases and saved sessions. "
+    "The live demo works without an account."
+)
+
+_demo_sessions_table: Any = None
+_demo_session_factory: Any = None
+
+
+def wire_demo_session_lookup(sessions_table: Any, async_session_factory: Any) -> None:
+    """Inject the ``sessions`` table used to verify server-created demo sessions."""
+    global _demo_sessions_table, _demo_session_factory
+    _demo_sessions_table = sessions_table
+    _demo_session_factory = async_session_factory
+
+
+async def is_server_demo_session(session_id: str) -> bool:
+    """True when ``session_id`` is a ``sessions`` row written by demo init (source='demo')."""
+    if not session_id.startswith("demo-") or _demo_sessions_table is None:
+        return False
+    from sqlalchemy import select
+
+    t = _demo_sessions_table
+    async with _demo_session_factory() as db:
+        result = await db.execute(
+            select(t.c.session_id).where(and_(t.c.session_id == session_id, t.c.source == "demo"))
+        )
+        return result.fetchone() is not None
+
+
+async def request_resource_ids(request: Request) -> tuple[Optional[str], Optional[str]]:
+    """``(session_id, connection_id)`` from path params, query string or JSON body."""
+    found: dict[str, Optional[str]] = {"session_id": None, "connection_id": None}
+    body: Any = {}
+    if request.headers.get("content-type", "").startswith("application/json"):
+        try:
+            body = await request.json()  # Starlette caches the body; route parsing still works
+        except ValueError:
+            body = {}
+    for key in found:
+        for source in (request.path_params, request.query_params, body if isinstance(body, dict) else {}):
+            value = source.get(key)
+            if isinstance(value, str) and value:
+                found[key] = value
+                break
+    return found["session_id"], found["connection_id"]
+
+
+async def is_demo_only_request(request: Request, *, verify: bool = True) -> bool:
+    """True when the request only touches demo resources (``credit_service.is_demo_request``).
+
+    ``verify=False`` skips the sessions lookup (prefix-only) — used where a
+    false positive only hurts the caller (the demo spend cap).
+    """
+    from api.credit_service import is_demo_request
+
+    sid, cid = await request_resource_ids(request)
+    exists = bool(sid) and (await is_server_demo_session(sid) if verify else sid.startswith("demo-"))
+    return is_demo_request(sid, cid, session_exists=exists)
+
+
+async def require_principal(request: Request) -> CallerScope:
+    """FastAPI dependency: the caller's scope, gated by ``APP_AUTH_MODE``.
+
+    * open mode: identical to ``get_caller_scope`` (anonymous → anon scope).
+    * required mode: logged-in → user/org scope; anonymous touching ONLY a
+      server-created demo session/connection → anon (demo) scope, whose row
+      ownership the route still checks; otherwise HTTP 401 with a
+      "Sign in (free)" message the frontend turns into the login modal.
+    """
+    from api.auth_service import is_auth_enforcement_active
+
+    scope = await resolve_caller_scope(request)
+    if not scope.is_anonymous or not is_auth_enforcement_active():
+        return scope
+    if await is_demo_only_request(request):
+        return scope
+    raise HTTPException(status_code=401, detail=SIGN_IN_REQUIRED_DETAIL)
 
 
 # ---------------------------------------------------------------------------

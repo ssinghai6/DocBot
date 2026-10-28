@@ -10,6 +10,7 @@ import Sidebar from "@/components/Sidebar"
 import ChatArea from "@/components/ChatArea"
 import InspectorPanel from "@/components/InspectorPanel"
 import AuthModal from "@/components/AuthModal"
+import OutOfCreditsModal from "@/components/OutOfCreditsModal"
 import AdminPanel from "@/components/AdminPanel"
 import CommandPalette, { useCommandPalette, buildCommands } from "@/components/CommandPalette"
 import ToolPicker, { useToolPicker } from "@/components/ToolPicker"
@@ -21,6 +22,7 @@ import { useBreakpoint } from "@/lib/useBreakpoint"
 import { resolveChatMode, createAnonymousSessionId, type ChatMode } from "@/lib/chatSession"
 import { VerifyRequestSchema, VerifyResponseSchema } from "@/lib/schemas/emailVerify"
 import { OwnerUnlockResponseSchema } from "@/lib/schemas/ownerUnlock"
+import { signInGateMessage } from "@/lib/signInGate"
 
 import {
   AuthMeSchema,
@@ -370,7 +372,7 @@ export default function Home() {
     showToast,
   });
 
-  const { handleSendMessage } = useChatSubmit({
+  const { handleSendMessage, paywall, dismissPaywall } = useChatSubmit({
     input,
     sessionId,
     isDbConnected,
@@ -395,6 +397,7 @@ export default function Home() {
 
     showToast,
     loadQueryHistory: handlers.loadQueryHistory,
+    setAuthModalOpen,
   });
 
   // ── Effects ────────────────────────────────────────────────────────────────
@@ -452,6 +455,14 @@ export default function Home() {
             window.history.replaceState({}, "", window.location.pathname);
             setAuthChecked(true);
             return;
+          }
+          // DOCBOT-1805: back from Stripe (Checkout success/cancel URL or the
+          // Payment Link's after-payment redirect). No balance endpoint yet.
+          const checkout = params.get("checkout");
+          if (checkout) {
+            if (checkout === "success") showToast("success", "Payment received — your credits are being added.");
+            else showToast("info", "Checkout cancelled — you weren't charged.");
+            window.history.replaceState({}, "", window.location.pathname);
           }
           if (params.get("auth_success")) {
             const meRes = await fetch("/api/auth/me", { credentials: "include" });
@@ -571,6 +582,13 @@ export default function Home() {
     setDemoLoading(true);
     try {
       const res = await fetch(`/api/demo/init?dataset=${dataset}`, { method: "POST" });
+      // DOCBOT-1711: demo spend cap reached → offer free sign-in instead of an error.
+      const gated = await signInGateMessage(res);
+      if (gated !== null) {
+        setAuthModalOpen(true);
+        showToast("info", gated);
+        return;
+      }
       if (!res.ok) throw new Error("Demo initialization failed");
       const data = await res.json();
       const demo = DEMO_UI[dataset];
@@ -783,6 +801,16 @@ export default function Home() {
           setTurnstileToken={setTurnstileToken}
           turnstileResetSignal={turnstileResetSignal}
           onClose={() => setAuthModalOpen(false)}
+        />
+      )}
+
+      {/* DOCBOT-1805: out-of-credits / rate-limit paywall */}
+      {paywall && (
+        <OutOfCreditsModal
+          paywall={paywall}
+          isSignedIn={authUser !== null}
+          onSignIn={() => { dismissPaywall(); setAuthModalTab("register"); setAuthModalOpen(true); }}
+          onClose={dismissPaywall}
         />
       )}
 

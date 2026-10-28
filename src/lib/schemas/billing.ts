@@ -82,6 +82,8 @@ export const CreditPackSchema = z.object({
   currency: currencyCode,
   description: z.string().max(280).nullable(),
   highlight: z.boolean(),
+  // false -> "coming soon", no buy action (payments not enabled, DOCBOT-1803)
+  purchasable: z.boolean(),
 })
 export type CreditPack = z.infer<typeof CreditPackSchema>
 
@@ -104,9 +106,12 @@ export const CheckoutSessionRequestSchema = z
   .strict()
 export type CheckoutSessionRequest = z.infer<typeof CheckoutSessionRequestSchema>
 
+// Checkout Session or Stripe Payment Link (DOCBOT-1803). Host is pinned so a
+// tampered response can't redirect the browser off Stripe.
 export const CheckoutSessionResponseSchema = z.object({
-  checkout_url: z.string().regex(/^https:\/\/checkout\.stripe\.com\//),
-  session_id: z.string().regex(/^cs_(test|live)_[A-Za-z0-9]+$/),
+  url: z.string().regex(/^https:\/\/(checkout|buy)\.stripe\.com\//),
+  mode: z.enum(["checkout", "payment_link"]),
+  session_id: z.string().regex(/^cs_(test|live)_[A-Za-z0-9]+$/).nullable(),
   expires_at: timestamp.nullable(),
 })
 export type CheckoutSessionResponse = z.infer<typeof CheckoutSessionResponseSchema>

@@ -111,7 +111,9 @@ Next.js proxies `/api/*` to `localhost:8000` in development.
 | `GEMINI_API_KEY` | Yes | Gemini 2.5 Flash for LangExtract financial extraction |
 | `ALLOWED_ORIGINS` | No | Comma-separated CORS origins, defaults to localhost:3000 |
 | `SESSION_TTL_HOURS` | No | Session cookie TTL in hours, default 8 |
-| `AUTH_REQUIRED` | No | Set to `true` to enforce RBAC login on all protected routes. Default off (open/demo mode) |
+| `APP_AUTH_MODE` | No | `open` (default) or `required`. `required` needs login for own data (uploads, DB connect, CSV, EDGAR ingest, sessions); anonymous visitors keep the one-click demo. Unknown values fail closed (required) |
+| `AUTH_REQUIRED` | No | Legacy alias: `true` == `APP_AUTH_MODE=required` |
+| `DEMO_DAILY_USD_CAP` | No | Daily (UTC) USD cap on anonymous LLM+E2B spend; over it, demo init + anonymous demo chats return 429. Default `10`, `0` disables |
 | `SENTRY_DSN` | No | Enables Sentry error tracking (errors only, `traces_sample_rate=0.0` — no APM/tracing spend). No-op if unset |
 | `SESSION_COST_CEILING_USD` | No | Soft per-session (per-run_id) LLM cost ceiling in USD for Autopilot/Deep Research multi-call loops, default `0.50`. `0` or negative disables the check |
 | `SAML_SP_ENTITY_ID` | SSO | SP entity ID for SAML 2.0 |
