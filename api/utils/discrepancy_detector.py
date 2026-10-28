@@ -207,7 +207,9 @@ def detect_discrepancies(
         db_values = _extract_from_text(csv_answer, source="db")
     else:
         rows = sql_metadata.get("result_preview", [])
-        db_values = _extract_from_rows(rows)
+        db_values = _extract_from_rows(
+            rows, fallback_dimension=_where_dimension(sql_metadata.get("sql_query"))
+        )
 
     sources = [str(x) for x in (sql_metadata.get("sources") or []) if x]
     db_table = ", ".join(sources[:3]) if sources else None
@@ -533,7 +535,43 @@ def _row_period_and_dimension(row: dict) -> tuple[Optional[str], str]:
     return period, " ".join(dims[:2])
 
 
-def _extract_from_rows(rows: list[dict]) -> list[NumericValue]:
+def _where_dimension(sql: Any) -> str:
+    """Text the SQL filtered on, e.g. ``WHERE category = 'Sales and marketing'``.
+
+    DOCBOT-2322: when a query selects only ``period, amount`` the metric name
+    lives solely in the WHERE clause, so the row alone labels the value
+    "amount" and nothing ties out. Read equality / LIKE string literals on
+    non-period columns from the sqlglot AST (never regex) and use them as the
+    row dimension. Returns "" when nothing applies or the SQL does not parse.
+    """
+    if not sql:
+        return ""
+    import sqlglot
+    import sqlglot.expressions as exp
+
+    try:
+        tree = sqlglot.parse_one(str(sql))
+    except sqlglot.errors.SqlglotError:
+        return ""
+    if tree is None:
+        return ""
+    values: list[str] = []
+    for node in tree.find_all(exp.EQ, exp.Like):
+        col = node.find(exp.Column)
+        lit = node.expression if isinstance(node.expression, exp.Literal) else node.this
+        if col is None or not isinstance(lit, exp.Literal) or not lit.is_string:
+            continue
+        if col.name.lower() in _PERIOD_COLS:
+            continue
+        text = lit.this.strip("%").strip()
+        if not text or extract_period(text) or _BARE_QUARTER_RE.match(text):
+            continue
+        if re.search(r"[A-Za-z]", text) and len(text) <= 60 and text not in values:
+            values.append(text)
+    return " ".join(values[:2])
+
+
+def _extract_from_rows(rows: list[dict], fallback_dimension: str = "") -> list[NumericValue]:
     """
     Extract numeric values from SQL result_preview rows.
     Each key becomes the label; each numeric value is extracted. Text
@@ -547,6 +585,7 @@ def _extract_from_rows(rows: list[dict]) -> list[NumericValue]:
         if not isinstance(row, dict):
             continue
         period, dimension = _row_period_and_dimension(row)
+        dimension = dimension or fallback_dimension
         dim_label = _normalize_label(dimension) if dimension else ""
         for col, val in row.items():
             if str(col).lower() in _PERIOD_COLS:

@@ -333,3 +333,50 @@ class TestCitationsAndSeverity:
         item = report.discrepancies[0]
         assert abs(item.db_value - 860_000_000) < 1
         assert "restaurant" in item.label.lower()
+
+
+# --- DOCBOT-2322: metric name only in the WHERE clause --------------------
+
+import pytest  # noqa: E402
+
+from api.utils.discrepancy_detector import _where_dimension, detect_discrepancies  # noqa: E402
+
+
+@pytest.mark.parametrize(
+    "sql,expected",
+    [
+        ("SELECT period, amount FROM opex WHERE category = 'Sales and marketing' LIMIT 500", "Sales and marketing"),
+        ("SELECT amount FROM t WHERE period = 'FY2025' AND line_item LIKE 'Total revenue%'", "Total revenue"),
+        ("SELECT net_income_m FROM quarterly WHERE quarter LIKE 'Q4%'", ""),
+        ("SELECT SUM(amount) FROM t WHERE fiscal_year = '2025'", ""),
+        ("not sql at all (", ""),
+        (None, ""),
+    ],
+)
+def test_where_dimension(sql, expected):
+    assert _where_dimension(sql) == expected
+
+
+def test_where_literal_labels_value_so_it_ties_out():
+    """Row is just {period, amount}; the metric lives in WHERE (seen on prod)."""
+    doc = "Source: Draft-10K.pdf, Page 5\nSales and marketing expense: $54.9 million in FY2025."
+    meta = {
+        "result_preview": [{"period": "FY2025", "amount": 55_200_000}],
+        "sql_query": "SELECT period, amount FROM opex WHERE category = 'Sales and marketing' LIMIT 500",
+        "sources": ["opex"],
+    }
+    report = detect_discrepancies(doc, meta)
+    assert any(
+        d.doc_value == 54_900_000 and d.db_value == 55_200_000 for d in report.discrepancies
+    )
+
+
+def test_row_dimension_still_wins_over_where_literal():
+    doc = "Source: Draft-10K.pdf, Page 9\nLab Services revenue: $104.9 million in FY2025."
+    meta = {
+        "result_preview": [{"segment": "Lab Services", "period": "FY2025", "revenue": 102_700_000}],
+        "sql_query": "SELECT segment, period, revenue FROM revenue_by_segment WHERE segment = 'Ignored'",
+        "sources": ["revenue_by_segment"],
+    }
+    report = detect_discrepancies(doc, meta)
+    assert report.discrepancies and all("lab services" in d.label.lower() for d in report.discrepancies)
