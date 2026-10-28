@@ -83,7 +83,7 @@ export default function OutOfCreditsModal({ paywall, isSignedIn, onSignIn, onClo
       })
       const parsed = CheckoutSessionResponseSchema.safeParse(res.ok ? await res.json() : null)
       if (parsed.success) {
-        window.location.href = parsed.data.url
+        window.location.assign(parsed.data.url)
         return
       }
       setNotice(
