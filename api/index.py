@@ -37,6 +37,11 @@ from api.sandbox_service import SandboxResult
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
+# DOCBOT-2307: doc chat now goes through llm_provider — bump on prompt edits
+# (see PROMPT_VERSION convention in api/utils/llm_provider.py).
+PROMPT_VERSION_DOC_CHAT = "v1"
+PROMPT_VERSION_DOC_CHAT_REPHRASE = "v1"
+
 # Thin observability — DOCBOT-1401/1618. Error tracking only, secrets scrubbed.
 # No-op unless SENTRY_DSN is set, so local dev needs no DSN.
 from api.utils.sentry_setup import init_sentry
@@ -119,7 +124,7 @@ app.add_middleware(SecurityHeadersMiddleware)
 
 # DOCBOT-2005: moved to api/utils/exceptions.py so services can reuse it
 # without importing this entrypoint; re-exported here for existing callers.
-from api.utils.exceptions import safe_error_message  # noqa: E402,F401
+from api.utils.exceptions import StreamInterruptedError, safe_error_message  # noqa: E402,F401
 
 # ---------------------------------------------------------------------------
 # Database setup — PostgreSQL via asyncpg
@@ -1217,9 +1222,11 @@ async def chat(
 
         return StreamingResponse(_emit_guidance(), media_type="text/event-stream")
 
-    groq_api_key = os.getenv('groq_api_key')
-    if not groq_api_key:
-        raise HTTPException(status_code=500, detail="Groq API key not configured")
+    # DOCBOT-2307: any provider key is enough — the provider falls back to Gemini.
+    from api.utils.llm_provider import llm_configured
+    if not llm_configured():
+        raise HTTPException(status_code=500, detail="No LLM provider configured")
+    groq_api_key = os.getenv('groq_api_key', '')  # compress_session compat arg only
 
     async def event_stream():
         # DOCBOT-1512: wall-clock timer for this turn's agent trace row
@@ -1262,20 +1269,14 @@ async def chat(
             effective_persona = request.persona
 
         # ── Standard single-shot path ─────────────────────────────────────────
-        from api.utils.llm_provider import get_llm
+        from api.utils.llm_provider import (
+            achat_completion, achat_completion_stream, lc_messages_to_dicts,
+        )
         from langchain_core.prompts import ChatPromptTemplate, MessagesPlaceholder
         from langchain_core.messages import HumanMessage, AIMessage
-        from langchain_core.runnables import RunnablePassthrough
-        from langchain_core.output_parsers import StrOutputParser
         from concurrent.futures import ThreadPoolExecutor
 
         try:
-            llm = get_llm(
-                temperature=0,
-                streaming=True,
-                groq_api_key=groq_api_key,
-            )
-
             db = VECTOR_STORES[request.session_id]
 
             chat_history = []
@@ -1305,13 +1306,13 @@ async def chat(
                     MessagesPlaceholder("chat_history"),
                     ("human", "{input}"),
                 ])
-                rephrase_chain = contextualize_q_prompt | llm | StrOutputParser()
-                loop = asyncio.get_running_loop()
-                search_query = await loop.run_in_executor(
-                    None,
-                    lambda: rephrase_chain.invoke(
-                        {"input": request.message, "chat_history": chat_history}
-                    )
+                search_query = await achat_completion(
+                    lc_messages_to_dicts(contextualize_q_prompt.format_messages(
+                        input=request.message, chat_history=chat_history,
+                    )),
+                    temperature=0,
+                    caller="doc_chat_rephrase",
+                    prompt_version=PROMPT_VERSION_DOC_CHAT_REPHRASE,
                 )
 
             # Step 2: expand query + parallel retrieval across all variants
@@ -1411,18 +1412,25 @@ async def chat(
             ])
 
             # ── Stream tokens ─────────────────────────────────────────────────
-            qa_chain = qa_prompt | llm | StrOutputParser()
             full_answer = []
 
             from api.utils.pii_masking import mask_pii
 
             lineage.set_persona(effective_persona)
             lineage.set_pii(True)
-            async for chunk in qa_chain.astream({
-                "context": format_docs(retrieved_docs),
-                "chat_history": chat_history,
-                "input": request.message,
-            }):
+            # DOCBOT-2307: through the provider (Groq → Gemini before first token).
+            async for chunk in achat_completion_stream(
+                lc_messages_to_dicts(qa_prompt.format_messages(
+                    context=format_docs(retrieved_docs),
+                    chat_history=chat_history,
+                    input=request.message,
+                )),
+                temperature=0,
+                max_tokens=2000,
+                caller="doc_chat",
+                run_id=_run_id,
+                prompt_version=PROMPT_VERSION_DOC_CHAT,
+            ):
                 masked_chunk = mask_pii(chunk)
                 full_answer.append(masked_chunk)
                 yield f"data: {json.dumps({'type': 'token', 'content': masked_chunk})}\n\n"
@@ -1992,6 +2000,8 @@ async def db_chat(
             yield f"data: {json.dumps({'type': 'error', 'error_type': 'QueryValidationError', 'detail': str(exc)})}\n\n"
         except ExecutionTimeoutError as exc:
             yield f"data: {json.dumps({'type': 'error', 'error_type': 'ExecutionTimeoutError', 'detail': str(exc)})}\n\n"
+        except StreamInterruptedError as exc:
+            yield f"data: {json.dumps({'type': 'error', 'error_type': 'StreamInterruptedError', 'detail': str(exc)})}\n\n"
         except Exception as exc:
             logger.error("db_chat pipeline error: %s — %s", type(exc).__name__, exc, exc_info=True)
             yield f"data: {json.dumps({'type': 'error', 'error_type': 'InternalError', 'detail': 'An internal error occurred.'})}\n\n"

@@ -96,7 +96,7 @@ async def compress_session(
     parameter was always populated from).
     """
     try:
-        from api.utils.llm_provider import chat_completion
+        from api.utils.llm_provider import achat_completion
 
         async with async_session_factory() as session:
             result = await session.execute(
@@ -118,7 +118,7 @@ async def compress_session(
             for row in messages_to_compress
         )
 
-        summary = chat_completion(
+        summary = await achat_completion(
             [
                 {
                     "role": "system",

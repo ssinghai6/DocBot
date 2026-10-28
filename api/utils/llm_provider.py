@@ -40,6 +40,7 @@ Usage:
 
 from __future__ import annotations
 
+import asyncio
 import contextvars
 import json
 import logging
@@ -48,11 +49,12 @@ import time
 import uuid
 from collections import OrderedDict
 from contextlib import contextmanager
-from typing import Callable, Iterator, List, Optional
+from typing import AsyncIterator, Callable, Iterator, List, Optional
 
 from langchain_core.language_models import BaseChatModel
 
 from api.usage_service import billing_attribution, meter_llm_call
+from api.utils.exceptions import StreamInterruptedError
 
 logger = logging.getLogger(__name__)
 
@@ -820,6 +822,10 @@ def chat_completion_stream(
 ) -> Iterator[str]:
     """Streaming chat completion with Groq → Gemini fallback.
 
+    DOCBOT-2307: fallback happens only BEFORE the first token. If Groq fails
+    after yielding tokens, StreamInterruptedError is raised instead (callers
+    turn it into an SSE error via safe_error_message).
+
     Yields content tokens as strings. Drop-in replacement for the
     streaming pattern used in db_service and hybrid_service.
 
@@ -834,6 +840,7 @@ def chat_completion_stream(
     """
     # Try Groq first
     start = time.monotonic()
+    yielded = False
     try:
         from groq import Groq
         api_key = os.getenv("groq_api_key", "")
@@ -852,6 +859,7 @@ def chat_completion_stream(
                 finish_info["finish_reason"] = chunk.choices[0].finish_reason
             delta = chunk.choices[0].delta
             if delta and delta.content:
+                yielded = True
                 yield delta.content
         _log_llm_call(
             provider="groq", model=model, latency_ms=(time.monotonic() - start) * 1000,
@@ -860,6 +868,18 @@ def chat_completion_stream(
         )
         return  # success — don't fall through
     except Exception as exc:
+        if yielded:
+            # DOCBOT-2307: tokens already reached the client — a Gemini
+            # fallback would restart the answer and duplicate text. Stop.
+            logger.error("Groq streaming failed mid-answer (%s), not falling back", type(exc).__name__)
+            _log_llm_call(
+                provider="groq", model=model, latency_ms=(time.monotonic() - start) * 1000,
+                success=False, fallback_triggered=False, caller=caller, run_id=run_id,
+                error_message=f"{type(exc).__name__}: {str(exc)[:200]}",
+                error_class=type(exc).__name__,
+                prompt_version=prompt_version,
+            )
+            raise StreamInterruptedError() from exc
         if isinstance(exc, ValueError) or _is_retriable_error(exc):
             logger.warning("Groq streaming failed (%s), falling back to Gemini", str(exc)[:200])
         else:
@@ -883,3 +903,37 @@ def chat_completion_stream(
             prompt_version=prompt_version,
         )
         raise
+
+
+def llm_configured() -> bool:
+    """DOCBOT-2307: True when ANY provider key is set (Groq or Gemini)."""
+    return bool(os.getenv("groq_api_key") or os.getenv("GEMINI_API_KEY"))
+
+
+async def achat_completion(messages: List[dict], **kwargs) -> str:
+    """DOCBOT-2307: ``chat_completion`` off the event loop. ``asyncio.to_thread``
+    copies the current context, so billing/run_id ContextVars carry through."""
+    return await asyncio.to_thread(chat_completion, messages, **kwargs)
+
+
+async def achat_completion_stream(messages: List[dict], **kwargs) -> AsyncIterator[str]:
+    """DOCBOT-2307: ``chat_completion_stream`` with each blocking ``next()`` run
+    in a worker thread so the event loop keeps serving other requests.
+
+    ``asyncio.to_thread`` copies the current context on every step, so
+    billing/run_id ContextVars carry through and the request meter (shared
+    by reference) records the call.
+    """
+    it = iter(chat_completion_stream(messages, **kwargs))
+    done = object()
+    while True:
+        token = await asyncio.to_thread(next, it, done)
+        if token is done:
+            return
+        yield token
+
+
+def lc_messages_to_dicts(messages) -> List[dict]:
+    """LangChain BaseMessage list → OpenAI-style role/content dicts."""
+    roles = {"system": "system", "human": "user", "ai": "assistant"}
+    return [{"role": roles.get(m.type, "user"), "content": m.content} for m in messages]
