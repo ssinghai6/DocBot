@@ -147,8 +147,9 @@ PUBLIC_ROUTES: dict[RouteKey, str] = {
     ("GET", "/api/personas"): "Static persona catalogue rendered before login.",
     ("GET", "/api/tools"): "Static tool registry metadata for the tool picker (DOCBOT-1514); read-only.",
     ("GET", "/api/auth/config"): "Lists enabled login methods; the login screen needs it pre-auth.",
-    ("POST", "/api/demo/init"): "One-click anonymous demo (EPIC-13). Abuse controls: IP rate limit "
-                                "(DOCBOT-1612) and metering (DOCBOT-1623), not auth.",
+    ("POST", "/api/demo/init"): "One-click anonymous demo (EPIC-13), open even when APP_AUTH_MODE=required. "
+                                "Abuse controls: IP rate limit (DOCBOT-1612), metering (DOCBOT-1623) "
+                                "and the DEMO_DAILY_USD_CAP breaker (DOCBOT-1711), not auth.",
     ("POST", "/api/auth/owner-unlock"): "Checks the X-Owner-Key header itself (compare_digest) and returns 403 on mismatch (DOCBOT-1605).",
     ("GET", "/api/auth/saml/metadata"): "SAML SP metadata must be fetchable by the IdP.",
     ("GET", "/api/auth/saml/login"): "Starts the SAML login redirect.",
@@ -188,13 +189,9 @@ DEV_ONLY: dict[RouteKey, str] = {
 # Ratchet: current gaps -> ticket that closes them (YC plan §2, EPIC-16/17).
 # Remove an entry once its route is guarded; the test will tell you to.
 KNOWN_UNGUARDED: dict[RouteKey, str] = {
-    # Uploads: gate_uploads only enforces when GATE_UPLOADS=true.
-    ("POST", "/api/upload"): "DOCBOT-1711",
     # EDGAR: outbound SEC calls + embedding cost, unmetered (SEC-21).
     ("POST", "/api/edgar/search"): "DOCBOT-1623",
     ("POST", "/api/edgar/filings"): "DOCBOT-1623",
-    ("POST", "/api/edgar/ingest"): "DOCBOT-1623",
-    ("POST", "/api/edgar/ingest-batch"): "DOCBOT-1623",
     ("GET", "/api/edgar/cache"): "DOCBOT-1623",
 }
 
@@ -278,7 +275,7 @@ def test_guard_detection_sees_known_guards() -> None:
     for key in [("POST", "/api/chat"), ("GET", "/admin/audit-log"), ("POST", "/v1/hybrid/chat")]:
         assert key in routes, f"expected route {key} to exist"
         assert _has_guard(routes[key]), f"guard detection failed for {key}"
-    assert not _has_guard(routes[("POST", "/api/upload")]), "gate_uploads must not count as a guard"
+    assert not _is_guard_callable(idx.gate_uploads), "gate_uploads must not count as a guard"
 
 
 # ---------------------------------------------------------------------------

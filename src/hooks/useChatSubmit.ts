@@ -16,6 +16,7 @@ import { EMPTY_ANSWER_MESSAGE, StreamErrorEvent, fillEmptyAssistant } from "@/li
 import { AutopilotStepEventSchema } from "@/lib/schemas/autopilotStep"
 import { readPaywall } from "@/components/OutOfCreditsModal"
 import type { Paywall } from "@/components/OutOfCreditsModal"
+import { SignInGatedError, signInGateMessage } from "@/lib/signInGate"
 
 /**
  * DOCBOT-1510: validate a `lineage` SSE event, attach it to the in-flight
@@ -76,6 +77,8 @@ interface UseChatSubmitParams {
 
   showToast: (type: Toast['type'], message: string) => void
   loadQueryHistory: (connId: string) => void
+  /** DOCBOT-1711: opened when the backend asks an anonymous visitor to sign in. */
+  setAuthModalOpen?: (open: boolean) => void
 }
 
 export function useChatSubmit(params: UseChatSubmitParams) {
@@ -104,6 +107,7 @@ export function useChatSubmit(params: UseChatSubmitParams) {
 
     showToast,
     loadQueryHistory,
+    setAuthModalOpen,
   } = params;
 
   // DOCBOT-1805: 402 (credits) / 429 (rate, demo cap) -> OutOfCreditsModal.
@@ -125,6 +129,14 @@ export function useChatSubmit(params: UseChatSubmitParams) {
     });
     setInput(question);
     return true;
+  };
+
+  // DOCBOT-1711: 401 / demo-cap 429 → login modal; the thrown message is the backend's prompt.
+  const throwIfSignInGated = async (response: Response): Promise<void> => {
+    const message = await signInGateMessage(response);
+    if (message === null) return;
+    setAuthModalOpen?.(true);
+    throw new SignInGatedError(message);
   };
 
   const handleSendMessage = async (e?: React.FormEvent) => {
@@ -267,7 +279,9 @@ export function useChatSubmit(params: UseChatSubmitParams) {
                 headers: { "Content-Type": "application/json" },
                 body: autopilotBody,
               });
-              if ((r.ok && r.body) || r.status === 402 || r.status === 429) return r;
+              if (r.ok && r.body) return r;
+              await throwIfSignInGated(r);
+              if (r.status === 402 || r.status === 429) return r;
               // Retry transient gateway errors (backend waking up); fail fast otherwise.
               if (attempt === 0 && [502, 503, 504].includes(r.status)) {
                 await new Promise(res => setTimeout(res, 1500));
@@ -275,6 +289,7 @@ export function useChatSubmit(params: UseChatSubmitParams) {
               }
               throw new Error(`Autopilot HTTP ${r.status}`);
             } catch (e) {
+              if (e instanceof SignInGatedError) throw e;
               lastErr = e;
               if (attempt === 0) {
                 await new Promise(res => setTimeout(res, 1500));
@@ -444,6 +459,7 @@ export function useChatSubmit(params: UseChatSubmitParams) {
           }),
         });
 
+        await throwIfSignInGated(response);
         if (await blockedByPaywall(response, userMsg.content)) return;
         if (!response.ok || !response.body) {
           throw new Error(`HTTP ${response.status}`);
@@ -545,6 +561,7 @@ export function useChatSubmit(params: UseChatSubmitParams) {
           }),
         });
 
+        await throwIfSignInGated(response);
         if (await blockedByPaywall(response, userMsg.content)) return;
         if (!response.ok || !response.body) throw new Error(`HTTP ${response.status}`);
 
@@ -668,6 +685,7 @@ export function useChatSubmit(params: UseChatSubmitParams) {
         })
       });
 
+      await throwIfSignInGated(response);
       if (await blockedByPaywall(response, userMsg.content)) return;
       if (!response.ok || !response.body) throw new Error(`HTTP ${response.status}`);
 

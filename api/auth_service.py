@@ -111,14 +111,28 @@ def is_saml_configured() -> bool:
     return all(os.getenv(v) for v in required)
 
 
+AUTH_MODES = ("open", "required")
+
+
+def auth_mode_setting() -> str:
+    """Raw ``APP_AUTH_MODE`` (lower-cased); empty means unset (DOCBOT-1711)."""
+    return os.getenv("APP_AUTH_MODE", "").strip().lower()
+
+
 def is_auth_enforcement_active() -> bool:
     """Return True when RBAC should enforce authentication on protected routes.
 
-    Requires explicit opt-in via AUTH_REQUIRED=true env var.
+    DOCBOT-1711: ``APP_AUTH_MODE=open|required`` (default ``open``). The older
+    ``AUTH_REQUIRED=true`` is still honoured as an alias for ``required``.
+    An unrecognised ``APP_AUTH_MODE`` value fails closed (required) — a typo
+    must never silently open the app; ``assert_safe_auth_config`` warns.
     SAML/OAuth env vars alone do NOT activate enforcement — this prevents
     accidental lockout when auth providers are configured but login flow
     hasn't been completed (e.g., during demos or local development).
     """
+    mode = auth_mode_setting()
+    if mode not in ("", "open"):
+        return True
     return os.getenv("AUTH_REQUIRED", "").lower() in ("true", "1", "yes")
 
 

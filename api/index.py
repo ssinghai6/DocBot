@@ -59,7 +59,7 @@ app.add_middleware(
 
 from api.utils import request_guard
 from api.utils import caller_scope
-from api.utils.caller_scope import CallerScope, get_caller_scope, owner_values, resolve_caller_scope, scope_from_user
+from api.utils.caller_scope import CallerScope, owner_values, require_principal, resolve_caller_scope, scope_from_user
 from api.utils.pdf_io import PdfPasswordProtectedError, open_pdf_bytes
 
 
@@ -443,7 +443,10 @@ async def charge_budget(request: Request, session_id: str, endpoint: str) -> Non
 
 
 _gate_uploads = Depends(gate_uploads)
-_caller_scope = Depends(get_caller_scope)
+# DOCBOT-1711: open mode == get_caller_scope; required mode admits anonymous
+# callers only on server-created demo sessions/connections, else 401.
+_caller_scope = Depends(require_principal)
+_demo_spend_guard = Depends(request_guard.demo_spend_guard)
 _SESSION_NOT_FOUND = "Session not found"
 
 
@@ -561,6 +564,8 @@ async def lifespan(app: FastAPI):
     # DOCBOT-603: wire RBAC module-level table references
     from api.rbac_service import wire_rbac
     wire_rbac(users_table, user_sessions_table, async_session_factory)
+    # DOCBOT-1711: require_principal verifies demo sessions (sessions.source='demo').
+    caller_scope.wire_demo_session_lookup(sessions_table, async_session_factory)
     # DOCBOT-702: wire commerce service table references
     from api.commerce_service import wire_commerce
     wire_commerce(commerce_orders_table, commerce_financials_table, async_session_factory)
@@ -939,6 +944,7 @@ async def upload_documents(
     request: Request,
     files: List[UploadFile] = File(...),
     _gate=_gate_uploads,
+    _scope: CallerScope = _caller_scope,  # DOCBOT-1711: 401 when APP_AUTH_MODE=required
 ):
     session_id = str(uuid.uuid4())
     
@@ -1142,11 +1148,10 @@ async def upload_documents(
         logger.exception("Error in upload (%s): %s", type(e).__name__, e)
         raise HTTPException(status_code=500, detail=safe_error_message(e))
 
-@app.post("/api/chat")
+@app.post("/api/chat", dependencies=[_demo_spend_guard])
 async def chat(
     raw_request: Request,
     request: ChatRequest,
-    _user=_rbac_viewer,
     scope: CallerScope = _caller_scope,
 ):
     """SSE streaming document chat.
@@ -1902,11 +1907,10 @@ async def db_refresh_schema(connection_id: str, scope: CallerScope = _caller_sco
         raise HTTPException(status_code=500, detail=safe_error_message(exc))
 
 
-@app.post("/api/db/chat")
+@app.post("/api/db/chat", dependencies=[_demo_spend_guard])
 async def db_chat(
     raw_request: Request,
     request: DBChatRequest,
-    _user=_rbac_viewer,
     scope: CallerScope = _caller_scope,
 ):
     """
@@ -2280,11 +2284,10 @@ class HybridChatRequest(BaseModel):
     chart_type: str = "auto"
 
 
-@app.post("/api/hybrid/chat")
+@app.post("/api/hybrid/chat", dependencies=[_demo_spend_guard])
 async def hybrid_chat_route(
     raw_request: Request,
     request: HybridChatRequest,
-    _user=_rbac_viewer,
     scope: CallerScope = _caller_scope,
 ):
     """DOCBOT-402 — Hybrid chat pipeline: intent classification → SQL + RAG → synthesis.
@@ -2369,11 +2372,10 @@ class AutopilotRequest(BaseModel):
     history: List[ChatMessage] = []
 
 
-@app.post("/api/autopilot/run")
+@app.post("/api/autopilot/run", dependencies=[_demo_spend_guard])
 async def autopilot_run(
     raw_request: Request,
     request: AutopilotRequest,
-    _user=_rbac_viewer,
     scope: CallerScope = _caller_scope,
 ):
     """DOCBOT-405 — Analytical Autopilot: plan → execute (≤5 steps) → synthesise.
@@ -3363,12 +3365,14 @@ async def edgar_list_filings(body: EdgarFilingsRequest):
     return {"cik": body.cik, "filing_type": body.filing_type, "filings": filings}
 
 
-@app.post("/api/edgar/ingest", dependencies=[Depends(request_guard.edgar_guard("edgar_ingest"))])
-async def edgar_ingest_filing(request: Request, body: EdgarIngestRequest):
+@app.post(
+    "/api/edgar/ingest",
+    # DOCBOT-1711: auth before the EDGAR limiter so a 401 burns no quota.
+    dependencies=[_caller_scope, Depends(request_guard.edgar_guard("edgar_ingest"))],
+)
+async def edgar_ingest_filing(body: EdgarIngestRequest, scope: CallerScope = _caller_scope):
     """Download a single SEC filing and ingest into the RAG pipeline."""
     from api.edgar_service import ingest_edgar_filing
-
-    scope = await resolve_caller_scope(request)
 
     result = await ingest_edgar_filing(
         cik=body.cik,
@@ -3389,7 +3393,9 @@ async def edgar_ingest_filing(request: Request, body: EdgarIngestRequest):
 
 
 @app.post("/api/edgar/ingest-batch")
-async def edgar_ingest_batch(request: Request, body: EdgarBatchIngestRequest):
+async def edgar_ingest_batch(
+    request: Request, body: EdgarBatchIngestRequest, scope: CallerScope = _caller_scope
+):
     """Ingest multiple years of SEC filings at once."""
     from api.edgar_service import ingest_multiple_filings
 
@@ -3400,8 +3406,6 @@ async def edgar_ingest_batch(request: Request, body: EdgarBatchIngestRequest):
             detail=f"count must be between 1 and {request_guard.EDGAR_BATCH_MAX}.",
         )
     await request_guard.check_edgar_limit(request, "edgar_ingest_batch", amount=body.count)
-
-    scope = await resolve_caller_scope(request)
 
     results = await ingest_multiple_filings(
         cik=body.cik,

@@ -22,6 +22,7 @@ import { useBreakpoint } from "@/lib/useBreakpoint"
 import { resolveChatMode, createAnonymousSessionId, type ChatMode } from "@/lib/chatSession"
 import { VerifyRequestSchema, VerifyResponseSchema } from "@/lib/schemas/emailVerify"
 import { OwnerUnlockResponseSchema } from "@/lib/schemas/ownerUnlock"
+import { signInGateMessage } from "@/lib/signInGate"
 
 import {
   AuthMeSchema,
@@ -396,6 +397,7 @@ export default function Home() {
 
     showToast,
     loadQueryHistory: handlers.loadQueryHistory,
+    setAuthModalOpen,
   });
 
   // ── Effects ────────────────────────────────────────────────────────────────
@@ -573,6 +575,13 @@ export default function Home() {
     setDemoLoading(true);
     try {
       const res = await fetch(`/api/demo/init?dataset=${dataset}`, { method: "POST" });
+      // DOCBOT-1711: demo spend cap reached → offer free sign-in instead of an error.
+      const gated = await signInGateMessage(res);
+      if (gated !== null) {
+        setAuthModalOpen(true);
+        showToast("info", gated);
+        return;
+      }
       if (!res.ok) throw new Error("Demo initialization failed");
       const data = await res.json();
       const demo = DEMO_UI[dataset];

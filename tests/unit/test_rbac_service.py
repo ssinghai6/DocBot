@@ -167,28 +167,17 @@ class TestWireRbac:
 # ---------------------------------------------------------------------------
 
 class TestRouteRBACWiring:
-    """Verify that all four chat endpoints declare a _user parameter (RBAC guard)."""
+    """All four chat endpoints are guarded by require_principal (DOCBOT-1711).
 
-    def _has_rbac_param(self, fn) -> bool:
+    It replaced ``_user=_rbac_viewer``: under APP_AUTH_MODE=required it admits
+    logged-in users and anonymous demo-only callers, and 401s everyone else.
+    """
+
+    @pytest.mark.parametrize("name", ["chat", "db_chat", "hybrid_chat_route", "autopilot_run"])
+    def test_chat_route_guarded_by_require_principal(self, name):
         import inspect
-        return "_user" in inspect.signature(fn).parameters
-
-    def test_chat_route_has_rbac(self):
         import api.index as idx
-        assert self._has_rbac_param(idx.chat), \
-            "/api/chat is missing _user=_rbac_viewer — route is unguarded"
+        from api.utils.caller_scope import require_principal
 
-    def test_db_chat_route_has_rbac(self):
-        import api.index as idx
-        assert self._has_rbac_param(idx.db_chat), \
-            "/api/db/chat is missing _user=_rbac_viewer — route is unguarded"
-
-    def test_hybrid_chat_route_has_rbac(self):
-        import api.index as idx
-        assert self._has_rbac_param(idx.hybrid_chat_route), \
-            "/api/hybrid/chat is missing _user=_rbac_viewer — route is unguarded"
-
-    def test_autopilot_run_has_rbac(self):
-        import api.index as idx
-        assert self._has_rbac_param(idx.autopilot_run), \
-            "/api/autopilot/run is missing _user=_rbac_viewer — route is unguarded"
+        scope = inspect.signature(getattr(idx, name)).parameters["scope"]
+        assert scope.default.dependency is require_principal, f"{name} is not guarded by require_principal"
