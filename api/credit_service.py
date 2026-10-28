@@ -417,6 +417,14 @@ async def _is_free_tier(session: Any, org_id: str) -> bool:
     return row is None
 
 
+async def is_paid_org(org_id: str) -> bool:
+    """True when ``org_id`` has ever purchased credits (DOCBOT-1615). False if unwired."""
+    if not is_wired():
+        return False
+    async with _session_factory() as session:
+        return not await _is_free_tier(session, org_id)
+
+
 async def reserve(org_id: str, estimate: int, run_id: str, route: str) -> ReserveResult:
     """Atomically reserve ``estimate`` credits (capped for free tier).
 

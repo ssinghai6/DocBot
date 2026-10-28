@@ -443,6 +443,9 @@ async def charge_budget(request: Request, session_id: str, endpoint: str) -> Non
 
 
 _gate_uploads = Depends(gate_uploads)
+# DOCBOT-1615: platform daily USD cap — 503 for free-tier callers once spent.
+from api.utils.spend_guard import check_platform_capacity  # noqa: E402
+_spend_cap = Depends(check_platform_capacity)
 _caller_scope = Depends(get_caller_scope)
 _SESSION_NOT_FOUND = "Session not found"
 
@@ -584,6 +587,9 @@ async def lifespan(app: FastAPI):
     from api.usage_service import wire_usage_store, start_writer as start_usage_writer
     wire_usage_store(usage_events_table, async_session_factory)
     start_usage_writer()
+    # DOCBOT-1615: platform daily spend cap reads llm_calls + usage_events
+    from api.utils.spend_guard import wire_spend_guard
+    wire_spend_guard(llm_calls_table, usage_events_table, async_session_factory)
     # DOCBOT-1802: credit reserve/settle store; release reservations orphaned
     # by a previous process before serving traffic.
     credit_service.wire_credit_store(credit_tables, async_session_factory, engine.dialect.name)
@@ -911,7 +917,7 @@ def get_tools(category: Optional[str] = None):
 
 
 # DOCBOT-1612/1623: per-IP + per-user + global hourly limit (owner bypass), metered.
-@app.post("/api/demo/init", dependencies=[Depends(request_guard.check_demo_init_limit)])
+@app.post("/api/demo/init", dependencies=[_spend_cap, Depends(request_guard.check_demo_init_limit)])
 async def init_demo(request: Request, dataset: str = "quickbite"):
     """Initialize a sandbox demo session with pre-loaded data.
 
@@ -934,7 +940,7 @@ async def init_demo(request: Request, dataset: str = "quickbite"):
     return result
 
 
-@app.post("/api/upload")
+@app.post("/api/upload", dependencies=[_spend_cap])
 async def upload_documents(
     request: Request,
     files: List[UploadFile] = File(...),
@@ -1142,7 +1148,7 @@ async def upload_documents(
         logger.exception("Error in upload (%s): %s", type(e).__name__, e)
         raise HTTPException(status_code=500, detail=safe_error_message(e))
 
-@app.post("/api/chat")
+@app.post("/api/chat", dependencies=[_spend_cap])
 async def chat(
     raw_request: Request,
     request: ChatRequest,
@@ -1902,7 +1908,7 @@ async def db_refresh_schema(connection_id: str, scope: CallerScope = _caller_sco
         raise HTTPException(status_code=500, detail=safe_error_message(exc))
 
 
-@app.post("/api/db/chat")
+@app.post("/api/db/chat", dependencies=[_spend_cap])
 async def db_chat(
     raw_request: Request,
     request: DBChatRequest,
@@ -2035,7 +2041,7 @@ async def db_query_history(
 from api.file_upload_service import upload_sqlite, upload_csv
 
 
-@app.post("/api/db/upload")
+@app.post("/api/db/upload", dependencies=[_spend_cap])
 async def db_upload_sqlite(
     file: UploadFile = File(...),
     session_id: str = Form(...),
@@ -2069,7 +2075,7 @@ async def db_upload_sqlite(
         raise HTTPException(status_code=500, detail=safe_error_message(exc))
 
 
-@app.post("/api/db/upload/csv")
+@app.post("/api/db/upload/csv", dependencies=[_spend_cap])
 async def db_upload_csv(
     file: UploadFile = File(...),
     session_id: str = Form(...),
@@ -2115,7 +2121,7 @@ class SandboxExecuteRequest(BaseModel):
 # DOCBOT-1612/1607: raw code execution requires a logged-in analyst+ in every
 # mode. ALLOW_ANONYMOUS_SANDBOX=true is honored only in local dev (ignored on
 # Railway/production; refused with MULTI_TENANT). Metered per org/user.
-@app.post("/api/sandbox/execute", response_model=SandboxResult)
+@app.post("/api/sandbox/execute", response_model=SandboxResult, dependencies=[_spend_cap])
 async def execute_sandbox(
     request: SandboxExecuteRequest,
     raw_request: Request,
@@ -2280,7 +2286,7 @@ class HybridChatRequest(BaseModel):
     chart_type: str = "auto"
 
 
-@app.post("/api/hybrid/chat")
+@app.post("/api/hybrid/chat", dependencies=[_spend_cap])
 async def hybrid_chat_route(
     raw_request: Request,
     request: HybridChatRequest,
@@ -2369,7 +2375,7 @@ class AutopilotRequest(BaseModel):
     history: List[ChatMessage] = []
 
 
-@app.post("/api/autopilot/run")
+@app.post("/api/autopilot/run", dependencies=[_spend_cap])
 async def autopilot_run(
     raw_request: Request,
     request: AutopilotRequest,
@@ -3358,7 +3364,7 @@ async def edgar_list_filings(body: EdgarFilingsRequest):
     return {"cik": body.cik, "filing_type": body.filing_type, "filings": filings}
 
 
-@app.post("/api/edgar/ingest", dependencies=[Depends(request_guard.edgar_guard("edgar_ingest"))])
+@app.post("/api/edgar/ingest", dependencies=[_spend_cap, Depends(request_guard.edgar_guard("edgar_ingest"))])
 async def edgar_ingest_filing(request: Request, body: EdgarIngestRequest):
     """Download a single SEC filing and ingest into the RAG pipeline."""
     from api.edgar_service import ingest_edgar_filing
@@ -3383,7 +3389,7 @@ async def edgar_ingest_filing(request: Request, body: EdgarIngestRequest):
     return result
 
 
-@app.post("/api/edgar/ingest-batch")
+@app.post("/api/edgar/ingest-batch", dependencies=[_spend_cap])
 async def edgar_ingest_batch(request: Request, body: EdgarBatchIngestRequest):
     """Ingest multiple years of SEC filings at once."""
     from api.edgar_service import ingest_multiple_filings
