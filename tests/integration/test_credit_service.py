@@ -400,3 +400,31 @@ def test_cost_to_credits_rounds_up():
     assert credit_service.cost_to_credits(0) == 0
     assert credit_service.cost_to_credits(1) == 1
     assert credit_service.cost_to_credits(1_000) == 4  # 3.5 -> 4
+
+
+# ---------------------------------------------------------------------------
+# DOCBOT-1803: manual purchase grant (Payment Link flow)
+# ---------------------------------------------------------------------------
+
+
+async def test_grant_purchase_idempotent_on_reference(store):
+    tables, factory = store
+    first = await credit_service.grant_purchase("org-1", 10_000, "pi_123", "Manual grant")
+    again = await credit_service.grant_purchase("org-1", 10_000, "pi_123", "Manual grant")
+    assert first.duplicate is False and again.duplicate is True
+    # monthly free grant (500) + one purchase, never two
+    assert first.balance_credits == again.balance_credits == 10_500
+    bal = await _balance(factory, tables)
+    assert bal.balance_credits == 10_500
+    rows = await _ledger(factory, tables)
+    purchases = [r for r in rows if r.kind == LedgerEntryKind.purchase.value]
+    assert len(purchases) == 1 and purchases[0].ref == "pi_123"
+    assert purchases[0].balance_after_credits == 10_500
+    assert sum(r.delta_credits for r in rows) == bal.balance_credits
+
+
+async def test_grant_purchase_ends_free_tier(store):
+    tables, factory = store
+    await credit_service.grant_purchase("org-1", 1_000, "pi_free", "Manual grant")
+    result = await credit_service.reserve("org-1", 400, "run-x", "/api/chat")
+    assert result.free_tier is False
