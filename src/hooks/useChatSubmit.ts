@@ -17,6 +17,7 @@ import { AutopilotStepEventSchema } from "@/lib/schemas/autopilotStep"
 import { readPaywall } from "@/components/OutOfCreditsModal"
 import type { Paywall } from "@/components/OutOfCreditsModal"
 import { SignInGatedError, signInGateMessage } from "@/lib/signInGate"
+import { PlatformCapacityError, throwIfAtCapacity } from "@/lib/capacity"
 
 /**
  * DOCBOT-1510: validate a `lineage` SSE event, attach it to the in-flight
@@ -133,6 +134,7 @@ export function useChatSubmit(params: UseChatSubmitParams) {
 
   // DOCBOT-1711: 401 / demo-cap 429 → login modal; the thrown message is the backend's prompt.
   const throwIfSignInGated = async (response: Response): Promise<void> => {
+    await throwIfAtCapacity(response); // DOCBOT-1615 capacity 503 -> readable error, no retry
     const message = await signInGateMessage(response);
     if (message === null) return;
     setAuthModalOpen?.(true);
@@ -289,7 +291,7 @@ export function useChatSubmit(params: UseChatSubmitParams) {
               }
               throw new Error(`Autopilot HTTP ${r.status}`);
             } catch (e) {
-              if (e instanceof SignInGatedError) throw e;
+              if (e instanceof SignInGatedError || e instanceof PlatformCapacityError) throw e;
               lastErr = e;
               if (attempt === 0) {
                 await new Promise(res => setTimeout(res, 1500));

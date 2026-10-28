@@ -42,6 +42,7 @@ ADMIN_ROUTES = [
     ("GET", "/admin/metrics", "/admin/metrics", None),
     ("POST", "/admin/credits/grant", "/admin/credits/grant", {"org_id": "o1", "credits": 1, "reference": "r1"}),
     ("POST", "/api/billing/checkout", "/api/billing/checkout", {"pack_id": "starter"}),
+    ("GET", "/admin/funnel", "/admin/funnel", None),
 ]
 
 _ADMIN_DEP_CALLS = {

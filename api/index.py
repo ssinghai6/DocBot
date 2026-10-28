@@ -9,7 +9,7 @@ from api.utils.langsmith_pin import pin_langsmith_env
 pin_langsmith_env()
 
 from contextlib import asynccontextmanager
-from fastapi import FastAPI, File, UploadFile, Form, HTTPException, Depends, Request
+from fastapi import FastAPI, File, UploadFile, Form, HTTPException, Depends, Query, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse, StreamingResponse
 from pydantic import BaseModel
@@ -375,6 +375,10 @@ eval_judgments_table = register_eval_judgments_table(metadata)
 from api.api_key_service import register_api_keys_table
 api_keys_table = register_api_keys_table(metadata)
 
+# ── DOCBOT-1706: server-side activation funnel events ───────────────────────
+from api import funnel_service  # noqa: E402
+funnel_events_table = funnel_service.register_funnel_events_table(metadata)
+
 # ── EPIC-06: RBAC dependencies (DOCBOT-603) ──────────────────────────────────
 # Imported here so Depends() objects can be declared at module level.
 # require_role() checks is_auth_enforcement_active() at request time — safe to import early.
@@ -443,6 +447,9 @@ async def charge_budget(request: Request, session_id: str, endpoint: str) -> Non
 
 
 _gate_uploads = Depends(gate_uploads)
+# DOCBOT-1615: platform daily USD cap — 503 for free-tier callers once spent.
+from api.utils.spend_guard import check_platform_capacity  # noqa: E402
+_spend_cap = Depends(check_platform_capacity)
 # DOCBOT-1711: open mode == get_caller_scope; required mode admits anonymous
 # callers only on server-created demo sessions/connections, else 401.
 _caller_scope = Depends(require_principal)
@@ -537,6 +544,9 @@ async def init_db() -> None:
         # DOCBOT-1802: credit_ledger is append-only (immutability trigger)
         for stmt in credit_service.LEDGER_IMMUTABILITY_STATEMENTS:
             await conn.execute(text(stmt))
+        # DOCBOT-1706: funnel dedupe indexes (idempotent)
+        for stmt in funnel_service.FUNNEL_EVENTS_DDL:
+            await conn.execute(text(stmt))
     logger.info(
         "Database tables verified / created "
         "(sessions, messages, db_connections, schema_cache, query_history, "
@@ -589,6 +599,10 @@ async def lifespan(app: FastAPI):
     from api.usage_service import wire_usage_store, start_writer as start_usage_writer
     wire_usage_store(usage_events_table, async_session_factory)
     start_usage_writer()
+    # DOCBOT-1615: platform daily spend cap reads llm_calls + usage_events
+    from api.utils.spend_guard import wire_spend_guard
+    wire_spend_guard(llm_calls_table, usage_events_table, async_session_factory)
+    funnel_service.wire_funnel_store(funnel_events_table, async_session_factory, engine.dialect.name)
     # DOCBOT-1802: credit reserve/settle store; release reservations orphaned
     # by a previous process before serving traffic.
     credit_service.wire_credit_store(credit_tables, async_session_factory, engine.dialect.name)
@@ -916,7 +930,7 @@ def get_tools(category: Optional[str] = None):
 
 
 # DOCBOT-1612/1623: per-IP + per-user + global hourly limit (owner bypass), metered.
-@app.post("/api/demo/init", dependencies=[Depends(request_guard.check_demo_init_limit)])
+@app.post("/api/demo/init", dependencies=[_spend_cap, Depends(request_guard.check_demo_init_limit)])
 async def init_demo(request: Request, dataset: str = "quickbite"):
     """Initialize a sandbox demo session with pre-loaded data.
 
@@ -939,7 +953,7 @@ async def init_demo(request: Request, dataset: str = "quickbite"):
     return result
 
 
-@app.post("/api/upload")
+@app.post("/api/upload", dependencies=[_spend_cap])
 async def upload_documents(
     request: Request,
     files: List[UploadFile] = File(...),
@@ -1075,6 +1089,7 @@ async def upload_documents(
                     **owner_values(_owner_scope),
                 )
             )
+        funnel_service.record_for_scope("first_upload", _owner_scope, {"kind": "pdf"})
         
         # Determine suggested persona based on file names + first ~5000 chars of extracted text
         # Require 2+ keyword matches to avoid false positives (e.g. LCA docs matching AI/ML)
@@ -1148,7 +1163,7 @@ async def upload_documents(
         logger.exception("Error in upload (%s): %s", type(e).__name__, e)
         raise HTTPException(status_code=500, detail=safe_error_message(e))
 
-@app.post("/api/chat", dependencies=[_demo_spend_guard])
+@app.post("/api/chat", dependencies=[_spend_cap, _demo_spend_guard])
 async def chat(
     raw_request: Request,
     request: ChatRequest,
@@ -1907,7 +1922,7 @@ async def db_refresh_schema(connection_id: str, scope: CallerScope = _caller_sco
         raise HTTPException(status_code=500, detail=safe_error_message(exc))
 
 
-@app.post("/api/db/chat", dependencies=[_demo_spend_guard])
+@app.post("/api/db/chat", dependencies=[_spend_cap, _demo_spend_guard])
 async def db_chat(
     raw_request: Request,
     request: DBChatRequest,
@@ -2039,7 +2054,7 @@ async def db_query_history(
 from api.file_upload_service import upload_sqlite, upload_csv
 
 
-@app.post("/api/db/upload")
+@app.post("/api/db/upload", dependencies=[_spend_cap])
 async def db_upload_sqlite(
     file: UploadFile = File(...),
     session_id: str = Form(...),
@@ -2065,6 +2080,7 @@ async def db_upload_sqlite(
         await stamp_connection_owner(
             result["connection_id"], scope, db_connections_table, async_session_factory
         )
+        funnel_service.record_for_scope("first_upload", scope, {"kind": "sqlite"})
         return result
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc))
@@ -2073,7 +2089,7 @@ async def db_upload_sqlite(
         raise HTTPException(status_code=500, detail=safe_error_message(exc))
 
 
-@app.post("/api/db/upload/csv")
+@app.post("/api/db/upload/csv", dependencies=[_spend_cap])
 async def db_upload_csv(
     file: UploadFile = File(...),
     session_id: str = Form(...),
@@ -2099,6 +2115,7 @@ async def db_upload_csv(
         await stamp_connection_owner(
             result["connection_id"], scope, db_connections_table, async_session_factory
         )
+        funnel_service.record_for_scope("first_upload", scope, {"kind": "csv"})
         return result
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc))
@@ -2119,7 +2136,7 @@ class SandboxExecuteRequest(BaseModel):
 # DOCBOT-1612/1607: raw code execution requires a logged-in analyst+ in every
 # mode. ALLOW_ANONYMOUS_SANDBOX=true is honored only in local dev (ignored on
 # Railway/production; refused with MULTI_TENANT). Metered per org/user.
-@app.post("/api/sandbox/execute", response_model=SandboxResult)
+@app.post("/api/sandbox/execute", response_model=SandboxResult, dependencies=[_spend_cap])
 async def execute_sandbox(
     request: SandboxExecuteRequest,
     raw_request: Request,
@@ -2284,7 +2301,7 @@ class HybridChatRequest(BaseModel):
     chart_type: str = "auto"
 
 
-@app.post("/api/hybrid/chat", dependencies=[_demo_spend_guard])
+@app.post("/api/hybrid/chat", dependencies=[_spend_cap, _demo_spend_guard])
 async def hybrid_chat_route(
     raw_request: Request,
     request: HybridChatRequest,
@@ -2372,7 +2389,7 @@ class AutopilotRequest(BaseModel):
     history: List[ChatMessage] = []
 
 
-@app.post("/api/autopilot/run", dependencies=[_demo_spend_guard])
+@app.post("/api/autopilot/run", dependencies=[_spend_cap, _demo_spend_guard])
 async def autopilot_run(
     raw_request: Request,
     request: AutopilotRequest,
@@ -2836,6 +2853,7 @@ async def auth_register(body: RegisterRequest, response: Response, request: Requ
                 {"status": "verification_required", "email": email}, status_code=202,
             )
         raise HTTPException(status_code=400, detail=REGISTER_FAILED_DETAIL)
+    funnel_service.record_funnel_event("signup", user_id=user_id, props={"provider": "email"})
 
     log_event(
         AuditEventType.login, audit_log_table, async_session_factory,
@@ -3278,6 +3296,14 @@ async def get_admin_metrics(llm_days: int = 7, _user=_rbac_platform_admin):
     return metrics
 
 
+@app.get("/admin/funnel", response_model=funnel_service.FunnelReport)
+async def get_admin_funnel(
+    days: int = Query(30, ge=1, le=365), _user=_rbac_platform_admin,
+) -> funnel_service.FunnelReport:
+    """DOCBOT-1706: activation funnel counts + step conversion. Platform operators only."""
+    return await funnel_service.get_funnel_report(days)
+
+
 # ---------------------------------------------------------------------------
 # Commerce Connectors — EPIC-07. DOCBOT-1602: routes live in
 # api/routes/connector_routes.py (analyst+ in every mode, org-scoped).
@@ -3368,7 +3394,7 @@ async def edgar_list_filings(body: EdgarFilingsRequest):
 @app.post(
     "/api/edgar/ingest",
     # DOCBOT-1711: auth before the EDGAR limiter so a 401 burns no quota.
-    dependencies=[_caller_scope, Depends(request_guard.edgar_guard("edgar_ingest"))],
+    dependencies=[_spend_cap, _caller_scope, Depends(request_guard.edgar_guard("edgar_ingest"))],
 )
 async def edgar_ingest_filing(body: EdgarIngestRequest, scope: CallerScope = _caller_scope):
     """Download a single SEC filing and ingest into the RAG pipeline."""
@@ -3392,7 +3418,7 @@ async def edgar_ingest_filing(body: EdgarIngestRequest, scope: CallerScope = _ca
     return result
 
 
-@app.post("/api/edgar/ingest-batch")
+@app.post("/api/edgar/ingest-batch", dependencies=[_spend_cap])
 async def edgar_ingest_batch(
     request: Request, body: EdgarBatchIngestRequest, scope: CallerScope = _caller_scope
 ):

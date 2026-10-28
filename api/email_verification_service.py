@@ -253,6 +253,9 @@ async def consume_verification_token(
                 .where(users_table.c.id == row.user_id)
                 .values(email_verified=True)
             )
+    from api.funnel_service import record_funnel_event  # DOCBOT-1706
+
+    record_funnel_event("email_verified", user_id=row.user_id)
 
     logger.info("email-verification: marked email verified for user %s", row.user_id)
     return user.email
