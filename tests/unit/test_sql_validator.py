@@ -160,3 +160,40 @@ def test_extract_sql_never_makes_prose_or_writes_valid():
     for reply in ("I cannot answer this from the schema.", "DELETE FROM t; SELECT 1"):
         with pytest.raises(QueryValidationError):
             validate_and_sanitize_sql(extract_sql(reply), "sqlite")
+
+
+@pytest.mark.parametrize("dialect", ["mysql", "postgresql", "sqlite", None])
+@pytest.mark.parametrize(
+    "sql",
+    [
+        "SELECT 1 /*! ; DROP TABLE t */",
+        "SELECT * FROM t /*!50000 INTO OUTFILE '/tmp/x' */",
+        "SELECT 1 /*M! ; DELETE FROM t */",
+    ],
+)
+def test_mysql_executable_comments_rejected(sql, dialect):
+    """MySQL runs /*! ... */ bodies; sqlglot sees a comment. Never accept."""
+    from api.utils.sql_validator import QueryValidationError, validate_and_sanitize_sql
+
+    with pytest.raises(QueryValidationError):
+        validate_and_sanitize_sql(sql, dialect)
+
+
+@pytest.mark.parametrize("dialect", ["mysql", "postgresql", "azure_sql"])
+def test_non_sqlite_executes_regenerated_sql_not_raw_text(dialect):
+    """Comments / trailing text in the raw reply never reach a network DB."""
+    from api.utils.sql_validator import validate_and_sanitize_sql
+
+    out = validate_and_sanitize_sql("SELECT a FROM t -- note: ; DROP TABLE t\n", dialect)
+    assert "DROP" not in out.upper()
+    assert "--" not in out
+
+
+def test_sqlite_keeps_cte_column_list_verbatim():
+    from api.utils.sql_validator import validate_and_sanitize_sql
+
+    out = validate_and_sanitize_sql(
+        "WITH doc(metric, amount) AS (VALUES ('rev', 1)) SELECT metric, amount FROM doc",
+        "sqlite",
+    )
+    assert "doc(metric, amount)" in out and out.rstrip().endswith("LIMIT 500")

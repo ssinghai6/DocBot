@@ -35,6 +35,10 @@ def validate_and_sanitize_sql(sql: str, dialect: Optional[str] = None) -> str:
             The *invalid SQL is never included* in the error message.
     """
     dialect = _DIALECT_ALIASES.get(dialect, dialect)
+    # MySQL/MariaDB run `/*! ... */` comment bodies as SQL; sqlglot treats
+    # them as comments. Never accept them, whatever the target dialect.
+    if "/*!" in sql or "/*M!" in sql:
+        raise QueryValidationError("Generated SQL could not be parsed.")
     try:
         statements = sqlglot.parse(sql, dialect=dialect)
     except sqlglot.errors.SqlglotError as exc:  # ParseError, or TokenError on a truncated literal
@@ -60,14 +64,19 @@ def validate_and_sanitize_sql(sql: str, dialect: Optional[str] = None) -> str:
             "Only SELECT queries are permitted. Write operations are not allowed."
         )
 
-    # Execute the text that was validated rather than sqlglot's regeneration:
-    # round-tripping is lossy (sqlite drops CTE column lists, so
-    # `WITH doc(metric, amount) AS (VALUES ...)` broke with "no such column").
+    # Only SQLite executes the validated text verbatim: sqlglot's sqlite
+    # round-trip drops CTE column lists (`WITH doc(metric, amount) AS (VALUES
+    # ...)` -> "no such column"), and SQLite has no executable comments, so
+    # what sqlglot validated is what runs. Every other dialect executes
+    # sqlglot's regenerated SQL, so a parser differential (MySQL `/*! ... */`
+    # executable comments, `#` comments) can never smuggle in unvalidated text.
+    if dialect != "sqlite":
+        if stmt.args.get("limit") is None and stmt.args.get("fetch") is None:
+            stmt = stmt.limit(500)
+        return stmt.sql(dialect=dialect, comments=False)
     text = sql.strip().rstrip(";").rstrip()
     if stmt.args.get("limit") is not None or stmt.args.get("fetch") is not None:
         return text
-    if dialect == "tsql":
-        return stmt.limit(500).sql(dialect=dialect)  # needs TOP, not LIMIT
     # Newline so a trailing "-- comment" can't swallow the LIMIT.
     return f"{text}\nLIMIT 500"
 
