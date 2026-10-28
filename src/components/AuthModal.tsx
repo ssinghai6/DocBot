@@ -119,6 +119,17 @@ export default function AuthModal({
               required
               className={inputCx}
             />
+            {authModalTab === "register" && (
+              <label className="flex items-start gap-2 text-[11px] text-[var(--color-text-tertiary)]">
+                <input type="checkbox" required className="mt-0.5 accent-[var(--color-cyan-500)]" />
+                <span>
+                  I agree to the{" "}
+                  <a href="/terms" target="_blank" rel="noopener noreferrer" className="text-[var(--color-cyan-500)] hover:underline">Terms</a>
+                  {" "}and{" "}
+                  <a href="/privacy" target="_blank" rel="noopener noreferrer" className="text-[var(--color-cyan-500)] hover:underline">Privacy Policy</a>
+                </span>
+              </label>
+            )}
             {turnstileRequired && authModalTab === "register" && (
               <div className="flex justify-center py-0.5">
                 <TurnstileWidget
@@ -129,7 +140,7 @@ export default function AuthModal({
               </div>
             )}
             {authError && (
-              <p className="text-[11px] text-[var(--color-danger-500)] bg-[var(--color-danger-500)]/10 border border-[var(--color-danger-500)]/30 rounded-[5px] px-2.5 py-1.5">
+              <p role="alert" className="text-[11px] text-[var(--color-danger-500)] bg-[var(--color-danger-500)]/10 border border-[var(--color-danger-500)]/30 rounded-[5px] px-2.5 py-1.5">
                 {authError}
               </p>
             )}

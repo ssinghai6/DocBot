@@ -9,6 +9,7 @@ import { MailCheck, TriangleAlert } from "lucide-react"
 import LogoMark from "@/components/LogoMark"
 import TurnstileWidget from "@/components/TurnstileWidget"
 import OAuthButtons, { authInputCx, authPrimaryBtnCx } from "@/components/OAuthButtons"
+import { LegalLinks } from "@/components/LegalPage"
 import { RegisterRequestSchema, RegisterResponseSchema } from "@/lib/schemas/emailVerify"
 import { AuthConfigSchema, apiErrorDetail, type AuthConfig } from "@/lib/schemas/signup"
 
@@ -26,6 +27,7 @@ export default function SignupPage() {
   const [name, setName] = useState("")
   const [email, setEmail] = useState("")
   const [password, setPassword] = useState("")
+  const [acceptedTerms, setAcceptedTerms] = useState(false)
   const [turnstileToken, setTurnstileToken] = useState("")
   const [turnstileReset, setTurnstileReset] = useState(0)
   const [submitting, setSubmitting] = useState(false)
@@ -61,9 +63,14 @@ export default function SignupPage() {
       password,
       ...(name.trim() ? { name: name.trim() } : {}),
       ...(turnstileToken ? { turnstile_token: turnstileToken } : {}),
+      accepted_terms: acceptedTerms,
     })
     if (!parsed.success) {
       setError("Please enter a valid email and password.")
+      return
+    }
+    if (!acceptedTerms) {
+      setError("Please accept the Terms of Service and Privacy Policy.")
       return
     }
     setSubmitting(true)
@@ -200,6 +207,15 @@ export default function SignupPage() {
                       At least 8 characters. Breached passwords are rejected.
                     </p>
                   </div>
+                  <div className="flex items-start gap-2">
+                    <input id="signup-terms" type="checkbox" required checked={acceptedTerms}
+                      onChange={(e) => setAcceptedTerms(e.target.checked)}
+                      className="mt-0.5 w-4 h-4 accent-[var(--color-cyan-500)] outline-none focus-visible:shadow-[var(--glow-cyan)]" />
+                    <label htmlFor="signup-terms" className="text-[12px] text-[var(--color-text-secondary)]">
+                      I agree to the <Link href="/terms" target="_blank" className={linkCx}>Terms of Service</Link> and{" "}
+                      <Link href="/privacy" target="_blank" className={linkCx}>Privacy Policy</Link>.
+                    </label>
+                  </div>
                   {turnstileSiteKey && (
                     <div className="flex justify-center">
                       <TurnstileWidget siteKey={turnstileSiteKey} onToken={setTurnstileToken} resetSignal={turnstileReset} />
@@ -212,7 +228,7 @@ export default function SignupPage() {
                       </p>
                     )}
                   </div>
-                  <button type="submit" disabled={submitting || !email || !password || botCheckMissing} className={authPrimaryBtnCx}>
+                  <button type="submit" disabled={submitting || !email || !password || !acceptedTerms || botCheckMissing} className={authPrimaryBtnCx}>
                     {submitting ? "Creating account…" : "Create account"}
                   </button>
                 </form>
@@ -232,6 +248,11 @@ export default function SignupPage() {
           <SampleTieOutCard />
         </aside>
       </main>
+
+      <footer className="border-t border-[var(--color-border-subtle)] py-4 px-4 sm:px-6 lg:px-8 text-[12px] text-[var(--color-text-tertiary)] flex items-center justify-between">
+        <span>&copy; 2026 DocBot</span>
+        <LegalLinks />
+      </footer>
     </div>
   )
 }

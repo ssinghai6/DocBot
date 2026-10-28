@@ -18,6 +18,8 @@ export const RegisterRequestSchema = z
     password: z.string(),
     name: z.string().optional(),
     turnstile_token: z.string().optional(),
+    // DOCBOT-1707: register only; the backend refuses signup unless true.
+    accepted_terms: z.boolean().optional(),
   })
   .strict()
 

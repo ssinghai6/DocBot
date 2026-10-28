@@ -12,7 +12,7 @@ from contextlib import asynccontextmanager
 from fastapi import FastAPI, File, UploadFile, Form, HTTPException, Depends, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse, StreamingResponse
-from pydantic import BaseModel
+from pydantic import BaseModel, StrictBool
 from sqlalchemy.ext.asyncio import create_async_engine, AsyncSession, async_sessionmaker
 from sqlalchemy import (
     MetaData, Table, Column, String, Text, Integer, BigInteger, DateTime,
@@ -2779,7 +2779,11 @@ class RegisterRequest(BaseModel):
     # DOCBOT-1713: widget token, present only when NEXT_PUBLIC_TURNSTILE_SITE_KEY
     # is configured (and TURNSTILE_SECRET_KEY is set server-side).
     turnstile_token: Optional[str] = None
+    # DOCBOT-1707: the signup checkbox; anything but an explicit true is refused.
+    accepted_terms: StrictBool = False  # strict: "yes"/1 don't coerce to True
 
+
+TERMS_REQUIRED_DETAIL = "You must accept the Terms of Service and Privacy Policy to create an account."
 
 # DOCBOT-1622: one body for every credential failure — no account enumeration.
 LOGIN_FAILED_DETAIL = "Invalid email or password."
@@ -2809,6 +2813,8 @@ async def auth_register(body: RegisterRequest, response: Response, request: Requ
     email = body.email.lower().strip()
     if not re.match(r"^[^@\s]+@[^@\s]+\.[^@\s]+$", email):
         raise HTTPException(status_code=422, detail="Invalid email address.")
+    if body.accepted_terms is not True:
+        raise HTTPException(status_code=422, detail=TERMS_REQUIRED_DETAIL)
 
     err = validate_password_strength(body.password)
     if err:
