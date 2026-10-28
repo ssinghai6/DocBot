@@ -3297,6 +3297,11 @@ from api.routes.email_verify_routes import (  # noqa: E402
 app.include_router(email_verify_router)
 wire_email_verification(users_table, email_verification_tokens_table, async_session_factory)
 
+# ── DOCBOT-1803: credit packs, Stripe Checkout / Payment Link, manual grant ──
+from api.routes.billing_routes import router as billing_router  # noqa: E402
+
+app.include_router(billing_router)
+
 
 def _get_connector(connector_id: str):
     """Retrieve a registered connector by ID or raise 404 (used by /v1 routes)."""

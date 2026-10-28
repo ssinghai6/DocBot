@@ -1,5 +1,6 @@
 "use client"
 
+import { useState } from "react"
 import { EXPERT_PERSONAS, routeQuestion } from "@/components/personas"
 import { DocumentsExpiredEventSchema, LineageSchema } from "@/components/types"
 import type {
@@ -13,6 +14,8 @@ import type {
 import { useUIStore } from "@/store/uiStore"
 import { EMPTY_ANSWER_MESSAGE, StreamErrorEvent, fillEmptyAssistant } from "@/lib/chatStream"
 import { AutopilotStepEventSchema } from "@/lib/schemas/autopilotStep"
+import { readPaywall } from "@/components/OutOfCreditsModal"
+import type { Paywall } from "@/components/OutOfCreditsModal"
 
 /**
  * DOCBOT-1510: validate a `lineage` SSE event, attach it to the in-flight
@@ -102,6 +105,27 @@ export function useChatSubmit(params: UseChatSubmitParams) {
     showToast,
     loadQueryHistory,
   } = params;
+
+  // DOCBOT-1805: 402 (credits) / 429 (rate, demo cap) -> OutOfCreditsModal.
+  const [paywall, setPaywall] = useState<Paywall | null>(null);
+
+  /** True when the request was refused by billing/rate limits and the paywall is now shown. */
+  const blockedByPaywall = async (response: Response, question: string): Promise<boolean> => {
+    const hit = await readPaywall(response);
+    if (!hit) return false;
+    setPaywall(hit);
+    // Drop the unanswered turn and put the question back so the user can resend it.
+    setMessages(prev => {
+      let out = prev;
+      const last = out[out.length - 1];
+      if (last && last.role === "assistant" && !last.content) out = out.slice(0, -1);
+      const prevUser = out[out.length - 1];
+      if (prevUser && prevUser.role === "user" && prevUser.content === question) out = out.slice(0, -1);
+      return out;
+    });
+    setInput(question);
+    return true;
+  };
 
   const handleSendMessage = async (e?: React.FormEvent) => {
     if (e) e.preventDefault();
@@ -243,7 +267,7 @@ export function useChatSubmit(params: UseChatSubmitParams) {
                 headers: { "Content-Type": "application/json" },
                 body: autopilotBody,
               });
-              if (r.ok && r.body) return r;
+              if ((r.ok && r.body) || r.status === 402 || r.status === 429) return r;
               // Retry transient gateway errors (backend waking up); fail fast otherwise.
               if (attempt === 0 && [502, 503, 504].includes(r.status)) {
                 await new Promise(res => setTimeout(res, 1500));
@@ -262,6 +286,7 @@ export function useChatSubmit(params: UseChatSubmitParams) {
         };
 
         const response = await openAutopilot();
+        if (await blockedByPaywall(response, userMsg.content)) return;
 
         const assistantMsg: Message = {
           role: "assistant",
@@ -419,6 +444,7 @@ export function useChatSubmit(params: UseChatSubmitParams) {
           }),
         });
 
+        if (await blockedByPaywall(response, userMsg.content)) return;
         if (!response.ok || !response.body) {
           throw new Error(`HTTP ${response.status}`);
         }
@@ -519,6 +545,7 @@ export function useChatSubmit(params: UseChatSubmitParams) {
           }),
         });
 
+        if (await blockedByPaywall(response, userMsg.content)) return;
         if (!response.ok || !response.body) throw new Error(`HTTP ${response.status}`);
 
         const reader = response.body.getReader();
@@ -641,6 +668,7 @@ export function useChatSubmit(params: UseChatSubmitParams) {
         })
       });
 
+      if (await blockedByPaywall(response, userMsg.content)) return;
       if (!response.ok || !response.body) throw new Error(`HTTP ${response.status}`);
 
       const reader = response.body.getReader();
@@ -702,5 +730,5 @@ export function useChatSubmit(params: UseChatSubmitParams) {
     }
   };
 
-  return { handleSendMessage };
+  return { handleSendMessage, paywall, dismissPaywall: () => setPaywall(null) };
 }

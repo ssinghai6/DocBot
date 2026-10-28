@@ -362,7 +362,7 @@ async def _ensure_row_and_grant(session: Any, org_id: str, now: datetime) -> str
     after the transaction commits.
     """
     assert _tables is not None
-    ob, ledger = _tables.org_balances, _tables.credit_ledger
+    ob = _tables.org_balances
     await session.execute(
         _insert(ob)
         .values(org_id=org_id, balance_credits=0, reserved_credits=0, updated_at=now, frozen=False)
@@ -372,6 +372,31 @@ async def _ensure_row_and_grant(session: Any, org_id: str, now: datetime) -> str
     if _granted_period.get(org_id) == period:
         return period
     amount = free_monthly_credits()
+    inserted = await _credit_once(
+        session, org_id, LedgerEntryKind.free_grant, grant_ref(org_id, period),
+        amount, f"Monthly free credits {period}", now,
+    )
+    if inserted and amount > 0:
+        logger.info("credit_service: monthly grant org=%s period=%s credits=%d", org_id, period, amount)
+    return period
+
+
+async def _credit_once(
+    session: Any,
+    org_id: str,
+    kind: LedgerEntryKind,
+    ref: str,
+    amount: int,
+    description: str,
+    now: datetime,
+) -> bool:
+    """Write one positive ledger row and add it to the balance, at most once per (kind, ref).
+
+    Caller holds the transaction and has already upserted the balance row.
+    Returns False when ``(kind, ref)`` already exists (nothing applied).
+    """
+    assert _tables is not None
+    ob, ledger = _tables.org_balances, _tables.credit_ledger
     current = (
         await session.execute(
             select(ob.c.balance_credits).where(ob.c.org_id == org_id).with_for_update()
@@ -383,11 +408,11 @@ async def _ensure_row_and_grant(session: Any, org_id: str, now: datetime) -> str
             .values(
                 id=str(uuid.uuid4()),
                 org_id=org_id,
-                kind=LedgerEntryKind.free_grant.value,
-                ref=grant_ref(org_id, period),
+                kind=kind.value,
+                ref=ref,
                 delta_credits=amount,
                 balance_after_credits=int(current) + amount,
-                description=f"Monthly free credits {period}",
+                description=description,
                 created_at=now,
             )
             .on_conflict_do_nothing(index_elements=["kind", "ref"])
@@ -400,8 +425,43 @@ async def _ensure_row_and_grant(session: Any, org_id: str, now: datetime) -> str
             .where(ob.c.org_id == org_id)
             .values(balance_credits=ob.c.balance_credits + amount, updated_at=now)
         )
-        logger.info("credit_service: monthly grant org=%s period=%s credits=%d", org_id, period, amount)
-    return period
+    return inserted is not None
+
+
+@dataclass(frozen=True)
+class GrantResult:
+    duplicate: bool
+    balance_credits: int
+
+
+async def grant_purchase(org_id: str, credits: int, ref: str, description: str) -> GrantResult:
+    """Credit a purchase (DOCBOT-1803 manual grant; DOCBOT-1804 webhook later).
+
+    One transaction: balance row upsert + monthly grant + ``purchase`` ledger
+    row + balance update. ``UNIQUE(kind, ref)`` makes a replayed ``ref`` a
+    no-op (``duplicate=True``), so the operator can safely retry.
+    """
+    if not is_wired():
+        raise RuntimeError("credit store not wired")
+    if credits <= 0:
+        raise ValueError("credits must be positive")
+    assert _tables is not None
+    ob = _tables.org_balances
+    now = _now()
+    async with _session_factory() as session:
+        async with session.begin():
+            period = await _ensure_row_and_grant(session, org_id, now)
+            inserted = await _credit_once(
+                session, org_id, LedgerEntryKind.purchase, ref, credits, description, now
+            )
+            balance = (
+                await session.execute(select(ob.c.balance_credits).where(ob.c.org_id == org_id))
+            ).scalar_one()
+    _granted_period[org_id] = period
+    logger.info(
+        "credit_service: purchase org=%s credits=%d duplicate=%s", org_id, credits, not inserted
+    )
+    return GrantResult(duplicate=not inserted, balance_credits=int(balance))
 
 
 async def _is_free_tier(session: Any, org_id: str) -> bool:
@@ -902,6 +962,8 @@ __all__ = [
     "estimate_for",
     "free_monthly_credits",
     "free_run_ceiling_credits",
+    "GrantResult",
+    "grant_purchase",
     "grant_ref",
     "is_demo_request",
     "is_enforced",
