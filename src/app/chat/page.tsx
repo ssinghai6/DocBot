@@ -10,6 +10,7 @@ import Sidebar from "@/components/Sidebar"
 import ChatArea from "@/components/ChatArea"
 import InspectorPanel from "@/components/InspectorPanel"
 import AuthModal from "@/components/AuthModal"
+import OutOfCreditsModal from "@/components/OutOfCreditsModal"
 import AdminPanel from "@/components/AdminPanel"
 import CommandPalette, { useCommandPalette, buildCommands } from "@/components/CommandPalette"
 import ToolPicker, { useToolPicker } from "@/components/ToolPicker"
@@ -370,7 +371,7 @@ export default function Home() {
     showToast,
   });
 
-  const { handleSendMessage } = useChatSubmit({
+  const { handleSendMessage, paywall, dismissPaywall } = useChatSubmit({
     input,
     sessionId,
     isDbConnected,
@@ -452,6 +453,14 @@ export default function Home() {
             window.history.replaceState({}, "", window.location.pathname);
             setAuthChecked(true);
             return;
+          }
+          // DOCBOT-1805: back from Stripe (Checkout success/cancel URL or the
+          // Payment Link's after-payment redirect). No balance endpoint yet.
+          const checkout = params.get("checkout");
+          if (checkout) {
+            if (checkout === "success") showToast("success", "Payment received — your credits are being added.");
+            else showToast("info", "Checkout cancelled — you weren't charged.");
+            window.history.replaceState({}, "", window.location.pathname);
           }
           if (params.get("auth_success")) {
             const meRes = await fetch("/api/auth/me", { credentials: "include" });
@@ -776,6 +785,16 @@ export default function Home() {
           setTurnstileToken={setTurnstileToken}
           turnstileResetSignal={turnstileResetSignal}
           onClose={() => setAuthModalOpen(false)}
+        />
+      )}
+
+      {/* DOCBOT-1805: out-of-credits / rate-limit paywall */}
+      {paywall && (
+        <OutOfCreditsModal
+          paywall={paywall}
+          isSignedIn={authUser !== null}
+          onSignIn={() => { dismissPaywall(); setAuthModalTab("register"); setAuthModalOpen(true); }}
+          onClose={dismissPaywall}
         />
       )}
 
