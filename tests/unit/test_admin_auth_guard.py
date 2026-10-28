@@ -130,15 +130,34 @@ def test_non_admin_gets_403_in_open_mode(client, method, template, path, body):
 # Sweep: the list above is exhaustive
 # ---------------------------------------------------------------------------
 
+def _all_api_routes() -> list[tuple[str, APIRoute]]:
+    """(full_path, route) for every APIRoute, including included routers.
+
+    fastapi >= 0.162 (CI) keeps include_router() output behind a wrapper with
+    ``original_router`` instead of flattening it into ``app.routes``.
+    """
+    out: list[tuple[str, APIRoute]] = []
+
+    def _collect(items, prefix: str) -> None:
+        for route in items:
+            inner = getattr(route, "original_router", None)
+            if inner is not None:
+                ctx = getattr(route, "include_context", None)
+                _collect(inner.routes, prefix + (getattr(ctx, "prefix", "") or ""))
+            elif isinstance(route, APIRoute):
+                out.append((prefix + route.path, route))
+
+    _collect(idx.app.routes, "")
+    return out
+
+
 def test_admin_route_list_is_exhaustive():
     listed = {(m, t) for m, t, _, _ in ADMIN_ROUTES}
     found = set()
-    for route in idx.app.routes:
-        if not isinstance(route, APIRoute):
-            continue
-        if route.path.startswith("/admin") or _route_uses_admin_dep(route):
+    for path, route in _all_api_routes():
+        if path.startswith("/admin") or _route_uses_admin_dep(route):
             for method in route.methods:
-                found.add((method, route.path))
+                found.add((method, path))
     assert found == listed, (
         f"Admin route set changed. Unlisted: {sorted(found - listed)}; stale: {sorted(listed - found)}. "
         "Add new admin routes to ADMIN_ROUTES (and guard them with _rbac_admin)."
@@ -146,9 +165,9 @@ def test_admin_route_list_is_exhaustive():
 
 
 def test_every_admin_path_uses_admin_dependency():
-    for route in idx.app.routes:
-        if isinstance(route, APIRoute) and route.path.startswith("/admin"):
-            assert _route_uses_admin_dep(route), f"{route.path} is not guarded by require_admin()"
+    for path, route in _all_api_routes():
+        if path.startswith("/admin"):
+            assert _route_uses_admin_dep(route), f"{path} is not guarded by require_admin()"
 
 
 # ---------------------------------------------------------------------------
