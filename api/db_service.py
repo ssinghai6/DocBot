@@ -133,7 +133,7 @@ async def _decrypt_conn_credentials_lazy(
 
 PROMPT_VERSION_SQL_REPHRASE = "v1"          # _rephrase_with_history
 PROMPT_VERSION_SQL_TABLE_SELECTOR = "v1"    # _select_relevant_tables (incl. retry)
-PROMPT_VERSION_SQL_GEN = "v2"               # _generate_sql
+PROMPT_VERSION_SQL_GEN = "v3"               # _generate_sql
 PROMPT_VERSION_SQL_ANSWER_GEN = "v1"        # _stream_answer
 
 
@@ -1149,6 +1149,60 @@ def _get_columns_via_information_schema(engine, table_name: str) -> List[Dict[st
         return []
 
 
+# DOCBOT-2321: sample values for low-cardinality text columns, so the SQL
+# generator writes `quarter LIKE 'Q4%'` instead of `quarter = 'Q4'` when the
+# data holds 'Q4 2025'. Computed once at introspection, cached with the schema.
+_SAMPLE_MAX_VALUES = 5
+_SAMPLE_MAX_LEN = 40
+_SAMPLE_MAX_DISTINCT = 20
+_SAMPLE_SCAN_ROWS = 1000
+_SAMPLE_MAX_COLUMNS = 60
+_TEXT_TYPE_MARKERS = ("CHAR", "TEXT", "STRING", "CLOB")
+_SENSITIVE_COLUMN_MARKERS = (
+    "email", "phone", "ssn", "password", "secret", "token", "address", "birth", "dob",
+)
+
+
+def _attach_sample_values(engine, table_name: str, columns: List[Dict[str, Any]], budget: List[int]) -> None:
+    """Add ``sample_values`` (<=5 values, <=40 chars) to TEXT columns with
+    <=20 distinct values. Skips PII-looking columns (by name, or any value the
+    PII masker would mask). ``budget`` caps sampled columns per introspection.
+    """
+    from sqlalchemy import column as sa_column, table as sa_table
+    from sqlalchemy.exc import SQLAlchemyError
+    from api.utils.pii_masking import mask_pii
+
+    for col in columns:
+        if budget[0] <= 0:
+            return
+        name = str(col["name"])
+        ctype = str(col.get("type", "")).upper()
+        # untyped ("" / NULL) = computed sqlite view column; non-str values are dropped below
+        if ctype not in ("", "NULL") and not any(m in ctype for m in _TEXT_TYPE_MARKERS):
+            continue
+        if any(m in name.lower() for m in _SENSITIVE_COLUMN_MARKERS):
+            continue
+        budget[0] -= 1
+        # shortcut: cardinality judged on the first 1000 rows (bounded scan on
+        # big tables), so values are labelled "e.g." in the prompt.
+        inner = select(sa_column(name)).select_from(sa_table(table_name)).limit(_SAMPLE_SCAN_ROWS).subquery()
+        query = select(inner.c[name]).distinct().limit(_SAMPLE_MAX_DISTINCT + 1)
+        try:
+            with engine.connect() as conn:
+                values = [r[0] for r in conn.execute(query)]
+        except SQLAlchemyError as exc:
+            logger.debug("sample values skipped for %s.%s: %s", table_name, name, type(exc).__name__)
+            continue
+        values = [v for v in values if isinstance(v, str)]
+        if not values or len(values) > _SAMPLE_MAX_DISTINCT:
+            continue
+        if any(mask_pii(v) != v for v in values):
+            continue
+        short = sorted(v for v in values if len(v) <= _SAMPLE_MAX_LEN)[:_SAMPLE_MAX_VALUES]
+        if short:
+            col["sample_values"] = short
+
+
 async def _introspect_schema_from_url(
     sync_url: str, dialect: str,
     entra_connect_args: Optional[Dict[str, Any]] = None,
@@ -1184,6 +1238,7 @@ async def _introspect_schema_from_url(
             table_names = _sort_tables_by_row_estimate_pg(engine, table_names)
 
         table_names = table_names[:200]
+        sample_budget = [_SAMPLE_MAX_COLUMNS]
 
         schema = []
         for tname in table_names:
@@ -1195,6 +1250,7 @@ async def _introspect_schema_from_url(
                 ]
             except Exception:
                 col_list = _get_columns_via_information_schema(engine, tname)
+            _attach_sample_values(engine, tname, col_list, sample_budget)
             schema.append({"name": tname, "columns": col_list})
 
         # Append views (tagged with is_view for downstream awareness)
@@ -1208,6 +1264,8 @@ async def _introspect_schema_from_url(
                 ]
             except Exception:
                 col_list = _get_columns_via_information_schema(engine, vname)
+            if dialect == "sqlite":  # views can be expensive on server DBs
+                _attach_sample_values(engine, vname, col_list, sample_budget)
             schema.append({"name": vname, "columns": col_list, "is_view": True})
 
         return schema
@@ -1874,8 +1932,15 @@ async def _generate_sql(
     can be logged as the model wrote it). ``feedback`` (DOCBOT-2320) turns
     this into the corrective retry: appended to the prompt, cache bypassed.
     """
+    def _fmt_col(c: Dict[str, Any]) -> str:
+        samples = c.get("sample_values")
+        if not samples:
+            return f"{c['name']} ({c['type']})"
+        vals = ", ".join("'" + str(v).replace("'", "''") + "'" for v in samples)
+        return f"{c['name']} ({c['type']}, e.g. {vals})"
+
     def _fmt_table(t: Dict[str, Any]) -> str:
-        cols = ", ".join(f"{c['name']} ({c['type']})" for c in t["columns"])
+        cols = ", ".join(_fmt_col(c) for c in t["columns"])
         return f"Table: {t['name']}\nColumns: {cols}"
 
     schema_text = "\n\n".join(_fmt_table(t) for t in schema_subset)
@@ -1897,7 +1962,9 @@ async def _generate_sql(
         "4. Return ONLY the SQL query — no explanation, no markdown fences.\n"
         "5. If the question compares the database with a document (report, 10-K, note), "
         "return the database side only: the relevant figures, e.g. one row per metric "
-        "via UNION ALL or a grouped query. Never answer in prose.\n\n"
+        "via UNION ALL or a grouped query. Never answer in prose.\n"
+        "6. Filter text columns using the stored format shown in their e.g. values "
+        "(e.g. quarter values like 'Q4 2025' need quarter LIKE 'Q4%', not quarter = 'Q4').\n\n"
         f"Schema:\n{schema_text}"
         f"{few_shot_text}\n\n"
         f"Question: {question}\n\n"
