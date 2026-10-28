@@ -22,8 +22,9 @@ Units — chosen deliberately, read before adding fields
   ISO-8601 with offset, which the Zod side validates with
   ``z.iso.datetime({ offset: true })``.
 
-Server-only models (``CreditPackConfig``, ``UsageEventRecord``) have no Zod
-mirror on purpose — they carry Stripe price ids or margin data.
+Server-only models (``CreditPackConfig``, ``UsageEventRecord``,
+``AdminCreditGrant*``) have no Zod mirror on purpose — they carry Stripe ids,
+margin data, or are operator-only.
 """
 
 from __future__ import annotations
@@ -167,15 +168,39 @@ class CreditPack(_Contract):
     currency: str = Field(default="usd", pattern=r"^[a-z]{3}$")
     description: Optional[str] = Field(default=None, max_length=280)
     highlight: bool = False
+    purchasable: bool = Field(
+        default=False,
+        description="False -> show as 'coming soon' with no buy action (payments not enabled)",
+    )
 
 
 class CreditPackConfig(CreditPack):
-    """Server-only: one entry of ``STRIPE_PACKS_JSON`` (DOCBOT-1803)."""
+    """Server-only: one entry of ``STRIPE_PACKS_JSON`` (DOCBOT-1803).
 
-    stripe_price_id: str = Field(pattern=r"^price_[A-Za-z0-9]+$")
+    Accepts ``price_usd`` (e.g. ``9.99``) as an alternative to ``price_cents``.
+    A pack is buyable via Checkout (``stripe_price_id`` + ``STRIPE_SECRET_KEY``)
+    or via a Stripe Payment Link (``payment_link_url``).
+    """
 
-    def to_public(self) -> CreditPack:
-        return CreditPack.model_validate(self.model_dump(exclude={"stripe_price_id"}))
+    stripe_price_id: Optional[str] = Field(default=None, pattern=r"^price_[A-Za-z0-9]+$")
+    payment_link_url: Optional[str] = Field(
+        default=None, max_length=512, pattern=r"^https://buy\.stripe\.com/[A-Za-z0-9_/-]+$"
+    )
+
+    @model_validator(mode="before")
+    @classmethod
+    def _price_usd_to_cents(cls, data: object) -> object:
+        if isinstance(data, dict) and "price_usd" in data:
+            data = dict(data)
+            usd = data.pop("price_usd")
+            if "price_cents" not in data:
+                data["price_cents"] = int((Decimal(str(usd)) * 100).to_integral_value())
+        return data
+
+    def to_public(self, purchasable: bool = False) -> CreditPack:
+        public = self.model_dump(exclude={"stripe_price_id", "payment_link_url"})
+        public["purchasable"] = purchasable
+        return CreditPack.model_validate(public)
 
 
 class CreditPackCatalog(_Contract):
@@ -226,9 +251,30 @@ class CheckoutSessionRequest(_Contract):
 
 
 class CheckoutSessionResponse(_Contract):
-    checkout_url: str = Field(pattern=r"^https://checkout\.stripe\.com/")
-    session_id: str = Field(pattern=r"^cs_(test|live)_[A-Za-z0-9]+$")
+    """Where to send the browser: a Checkout Session or a Payment Link (DOCBOT-1803)."""
+
+    url: str = Field(pattern=r"^https://(checkout|buy)\.stripe\.com/")
+    mode: Literal["checkout", "payment_link"]
+    session_id: Optional[str] = Field(default=None, pattern=r"^cs_(test|live)_[A-Za-z0-9]+$")
     expires_at: Optional[AwareDatetime] = None
+
+
+class AdminCreditGrantRequest(_Contract):
+    """``POST /admin/credits/grant`` (platform admin) — manual top-up for the
+    Payment Link flow. ``reference`` is the idempotency key (e.g. the Stripe
+    payment/checkout id): re-posting it never double-credits."""
+
+    org_id: str = Field(min_length=1, max_length=255)
+    credits: int = Field(gt=0, le=100_000_000)
+    reference: str = Field(min_length=1, max_length=255)
+
+
+class AdminCreditGrantResponse(_Contract):
+    org_id: str
+    credits: int
+    reference: str
+    duplicate: bool = Field(description="True when this reference was already granted (no-op)")
+    balance_credits: int
 
 
 # ---------------------------------------------------------------------------
@@ -372,6 +418,8 @@ class QuotaErrorResponse(_Contract):
 
 
 __all__ = [
+    "AdminCreditGrantRequest",
+    "AdminCreditGrantResponse",
     "CREDITS_PER_USD",
     "MICRO_USD_PER_CREDIT",
     "MICRO_USD_PER_USD",

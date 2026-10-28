@@ -163,6 +163,8 @@ PUBLIC_ROUTES: dict[RouteKey, str] = {
                                   "token (SHA-256-hashed at rest; the token itself IS the "
                                   "credential; expiry + single-use enforced atomically).",
     ("POST", "/api/auth/logout"): "Clears the caller's own session cookie; no-op when anonymous.",
+    ("GET", "/api/billing/packs"): "DOCBOT-1803: static credit-pack catalogue (names, credits, "
+                                   "prices); Stripe price ids / payment links are stripped.",
     ("POST", "/api/marketplace/webhook/shopify"): "Shopify server-to-server webhook; no browser session. "
                                                   "Authenticated by HMAC-SHA256 over the raw body with the "
                                                   "connector's webhook_secret; shop domain header validated "

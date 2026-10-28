@@ -27,6 +27,7 @@ from fastapi.testclient import TestClient
 
 import api.index as idx
 from api import rbac_service
+from api.routes import billing_routes
 from api.utils import request_guard
 
 
@@ -39,9 +40,16 @@ ADMIN_ROUTES = [
     ("POST", "/admin/api-keys", "/admin/api-keys", {"name": "pwn", "scopes": ["hybrid:read"]}),
     ("DELETE", "/admin/api-keys/{key_id}", "/admin/api-keys/k-123", None),
     ("GET", "/admin/metrics", "/admin/metrics", None),
+    ("POST", "/admin/credits/grant", "/admin/credits/grant", {"org_id": "o1", "credits": 1, "reference": "r1"}),
+    ("POST", "/api/billing/checkout", "/api/billing/checkout", {"pack_id": "starter"}),
 ]
 
-_ADMIN_DEP_CALLS = {idx._rbac_admin.dependency, idx._rbac_platform_admin.dependency}
+_ADMIN_DEP_CALLS = {
+    idx._rbac_admin.dependency,
+    idx._rbac_platform_admin.dependency,
+    billing_routes._rbac_admin.dependency,
+    billing_routes._rbac_platform_admin.dependency,
+}
 
 
 @pytest.fixture(autouse=True)
