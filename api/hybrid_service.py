@@ -116,7 +116,6 @@ async def classify_intent(
     has_db: bool,
     has_docs: bool,
     session_id: str,
-    groq_client,
     async_session_factory,
     query_history_table=None,
 ) -> str:
@@ -133,8 +132,6 @@ async def classify_intent(
         True when the session has at least one uploaded document.
     session_id:
         Used for logging; never sent to the LLM.
-    groq_client:
-        An initialised groq.AsyncGroq (or compatible) instance.
     async_session_factory:
         SQLAlchemy async_sessionmaker for writing to query_history.
     query_history_table:
@@ -166,7 +163,7 @@ async def classify_intent(
         return result
 
     # ── LLM classification (both sources present) ─────────────────────────
-    from api.utils.llm_provider import log_external_llm_call, safe_int
+    from api.utils.llm_provider import achat_completion
     from api.utils import llm_cache
 
     # DOCBOT-1506: exact-match cache — this call runs at temperature=0 with
@@ -176,35 +173,19 @@ async def classify_intent(
     raw = await llm_cache.get_cached_response(cache_prompt_hash, _MODEL)
 
     if raw is None:
-        _start = time.monotonic()
-        try:
-            response = await groq_client.chat.completions.create(
-                model=_MODEL,
-                messages=[
-                    {"role": "system", "content": _SYSTEM_PROMPT},
-                    {"role": "user", "content": question},
-                ],
-                max_tokens=10,
-                temperature=0,
-            )
-        except Exception:
-            log_external_llm_call(
-                provider="groq", model=_MODEL, latency_ms=(time.monotonic() - _start) * 1000,
-                success=False, caller="intent_classification",
-                prompt_version=PROMPT_VERSION_INTENT_CLASSIFICATION,
-            )
-            raise
-
-        usage = getattr(response, "usage", None)
-        log_external_llm_call(
-            provider="groq", model=_MODEL, latency_ms=(time.monotonic() - _start) * 1000,
-            success=True, caller="intent_classification",
-            input_tokens=safe_int(getattr(usage, "prompt_tokens", None)),
-            output_tokens=safe_int(getattr(usage, "completion_tokens", None)),
+        # DOCBOT-2307: async provider path (Groq → Gemini, off the event loop).
+        # max_tokens 200: gpt-oss spends tokens reasoning; 10 could return empty text.
+        raw = (await achat_completion(
+            [
+                {"role": "system", "content": _SYSTEM_PROMPT},
+                {"role": "user", "content": question},
+            ],
+            model=_MODEL,
+            max_tokens=200,
+            temperature=0,
+            caller="intent_classification",
             prompt_version=PROMPT_VERSION_INTENT_CLASSIFICATION,
-        )
-
-        raw = response.choices[0].message.content.strip().lower()
+        )).strip().lower()
         await llm_cache.set_cached_response(cache_prompt_hash, _MODEL, raw)
     else:
         raw = raw.strip().lower()
@@ -252,7 +233,6 @@ async def classify_intent_safe(
     has_db: bool,
     has_docs: bool,
     session_id: str,
-    groq_client,
     async_session_factory,
     query_history_table=None,
 ) -> IntentClassification:
@@ -276,7 +256,6 @@ async def classify_intent_safe(
             has_db=has_db,
             has_docs=has_docs,
             session_id=session_id,
-            groq_client=groq_client,
             async_session_factory=async_session_factory,
             query_history_table=query_history_table,
         )
@@ -609,23 +588,11 @@ async def hybrid_chat(
                 logger.warning("Hybrid rephrase failed, using original: %s", _exc)
 
         # ── Step 1: classify intent ───────────────────────────────────────────
-        groq_api_key = os.getenv("groq_api_key", "")
-
-        # Build a groq_client for classify_intent (signature unchanged for test compat).
-        # If Groq key is missing, classify_intent_safe will catch the error and default
-        # to "hybrid", then synthesis uses chat_completion_stream with Gemini fallback.
-        try:
-            import groq as groq_module
-            groq_client = groq_module.Groq(api_key=groq_api_key) if groq_api_key else None
-        except Exception:
-            groq_client = None
-
         classification = await classify_intent_safe(
             question=question,
             has_db=has_db,
             has_docs=has_docs,
             session_id=session_id,
-            groq_client=groq_client,
             async_session_factory=async_session_factory,
             query_history_table=query_history_table,
         )
@@ -857,14 +824,14 @@ async def hybrid_chat(
 
         # ── Step 4: stream synthesis (Groq → Gemini fallback) ───────────────
         try:
-            from api.utils.llm_provider import chat_completion_stream
+            from api.utils.llm_provider import achat_completion_stream
             from api.utils.pii_masking import StreamingPIIMasker, mask_pii
 
             lineage.set_pii(True)
             _synth_start = time.perf_counter()
             _answer_parts: list[str] = []
             _masker = StreamingPIIMasker()  # DOCBOT-2003: line-buffered masking
-            for token in chat_completion_stream(
+            async for token in achat_completion_stream(
                 [{"role": "user", "content": prompt}],
                 temperature=0.2,
                 max_tokens=2000,
@@ -887,7 +854,9 @@ async def hybrid_chat(
                 yield f"data: {json.dumps({'type': 'token', 'content': fence_tail})}\n\n"
         except Exception as exc:
             logger.error("hybrid_chat synthesis failed: %s", exc)
-            yield f"data: {json.dumps({'type': 'error', 'detail': 'Synthesis failed. Please try again.'})}\n\n"
+            from api.utils.exceptions import StreamInterruptedError
+            detail = str(exc) if isinstance(exc, StreamInterruptedError) else "Synthesis failed. Please try again."
+            yield f"data: {json.dumps({'type': 'error', 'detail': detail})}\n\n"
             return
 
         # DOCBOT-1518: active discrepancy gate. detect_discrepancies() above
@@ -903,7 +872,7 @@ async def hybrid_chat(
             _synth_answer_text = "".join(_answer_parts)
             if not _answer_addresses_discrepancies(_synth_answer_text):
                 try:
-                    from api.utils.llm_provider import chat_completion
+                    from api.utils.llm_provider import achat_completion
 
                     correction_prompt = (
                         f"{persona_def}\n\n"
@@ -921,7 +890,7 @@ async def hybrid_chat(
                         f"Previous answer:\n{_synth_answer_text}\n\n"
                         "Rewrite the full answer including the discrepancy note:"
                     )
-                    corrected = chat_completion(
+                    corrected = await achat_completion(
                         [{"role": "user", "content": correction_prompt}],
                         temperature=0.2,
                         max_tokens=2000,

@@ -398,7 +398,10 @@ class TestCallerKwargCoverage:
         from pathlib import Path
 
         api_dir = Path(__file__).resolve().parents[2] / "api"
-        target_functions = {"chat_completion", "chat_completion_stream", "call_llm"}
+        target_functions = {
+            "chat_completion", "chat_completion_stream", "call_llm",
+            "achat_completion", "achat_completion_stream",  # DOCBOT-2307
+        }
         missing: list[str] = []
 
         for py_file in api_dir.rglob("*.py"):
@@ -437,7 +440,10 @@ class TestPromptVersionCoverage:
         from pathlib import Path
 
         api_dir = Path(__file__).resolve().parents[2] / "api"
-        target_functions = {"chat_completion", "chat_completion_stream", "call_llm"}
+        target_functions = {
+            "chat_completion", "chat_completion_stream", "call_llm",
+            "achat_completion", "achat_completion_stream",  # DOCBOT-2307
+        }
         missing: list[str] = []
 
         for py_file in api_dir.rglob("*.py"):

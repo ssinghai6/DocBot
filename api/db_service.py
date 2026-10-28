@@ -1749,12 +1749,12 @@ async def _select_relevant_tables(question: str, schema: List[Dict[str, Any]]) -
         "Response (JSON array only):"
     )
 
-    from api.utils.llm_provider import chat_completion, log_malformed_llm_output
+    from api.utils.llm_provider import achat_completion, log_malformed_llm_output
 
     raw: Optional[str] = None
     _parse_errors = (ValueError, json.JSONDecodeError, ValidationError)
     try:
-        raw = chat_completion(
+        raw = await achat_completion(
             [{"role": "user", "content": prompt}],
             temperature=0,
             max_tokens=200,
@@ -1767,7 +1767,7 @@ async def _select_relevant_tables(question: str, schema: List[Dict[str, Any]]) -
         log_malformed_llm_output(caller="sql_table_selector", error=str(exc))
 
         try:
-            retry_raw = chat_completion(
+            retry_raw = await achat_completion(
                 [
                     {"role": "user", "content": prompt},
                     {"role": "assistant", "content": raw or ""},
@@ -1887,7 +1887,7 @@ async def _generate_sql(
         "SQL:"
     )
 
-    from api.utils.llm_provider import chat_completion, GROQ_MODEL
+    from api.utils.llm_provider import achat_completion, GROQ_MODEL
     from api.utils import llm_cache
 
     # DOCBOT-1506: exact-match cache — SQL gen runs at temperature=0 and the
@@ -1896,7 +1896,7 @@ async def _generate_sql(
     prompt_hash = llm_cache.hash_prompt(prompt)
     sql = await llm_cache.get_cached_response(prompt_hash, GROQ_MODEL)
     if sql is None:
-        sql = chat_completion(
+        sql = await achat_completion(
             [{"role": "user", "content": prompt}],
             temperature=0,
             max_tokens=1200,
@@ -2074,13 +2074,13 @@ async def _stream_answer(
         "Answer:"
     )
 
-    from api.utils.llm_provider import chat_completion_stream
+    from api.utils.llm_provider import achat_completion_stream
     from api.utils.pii_masking import StreamingPIIMasker
     # DOCBOT-2003: line-buffered masking so PII split across tokens is caught.
     masker = StreamingPIIMasker()
     emitted: list[str] = []
     finish_info: dict = {}
-    for token in chat_completion_stream(
+    async for token in achat_completion_stream(
         [{"role": "user", "content": prompt}],
         temperature=0.2,
         max_tokens=1500,

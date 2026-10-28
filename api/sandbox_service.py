@@ -769,7 +769,7 @@ async def generate_analysis_code(
     fallback_tokens = max(code_tokens, 4000)
     for _model, _tokens in ((GROQ_CODE_MODEL, code_tokens), (GROQ_MODEL, fallback_tokens)):
         try:
-            result = _attempt(_model, _tokens)
+            result = await asyncio.to_thread(_attempt, _model, _tokens)
         except Exception as exc:
             logger.warning("generate_analysis_code: %s raised (%s)", _model, exc)
             result = None
@@ -1031,8 +1031,8 @@ async def generate_csv_analysis_code(
     effective_question = question
     previous_context = ""
     if chat_history:
-        effective_question, previous_context = _rephrase_for_csv(
-            question, chat_history
+        effective_question, previous_context = await asyncio.to_thread(
+            _rephrase_for_csv, question, chat_history
         )
 
     chart_instructions = _chart_type_instructions(chart_type)
@@ -1187,7 +1187,7 @@ async def generate_csv_analysis_code(
     fallback_tokens = max(code_gen_max_tokens, 4000)
     for _model, _tokens in ((GROQ_CODE_MODEL, code_gen_max_tokens), (GROQ_MODEL, fallback_tokens)):
         try:
-            result = _attempt(_model, _tokens)
+            result = await asyncio.to_thread(_attempt, _model, _tokens)
         except Exception as exc:
             logger.warning(
                 "generate_csv_analysis_code: %s attempt raised (%s)", _model, exc

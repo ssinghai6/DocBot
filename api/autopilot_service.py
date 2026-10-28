@@ -332,7 +332,7 @@ async def _planner_node(state: AutopilotState) -> dict:
     degradation_reasons: list[str] = []
     plan: list[str] = [state["question"]]
     try:
-        plan = _parse_plan_response(_attempt(None))
+        plan = _parse_plan_response(await asyncio.to_thread(_attempt, None))
     except Exception as first_exc:
         # P1: bounded retry — exactly one regeneration call with the
         # validation error appended, then a visible (non-silent) fallback.
@@ -343,7 +343,7 @@ async def _planner_node(state: AutopilotState) -> dict:
         for _attempt_no in range(_PLANNER_REGENERATION_LIMIT):
             try:
                 plan = _parse_plan_response(
-                    _attempt(f"Attempt failed: {first_exc}")
+                    await asyncio.to_thread(_attempt, f"Attempt failed: {first_exc}")
                 )
                 break
             except Exception as retry_exc:
@@ -1803,9 +1803,9 @@ async def _synthesizer_node(state: AutopilotState) -> dict:
     )
 
     try:
-        from api.utils.llm_provider import chat_completion
+        from api.utils.llm_provider import achat_completion
 
-        final_answer = chat_completion(
+        final_answer = await achat_completion(
             [
                 {"role": "system", "content": system_prompt},
                 {"role": "user", "content": user_content},
@@ -1897,7 +1897,7 @@ async def _force_fixup_with_data(
     deterministic data block is appended instead so numbers always surface.
     Never raises."""
     try:
-        from api.utils.llm_provider import chat_completion
+        from api.utils.llm_provider import achat_completion
 
         system_prompt = (
             "You are a senior data analyst. The draft answer below wrongly claims "
@@ -1911,7 +1911,7 @@ async def _force_fixup_with_data(
             f"Ground-truth data returned by the tools:\n{data_summary_text}\n\n"
             f"Draft answer to rewrite:\n{answer}"
         )
-        fixed = chat_completion(
+        fixed = await achat_completion(
             [
                 {"role": "system", "content": system_prompt},
                 {"role": "user", "content": user_content},
@@ -2079,7 +2079,7 @@ async def _verifier_node(state: AutopilotState) -> dict:
     # One corrective re-synthesis — same correction prompt shape as
     # _synthesizer_node, with the verifier's specific contradiction folded in.
     try:
-        from api.utils.llm_provider import chat_completion
+        from api.utils.llm_provider import achat_completion
 
         correction_system_prompt = (
             "You are a senior data analyst and financial modeler. A previous draft "
@@ -2097,7 +2097,7 @@ async def _verifier_node(state: AutopilotState) -> dict:
             f"Contradiction found by verifier:\n{explanation}\n\n"
             "Rewrite the full answer, correcting this contradiction."
         )
-        corrected_answer = chat_completion(
+        corrected_answer = await achat_completion(
             [
                 {"role": "system", "content": correction_system_prompt},
                 {"role": "user", "content": correction_user_content},

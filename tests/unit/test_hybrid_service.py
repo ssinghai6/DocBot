@@ -30,28 +30,22 @@ from api.utils.discrepancy_detector import DiscrepancyItem, DiscrepancyReport
 # ---------------------------------------------------------------------------
 
 
-def _make_groq_response(content: str) -> MagicMock:
-    """Build a minimal mock that looks like a groq ChatCompletion response."""
-    message = MagicMock()
-    message.content = content
-
-    choice = MagicMock()
-    choice.message = message
-
-    response = MagicMock()
-    response.choices = [choice]
-    return response
+_active_patches: list = []
 
 
-def _make_groq_client(content: str = "hybrid") -> AsyncMock:
-    """Return an AsyncMock groq client whose completions.create returns *content*."""
-    client = MagicMock()
-    client.chat = MagicMock()
-    client.chat.completions = MagicMock()
-    client.chat.completions.create = AsyncMock(
-        return_value=_make_groq_response(content)
-    )
-    return client
+@pytest.fixture(autouse=True)
+def _stop_llm_patches():
+    yield
+    while _active_patches:
+        _active_patches.pop().stop()
+
+
+def _make_groq_client(content: str = "hybrid") -> MagicMock:
+    """DOCBOT-2307: the classifier goes through llm_provider.chat_completion
+    (async, off-loop). Patch it for the current test and return the mock."""
+    p = patch("api.utils.llm_provider.chat_completion", return_value=content)
+    _active_patches.append(p)
+    return p.start()
 
 
 # A no-op async session factory used wherever DB logging is not under test.
@@ -75,11 +69,10 @@ class TestClassifyIntentFallbacks:
             has_db=False,
             has_docs=True,
             session_id="sess-1",
-            groq_client=client,
             async_session_factory=_noop_session_factory,
         )
         assert result == "doc"
-        client.chat.completions.create.assert_not_called()
+        client.assert_not_called()
 
     async def test_no_docs_returns_sql(self):
         """When has_docs=False the classifier must return 'sql' without calling the LLM."""
@@ -89,11 +82,10 @@ class TestClassifyIntentFallbacks:
             has_db=True,
             has_docs=False,
             session_id="sess-2",
-            groq_client=client,
             async_session_factory=_noop_session_factory,
         )
         assert result == "sql"
-        client.chat.completions.create.assert_not_called()
+        client.assert_not_called()
 
     async def test_both_false_returns_doc(self):
         """When neither source is available, has_db=False fires first → 'doc'."""
@@ -103,11 +95,10 @@ class TestClassifyIntentFallbacks:
             has_db=False,
             has_docs=False,
             session_id="sess-3",
-            groq_client=client,
             async_session_factory=_noop_session_factory,
         )
         assert result == "doc"
-        client.chat.completions.create.assert_not_called()
+        client.assert_not_called()
 
 
 # ---------------------------------------------------------------------------
@@ -127,11 +118,10 @@ class TestClassifyIntentLLM:
             has_db=True,
             has_docs=True,
             session_id="sess-4",
-            groq_client=client,
             async_session_factory=_noop_session_factory,
         )
         assert result == "sql"
-        client.chat.completions.create.assert_awaited_once()
+        client.assert_called_once()
 
     async def test_llm_returns_hybrid(self):
         """LLM response 'hybrid' must be passed through as-is."""
@@ -141,7 +131,6 @@ class TestClassifyIntentLLM:
             has_db=True,
             has_docs=True,
             session_id="sess-5",
-            groq_client=client,
             async_session_factory=_noop_session_factory,
         )
         assert result == "hybrid"
@@ -154,7 +143,6 @@ class TestClassifyIntentLLM:
             has_db=True,
             has_docs=True,
             session_id="sess-6",
-            groq_client=client,
             async_session_factory=_noop_session_factory,
         )
         assert result == "doc"
@@ -168,8 +156,7 @@ class TestClassifyIntentLLM:
                 has_db=True,
                 has_docs=True,
                 session_id="sess-7",
-                groq_client=client,
-                async_session_factory=_noop_session_factory,
+                    async_session_factory=_noop_session_factory,
             )
             assert result == "hybrid", f"Expected 'hybrid' for LLM output {unexpected!r}"
 
@@ -181,7 +168,6 @@ class TestClassifyIntentLLM:
             has_db=True,
             has_docs=True,
             session_id="sess-8",
-            groq_client=client,
             async_session_factory=_noop_session_factory,
         )
         assert result == "sql"
@@ -204,7 +190,6 @@ class TestClassifyIntentSafe:
             has_db=True,
             has_docs=False,
             session_id="sess-9",
-            groq_client=client,
             async_session_factory=_noop_session_factory,
         )
         assert isinstance(result, IntentClassification)
@@ -217,7 +202,6 @@ class TestClassifyIntentSafe:
             has_db=False,
             has_docs=True,
             session_id="sess-10",
-            groq_client=client,
             async_session_factory=_noop_session_factory,
         )
         assert result.fallback_applied is True
@@ -231,7 +215,6 @@ class TestClassifyIntentSafe:
             has_db=True,
             has_docs=True,
             session_id="sess-11",
-            groq_client=client,
             async_session_factory=_noop_session_factory,
         )
         assert result.fallback_applied is False
@@ -239,19 +222,14 @@ class TestClassifyIntentSafe:
 
     async def test_llm_exception_returns_hybrid_does_not_raise(self):
         """When the LLM call raises, classify_intent_safe must return 'hybrid' silently."""
-        client = MagicMock()
-        client.chat = MagicMock()
-        client.chat.completions = MagicMock()
-        client.chat.completions.create = AsyncMock(
-            side_effect=RuntimeError("Groq service unavailable")
-        )
+        client = _make_groq_client()
+        client.side_effect = RuntimeError("Groq service unavailable")
 
         result = await classify_intent_safe(
             question="What is the churn rate?",
             has_db=True,
             has_docs=True,
             session_id="sess-12",
-            groq_client=client,
             async_session_factory=_noop_session_factory,
         )
         assert result.intent == "hybrid"
@@ -265,7 +243,6 @@ class TestClassifyIntentSafe:
             has_db=True,
             has_docs=True,
             session_id="sess-13",
-            groq_client=client,
             async_session_factory=_noop_session_factory,
         )
         assert len(result.question_hash) == 16

@@ -3,8 +3,21 @@ Shared exception types for DocBot service layer.
 """
 
 
+class StreamInterruptedError(RuntimeError):
+    """DOCBOT-2307: the LLM stream failed after tokens reached the client.
+
+    Raised instead of falling back to another provider, which would restart
+    the answer and duplicate text. The message is safe to show the user.
+    """
+
+    def __init__(self) -> None:
+        super().__init__("Answer interrupted, please retry.")
+
+
 def safe_error_message(error: BaseException | str | None = None) -> str:
     """Sanitize error messages for client responses — never leak exception internals."""
+    if isinstance(error, StreamInterruptedError):
+        return str(error)
     return "An internal error occurred. Please try again later."
 
 
