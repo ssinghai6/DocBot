@@ -963,6 +963,18 @@ async def hybrid_chat(
         if lineage_event:
             yield lineage_event
 
+        # DOCBOT-1706: first tie-out = a hybrid answer whose lineage carries a discrepancy.
+        if discrepancy_report is not None and discrepancy_report.has_discrepancies:
+            from api.funnel_service import record_funnel_event
+            from api.utils.billing_context import get_principal
+
+            _principal = get_principal()
+            if _principal is not None:
+                record_funnel_event(
+                    "first_tieout", user_id=_principal.user_id, org_id=_principal.org_id,
+                    props={"discrepancies": len(discrepancy_report.discrepancies)},
+                )
+
         # DOCBOT-1512: fire-and-forget agent trace row for this turn
         from api.trace_service import log_trace
         _tool_chosen = (

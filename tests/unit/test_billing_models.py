@@ -151,6 +151,19 @@ class TestPacks:
         assert type(pub) is CreditPack
         assert "stripe_price_id" not in pub.model_dump()
         assert "price_abc123" not in pub.model_dump_json()
+        assert pub.purchasable is False
+
+    def test_config_price_usd_and_payment_link(self) -> None:
+        cfg = CreditPackConfig.model_validate(
+            {"id": "p1", "name": "P1", "credits": 1000, "price_usd": 9.99,
+             "payment_link_url": "https://buy.stripe.com/test_abc"}
+        )
+        assert cfg.price_cents == 999 and cfg.stripe_price_id is None
+        assert "buy.stripe.com" not in cfg.to_public(purchasable=True).model_dump_json()
+
+    def test_config_rejects_foreign_payment_link(self) -> None:
+        with pytest.raises(ValidationError):
+            CreditPackConfig(id="p", name="p", credits=1, price_cents=1, payment_link_url="https://evil.com/x")
 
     def test_config_parses_env_json(self) -> None:
         raw = '[{"id":"p1","name":"P1","credits":1000,"price_cents":500,"stripe_price_id":"price_X1"}]'
@@ -177,15 +190,17 @@ class TestCheckout:
 
     def test_response(self) -> None:
         r = CheckoutSessionResponse(
-            checkout_url="https://checkout.stripe.com/c/pay/cs_test_abc",
+            url="https://checkout.stripe.com/c/pay/cs_test_abc",
+            mode="checkout",
             session_id="cs_test_abc123",
             expires_at=NOW + timedelta(hours=1),
         )
         _roundtrip(r)
+        _roundtrip(CheckoutSessionResponse(url="https://buy.stripe.com/abc?x=1", mode="payment_link"))
 
     def test_response_rejects_foreign_url(self) -> None:
         with pytest.raises(ValidationError):
-            CheckoutSessionResponse(checkout_url="https://evil.com/x", session_id="cs_test_abc")
+            CheckoutSessionResponse(url="https://evil.com/x", mode="checkout")
 
 
 class TestLedger:
@@ -350,6 +365,7 @@ class TestZodMirror:
         assert "CreditPackConfigSchema" not in self.source
         assert "UsageEventRecordSchema" not in self.source
         assert "stripe_price_id" not in self.source
+        assert "payment_link_url" not in self.source
         assert "cost_micro_usd" not in self.source
 
     def test_no_any(self) -> None:

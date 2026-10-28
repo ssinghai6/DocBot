@@ -141,10 +141,8 @@ class TestSignupVerifyLoginFlow:
         payload = client.post.call_args.kwargs["json"]
         assert payload["to"] == ["n@x.com"]
         text = payload["text"]
-        assert text.startswith("https://docbot.example/chat?verify_token=") or (
-            "https://docbot.example/chat?verify_token=" in text
-        )
-        raw_token = text.rsplit("verify_token=", 1)[1].split("\n")[0]
+        assert "https://docbot.example/verify?token=" in text
+        raw_token = text.rsplit("/verify?token=", 1)[1].split("\n")[0]
 
         user = await _user(factory, tables, user_id)
         # Sign-up leaves the account unverified → the login route's

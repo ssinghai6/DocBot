@@ -88,6 +88,7 @@ from api.billing_models import (
     credits_for_cost,
 )
 from api.utils.caller_scope import CallerScope
+from api.funnel_service import record_funnel_event
 from api.utils.billing_context import (
     BillingContextSnapshot,
     Principal,
@@ -362,7 +363,7 @@ async def _ensure_row_and_grant(session: Any, org_id: str, now: datetime) -> str
     after the transaction commits.
     """
     assert _tables is not None
-    ob, ledger = _tables.org_balances, _tables.credit_ledger
+    ob = _tables.org_balances
     await session.execute(
         _insert(ob)
         .values(org_id=org_id, balance_credits=0, reserved_credits=0, updated_at=now, frozen=False)
@@ -372,6 +373,31 @@ async def _ensure_row_and_grant(session: Any, org_id: str, now: datetime) -> str
     if _granted_period.get(org_id) == period:
         return period
     amount = free_monthly_credits()
+    inserted = await _credit_once(
+        session, org_id, LedgerEntryKind.free_grant, grant_ref(org_id, period),
+        amount, f"Monthly free credits {period}", now,
+    )
+    if inserted and amount > 0:
+        logger.info("credit_service: monthly grant org=%s period=%s credits=%d", org_id, period, amount)
+    return period
+
+
+async def _credit_once(
+    session: Any,
+    org_id: str,
+    kind: LedgerEntryKind,
+    ref: str,
+    amount: int,
+    description: str,
+    now: datetime,
+) -> bool:
+    """Write one positive ledger row and add it to the balance, at most once per (kind, ref).
+
+    Caller holds the transaction and has already upserted the balance row.
+    Returns False when ``(kind, ref)`` already exists (nothing applied).
+    """
+    assert _tables is not None
+    ob, ledger = _tables.org_balances, _tables.credit_ledger
     current = (
         await session.execute(
             select(ob.c.balance_credits).where(ob.c.org_id == org_id).with_for_update()
@@ -383,11 +409,11 @@ async def _ensure_row_and_grant(session: Any, org_id: str, now: datetime) -> str
             .values(
                 id=str(uuid.uuid4()),
                 org_id=org_id,
-                kind=LedgerEntryKind.free_grant.value,
-                ref=grant_ref(org_id, period),
+                kind=kind.value,
+                ref=ref,
                 delta_credits=amount,
                 balance_after_credits=int(current) + amount,
-                description=f"Monthly free credits {period}",
+                description=description,
                 created_at=now,
             )
             .on_conflict_do_nothing(index_elements=["kind", "ref"])
@@ -400,8 +426,43 @@ async def _ensure_row_and_grant(session: Any, org_id: str, now: datetime) -> str
             .where(ob.c.org_id == org_id)
             .values(balance_credits=ob.c.balance_credits + amount, updated_at=now)
         )
-        logger.info("credit_service: monthly grant org=%s period=%s credits=%d", org_id, period, amount)
-    return period
+    return inserted is not None
+
+
+@dataclass(frozen=True)
+class GrantResult:
+    duplicate: bool
+    balance_credits: int
+
+
+async def grant_purchase(org_id: str, credits: int, ref: str, description: str) -> GrantResult:
+    """Credit a purchase (DOCBOT-1803 manual grant; DOCBOT-1804 webhook later).
+
+    One transaction: balance row upsert + monthly grant + ``purchase`` ledger
+    row + balance update. ``UNIQUE(kind, ref)`` makes a replayed ``ref`` a
+    no-op (``duplicate=True``), so the operator can safely retry.
+    """
+    if not is_wired():
+        raise RuntimeError("credit store not wired")
+    if credits <= 0:
+        raise ValueError("credits must be positive")
+    assert _tables is not None
+    ob = _tables.org_balances
+    now = _now()
+    async with _session_factory() as session:
+        async with session.begin():
+            period = await _ensure_row_and_grant(session, org_id, now)
+            inserted = await _credit_once(
+                session, org_id, LedgerEntryKind.purchase, ref, credits, description, now
+            )
+            balance = (
+                await session.execute(select(ob.c.balance_credits).where(ob.c.org_id == org_id))
+            ).scalar_one()
+    _granted_period[org_id] = period
+    logger.info(
+        "credit_service: purchase org=%s credits=%d duplicate=%s", org_id, credits, not inserted
+    )
+    return GrantResult(duplicate=not inserted, balance_credits=int(balance))
 
 
 async def _is_free_tier(session: Any, org_id: str) -> bool:
@@ -415,6 +476,14 @@ async def _is_free_tier(session: Any, org_id: str) -> bool:
         )
     ).first()
     return row is None
+
+
+async def is_paid_org(org_id: str) -> bool:
+    """True when ``org_id`` has ever purchased credits (DOCBOT-1615). False if unwired."""
+    if not is_wired():
+        return False
+    async with _session_factory() as session:
+        return not await _is_free_tier(session, org_id)
 
 
 async def reserve(org_id: str, estimate: int, run_id: str, route: str) -> ReserveResult:
@@ -701,6 +770,7 @@ class BillingRun:
     free_tier: bool = True
     exempt: bool = False
     settled: bool = False
+    anon_owner: Optional[str] = None  # DOCBOT-1706 funnel key for anonymous callers
     _tokens: list[Any] = field(default_factory=list, repr=False)
 
     async def settle(self) -> Optional[SettleResult]:
@@ -752,14 +822,25 @@ class BillingRun:
         snapshot = self._snapshot(capture_billing_context())
 
         async def _billed() -> AsyncIterator[Any]:
+            failed = False
             try:
                 with use_billing_context(snapshot):
                     async for chunk in agen:
+                        failed = failed or (isinstance(chunk, str) and '"type": "error"' in chunk)
                         yield chunk
+                if not failed:
+                    self._record_first_answer()
             finally:
                 await self._settle_shielded()
 
         return _billed()
+
+    def _record_first_answer(self) -> None:
+        user_id = self.principal.user_id if self.principal else None
+        record_funnel_event(
+            "first_answer", user_id=user_id, org_id=self.org_id if user_id else None,
+            anon_owner=self.anon_owner, props={"route": self.route},
+        )
 
     # -- non-streaming -----------------------------------------------------
 
@@ -841,6 +922,9 @@ async def start_billing_run(
                 "credit_service: 402 route=%s org=%s required=%d available=%d frozen=%s",
                 route, billing_org, exc.required, exc.available, exc.frozen,
             )
+            record_funnel_event(
+                "paywall_shown", user_id=user_id, org_id=org_id, props={"route": route},
+            )
             raise _quota_error(exc) from None
         logger.info(
             "credit_service: shadow would_block route=%s org=%s required=%d available=%d frozen=%s",
@@ -880,13 +964,15 @@ async def begin_billing(
 
         scope = await resolve_caller_scope(request)
     demo = is_demo_request(session_id, connection_id, session_exists=session_exists)
-    return await start_billing_run(
+    run = await start_billing_run(
         route=route,
         user_id=scope.user_id,
         org_id=scope.org_id,
         role="admin" if scope.is_admin else "viewer",
         demo=demo,
     )
+    run.anon_owner = scope.anon_token
+    return run
 
 
 __all__ = [
@@ -902,6 +988,8 @@ __all__ = [
     "estimate_for",
     "free_monthly_credits",
     "free_run_ceiling_credits",
+    "GrantResult",
+    "grant_purchase",
     "grant_ref",
     "is_demo_request",
     "is_enforced",

@@ -244,6 +244,10 @@ async def resolve_provider_login(
                 user_id = await insert_new_user(session, users_table, attrs, email_verified=True)
                 await _insert_identity(session, identities_table, identity, user_id, verified=True)
                 logger.info("identity: new user %s via %s", user_id, identity.provider)
+                # DOCBOT-1706: provider-verified email, so both steps at once.
+                from api.funnel_service import record_funnel_event
+                for event in ("signup", "email_verified"):
+                    record_funnel_event(event, user_id=user_id, props={"provider": identity.provider})
                 return user_id
     except IntegrityError as exc:
         # Concurrent first login for the same subject/email. Fail closed; a

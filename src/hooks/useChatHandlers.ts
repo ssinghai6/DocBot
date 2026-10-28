@@ -415,6 +415,8 @@ export function useChatHandlers(params: UseChatHandlersParams) {
         password: authPassword,
         ...(isRegister && authName ? { name: authName } : {}),
         ...(isRegister && turnstileToken ? { turnstile_token: turnstileToken } : {}),
+        // DOCBOT-1707: AuthModal's required ToS checkbox blocks submit until ticked.
+        ...(isRegister ? { accepted_terms: true } : {}),
       });
       if (!parsed.success) {
         setAuthError("Please fill in a valid email and password.");

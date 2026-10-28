@@ -133,7 +133,7 @@ async def _decrypt_conn_credentials_lazy(
 
 PROMPT_VERSION_SQL_REPHRASE = "v1"          # _rephrase_with_history
 PROMPT_VERSION_SQL_TABLE_SELECTOR = "v1"    # _select_relevant_tables (incl. retry)
-PROMPT_VERSION_SQL_GEN = "v2"               # _generate_sql
+PROMPT_VERSION_SQL_GEN = "v3"               # _generate_sql
 PROMPT_VERSION_SQL_ANSWER_GEN = "v1"        # _stream_answer
 
 
@@ -1149,6 +1149,60 @@ def _get_columns_via_information_schema(engine, table_name: str) -> List[Dict[st
         return []
 
 
+# DOCBOT-2321: sample values for low-cardinality text columns, so the SQL
+# generator writes `quarter LIKE 'Q4%'` instead of `quarter = 'Q4'` when the
+# data holds 'Q4 2025'. Computed once at introspection, cached with the schema.
+_SAMPLE_MAX_VALUES = 5
+_SAMPLE_MAX_LEN = 40
+_SAMPLE_MAX_DISTINCT = 20
+_SAMPLE_SCAN_ROWS = 1000
+_SAMPLE_MAX_COLUMNS = 60
+_TEXT_TYPE_MARKERS = ("CHAR", "TEXT", "STRING", "CLOB")
+_SENSITIVE_COLUMN_MARKERS = (
+    "email", "phone", "ssn", "password", "secret", "token", "address", "birth", "dob",
+)
+
+
+def _attach_sample_values(engine, table_name: str, columns: List[Dict[str, Any]], budget: List[int]) -> None:
+    """Add ``sample_values`` (<=5 values, <=40 chars) to TEXT columns with
+    <=20 distinct values. Skips PII-looking columns (by name, or any value the
+    PII masker would mask). ``budget`` caps sampled columns per introspection.
+    """
+    from sqlalchemy import column as sa_column, table as sa_table
+    from sqlalchemy.exc import SQLAlchemyError
+    from api.utils.pii_masking import mask_pii
+
+    for col in columns:
+        if budget[0] <= 0:
+            return
+        name = str(col["name"])
+        ctype = str(col.get("type", "")).upper()
+        # untyped ("" / NULL) = computed sqlite view column; non-str values are dropped below
+        if ctype not in ("", "NULL") and not any(m in ctype for m in _TEXT_TYPE_MARKERS):
+            continue
+        if any(m in name.lower() for m in _SENSITIVE_COLUMN_MARKERS):
+            continue
+        budget[0] -= 1
+        # shortcut: cardinality judged on the first 1000 rows (bounded scan on
+        # big tables), so values are labelled "e.g." in the prompt.
+        inner = select(sa_column(name)).select_from(sa_table(table_name)).limit(_SAMPLE_SCAN_ROWS).subquery()
+        query = select(inner.c[name]).distinct().limit(_SAMPLE_MAX_DISTINCT + 1)
+        try:
+            with engine.connect() as conn:
+                values = [r[0] for r in conn.execute(query)]
+        except SQLAlchemyError as exc:
+            logger.debug("sample values skipped for %s.%s: %s", table_name, name, type(exc).__name__)
+            continue
+        values = [v for v in values if isinstance(v, str)]
+        if not values or len(values) > _SAMPLE_MAX_DISTINCT:
+            continue
+        if any(mask_pii(v) != v for v in values):
+            continue
+        short = sorted(v for v in values if len(v) <= _SAMPLE_MAX_LEN)[:_SAMPLE_MAX_VALUES]
+        if short:
+            col["sample_values"] = short
+
+
 async def _introspect_schema_from_url(
     sync_url: str, dialect: str,
     entra_connect_args: Optional[Dict[str, Any]] = None,
@@ -1184,6 +1238,7 @@ async def _introspect_schema_from_url(
             table_names = _sort_tables_by_row_estimate_pg(engine, table_names)
 
         table_names = table_names[:200]
+        sample_budget = [_SAMPLE_MAX_COLUMNS]
 
         schema = []
         for tname in table_names:
@@ -1195,6 +1250,7 @@ async def _introspect_schema_from_url(
                 ]
             except Exception:
                 col_list = _get_columns_via_information_schema(engine, tname)
+            _attach_sample_values(engine, tname, col_list, sample_budget)
             schema.append({"name": tname, "columns": col_list})
 
         # Append views (tagged with is_view for downstream awareness)
@@ -1208,6 +1264,8 @@ async def _introspect_schema_from_url(
                 ]
             except Exception:
                 col_list = _get_columns_via_information_schema(engine, vname)
+            if dialect == "sqlite":  # views can be expensive on server DBs
+                _attach_sample_values(engine, vname, col_list, sample_budget)
             schema.append({"name": vname, "columns": col_list, "is_view": True})
 
         return schema
@@ -1289,6 +1347,13 @@ async def run_sql_pipeline(
 ) -> AsyncGenerator[str, None]:
     """
     Execute the 7-step bounded SQL pipeline and yield SSE-formatted strings.
+
+    LLM calls per question (DOCBOT-2320), no loops:
+      typical 3  = table selector + SQL gen + answer
+      worst   6  = rephrase (only with chat_history) + table selector + its one
+                   malformed-JSON retry (LLM fallback path only) + SQL gen +
+                   ONE extra SQL gen (corrective validation retry OR schema-drift
+                   regen, never both) + answer
 
     ``emit_lineage_event`` (DOCBOT-1510): when True, a ``lineage`` SSE event
     is yielded just before ``done``. Off for hybrid/Autopilot callers, which
@@ -1481,13 +1546,7 @@ async def run_sql_pipeline(
                      latency_ms=(time.perf_counter() - _t) * 1000,
                      detail=f"{len(few_shot_examples or [])} examples")
 
-        # ── Step 4: SQL generation (LLM call #2) ─────────────────────────────
-        _t = time.perf_counter()
-        raw_sql = await _generate_sql(question, schema_subset, few_shot_examples)
-        lin.add_step("sql_generation", tool="llm",
-                     latency_ms=(time.perf_counter() - _t) * 1000)
-
-        # ── Step 5: SQL validation (deterministic, no LLM) ───────────────────
+        # ── Steps 4+5: SQL generation (LLM) + validation (sqlglot AST) ───────
         async with async_session_factory() as session:
             conn_result = await session.execute(
                 select(db_connections_table).where(
@@ -1501,7 +1560,16 @@ async def run_sql_pipeline(
             raise ConnectionNotFoundError(f"Connection '{connection_id}' not found.")
 
         dialect = conn_row.dialect
-        validated_sql = validate_and_sanitize_sql(raw_sql, dialect=dialect)
+        # DOCBOT-2320: one extra SQL-gen LLM call per run, shared by the
+        # corrective retry here and the schema-drift retry in step 6.
+        _t = time.perf_counter()
+        validated_sql, _sql_retried = await _generate_validated_sql(
+            question, schema_subset, few_shot_examples, dialect, lin, allow_retry=True,
+        )
+        _extra_sql_call_left = not _sql_retried
+        lin.add_step("sql_generation", tool="llm",
+                     status="retried" if _sql_retried else "ok",
+                     latency_ms=(time.perf_counter() - _t) * 1000)
         lin.add_step("sql_validation", tool="sqlglot_ast")
 
         # ── Step 6: Execute (with schema drift retry) ──────────────────────
@@ -1522,7 +1590,7 @@ async def run_sql_pipeline(
                 "does not exist", "no such table", "no such column",
                 "unknown table", "unknown column", "relation",
             ))
-            if not is_drift:
+            if not is_drift or not _extra_sql_call_left:
                 raise
 
             # Schema drift detected — invalidate cache, re-introspect, regenerate SQL, retry once
@@ -1549,8 +1617,9 @@ async def run_sql_pipeline(
             schema_subset = [t for t in schema if t["name"] in set(selected_tables)]
             if not schema_subset:
                 schema_subset = schema[:10]
-            raw_sql = await _generate_sql(question, schema_subset, few_shot_examples)
-            validated_sql = validate_and_sanitize_sql(raw_sql, dialect=dialect)
+            validated_sql, _ = await _generate_validated_sql(
+                question, schema_subset, few_shot_examples, dialect, lin, allow_retry=False,
+            )
             rows, column_names = await _execute_query(validated_sql, sync_url, dialect, entra_connect_args)
 
         execution_time_ms = int(time.time() * 1000) - start_ms
@@ -1855,10 +1924,23 @@ async def _generate_sql(
     question: str,
     schema_subset: List[Dict[str, Any]],
     few_shot_examples: List[Dict[str, Any]],
+    feedback: Optional[str] = None,
 ) -> str:
-    """LLM call #2: generate a SELECT query given schema + few-shot examples."""
+    """LLM call #2: generate a SELECT query given schema + few-shot examples.
+
+    Returns the RAW reply; callers run ``extract_sql`` (so a rejected reply
+    can be logged as the model wrote it). ``feedback`` (DOCBOT-2320) turns
+    this into the corrective retry: appended to the prompt, cache bypassed.
+    """
+    def _fmt_col(c: Dict[str, Any]) -> str:
+        samples = c.get("sample_values")
+        if not samples:
+            return f"{c['name']} ({c['type']})"
+        vals = ", ".join("'" + str(v).replace("'", "''") + "'" for v in samples)
+        return f"{c['name']} ({c['type']}, e.g. {vals})"
+
     def _fmt_table(t: Dict[str, Any]) -> str:
-        cols = ", ".join(f"{c['name']} ({c['type']})" for c in t["columns"])
+        cols = ", ".join(_fmt_col(c) for c in t["columns"])
         return f"Table: {t['name']}\nColumns: {cols}"
 
     schema_text = "\n\n".join(_fmt_table(t) for t in schema_subset)
@@ -1880,10 +1962,13 @@ async def _generate_sql(
         "4. Return ONLY the SQL query — no explanation, no markdown fences.\n"
         "5. If the question compares the database with a document (report, 10-K, note), "
         "return the database side only: the relevant figures, e.g. one row per metric "
-        "via UNION ALL or a grouped query. Never answer in prose.\n\n"
+        "via UNION ALL or a grouped query. Never answer in prose.\n"
+        "6. Filter text columns using the stored format shown in their e.g. values "
+        "(e.g. quarter values like 'Q4 2025' need quarter LIKE 'Q4%', not quarter = 'Q4').\n\n"
         f"Schema:\n{schema_text}"
         f"{few_shot_text}\n\n"
         f"Question: {question}\n\n"
+        f"{feedback + chr(10) + chr(10) if feedback else ''}"
         "SQL:"
     )
 
@@ -1893,6 +1978,14 @@ async def _generate_sql(
     # DOCBOT-1506: exact-match cache — SQL gen runs at temperature=0 and the
     # prompt already fully encodes schema + few-shot examples + question, so
     # a byte-identical prompt is a legitimate re-ask, not a stale hit.
+    if feedback:
+        return chat_completion(
+            [{"role": "user", "content": prompt}],
+            temperature=0,
+            max_tokens=1200,
+            caller="sql_gen_retry",
+            prompt_version=PROMPT_VERSION_SQL_GEN,
+        )
     prompt_hash = llm_cache.hash_prompt(prompt)
     sql = await llm_cache.get_cached_response(prompt_hash, GROQ_MODEL)
     if sql is None:
@@ -1904,7 +1997,53 @@ async def _generate_sql(
             prompt_version=PROMPT_VERSION_SQL_GEN,
         )
         await llm_cache.set_cached_response(prompt_hash, GROQ_MODEL, sql)
-    return extract_sql(sql)
+    return sql
+
+
+async def _generate_validated_sql(
+    question: str,
+    schema_subset: List[Dict[str, Any]],
+    few_shot_examples: List[Dict[str, Any]],
+    dialect: str,
+    lin: Any,
+    allow_retry: bool,
+) -> tuple[str, bool]:
+    """Steps 4+5: generate SQL, validate it, and on QueryValidationError make
+    ONE corrective LLM call (DOCBOT-2320) if ``allow_retry``.
+
+    Returns (validated_sql, retried). Raises QueryValidationError if the
+    retry is not allowed or also fails. Logs the rejected reply prefix
+    (model-written SQL only — no connection string ever reaches the prompt).
+    """
+    raw = await _generate_sql(question, schema_subset, few_shot_examples)
+    try:
+        return validate_and_sanitize_sql(extract_sql(raw, dialect), dialect=dialect), False
+    except QueryValidationError as exc:
+        logger.warning(
+            "SQL validation failed: %s (%s) dialect=%s reply_len=%d reply_prefix=%r",
+            type(exc).__name__, exc, dialect, len(raw or ""), (raw or "")[:200],
+        )
+        lin.add_step("sql_validation", tool="sqlglot_ast",
+                     status="retried" if allow_retry else "error",
+                     detail=f"sql_gen_error: {exc}")
+        if not allow_retry:
+            raise
+        feedback = (
+            f"Your previous reply was rejected: {exc}\n"
+            f"Rejected output (start): {(raw or '')[:300]}\n"
+            "Return exactly one SELECT statement (UNION ALL allowed) and nothing else."
+        )
+    raw = await _generate_sql(question, schema_subset, few_shot_examples, feedback=feedback)
+    try:
+        return validate_and_sanitize_sql(extract_sql(raw, dialect), dialect=dialect), True
+    except QueryValidationError as exc:
+        logger.warning(
+            "SQL validation failed after retry: %s (%s) dialect=%s reply_len=%d reply_prefix=%r",
+            type(exc).__name__, exc, dialect, len(raw or ""), (raw or "")[:200],
+        )
+        lin.add_step("sql_validation", tool="sqlglot_ast", status="error",
+                     detail=f"sql_gen_error: {exc}")
+        raise
 
 
 # ---------------------------------------------------------------------------

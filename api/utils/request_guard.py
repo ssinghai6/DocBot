@@ -72,10 +72,12 @@ import os
 import time
 from typing import Dict, Optional, Protocol, Tuple
 
-from fastapi import HTTPException, Request
+from fastapi import Depends, HTTPException, Request
 from sqlalchemy import text
 from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.ext.asyncio import AsyncEngine
+
+from api.utils.caller_scope import CallerScope, is_demo_only_request, require_principal
 
 logger = logging.getLogger(__name__)
 
@@ -384,6 +386,42 @@ def _too_many(limit: int, retry_after: int, scope: str) -> HTTPException:
     )
 
 
+DEMO_BUSY_DETAIL = "The live demo is busy today — sign in (free) to continue."
+
+
+def demo_daily_usd_cap() -> float:
+    """``DEMO_DAILY_USD_CAP`` (default 10 USD; 0 or negative disables). Read per request."""
+    try:
+        return float(os.getenv("DEMO_DAILY_USD_CAP", "10"))
+    except ValueError:
+        return 10.0
+
+
+async def enforce_demo_spend_cap() -> None:
+    """DOCBOT-1711: 429 once today's anonymous LLM+E2B spend exceeds the cap."""
+    cap = demo_daily_usd_cap()
+    if cap <= 0:
+        return
+    from api.usage_service import anonymous_spend_today_micro_usd
+
+    if await anonymous_spend_today_micro_usd() > cap * 1_000_000:
+        raise HTTPException(status_code=429, detail=DEMO_BUSY_DETAIL)
+
+
+async def demo_spend_guard(
+    request: Request, scope: CallerScope = Depends(require_principal)
+) -> None:
+    """Chat-route dependency: anonymous demo chats hit the daily spend cap.
+
+    Signed-in callers and the owner are never capped. Reuses the route's
+    ``require_principal`` result (FastAPI caches it per request).
+    """
+    if not scope.is_anonymous or is_owner(request):
+        return
+    if await is_demo_only_request(request, verify=False):
+        await enforce_demo_spend_cap()
+
+
 async def check_demo_init_limit(request: Request) -> None:
     """Limit + meter POST /api/demo/init — DOCBOT-1612 / DOCBOT-1623.
 
@@ -397,6 +435,8 @@ async def check_demo_init_limit(request: Request) -> None:
     """
     scope = await _caller_scope(request)
     if not is_owner(request):
+        if scope.is_anonymous:
+            await enforce_demo_spend_cap()  # DOCBOT-1711
         rejected = await _charge_all([
             ("demo_init_ip", client_ip(request), DEMO_INIT_PER_IP_PER_HOUR),
             ("demo_init_user", scope.user_id or "", DEMO_INIT_PER_USER_PER_HOUR if scope.user_id else 0),
