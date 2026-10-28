@@ -84,7 +84,7 @@ def test_login_success_still_works(client):
 
 def test_register_existing_email_is_generic(client, monkeypatch):
     monkeypatch.setattr(evs, "is_email_verification_enabled", lambda: False)
-    resp = client.post("/api/auth/register", json={"email": "alice@example.com", "password": PASSWORD})
+    resp = client.post("/api/auth/register", json={"email": "alice@example.com", "password": PASSWORD, "accepted_terms": True})
     assert resp.status_code == 400
     assert "exists" not in resp.json()["detail"].lower()
     assert resp.json()["detail"] == idx.REGISTER_FAILED_DETAIL
@@ -92,7 +92,7 @@ def test_register_existing_email_is_generic(client, monkeypatch):
 
 def test_register_existing_email_mirrors_verification_response(client, monkeypatch):
     monkeypatch.setattr(evs, "is_email_verification_enabled", lambda: True)
-    resp = client.post("/api/auth/register", json={"email": "alice@example.com", "password": PASSWORD})
+    resp = client.post("/api/auth/register", json={"email": "alice@example.com", "password": PASSWORD, "accepted_terms": True})
     assert resp.status_code == 202
     assert resp.json() == {"status": "verification_required", "email": "alice@example.com"}
 
@@ -130,7 +130,7 @@ def test_successful_logins_do_not_count(client):
 
 def test_register_rejects_breached_password(client, monkeypatch):
     monkeypatch.setattr(oauth_service, "is_password_breached", AsyncMock(return_value=True))
-    resp = client.post("/api/auth/register", json={"email": "new@example.com", "password": "password123"})
+    resp = client.post("/api/auth/register", json={"email": "new@example.com", "password": "password123", "accepted_terms": True})
     assert resp.status_code == 422
     assert resp.json()["detail"] == oauth_service.BREACHED_PASSWORD_MESSAGE
 
@@ -166,3 +166,33 @@ async def test_hibp_no_match_or_padding_row_allowed(monkeypatch):
 async def test_hibp_outage_fails_open(monkeypatch):
     _mock_hibp(monkeypatch, exc=httpx.ConnectTimeout("down"))
     assert await is_password_breached("hunter22") is False
+
+
+# ---------------------------------------------------------------------------
+# DOCBOT-1707: Terms / Privacy acceptance is required server-side
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize("extra", [{}, {"accepted_terms": False}, {"accepted_terms": None}, {"accepted_terms": "yes"}])
+def test_register_requires_accepted_terms(client, extra):
+    body = {"email": "terms@example.com", "password": PASSWORD, **extra}
+    resp = client.post("/api/auth/register", json=body)
+    assert resp.status_code == 422
+    if extra.get("accepted_terms", False) is False:
+        assert resp.json()["detail"] == idx.TERMS_REQUIRED_DETAIL
+    # Nothing was created: the same address still registers once accepted.
+    ok = client.post(
+        "/api/auth/register",
+        json={"email": "terms@example.com", "password": PASSWORD, "accepted_terms": True},
+    )
+    assert ok.status_code in (200, 202)
+
+
+def test_register_with_accepted_terms_creates_account(client, monkeypatch):
+    monkeypatch.setattr(evs, "is_email_verification_enabled", lambda: False)
+    resp = client.post(
+        "/api/auth/register",
+        json={"email": "terms@example.com", "password": PASSWORD, "accepted_terms": True},
+    )
+    assert resp.status_code == 200
+    assert "docbot_session" in resp.cookies

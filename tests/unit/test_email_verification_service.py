@@ -301,8 +301,8 @@ class TestResendDelivery:
         payload = kwargs["json"]
         assert payload["from"] == "DocBot <hello@x.com>"
         assert payload["to"] == ["n@x.com"]
-        assert "verify_token=raw-token" in payload["text"]
-        assert "verify_token=raw-token" in payload["html"]
+        assert "/verify?token=raw-token" in payload["text"]
+        assert "/verify?token=raw-token" in payload["html"]
         assert payload["subject"] == "Verify your DocBot email"
 
     async def test_issue_wrapper_swallows_send_failure(
@@ -325,7 +325,7 @@ class TestResendDelivery:
         assert await one(factory, tables["tokens"], user_id=user_id) is not None
         raw_out = "\n".join(rec.getMessage() for rec in caplog.records)
         raw_out = raw_out.replace("raw-token", "")  # caplog never carries it anyway
-        assert "verify_token=" not in raw_out
+        assert "token=" not in raw_out
 
     async def test_issue_wrapper_reports_unconfigured(
         self, db, monkeypatch: pytest.MonkeyPatch
@@ -459,11 +459,9 @@ class TestTurnstile:
 
 
 class TestVerificationLink:
-    def test_link_points_at_chat_with_verify_token(self, monkeypatch: pytest.MonkeyPatch) -> None:
+    def test_link_points_at_verify_page(self, monkeypatch: pytest.MonkeyPatch) -> None:
         monkeypatch.setenv("FRONTEND_URL", "https://docbot.example")
-        link = evs.verification_link("raw")
-        assert link.startswith("https://docbot.example/chat?verify_token=")
-        assert link.endswith("verify_token=raw") or "raw" in link
+        assert evs.verification_link("raw") == "https://docbot.example/verify?token=raw"
 
     def test_token_hash_never_reverses_to_raw(self) -> None:
         raw = evs.generate_token()

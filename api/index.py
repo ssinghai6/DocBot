@@ -12,7 +12,7 @@ from contextlib import asynccontextmanager
 from fastapi import FastAPI, File, UploadFile, Form, HTTPException, Depends, Query, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse, StreamingResponse
-from pydantic import BaseModel
+from pydantic import BaseModel, StrictBool
 from sqlalchemy.ext.asyncio import create_async_engine, AsyncSession, async_sessionmaker
 from sqlalchemy import (
     MetaData, Table, Column, String, Text, Integer, BigInteger, DateTime,
@@ -215,6 +215,8 @@ users_table = Table(
     Column("created_at", DateTime(timezone=True), server_default=func.now(), nullable=False),
     # ── DOCBOT-1524: org/workspace scoping (nullable FK → organizations.id) ──
     Column("org_id", String, index=True),
+    # DOCBOT-1712: primary use case picked on /onboarding (nullable, skippable)
+    Column("use_case", String),
 )
 
 user_sessions_table = Table(
@@ -504,6 +506,10 @@ async def init_db() -> None:
             await conn.execute(text(col_ddl))
         # DOCBOT-1617: users.email_verified + legacy identity backfill
         for col_ddl in USER_IDENTITY_COLUMN_MIGRATIONS:
+            await conn.execute(text(col_ddl))
+        # DOCBOT-1712: users.use_case (onboarding answer)
+        from api.routes.onboarding_routes import USER_ONBOARDING_COLUMN_MIGRATIONS
+        for col_ddl in USER_ONBOARDING_COLUMN_MIGRATIONS:
             await conn.execute(text(col_ddl))
         await backfill_legacy_identities(conn)
         # DOCBOT-1621: session tokens are stored hashed; rewrite legacy rows.
@@ -2792,7 +2798,11 @@ class RegisterRequest(BaseModel):
     # DOCBOT-1713: widget token, present only when NEXT_PUBLIC_TURNSTILE_SITE_KEY
     # is configured (and TURNSTILE_SECRET_KEY is set server-side).
     turnstile_token: Optional[str] = None
+    # DOCBOT-1707: the signup checkbox; anything but an explicit true is refused.
+    accepted_terms: StrictBool = False  # strict: "yes"/1 don't coerce to True
 
+
+TERMS_REQUIRED_DETAIL = "You must accept the Terms of Service and Privacy Policy to create an account."
 
 # DOCBOT-1622: one body for every credential failure — no account enumeration.
 LOGIN_FAILED_DETAIL = "Invalid email or password."
@@ -2822,6 +2832,8 @@ async def auth_register(body: RegisterRequest, response: Response, request: Requ
     email = body.email.lower().strip()
     if not re.match(r"^[^@\s]+@[^@\s]+\.[^@\s]+$", email):
         raise HTTPException(status_code=422, detail="Invalid email address.")
+    if body.accepted_terms is not True:
+        raise HTTPException(status_code=422, detail=TERMS_REQUIRED_DETAIL)
 
     err = validate_password_strength(body.password)
     if err:
@@ -3329,6 +3341,15 @@ wire_email_verification(users_table, email_verification_tokens_table, async_sess
 from api.routes.billing_routes import router as billing_router  # noqa: E402
 
 app.include_router(billing_router)
+
+# ── DOCBOT-1712: post-signup onboarding (workspace name + use case) ───────────
+from api.routes.onboarding_routes import (  # noqa: E402
+    router as onboarding_router,
+    wire_onboarding,
+)
+
+app.include_router(onboarding_router)
+wire_onboarding(users_table, organizations_table, async_session_factory)
 
 
 def _get_connector(connector_id: str):

@@ -32,6 +32,7 @@ import {
 } from "lucide-react"
 import { Button, Badge, Card } from "@/components/ui"
 import LogoMark from "@/components/LogoMark"
+import { LegalLinks } from "@/components/LegalPage"
 
 // ── Feature data ──────────────────────────────────────────────────────────────
 
@@ -774,6 +775,8 @@ export default function LandingPage() {
           </div>
 
           <div className="flex items-center gap-4">
+            <LegalLinks />
+            <span className="text-[var(--color-text-quaternary)]">|</span>
             <span>&copy; 2026 DocBot</span>
             <span className="text-[var(--color-text-quaternary)]">|</span>
             <span>Built by <a href="https://sanshrit-singhai.vercel.app/" target="_blank" rel="noopener noreferrer" className="text-[var(--color-text-secondary)] hover:text-[var(--color-text-primary)] transition-colors duration-150">Sanshrit Singhai</a></span>
