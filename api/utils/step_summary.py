@@ -62,6 +62,8 @@ def build_step_summary(step: dict) -> str:
     if is_failed_step(step):
         if tool == "unsupported":
             reason = "no data source connected"
+        elif step.get("failure_reason") == "step_timeout":  # DOCBOT-2310
+            reason = "timed out"
         elif step.get("failure_reason") and tool in _FAILURE_REASONS:
             reason = _FAILURE_REASONS[tool]
         else:

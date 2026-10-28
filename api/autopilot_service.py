@@ -59,7 +59,11 @@ from langgraph.graph import END, START, StateGraph
 logger = logging.getLogger(__name__)
 
 MAX_ITERATIONS = 5  # cap on executor *waves*, not individual steps — see module docstring
-TOTAL_TIMEOUT_S = 90
+# DOCBOT-2310: overall wall-clock budget; on expiry the synthesizer still
+# answers from the steps finished so far. Each tool step gets its own budget.
+TOTAL_TIMEOUT_S = float(os.getenv("AUTOPILOT_TIMEOUT_SECONDS", "90"))
+STEP_TIMEOUT_S = float(os.getenv("AUTOPILOT_STEP_TIMEOUT_SECONDS", "45"))
+_LIST_STATE_KEYS = ("steps_completed", "citations", "degradation_reasons")
 
 # DOCBOT-1507: both prompts below are built dynamically per-request (tools
 # list, data-fetch guidance), so each gets a version tag covering its
@@ -77,6 +81,7 @@ from api.utils.step_summary import (  # noqa: E402
     build_step_summary,
     clean_step_details,
 )
+from api.utils.exceptions import safe_error_message  # noqa: E402
 
 # P1: machine-readable degradation reason codes. The planner and executor
 # append these to state["degradation_reasons"]; a non-empty set forces the
@@ -1448,14 +1453,30 @@ def make_executor_node(
 
         wave_indices = _next_wave_indices(plan, pointer, state)
 
+        # DOCBOT-2310: per-step budget — a hung tool becomes a failed step.
         results = await asyncio.gather(
-            *(_run_single_step(idx, plan[idx], state) for idx in wave_indices),
+            *(
+                asyncio.wait_for(_run_single_step(idx, plan[idx], state), STEP_TIMEOUT_S)
+                for idx in wave_indices
+            ),
             return_exceptions=True,
         )
 
         step_results: list[dict] = []
         all_new_citations: list[dict] = []
         for idx, outcome in zip(wave_indices, results):
+            if isinstance(outcome, asyncio.TimeoutError):
+                logger.warning("executor_node: step %d timed out after %ss", idx, STEP_TIMEOUT_S)
+                step_results.append({
+                    "step": plan[idx],
+                    "tool": "unknown",
+                    "result": "",
+                    "artifact_id": None,
+                    "chart_b64": None,
+                    "error": f"Step timed out after {STEP_TIMEOUT_S:g}s",
+                    "failure_reason": "step_timeout",
+                })
+                continue
             if isinstance(outcome, BaseException):
                 logger.warning(
                     "executor_node: step %d raised outside its own try/except: %s",
@@ -2147,6 +2168,39 @@ def _should_continue(state: AutopilotState) -> str:
     return "execute"
 
 
+def _merge_state_update(state: dict, updates: Any) -> None:
+    """Apply one node's update to ``state`` with the graph's reducers."""
+    for key, value in (updates or {}).items():
+        if key in _LIST_STATE_KEYS:
+            state[key] = list(state.get(key) or []) + list(value or [])
+        elif key == "data_results":
+            state[key] = _merge_dict_reducer(state.get(key), value)
+        else:
+            state[key] = value
+
+
+async def _synthesize_partial(state: dict, done: int, total: int) -> str:
+    """DOCBOT-2310: answer from the steps finished before the overall timeout.
+    Bounded by STEP_TIMEOUT_S; falls back to the step summaries. Never raises."""
+    from api.utils.pii_masking import mask_pii
+    from api.utils.response_format import normalize_markdown
+
+    note = f"_Stopped early after {done} of {total} steps — answer is based on partial results._"
+    try:
+        result = await asyncio.wait_for(
+            _synthesizer_node({**state, "timed_out": True}), STEP_TIMEOUT_S
+        )
+        answer = str(result.get("final_answer") or "")
+    except Exception as exc:  # incl. TimeoutError — the user still gets an answer
+        logger.warning("autopilot partial synthesis failed (%s)", type(exc).__name__)
+        answer = ""
+    if not answer.strip():
+        answer = "\n".join(
+            f"- {build_step_summary(s)}" for s in state.get("steps_completed") or []
+        ) or "No investigation steps were completed."
+    return normalize_markdown(mask_pii(f"{note}\n\n{answer}"))
+
+
 def _build_graph(executor_node):
     graph = StateGraph(AutopilotState)
     graph.add_node("planner", _planner_node)
@@ -2301,20 +2355,37 @@ async def run_autopilot(
     # DOCBOT-1509: name opens the LangSmith root for this investigation.
     _trace_cm = run_trace(run_id, name="autopilot")
     _trace_cm.__enter__()
+    done_sent = False
+    # DOCBOT-2310: mirror of the graph state, so a timeout can still synthesize.
+    partial_state: dict = dict(initial_state)
+    stream = app.astream(initial_state, stream_mode="updates")
     try:
-        async for state_update in app.astream(initial_state, stream_mode="updates"):
-            # Wall-clock guard — emit warning but continue to synthesizer
-            if time.monotonic() - start_time > TOTAL_TIMEOUT_S:
+        while True:
+            try:
+                state_update = await asyncio.wait_for(
+                    stream.__anext__(), max(start_time + TOTAL_TIMEOUT_S - time.monotonic(), 0)
+                )
+            except StopAsyncIteration:
+                break
+            except asyncio.TimeoutError:
+                await stream.aclose()
+                total = len(partial_state.get("plan") or [])
+                done = len(partial_state.get("steps_completed") or [])
                 yield _sse({
                     "type": "warning",
                     "content": (
-                        f"Investigation reached the {TOTAL_TIMEOUT_S}s time limit. "
+                        f"Investigation reached the {TOTAL_TIMEOUT_S:g}s time limit. "
                         "Showing partial results."
                     ),
                 })
+                answer = await _synthesize_partial(partial_state, done, total)
+                yield _sse({"type": "answer", "content": answer})
+                yield _sse({"type": "done", "citations": all_citations, "run_id": run_id})
+                done_sent = True
                 break
 
             for node_name, updates in state_update.items():
+                _merge_state_update(partial_state, updates)
                 if node_name == "planner":
                     plan = updates.get("plan", [])
                     yield _sse({
@@ -2481,9 +2552,13 @@ async def run_autopilot(
                         "run_id": run_id,
                         "trace_id": trace_id,
                     })
+                    done_sent = True
 
     except Exception as exc:
         logger.error("run_autopilot failed: %s", exc)
-        yield _sse({"type": "error", "content": f"Autopilot error: {exc}"})
+        yield _sse({"type": "error", "content": f"Autopilot error: {safe_error_message(exc)}"})
     finally:
         _trace_cm.__exit__(None, None, None)
+    # DOCBOT-2310: the stream always ends with `done`, even after an error.
+    if not done_sent:
+        yield _sse({"type": "done", "citations": all_citations, "run_id": run_id})
