@@ -88,6 +88,7 @@ from api.billing_models import (
     credits_for_cost,
 )
 from api.utils.caller_scope import CallerScope
+from api.funnel_service import record_funnel_event
 from api.utils.billing_context import (
     BillingContextSnapshot,
     Principal,
@@ -709,6 +710,7 @@ class BillingRun:
     free_tier: bool = True
     exempt: bool = False
     settled: bool = False
+    anon_owner: Optional[str] = None  # DOCBOT-1706 funnel key for anonymous callers
     _tokens: list[Any] = field(default_factory=list, repr=False)
 
     async def settle(self) -> Optional[SettleResult]:
@@ -760,14 +762,25 @@ class BillingRun:
         snapshot = self._snapshot(capture_billing_context())
 
         async def _billed() -> AsyncIterator[Any]:
+            failed = False
             try:
                 with use_billing_context(snapshot):
                     async for chunk in agen:
+                        failed = failed or (isinstance(chunk, str) and '"type": "error"' in chunk)
                         yield chunk
+                if not failed:
+                    self._record_first_answer()
             finally:
                 await self._settle_shielded()
 
         return _billed()
+
+    def _record_first_answer(self) -> None:
+        user_id = self.principal.user_id if self.principal else None
+        record_funnel_event(
+            "first_answer", user_id=user_id, org_id=self.org_id if user_id else None,
+            anon_owner=self.anon_owner, props={"route": self.route},
+        )
 
     # -- non-streaming -----------------------------------------------------
 
@@ -849,6 +862,9 @@ async def start_billing_run(
                 "credit_service: 402 route=%s org=%s required=%d available=%d frozen=%s",
                 route, billing_org, exc.required, exc.available, exc.frozen,
             )
+            record_funnel_event(
+                "paywall_shown", user_id=user_id, org_id=org_id, props={"route": route},
+            )
             raise _quota_error(exc) from None
         logger.info(
             "credit_service: shadow would_block route=%s org=%s required=%d available=%d frozen=%s",
@@ -888,13 +904,15 @@ async def begin_billing(
 
         scope = await resolve_caller_scope(request)
     demo = is_demo_request(session_id, connection_id, session_exists=session_exists)
-    return await start_billing_run(
+    run = await start_billing_run(
         route=route,
         user_id=scope.user_id,
         org_id=scope.org_id,
         role="admin" if scope.is_admin else "viewer",
         demo=demo,
     )
+    run.anon_owner = scope.anon_token
+    return run
 
 
 __all__ = [

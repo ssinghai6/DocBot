@@ -9,7 +9,7 @@ from api.utils.langsmith_pin import pin_langsmith_env
 pin_langsmith_env()
 
 from contextlib import asynccontextmanager
-from fastapi import FastAPI, File, UploadFile, Form, HTTPException, Depends, Request
+from fastapi import FastAPI, File, UploadFile, Form, HTTPException, Depends, Query, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse, StreamingResponse
 from pydantic import BaseModel
@@ -375,6 +375,10 @@ eval_judgments_table = register_eval_judgments_table(metadata)
 from api.api_key_service import register_api_keys_table
 api_keys_table = register_api_keys_table(metadata)
 
+# ── DOCBOT-1706: server-side activation funnel events ───────────────────────
+from api import funnel_service  # noqa: E402
+funnel_events_table = funnel_service.register_funnel_events_table(metadata)
+
 # ── EPIC-06: RBAC dependencies (DOCBOT-603) ──────────────────────────────────
 # Imported here so Depends() objects can be declared at module level.
 # require_role() checks is_auth_enforcement_active() at request time — safe to import early.
@@ -537,6 +541,9 @@ async def init_db() -> None:
         # DOCBOT-1802: credit_ledger is append-only (immutability trigger)
         for stmt in credit_service.LEDGER_IMMUTABILITY_STATEMENTS:
             await conn.execute(text(stmt))
+        # DOCBOT-1706: funnel dedupe indexes (idempotent)
+        for stmt in funnel_service.FUNNEL_EVENTS_DDL:
+            await conn.execute(text(stmt))
     logger.info(
         "Database tables verified / created "
         "(sessions, messages, db_connections, schema_cache, query_history, "
@@ -590,6 +597,7 @@ async def lifespan(app: FastAPI):
     # DOCBOT-1615: platform daily spend cap reads llm_calls + usage_events
     from api.utils.spend_guard import wire_spend_guard
     wire_spend_guard(llm_calls_table, usage_events_table, async_session_factory)
+    funnel_service.wire_funnel_store(funnel_events_table, async_session_factory, engine.dialect.name)
     # DOCBOT-1802: credit reserve/settle store; release reservations orphaned
     # by a previous process before serving traffic.
     credit_service.wire_credit_store(credit_tables, async_session_factory, engine.dialect.name)
@@ -1075,6 +1083,7 @@ async def upload_documents(
                     **owner_values(_owner_scope),
                 )
             )
+        funnel_service.record_for_scope("first_upload", _owner_scope, {"kind": "pdf"})
         
         # Determine suggested persona based on file names + first ~5000 chars of extracted text
         # Require 2+ keyword matches to avoid false positives (e.g. LCA docs matching AI/ML)
@@ -2067,6 +2076,7 @@ async def db_upload_sqlite(
         await stamp_connection_owner(
             result["connection_id"], scope, db_connections_table, async_session_factory
         )
+        funnel_service.record_for_scope("first_upload", scope, {"kind": "sqlite"})
         return result
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc))
@@ -2101,6 +2111,7 @@ async def db_upload_csv(
         await stamp_connection_owner(
             result["connection_id"], scope, db_connections_table, async_session_factory
         )
+        funnel_service.record_for_scope("first_upload", scope, {"kind": "csv"})
         return result
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc))
@@ -2840,6 +2851,7 @@ async def auth_register(body: RegisterRequest, response: Response, request: Requ
                 {"status": "verification_required", "email": email}, status_code=202,
             )
         raise HTTPException(status_code=400, detail=REGISTER_FAILED_DETAIL)
+    funnel_service.record_funnel_event("signup", user_id=user_id, props={"provider": "email"})
 
     log_event(
         AuditEventType.login, audit_log_table, async_session_factory,
@@ -3280,6 +3292,14 @@ async def get_admin_metrics(llm_days: int = 7, _user=_rbac_platform_admin):
         llm_days=llm_days,
     )
     return metrics
+
+
+@app.get("/admin/funnel", response_model=funnel_service.FunnelReport)
+async def get_admin_funnel(
+    days: int = Query(30, ge=1, le=365), _user=_rbac_platform_admin,
+) -> funnel_service.FunnelReport:
+    """DOCBOT-1706: activation funnel counts + step conversion. Platform operators only."""
+    return await funnel_service.get_funnel_report(days)
 
 
 # ---------------------------------------------------------------------------

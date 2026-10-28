@@ -39,6 +39,7 @@ ADMIN_ROUTES = [
     ("POST", "/admin/api-keys", "/admin/api-keys", {"name": "pwn", "scopes": ["hybrid:read"]}),
     ("DELETE", "/admin/api-keys/{key_id}", "/admin/api-keys/k-123", None),
     ("GET", "/admin/metrics", "/admin/metrics", None),
+    ("GET", "/admin/funnel", "/admin/funnel", None),
 ]
 
 _ADMIN_DEP_CALLS = {idx._rbac_admin.dependency, idx._rbac_platform_admin.dependency}
