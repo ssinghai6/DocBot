@@ -29,7 +29,7 @@ export default function VerifyPage() {
     window.history.replaceState({}, "", window.location.pathname)
     const parsed = VerifyRequestSchema.safeParse({ token })
     if (!parsed.success) {
-      setStatus("invalid")
+      queueMicrotask(() => setStatus("invalid")) // async: no setState inside the effect body
       return
     }
     fetch("/api/auth/verify", {
