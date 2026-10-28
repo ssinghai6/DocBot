@@ -475,6 +475,13 @@ export default function Home() {
             const msg = errorMap[params.get("auth_error")!] ?? "Sign-in failed. Please try again.";
             showToast("error", msg);
             window.history.replaceState({}, "", window.location.pathname);
+          } else if (params.has("login")) {
+            // DOCBOT-1712: /signup, /verify link here for existing users.
+            if (!res.ok) {
+              setAuthModalTab("login");
+              setAuthModalOpen(true);
+            }
+            window.history.replaceState({}, "", window.location.pathname);
           }
         }
       } catch {

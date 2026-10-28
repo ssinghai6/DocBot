@@ -215,6 +215,8 @@ users_table = Table(
     Column("created_at", DateTime(timezone=True), server_default=func.now(), nullable=False),
     # ── DOCBOT-1524: org/workspace scoping (nullable FK → organizations.id) ──
     Column("org_id", String, index=True),
+    # DOCBOT-1712: primary use case picked on /onboarding (nullable, skippable)
+    Column("use_case", String),
 )
 
 user_sessions_table = Table(
@@ -494,6 +496,10 @@ async def init_db() -> None:
             await conn.execute(text(col_ddl))
         # DOCBOT-1617: users.email_verified + legacy identity backfill
         for col_ddl in USER_IDENTITY_COLUMN_MIGRATIONS:
+            await conn.execute(text(col_ddl))
+        # DOCBOT-1712: users.use_case (onboarding answer)
+        from api.routes.onboarding_routes import USER_ONBOARDING_COLUMN_MIGRATIONS
+        for col_ddl in USER_ONBOARDING_COLUMN_MIGRATIONS:
             await conn.execute(text(col_ddl))
         await backfill_legacy_identities(conn)
         # DOCBOT-1621: session tokens are stored hashed; rewrite legacy rows.
@@ -3296,6 +3302,15 @@ from api.routes.email_verify_routes import (  # noqa: E402
 
 app.include_router(email_verify_router)
 wire_email_verification(users_table, email_verification_tokens_table, async_session_factory)
+
+# ── DOCBOT-1712: post-signup onboarding (workspace name + use case) ───────────
+from api.routes.onboarding_routes import (  # noqa: E402
+    router as onboarding_router,
+    wire_onboarding,
+)
+
+app.include_router(onboarding_router)
+wire_onboarding(users_table, organizations_table, async_session_factory)
 
 
 def _get_connector(connector_id: str):

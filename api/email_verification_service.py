@@ -271,10 +271,11 @@ def _frontend_base_url() -> str:
 
 
 def verification_link(raw_token: str) -> str:
-    """The <a href> target. The frontend strips ?verify_token= after POSTing
-    it to POST /api/auth/verify — the link alone never verifies (no GET
-    auto-consume; email scanner prefetch can't flip the flag)."""
-    return f"{_frontend_base_url()}/chat?verify_token={raw_token}"
+    """The <a href> target. DOCBOT-1712: /verify POSTs ?token= to
+    POST /api/auth/verify — the link alone never verifies (no GET
+    auto-consume; email scanner prefetch can't flip the flag). The legacy
+    /chat?verify_token= landing still works for links already sent."""
+    return f"{_frontend_base_url()}/verify?token={raw_token}"
 
 
 def _email_payload(email: str, raw_token: str) -> dict[str, Any]:
