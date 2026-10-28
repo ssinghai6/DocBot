@@ -71,7 +71,8 @@ async def _resolve_user_with_role(docbot_session: Optional[str], min_role: UserR
     open-mode decision is made by the caller.
     """
     if not docbot_session:
-        raise HTTPException(status_code=401, detail="Authentication required.")
+        from api.utils.caller_scope import SIGN_IN_REQUIRED_DETAIL  # DOCBOT-1711: frontend opens AuthModal
+        raise HTTPException(status_code=401, detail=SIGN_IN_REQUIRED_DETAIL)
 
     from api.auth_service import get_user_from_session
     user = await get_user_from_session(
@@ -327,16 +328,22 @@ def assert_safe_auth_config() -> None:
             "ALLOW_ANONYMOUS_SANDBOX is set on a deployed environment and is IGNORED "
             "(dev-only). Remove it from this environment."
         )
+    from api.auth_service import AUTH_MODES, auth_mode_setting, is_auth_enforcement_active
+
+    mode = auth_mode_setting()
+    if mode and mode not in AUTH_MODES:
+        logger.warning(
+            "APP_AUTH_MODE=%r is not one of %s; treating it as 'required' (fail closed).",
+            mode, "|".join(AUTH_MODES),
+        )
     if not _env_true("MULTI_TENANT"):
         return
 
-    from api.auth_service import is_auth_enforcement_active
-
     if not is_auth_enforcement_active():
         raise UnsafeAuthConfigError(
-            "Refusing to start: MULTI_TENANT=true requires AUTH_REQUIRED=true. "
-            "Open/demo mode skips role checks and cannot isolate tenants. "
-            "Set AUTH_REQUIRED=true or unset MULTI_TENANT."
+            "Refusing to start: MULTI_TENANT=true requires APP_AUTH_MODE=required "
+            "(or AUTH_REQUIRED=true). Open/demo mode skips role checks and cannot "
+            "isolate tenants. Set APP_AUTH_MODE=required or unset MULTI_TENANT."
         )
     if _anonymous_sandbox_flag_set():
         raise UnsafeAuthConfigError(
