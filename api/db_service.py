@@ -1979,7 +1979,7 @@ async def _generate_sql(
     # prompt already fully encodes schema + few-shot examples + question, so
     # a byte-identical prompt is a legitimate re-ask, not a stale hit.
     if feedback:
-        return chat_completion(
+        return await achat_completion(
             [{"role": "user", "content": prompt}],
             temperature=0,
             max_tokens=1200,
