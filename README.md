@@ -772,7 +772,9 @@ GET /admin/audit-log?format=csv
 | `ALLOWED_ORIGINS` | No | Comma-separated CORS origins (defaults to localhost:3000) |
 | `FRONTEND_URL` | Auth | Frontend public URL for post-login redirects (SAML and OAuth) |
 | `SESSION_TTL_HOURS` | No | SSO session lifetime in hours (default: 8) |
-| `AUTH_REQUIRED` | No | Set to `true` to enforce RBAC login on all protected routes. Default off (open/demo mode) |
+| `APP_AUTH_MODE` | No | `open` (default) or `required`. `required` needs login for own data (uploads, DB connect, CSV, EDGAR ingest, sessions); anonymous visitors keep the one-click demo. Unknown values fail closed (required) |
+| `AUTH_REQUIRED` | No | Legacy alias: `true` == `APP_AUTH_MODE=required` |
+| `DEMO_DAILY_USD_CAP` | No | Daily (UTC) USD cap on anonymous LLM+E2B spend; over it, demo init + anonymous demo chats return 429. Default `10`, `0` disables |
 | `SAML_SP_ENTITY_ID` | SSO | SP Entity ID — e.g. `https://docbot.example.com` |
 | `SAML_SP_ACS_URL` | SSO | ACS callback URL — e.g. `https://docbot.example.com/api/auth/saml/acs` |
 | `SAML_IDP_ENTITY_ID` | SSO | IdP Entity ID from your IdP metadata |

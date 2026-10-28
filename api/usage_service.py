@@ -27,11 +27,13 @@ import asyncio
 import logging
 import math
 import queue
+import time
 import uuid
+from datetime import datetime, timezone
 from decimal import Decimal
 from typing import Any, AsyncIterator, Optional
 
-from sqlalchemy import BigInteger, Column, DateTime, Index, Integer, String, Table, func
+from sqlalchemy import BigInteger, Column, DateTime, Index, Integer, String, Table, func, select
 from sqlalchemy import insert as sa_insert
 from sqlalchemy.exc import SQLAlchemyError
 
@@ -345,3 +347,51 @@ __all__ = [
     "wire_usage_store",
     "writer_loop",
 ]
+
+
+# ---------------------------------------------------------------------------
+# DOCBOT-1711: anonymous/demo spend today (DEMO_DAILY_USD_CAP circuit breaker)
+# ---------------------------------------------------------------------------
+
+ANON_SPEND_CACHE_TTL_SEC = 60.0
+_anon_spend_cache: Optional[tuple[float, datetime, int]] = None  # (monotonic, utc day, micro-USD)
+
+
+def reset_anon_spend_cache() -> None:
+    global _anon_spend_cache
+    _anon_spend_cache = None
+
+
+async def anonymous_spend_today_micro_usd() -> int:
+    """Today's (UTC) metered LLM + E2B cost with no billing principal, in micro-USD.
+
+    Anonymous traffic is the only traffic with ``org_id IS NULL`` (a signed-in
+    user always bills to an org or ``user:<id>``), so this rides the
+    ``(org_id, created_at)`` index. Cached for ``ANON_SPEND_CACHE_TTL_SEC`` so
+    the breaker costs one query a minute, not one per request. Fails open
+    (last value, else 0) on a store error.
+    """
+    global _anon_spend_cache
+    day = datetime.now(timezone.utc).replace(hour=0, minute=0, second=0, microsecond=0)
+    now = time.monotonic()
+    cached = _anon_spend_cache
+    if cached and cached[1] == day and now - cached[0] < ANON_SPEND_CACHE_TTL_SEC:
+        return cached[2]
+    if _usage_table is None or _async_session_factory is None:
+        return 0
+    t = _usage_table
+    try:
+        async with _async_session_factory() as session:
+            total = (await session.execute(
+                select(func.coalesce(func.sum(t.c.cost_micro_usd), 0)).where(
+                    t.c.org_id.is_(None),
+                    t.c.user_id.is_(None),
+                    t.c.kind.in_(("llm", "sandbox")),
+                    t.c.created_at >= day,
+                )
+            )).scalar_one()
+    except (SQLAlchemyError, OSError) as exc:
+        logger.warning("usage_service: anonymous spend query failed: %s", type(exc).__name__)
+        return cached[2] if cached and cached[1] == day else 0
+    _anon_spend_cache = (now, day, int(total or 0))
+    return _anon_spend_cache[2]

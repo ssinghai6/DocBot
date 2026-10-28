@@ -13,6 +13,7 @@ import type {
 import { useUIStore } from "@/store/uiStore"
 import { EMPTY_ANSWER_MESSAGE, StreamErrorEvent, fillEmptyAssistant } from "@/lib/chatStream"
 import { AutopilotStepEventSchema } from "@/lib/schemas/autopilotStep"
+import { SignInGatedError, signInGateMessage } from "@/lib/signInGate"
 
 /**
  * DOCBOT-1510: validate a `lineage` SSE event, attach it to the in-flight
@@ -73,6 +74,8 @@ interface UseChatSubmitParams {
 
   showToast: (type: Toast['type'], message: string) => void
   loadQueryHistory: (connId: string) => void
+  /** DOCBOT-1711: opened when the backend asks an anonymous visitor to sign in. */
+  setAuthModalOpen?: (open: boolean) => void
 }
 
 export function useChatSubmit(params: UseChatSubmitParams) {
@@ -101,7 +104,16 @@ export function useChatSubmit(params: UseChatSubmitParams) {
 
     showToast,
     loadQueryHistory,
+    setAuthModalOpen,
   } = params;
+
+  // DOCBOT-1711: 401 / demo-cap 429 → login modal; the thrown message is the backend's prompt.
+  const throwIfSignInGated = async (response: Response): Promise<void> => {
+    const message = await signInGateMessage(response);
+    if (message === null) return;
+    setAuthModalOpen?.(true);
+    throw new SignInGatedError(message);
+  };
 
   const handleSendMessage = async (e?: React.FormEvent) => {
     if (e) e.preventDefault();
@@ -244,6 +256,7 @@ export function useChatSubmit(params: UseChatSubmitParams) {
                 body: autopilotBody,
               });
               if (r.ok && r.body) return r;
+              await throwIfSignInGated(r);
               // Retry transient gateway errors (backend waking up); fail fast otherwise.
               if (attempt === 0 && [502, 503, 504].includes(r.status)) {
                 await new Promise(res => setTimeout(res, 1500));
@@ -251,6 +264,7 @@ export function useChatSubmit(params: UseChatSubmitParams) {
               }
               throw new Error(`Autopilot HTTP ${r.status}`);
             } catch (e) {
+              if (e instanceof SignInGatedError) throw e;
               lastErr = e;
               if (attempt === 0) {
                 await new Promise(res => setTimeout(res, 1500));
@@ -419,6 +433,7 @@ export function useChatSubmit(params: UseChatSubmitParams) {
           }),
         });
 
+        await throwIfSignInGated(response);
         if (!response.ok || !response.body) {
           throw new Error(`HTTP ${response.status}`);
         }
@@ -519,6 +534,7 @@ export function useChatSubmit(params: UseChatSubmitParams) {
           }),
         });
 
+        await throwIfSignInGated(response);
         if (!response.ok || !response.body) throw new Error(`HTTP ${response.status}`);
 
         const reader = response.body.getReader();
@@ -641,6 +657,7 @@ export function useChatSubmit(params: UseChatSubmitParams) {
         })
       });
 
+      await throwIfSignInGated(response);
       if (!response.ok || !response.body) throw new Error(`HTTP ${response.status}`);
 
       const reader = response.body.getReader();
