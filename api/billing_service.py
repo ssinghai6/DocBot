@@ -18,9 +18,13 @@ purchasable ("coming soon").
 
 from __future__ import annotations
 
+import hashlib
+import hmac
 import json
 import logging
 import os
+import time
+from dataclasses import dataclass
 from datetime import datetime, timezone
 from typing import Optional
 from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
@@ -34,6 +38,7 @@ from api.credit_service import free_monthly_credits
 logger = logging.getLogger(__name__)
 
 STRIPE_CHECKOUT_URL = "https://api.stripe.com/v1/checkout/sessions"
+WEBHOOK_PATH = "/api/billing/webhook"
 DEFAULT_RETURN_PATH = "/settings/billing"
 
 DEFAULT_PACKS: tuple[CreditPackConfig, ...] = (
@@ -103,7 +108,7 @@ def _frontend_url(path: str) -> str:
 
 
 async def _create_checkout_session(
-    pack: CreditPackConfig, org_id: str, email: Optional[str], return_path: str
+    pack: CreditPackConfig, org_id: str, email: Optional[str], return_path: str, user_id: Optional[str]
 ) -> CheckoutSessionResponse:
     form: dict[str, str] = {
         "mode": "payment",
@@ -113,6 +118,7 @@ async def _create_checkout_session(
         "metadata[org_id]": org_id,
         "metadata[pack_id]": pack.id,
         "metadata[credits]": str(pack.credits),
+        "metadata[user_id]": user_id or "",
         "success_url": _frontend_url(_with_query(return_path, {"checkout": "success"})),
         "cancel_url": _frontend_url(_with_query(return_path, {"checkout": "cancel"})),
     }
@@ -142,14 +148,18 @@ async def _create_checkout_session(
 
 
 async def checkout_url(
-    pack_id: str, org_id: str, email: Optional[str], return_path: Optional[str] = None
+    pack_id: str,
+    org_id: str,
+    email: Optional[str],
+    return_path: Optional[str] = None,
+    user_id: Optional[str] = None,
 ) -> CheckoutSessionResponse:
     """Return where to send the buyer for ``pack_id``. ``org_id`` must come from the session."""
     pack = next((p for p in load_pack_configs() if p.id == pack_id), None)
     if pack is None:
         raise PackNotFound(pack_id)
     if pack.stripe_price_id and _secret_key():
-        return await _create_checkout_session(pack, org_id, email, return_path or DEFAULT_RETURN_PATH)
+        return await _create_checkout_session(pack, org_id, email, return_path or DEFAULT_RETURN_PATH, user_id)
     if pack.payment_link_url:
         params = {"client_reference_id": org_id}
         if email:
@@ -158,7 +168,100 @@ async def checkout_url(
     raise PaymentsDisabled(pack_id)
 
 
+# ---------------------------------------------------------------------------
+# Webhook (DOCBOT-2334)
+# ---------------------------------------------------------------------------
+
+WEBHOOK_TOLERANCE_SEC = 300
+# checkout.session.completed can arrive unpaid for delayed methods; the async
+# event follows once funds land. Same session id -> same ledger ref.
+CREDIT_EVENTS = frozenset({"checkout.session.completed", "checkout.session.async_payment_succeeded"})
+
+
+class WebhookNotConfigured(Exception):
+    pass
+
+
+class InvalidSignature(Exception):
+    pass
+
+
+def _webhook_secret() -> str:
+    return os.getenv("STRIPE_WEBHOOK_SECRET", "").strip()
+
+
+def verify_webhook(payload: bytes, sig_header: Optional[str], now: Optional[float] = None) -> dict:
+    """Verify ``Stripe-Signature`` (t=..,v1=..) over ``"{t}.{payload}"`` and return the event."""
+    secret = _webhook_secret()
+    if not secret:
+        raise WebhookNotConfigured()
+    timestamp: Optional[int] = None
+    signatures: list[str] = []
+    for part in (sig_header or "").split(","):
+        key, _, value = part.strip().partition("=")
+        if key == "t" and value.isdigit():
+            timestamp = int(value)
+        elif key == "v1":
+            signatures.append(value)
+    if timestamp is None or not signatures:
+        raise InvalidSignature("malformed header")
+    current = time.time() if now is None else now
+    if abs(current - timestamp) > WEBHOOK_TOLERANCE_SEC:
+        raise InvalidSignature("timestamp outside tolerance")
+    expected = hmac.new(
+        secret.encode(), f"{timestamp}.".encode() + payload, hashlib.sha256
+    ).hexdigest()
+    if not any(hmac.compare_digest(expected, sig) for sig in signatures):
+        raise InvalidSignature("no matching signature")
+    try:
+        event = json.loads(payload)
+    except ValueError:
+        raise InvalidSignature("bad json") from None
+    if not isinstance(event, dict):
+        raise InvalidSignature("bad json")
+    return event
+
+
+@dataclass(frozen=True)
+class CheckoutGrant:
+    session_id: str
+    org_id: str
+    user_id: Optional[str]
+    credits: int
+    pack_id: Optional[str]
+
+
+def checkout_grant(event: dict) -> Optional[CheckoutGrant]:
+    """The credit grant a verified event implies, or None (ignored event / unpaid / not ours).
+
+    ``org_id`` / ``credits`` / ``user_id`` are the metadata ``_create_checkout_session``
+    set server-side; ``client_reference_id`` (org id) is the fallback for org.
+    """
+    if event.get("type") not in CREDIT_EVENTS:
+        return None
+    obj = (event.get("data") or {}).get("object") or {}
+    if obj.get("payment_status") != "paid":
+        return None
+    meta = obj.get("metadata") or {}
+    session_id = obj.get("id") or ""
+    org_id = meta.get("org_id") or obj.get("client_reference_id") or ""
+    try:
+        credits = int(meta.get("credits") or 0)
+    except (TypeError, ValueError):
+        credits = 0
+    if not session_id.startswith("cs_") or not org_id or credits <= 0:
+        # e.g. a Payment Link session (no credits metadata): operator grants manually.
+        logger.warning("billing_service: paid checkout session not auto-creditable (missing metadata)")
+        return None
+    return CheckoutGrant(session_id, org_id, meta.get("user_id") or None, credits, meta.get("pack_id"))
+
+
 __all__ = [
+    "CheckoutGrant",
+    "InvalidSignature",
+    "WebhookNotConfigured",
+    "checkout_grant",
+    "verify_webhook",
     "DEFAULT_PACKS",
     "PackNotFound",
     "PaymentProviderError",

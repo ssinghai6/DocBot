@@ -160,6 +160,8 @@ PUBLIC_ROUTES: dict[RouteKey, str] = {
     ("GET", "/api/auth/google/callback"): "Google OAuth callback; validated via state + code exchange.",
     ("POST", "/api/auth/register"): "Email/password sign-up (abuse controls: DOCBOT-1622, 1701).",
     ("POST", "/api/auth/login"): "Email/password login (throttling: DOCBOT-1622).",
+    ("POST", "/api/billing/webhook"): "Stripe webhook (DOCBOT-2334); no session, authenticated by the "
+                                      "Stripe-Signature HMAC (STRIPE_WEBHOOK_SECRET), 503 when unset.",
     ("POST", "/api/auth/verify"): "DOCBOT-1713: consumes the single-use emailed verification "
                                   "token (SHA-256-hashed at rest; the token itself IS the "
                                   "credential; expiry + single-use enforced atomically).",

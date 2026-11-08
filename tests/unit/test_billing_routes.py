@@ -152,6 +152,7 @@ class TestCheckout:
         assert d["mode"] == "payment"
         assert d["line_items[0][price]"] == "price_Starter1"
         assert d["client_reference_id"] == "org-42" and d["metadata[org_id]"] == "org-42"
+        assert d["metadata[credits]"] == "10000" and d["metadata[user_id]"] == "u-1"
         assert d["success_url"] == "https://app.example.com/chat?checkout=success"
         assert d["cancel_url"] == "https://app.example.com/chat?checkout=cancel"
         assert d["customer_email"] == "buyer@example.com"
