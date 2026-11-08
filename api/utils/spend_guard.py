@@ -120,8 +120,13 @@ async def _is_paid_caller(request: Request) -> bool:
     from api.utils.caller_scope import resolve_caller_scope
 
     try:
-        scope = await resolve_caller_scope(request)
-        org = credit_service.billing_org_for(scope.user_id, scope.org_id)
+        # DOCBOT-2330: /v1 API-key routes: require_api_key (resolved first) set the key's org.
+        key_org = getattr(request.state, "org_id", None)
+        if key_org:
+            org: Optional[str] = key_org
+        else:
+            scope = await resolve_caller_scope(request)
+            org = credit_service.billing_org_for(scope.user_id, scope.org_id)
         return org is not None and await credit_service.is_paid_org(org)
     except (SQLAlchemyError, OSError) as exc:
         logger.warning("spend_guard: paid-tier lookup failed (%s) — failing open", type(exc).__name__)

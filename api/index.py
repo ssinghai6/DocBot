@@ -91,7 +91,8 @@ async def abuse_guard(request: Request, call_next):
             )
 
         # Rate-limit only the cost-bearing API surface; leave health/static alone.
-        if request.method in ("POST", "DELETE") and path.startswith("/api/"):
+        # DOCBOT-2330: /v1 (API-key) routes run the same LLM/E2B pipelines.
+        if request.method in ("POST", "DELETE") and path.startswith(("/api/", "/v1/")):
             try:
                 await request_guard.check_ip_rate_limit(request)
             except HTTPException as exc:
@@ -2691,20 +2692,41 @@ async def owner_unlock(raw_request: Request):
     return response
 
 
+def _oauth_start_response(url: str, cookie_value: str) -> JSONResponse:
+    """DOCBOT-2331: bind the OAuth flow to this browser with a short-lived cookie."""
+    from api.oauth_service import OAUTH_STATE_COOKIE
+    response = JSONResponse({"url": url})
+    response.set_cookie(
+        key=OAUTH_STATE_COOKIE, value=cookie_value, httponly=True, samesite="lax",
+        secure=os.getenv("APP_BASE_URL", "").startswith("https"), max_age=600, path="/api/auth",
+    )
+    return response
+
+
 @app.get("/api/auth/github")
 async def github_login():
     """Return GitHub OAuth URL as JSON — frontend navigates directly to avoid proxy redirect issues."""
     from api.oauth_service import github_authorize_url, generate_oauth_state, is_github_configured
     if not is_github_configured():
         raise HTTPException(status_code=503, detail="GitHub OAuth not configured.")
+    from api.oauth_service import oauth_state_cookie_value
     state = generate_oauth_state()
-    return {"url": github_authorize_url(state)}
+    return _oauth_start_response(github_authorize_url(state), oauth_state_cookie_value(state))
 
 
 @app.get("/api/auth/github/callback")
-async def github_callback(code: str, state: str, response: Response, request: Request):
+async def github_callback(code: str, state: str, request: Request):
     """Handle GitHub OAuth callback: exchange code → provision user → set cookie."""
-    from api.oauth_service import github_exchange_code, validate_oauth_state, oauth_success_redirect
+    from api.oauth_service import OAUTH_STATE_COOKIE
+    redirect = await _github_callback(code, state, request)
+    redirect.delete_cookie(OAUTH_STATE_COOKIE, path="/api/auth")
+    return redirect
+
+
+async def _github_callback(code: str, state: str, request: Request) -> Response:
+    from api.oauth_service import (
+        OAUTH_STATE_COOKIE, check_oauth_state_cookie, github_exchange_code, oauth_success_redirect, validate_oauth_state,
+    )
     from api.auth_service import create_user_session
     from api.identity_service import IdentityLinkError, identity_from_oauth_attrs, resolve_provider_login
     from api.audit_service import log_event, AuditEventType
@@ -2712,7 +2734,9 @@ async def github_callback(code: str, state: str, response: Response, request: Re
 
     frontend_url = oauth_success_redirect("")
 
-    if not validate_oauth_state(state):
+    # DOCBOT-2331: state must match this browser's cookie (login-CSRF), then TTL + single use.
+    if check_oauth_state_cookie(request.cookies.get(OAUTH_STATE_COOKIE), state) is None \
+            or not validate_oauth_state(state):
         return RedirectResponse(url=f"{frontend_url.split('?')[0]}?auth_error=invalid_state")
 
     try:
@@ -2753,27 +2777,41 @@ async def github_callback(code: str, state: str, response: Response, request: Re
 @app.get("/api/auth/google")
 async def google_login():
     """Return Google OAuth URL as JSON — frontend navigates directly to avoid proxy redirect issues."""
-    from api.oauth_service import google_authorize_url, generate_oauth_state, is_google_configured
+    from api.oauth_service import (
+        google_authorize_url, generate_oauth_state, is_google_configured, oauth_state_cookie_value, pkce_pair,
+    )
     if not is_google_configured():
         raise HTTPException(status_code=503, detail="Google OAuth not configured.")
     state = generate_oauth_state()
-    return {"url": google_authorize_url(state)}
+    verifier, challenge = pkce_pair()  # verifier lives only in the HttpOnly cookie
+    return _oauth_start_response(google_authorize_url(state, challenge), oauth_state_cookie_value(state, verifier))
 
 
 @app.get("/api/auth/google/callback")
-async def google_callback(code: str, state: str, response: Response, request: Request):
+async def google_callback(code: str, state: str, request: Request):
     """Handle Google OAuth callback: exchange code → provision user → set cookie."""
-    from api.oauth_service import google_exchange_code, validate_oauth_state, _frontend_url
+    from api.oauth_service import OAUTH_STATE_COOKIE
+    redirect = await _google_callback(code, state, request)
+    redirect.delete_cookie(OAUTH_STATE_COOKIE, path="/api/auth")
+    return redirect
+
+
+async def _google_callback(code: str, state: str, request: Request) -> Response:
+    from api.oauth_service import (
+        OAUTH_STATE_COOKIE, check_oauth_state_cookie, google_exchange_code, validate_oauth_state, _frontend_url,
+    )
     from api.auth_service import create_user_session
     from api.identity_service import identity_from_oauth_attrs, resolve_provider_login
     from api.audit_service import log_event, AuditEventType
     from fastapi.responses import RedirectResponse
 
-    if not validate_oauth_state(state):
+    # DOCBOT-2331: state must match this browser's cookie (login-CSRF), then TTL + single use.
+    verifier = check_oauth_state_cookie(request.cookies.get(OAUTH_STATE_COOKIE), state)
+    if not verifier or not validate_oauth_state(state):
         return RedirectResponse(url=f"{_frontend_url()}/chat?auth_error=invalid_state")
 
     try:
-        attrs = await google_exchange_code(code)
+        attrs = await google_exchange_code(code, verifier)
     except Exception as exc:
         logger.warning("Google OAuth exchange failed: %s", exc)
         return RedirectResponse(url=f"{_frontend_url()}/chat?auth_error=google_failed")
@@ -3547,6 +3585,20 @@ async def _require_v1_resources(key: Any, session_id: str, connection_id: Option
         raise HTTPException(status_code=404, detail="Session or connection not found.")
 
 
+async def _begin_v1_billing(
+    raw_request: Request, route: str, key: Any, session_id: str, connection_id: Optional[str],
+) -> "credit_service.BillingRun":
+    """DOCBOT-2330: reserve credits against the API key's org (402 only when BILLING_ENFORCE).
+
+    Call outside any try that rewrites errors, so a 402 propagates unchanged.
+    """
+    return await credit_service.begin_billing(
+        raw_request, route, session_id=session_id, connection_id=connection_id,
+        session_exists=session_id in VECTOR_STORES,
+        scope=CallerScope(user_id=None, org_id=key.org_id, anon_token=None),
+    )
+
+
 def _parse_sse_event(chunk: str) -> Optional[dict]:
     """Parse one `data: {...}\\n\\n` SSE line back into its dict payload."""
     if not chunk.startswith("data: "):
@@ -3577,7 +3629,9 @@ class V1HybridChatRequest(BaseModel):
         "Requires an API key with the `hybrid:read` scope."
     ),
 )
-async def v1_hybrid_chat(raw_request: Request, request: V1HybridChatRequest, _key=_v1_hybrid_read):
+async def v1_hybrid_chat(
+    raw_request: Request, request: V1HybridChatRequest, _key=_v1_hybrid_read, _cap=_spend_cap,
+):
     from api.hybrid_service import hybrid_chat
     from api.audit_service import log_event, AuditEventType, get_client_ip
 
@@ -3608,43 +3662,45 @@ async def v1_hybrid_chat(raw_request: Request, request: V1HybridChatRequest, _ke
     trace_id: Optional[str] = None
     error_detail: Optional[str] = None
 
-    try:
-        async for chunk in hybrid_chat(
-            question=request.question,
-            session_id=request.session_id,
-            connection_id=request.connection_id,
-            persona=request.persona,
-            has_docs=request.has_docs,
-            messages_table=messages_table,
-            sessions_table=sessions_table,
-            db_connections_table=db_connections_table,
-            schema_cache_table=schema_cache_table,
-            query_history_table=query_history_table,
-            query_embeddings_table=query_embeddings_table,
-            async_session_factory=async_session_factory,
-            expert_personas=EXPERT_PERSONAS,
-            vector_stores=VECTOR_STORES,
-            extracted_fields=EXTRACTED_FIELDS.get(request.session_id),
-            chat_history=_hybrid_history if _hybrid_history else None,
-            chart_type=request.chart_type,
-        ):
-            evt = _parse_sse_event(chunk)
-            if not evt:
-                continue
-            etype = evt.get("type")
-            if etype == "metadata":
-                metadata_evt = evt
-            elif etype == "token":
-                answer_parts.append(evt.get("content", ""))
-            elif etype == "done":
-                citations = evt.get("citations", [])
-                run_id = evt.get("run_id")
-                trace_id = evt.get("trace_id")
-            elif etype == "error":
-                error_detail = evt.get("detail") or evt.get("content") or "An internal error occurred."
-    except Exception as exc:
-        logger.error("v1_hybrid_chat error: %s", type(exc).__name__)
-        raise HTTPException(status_code=502, detail="An internal error occurred.") from exc
+    billing = await _begin_v1_billing(raw_request, "hybrid", _key, request.session_id, request.connection_id)
+    async with billing:
+        try:
+            async for chunk in hybrid_chat(
+                question=request.question,
+                session_id=request.session_id,
+                connection_id=request.connection_id,
+                persona=request.persona,
+                has_docs=request.has_docs,
+                messages_table=messages_table,
+                sessions_table=sessions_table,
+                db_connections_table=db_connections_table,
+                schema_cache_table=schema_cache_table,
+                query_history_table=query_history_table,
+                query_embeddings_table=query_embeddings_table,
+                async_session_factory=async_session_factory,
+                expert_personas=EXPERT_PERSONAS,
+                vector_stores=VECTOR_STORES,
+                extracted_fields=EXTRACTED_FIELDS.get(request.session_id),
+                chat_history=_hybrid_history if _hybrid_history else None,
+                chart_type=request.chart_type,
+            ):
+                evt = _parse_sse_event(chunk)
+                if not evt:
+                    continue
+                etype = evt.get("type")
+                if etype == "metadata":
+                    metadata_evt = evt
+                elif etype == "token":
+                    answer_parts.append(evt.get("content", ""))
+                elif etype == "done":
+                    citations = evt.get("citations", [])
+                    run_id = evt.get("run_id")
+                    trace_id = evt.get("trace_id")
+                elif etype == "error":
+                    error_detail = evt.get("detail") or evt.get("content") or "An internal error occurred."
+        except Exception as exc:
+            logger.error("v1_hybrid_chat error: %s", type(exc).__name__)
+            raise HTTPException(status_code=502, detail="An internal error occurred.") from exc
 
     if error_detail:
         raise HTTPException(status_code=502, detail=error_detail)
@@ -3682,7 +3738,9 @@ class V1AutopilotRequest(BaseModel):
         "Requires an API key with the `autopilot:run` scope."
     ),
 )
-async def v1_autopilot_run(raw_request: Request, request: V1AutopilotRequest, _key=_v1_autopilot_run):
+async def v1_autopilot_run(
+    raw_request: Request, request: V1AutopilotRequest, _key=_v1_autopilot_run, _cap=_spend_cap,
+):
     from api.autopilot_service import run_autopilot
     from api.audit_service import log_event, AuditEventType, get_client_ip
 
@@ -3713,62 +3771,64 @@ async def v1_autopilot_run(raw_request: Request, request: V1AutopilotRequest, _k
     warnings: list[str] = []
     error_detail: Optional[str] = None
 
-    try:
-        # Resolve data sources from persisted state — client-sent flags
-        # are fallback hints only (see api/utils/autopilot_sources.py).
-        from api.utils.autopilot_sources import SourceFlags, resolve_autopilot_sources
-        sources = await resolve_autopilot_sources(
-            session_id=request.session_id,
-            connection_id=request.connection_id,
-            db_connections_table=db_connections_table,
-            async_session_factory=async_session_factory,
-            vector_stores=VECTOR_STORES,
-            org_encryption_keys_table=org_encryption_keys_table,
-            fallback=SourceFlags(
-                has_docs=request.has_docs,
-                has_db=request.has_db,
-                has_csv=request.has_csv,
-            ),
-        )
+    billing = await _begin_v1_billing(raw_request, "autopilot", _key, request.session_id, request.connection_id)
+    async with billing:
+        try:
+            # Resolve data sources from persisted state — client-sent flags
+            # are fallback hints only (see api/utils/autopilot_sources.py).
+            from api.utils.autopilot_sources import SourceFlags, resolve_autopilot_sources
+            sources = await resolve_autopilot_sources(
+                session_id=request.session_id,
+                connection_id=request.connection_id,
+                db_connections_table=db_connections_table,
+                async_session_factory=async_session_factory,
+                vector_stores=VECTOR_STORES,
+                org_encryption_keys_table=org_encryption_keys_table,
+                fallback=SourceFlags(
+                    has_docs=request.has_docs,
+                    has_db=request.has_db,
+                    has_csv=request.has_csv,
+                ),
+            )
 
-        async for chunk in run_autopilot(
-            question=request.question,
-            session_id=request.session_id,
-            connection_id=request.connection_id or "",
-            persona=request.persona,
-            db_connections_table=db_connections_table,
-            schema_cache_table=schema_cache_table,
-            query_history_table=query_history_table,
-            query_embeddings_table=query_embeddings_table,
-            session_artifacts_table=session_artifacts_table,
-            table_embeddings_table=table_embeddings_table,
-            async_session_factory=async_session_factory,
-            expert_personas=EXPERT_PERSONAS,
-            vector_stores=VECTOR_STORES,
-            has_docs=sources.has_docs,
-            has_db=sources.has_db,
-            has_csv=sources.has_csv,
-            chat_history=_autopilot_history if _autopilot_history else None,
-        ):
-            evt = _parse_sse_event(chunk)
-            if not evt:
-                continue
-            etype = evt.get("type")
-            if etype == "plan":
-                plan_steps = evt.get("steps", [])
-            elif etype == "step":
-                steps.append(evt)
-            elif etype == "answer":
-                answer = evt.get("content", "")
-            elif etype == "done":
-                citations = evt.get("citations", [])
-            elif etype == "warning":
-                warnings.append(evt.get("content", ""))
-            elif etype == "error":
-                error_detail = evt.get("content") or "An internal error occurred."
-    except Exception as exc:
-        logger.error("v1_autopilot_run error: %s", type(exc).__name__)
-        raise HTTPException(status_code=502, detail="An internal error occurred.") from exc
+            async for chunk in run_autopilot(
+                question=request.question,
+                session_id=request.session_id,
+                connection_id=request.connection_id or "",
+                persona=request.persona,
+                db_connections_table=db_connections_table,
+                schema_cache_table=schema_cache_table,
+                query_history_table=query_history_table,
+                query_embeddings_table=query_embeddings_table,
+                session_artifacts_table=session_artifacts_table,
+                table_embeddings_table=table_embeddings_table,
+                async_session_factory=async_session_factory,
+                expert_personas=EXPERT_PERSONAS,
+                vector_stores=VECTOR_STORES,
+                has_docs=sources.has_docs,
+                has_db=sources.has_db,
+                has_csv=sources.has_csv,
+                chat_history=_autopilot_history if _autopilot_history else None,
+            ):
+                evt = _parse_sse_event(chunk)
+                if not evt:
+                    continue
+                etype = evt.get("type")
+                if etype == "plan":
+                    plan_steps = evt.get("steps", [])
+                elif etype == "step":
+                    steps.append(evt)
+                elif etype == "answer":
+                    answer = evt.get("content", "")
+                elif etype == "done":
+                    citations = evt.get("citations", [])
+                elif etype == "warning":
+                    warnings.append(evt.get("content", ""))
+                elif etype == "error":
+                    error_detail = evt.get("content") or "An internal error occurred."
+        except Exception as exc:
+            logger.error("v1_autopilot_run error: %s", type(exc).__name__)
+            raise HTTPException(status_code=502, detail="An internal error occurred.") from exc
 
     if error_detail:
         raise HTTPException(status_code=502, detail=error_detail)
