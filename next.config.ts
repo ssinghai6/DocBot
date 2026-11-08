@@ -32,15 +32,13 @@ const nextConfig: NextConfig = {
     ];
   },
   async rewrites() {
-    return [
-      {
-        source: "/api/:path*",
-        destination:
-          process.env.NODE_ENV === "development"
-            ? "http://127.0.0.1:8000/api/:path*"
-            : `${railwayBackendUrl}/api/:path*`,
-      },
-    ];
+    const backend =
+      process.env.NODE_ENV === "development" ? "http://127.0.0.1:8000" : railwayBackendUrl;
+    // DOCBOT-2339: /v1/* (Developer API, DOCBOT-1530) proxies exactly like /api/*.
+    return ["api", "v1"].map((prefix) => ({
+      source: `/${prefix}/:path*`,
+      destination: `${backend}/${prefix}/:path*`,
+    }));
   },
 };
 
