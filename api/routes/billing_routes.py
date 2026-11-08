@@ -63,6 +63,8 @@ async def grant_credits(body: AdminCreditGrantRequest, _user: Any = _rbac_platfo
         result = await credit_service.grant_purchase(
             body.org_id, body.credits, body.reference, f"Manual grant ({body.reference})"
         )
+    except credit_service.UnknownOrg:
+        raise HTTPException(status_code=404, detail="Unknown org.") from None
     except SQLAlchemyError:
         raise HTTPException(status_code=503, detail="Credit store unavailable.") from None
     return AdminCreditGrantResponse(

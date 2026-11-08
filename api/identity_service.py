@@ -61,6 +61,7 @@ from sqlalchemy import (
 from sqlalchemy.exc import IntegrityError
 
 from api.auth_service import insert_new_user
+from api.utils.email_canonical import canonical_email
 
 logger = logging.getLogger(__name__)
 
@@ -171,7 +172,56 @@ def register_user_identities_table(metadata: Any) -> Table:
 # a no-op on a fresh DB (the Table definition already declares the column).
 USER_IDENTITY_COLUMN_MIGRATIONS: list[str] = [
     "ALTER TABLE users ADD COLUMN IF NOT EXISTS email_verified BOOLEAN NOT NULL DEFAULT false",
+    "ALTER TABLE users ADD COLUMN IF NOT EXISTS email_canonical TEXT",  # DOCBOT-2332
 ]
+
+# DOCBOT-2332: created after `backfill_email_canonical`, so legacy collisions
+# (left NULL there) can never fail boot. NULLs are distinct in a UNIQUE index.
+EMAIL_CANONICAL_INDEX_DDL = (
+    "CREATE UNIQUE INDEX IF NOT EXISTS uq_users_email_canonical ON users (email_canonical)"
+)
+
+
+async def backfill_email_canonical(conn: Any) -> int:
+    """Idempotently fill ``users.email_canonical`` for rows that lack it.
+
+    Oldest account wins a canonical; a later legacy account whose canonical is
+    already taken (e.g. ``a.b@gmail.com`` next to ``ab@gmail.com``) keeps NULL
+    and stays usable — it just doesn't block anyone. Returns that skip count.
+    """
+    taken = {
+        row[0] for row in (await conn.execute(text(
+            "SELECT email_canonical FROM users WHERE email_canonical IS NOT NULL"
+        ))).fetchall()
+    }
+    pending = (await conn.execute(text(
+        "SELECT id, email FROM users WHERE email_canonical IS NULL ORDER BY created_at, id"
+    ))).fetchall()
+    collisions = 0
+    for user_id, email in pending:
+        canon = canonical_email(email)
+        if canon in taken:
+            collisions += 1
+            continue
+        taken.add(canon)
+        await conn.execute(
+            text("UPDATE users SET email_canonical = :c WHERE id = :id"),
+            {"c": canon, "id": user_id},
+        )
+    if collisions:
+        logger.warning(
+            "identity: %d legacy user(s) share a canonical email with an older account; "
+            "left email_canonical NULL", collisions,
+        )
+    return collisions
+
+
+def _email_match(users_table: Any, email: str) -> Any:
+    """Exact email, or the same canonical mailbox when the column exists."""
+    cond = users_table.c.email == email
+    if "email_canonical" in users_table.c:
+        cond = cond | (users_table.c.email_canonical == canonical_email(email))
+    return cond
 
 
 async def backfill_legacy_identities(conn: Any) -> None:
@@ -222,8 +272,13 @@ async def resolve_provider_login(
                 if user_id:
                     return user_id
 
+                # DOCBOT-2332: exact email first, then the same canonical
+                # mailbox — never a second account for an alias.
                 existing = (await session.execute(
                     select(users_table).where(users_table.c.email == identity.email)
+                )).fetchone() or (await session.execute(
+                    select(users_table).where(_email_match(users_table, identity.email))
+                    .order_by(users_table.c.created_at).limit(1)
                 )).fetchone()
 
                 if existing is not None:
@@ -369,7 +424,7 @@ async def register_password_user(
         async with async_session_factory() as session:
             async with session.begin():
                 taken = (await session.execute(
-                    select(users_table.c.id).where(users_table.c.email == email)
+                    select(users_table.c.id).where(_email_match(users_table, email)).limit(1)
                 )).fetchone()
                 if taken is not None:
                     raise EmailAlreadyRegistered(email)

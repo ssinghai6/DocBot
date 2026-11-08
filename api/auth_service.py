@@ -433,6 +433,9 @@ async def insert_new_user(
         insert_vals["provider_id"] = attrs["provider_id"]
     if attrs.get("password_hash"):
         insert_vals["password_hash"] = attrs["password_hash"]
+    if "email_canonical" in users_table.c:  # DOCBOT-2332
+        from api.utils.email_canonical import canonical_email
+        insert_vals["email_canonical"] = canonical_email(attrs["email"])
     if email_verified is not None and "email_verified" in users_table.c:
         insert_vals["email_verified"] = email_verified
 
