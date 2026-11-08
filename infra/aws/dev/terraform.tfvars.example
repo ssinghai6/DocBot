@@ -1,0 +1,11 @@
+# cp terraform.tfvars.example terraform.tfvars, then edit.
+aws_region   = "us-east-1"
+budget_email = "you@example.com"
+
+# api_domain          = "api-dev.docbot.space"
+# frontend_url        = "https://dev.docbot.space"       # the Vercel Preview URL for branch dev
+# allowed_origins     = "https://dev.docbot.space"
+# desired_count       = 1     # 0 when idle
+# use_fargate_spot    = true
+# deletion_protection = true
+# create_github_oidc_provider = true  # false if the account already has token.actions.githubusercontent.com
