@@ -222,6 +222,34 @@ def test_verified_oauth_alias_links_to_existing_account(env) -> None:
     assert uid == owner.id and len(client.portal.call(_users, factory)) == 1
 
 
+def test_non_gmail_plus_alias_never_links_provider_login(env) -> None:
+    """foo+x@corp.com may be a different mailbox: no takeover of foo@corp.com."""
+    client, factory, send = env
+    _register(client, "foo@corp.com")
+    _wait_for(lambda: send.await_count == 1)
+    owner = client.portal.call(_users, factory)[0]
+    ident = ProviderIdentity(
+        provider="github", provider_sub="gh-2", email="foo+x@corp.com", email_verified=True, name="X",
+    )
+    uid = client.portal.call(
+        resolve_provider_login,
+        ident, idx.users_table, idx.user_identities_table, idx.user_sessions_table, factory,
+    )
+    users = client.portal.call(_users, factory)
+    assert uid != owner.id and len(users) == 2
+    new = next(u for u in users if u.id == uid)
+    assert new.email_canonical is None  # canonical stays owned by foo@corp.com
+
+
+def test_canonical_is_same_mailbox_only_for_gmail() -> None:
+    from api.utils.email_canonical import canonical_is_same_mailbox
+
+    assert canonical_is_same_mailbox("A.B+x@GoogleMail.com")
+    assert canonical_is_same_mailbox("ab@gmail.com")
+    assert not canonical_is_same_mailbox("foo+x@corp.com")
+    assert not canonical_is_same_mailbox("not-an-email")
+
+
 # ---------------------------------------------------------------------------
 # Boot backfill
 # ---------------------------------------------------------------------------

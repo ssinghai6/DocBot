@@ -61,7 +61,7 @@ from sqlalchemy import (
 from sqlalchemy.exc import IntegrityError
 
 from api.auth_service import insert_new_user
-from api.utils.email_canonical import canonical_email
+from api.utils.email_canonical import canonical_email, canonical_is_same_mailbox
 
 logger = logging.getLogger(__name__)
 
@@ -272,14 +272,23 @@ async def resolve_provider_login(
                 if user_id:
                     return user_id
 
-                # DOCBOT-2332: exact email first, then the same canonical
-                # mailbox — never a second account for an alias.
+                # DOCBOT-2332: exact email first; link by canonical mailbox only
+                # where aliases provably share one inbox (Gmail). Elsewhere a
+                # canonical match must not link (takeover), so the new account
+                # is created without a canonical (see insert below).
                 existing = (await session.execute(
                     select(users_table).where(users_table.c.email == identity.email)
-                )).fetchone() or (await session.execute(
-                    select(users_table).where(_email_match(users_table, identity.email))
-                    .order_by(users_table.c.created_at).limit(1)
                 )).fetchone()
+                canonical_taken = False
+                if existing is None and "email_canonical" in users_table.c:
+                    alias = (await session.execute(
+                        select(users_table).where(_email_match(users_table, identity.email))
+                        .order_by(users_table.c.created_at).limit(1)
+                    )).fetchone()
+                    if alias is not None and canonical_is_same_mailbox(identity.email):
+                        existing = alias
+                    elif alias is not None:
+                        canonical_taken = True
 
                 if existing is not None:
                     return await _link_existing(
@@ -296,7 +305,10 @@ async def resolve_provider_login(
                     "provider": identity.provider,
                     "provider_id": identity.provider_sub,
                 }
-                user_id = await insert_new_user(session, users_table, attrs, email_verified=True)
+                user_id = await insert_new_user(
+                    session, users_table, attrs, email_verified=True,
+                    store_canonical=not canonical_taken,
+                )
                 await _insert_identity(session, identities_table, identity, user_id, verified=True)
                 logger.info("identity: new user %s via %s", user_id, identity.provider)
                 # DOCBOT-1706: provider-verified email, so both steps at once.

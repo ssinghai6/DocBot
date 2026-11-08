@@ -23,3 +23,15 @@ def canonical_email(email: str) -> str:
         local = local.replace(".", "")
         domain = "gmail.com"
     return f"{local}@{domain}"
+
+
+def canonical_is_same_mailbox(email: str) -> bool:
+    """True only where the provider guarantees aliases share one inbox (Gmail).
+
+    Elsewhere ``foo+x@corp.com`` may be a different mailbox from
+    ``foo@corp.com``, so the canonical form may block duplicate signups but
+    must never be used to LINK a provider login to another account
+    (that would be an account takeover).
+    """
+    _, sep, domain = email.strip().lower().rpartition("@")
+    return bool(sep) and domain in _GMAIL_DOMAINS
