@@ -93,8 +93,8 @@ def _guard_app() -> FastAPI:
 
     @app.post("/login-throttle")
     async def login_throttle() -> dict:
-        await request_guard.record_login_failure("a@b.co")
-        await request_guard.check_login_throttle("a@b.co")
+        await request_guard.record_login_failure("a@b.co", "203.0.113.1")
+        await request_guard.check_login_throttle("a@b.co", "203.0.113.1")
         return {}
 
     @app.post("/demo-cap")
