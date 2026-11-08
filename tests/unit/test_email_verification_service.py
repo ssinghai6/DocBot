@@ -46,6 +46,7 @@ def _schema() -> tuple[MetaData, dict[str, Table]]:
         Column("password_hash", Text),
         Column("email_verified", Boolean, server_default="0", nullable=False),
         Column("created_at", DateTime(timezone=True), server_default=func.now()),
+        Column("org_id", String),
     )
     tokens = evs.register_email_verification_tokens_table(md)
     return md, {"users": users, "tokens": tokens}

@@ -16,7 +16,7 @@ from pydantic import BaseModel, StrictBool
 from sqlalchemy.ext.asyncio import create_async_engine, AsyncSession, async_sessionmaker
 from sqlalchemy import (
     MetaData, Table, Column, String, Text, Integer, BigInteger, DateTime,
-    PrimaryKeyConstraint, func, select, insert, update, delete, text, Boolean,
+    PrimaryKeyConstraint, func, select, insert, update, delete, text, Boolean, Index,
 )
 from typing import List, Dict, Any, Optional, Literal
 import os
@@ -224,6 +224,9 @@ users_table = Table(
     Column("org_id", String, index=True),
     # DOCBOT-1712: primary use case picked on /onboarding (nullable, skippable)
     Column("use_case", String),
+    # DOCBOT-2332: canonical mailbox (lowercase, no +tag, no Gmail dots); one account each
+    Column("email_canonical", String),
+    Index("uq_users_email_canonical", "email_canonical", unique=True),
 )
 
 user_sessions_table = Table(
@@ -330,6 +333,7 @@ organizations_table = register_organizations_table(metadata)
 # ── DOCBOT-1617: provider identity linking (closes SEC-09) ───────────────────
 from api.identity_service import (
     register_user_identities_table, USER_IDENTITY_COLUMN_MIGRATIONS, backfill_legacy_identities,
+    EMAIL_CANONICAL_INDEX_DDL, backfill_email_canonical,
 )
 user_identities_table = register_user_identities_table(metadata)
 
@@ -519,6 +523,9 @@ async def init_db() -> None:
         for col_ddl in USER_ONBOARDING_COLUMN_MIGRATIONS:
             await conn.execute(text(col_ddl))
         await backfill_legacy_identities(conn)
+        # DOCBOT-2332: users.email_canonical — backfill before the UNIQUE index
+        await backfill_email_canonical(conn)
+        await conn.execute(text(EMAIL_CANONICAL_INDEX_DDL))
         # DOCBOT-1621: session tokens are stored hashed; rewrite legacy rows.
         from api.auth_service import hash_legacy_session_tokens
         await hash_legacy_session_tokens(conn, user_sessions_table)
@@ -2897,9 +2904,9 @@ async def auth_register(body: RegisterRequest, response: Response, request: Requ
 
     # DOCBOT-1713: dormant unless TURNSTILE_SECRET_KEY is set; on failure → 400.
     try:
-        await evs.enforce_turnstile(
-            body.turnstile_token, request.client.host if request.client else None
-        )
+        # DOCBOT-2332: the real client (trusted-hop XFF), not the proxy's IP.
+        ip = request_guard.client_ip(request)
+        await evs.enforce_turnstile(body.turnstile_token, None if ip == "unknown" else ip)
     except evs.TurnstileValidationError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from None
 
@@ -2929,7 +2936,8 @@ async def auth_register(body: RegisterRequest, response: Response, request: Requ
     # + email a single-use link and do NOT hand out a session. Keys unset →
     # dormant: skip sending, keep today's flow (immediate session cookie).
     if evs.is_email_verification_enabled():
-        await evs.issue_verification_token_and_send(
+        # DOCBOT-2332: background send keeps new vs existing email equally fast.
+        evs.issue_verification_in_background(
             user_id, email, email_verification_tokens_table, async_session_factory,
         )
         return JSONResponse(

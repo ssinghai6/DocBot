@@ -220,6 +220,13 @@ class TestManualGrant:
         assert first["duplicate"] is False and second["duplicate"] is True
         assert grant.await_args.args[:3] == ("org-9", 10000, "pi_3Abc")
 
+    def test_unknown_org_404(self, client, monkeypatch):
+        monkeypatch.setenv("PLATFORM_ADMIN_USER_IDS", "u-op")
+        monkeypatch.setattr(credit_service, "is_wired", lambda: True)
+        monkeypatch.setattr(credit_service, "grant_purchase", AsyncMock(side_effect=credit_service.UnknownOrg("org-9")))
+        with _as(_user(uid="u-op")):
+            assert _post(client, "/admin/credits/grant", GRANT).status_code == 404
+
     def test_unwired_store_503(self, client, monkeypatch):
         monkeypatch.setenv("PLATFORM_ADMIN_USER_IDS", "u-op")
         monkeypatch.setattr(credit_service, "is_wired", lambda: False)

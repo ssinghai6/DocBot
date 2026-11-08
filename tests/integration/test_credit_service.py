@@ -15,7 +15,7 @@ from datetime import datetime, timedelta, timezone
 
 import pytest
 from fastapi import HTTPException
-from sqlalchemy import MetaData, func, select, update
+from sqlalchemy import Boolean, Column, MetaData, String, Table, func, insert, select, text, update
 from sqlalchemy.exc import OperationalError
 from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 
@@ -27,10 +27,18 @@ from api.utils.billing_context import get_meter, get_principal
 async def _make_store(url: str, **engine_kw):
     metadata = MetaData()
     tables = credit_service.register_credit_tables(metadata)
+    # DOCBOT-2332: grant gates read users (verified?) and organizations (exists?)
+    Table("organizations", metadata, Column("id", String, primary_key=True))
+    Table(
+        "users", metadata,
+        Column("id", String, primary_key=True), Column("org_id", String),
+        Column("provider", String), Column("email_verified", Boolean),
+    )
     engine = create_async_engine(url, **engine_kw)
     async with engine.begin() as conn:
         await conn.run_sync(metadata.drop_all)
         await conn.run_sync(metadata.create_all)
+        await conn.execute(insert(metadata.tables["organizations"]).values(id="org-1"))
     factory = async_sessionmaker(engine, expire_on_commit=False)
     credit_service.wire_credit_store(tables, factory, engine.dialect.name)
     return engine, tables, factory
@@ -428,3 +436,69 @@ async def test_grant_purchase_ends_free_tier(store):
     await credit_service.grant_purchase("org-1", 1_000, "pi_free", "Manual grant")
     result = await credit_service.reserve("org-1", 400, "run-x", "/api/chat")
     assert result.free_tier is False
+
+
+async def test_grant_purchase_unknown_org_writes_nothing(store):
+    tables, factory = store
+    with pytest.raises(credit_service.UnknownOrg):
+        await credit_service.grant_purchase("org-ghost", 1_000, "pi_ghost", "Manual grant")
+    assert await _ledger(factory, tables, "org-ghost") == []
+    assert await _balance(factory, tables, "org-ghost") is None
+
+
+# ---------------------------------------------------------------------------
+# DOCBOT-2332: no free grant until the email is verified
+# ---------------------------------------------------------------------------
+
+
+async def _add_user(factory, uid, org, provider="email", verified=False):
+    async with factory() as s, s.begin():
+        await s.execute(insert(Table("users", MetaData(), Column("id"), Column("org_id"),
+                                     Column("provider"), Column("email_verified"))).values(
+            id=uid, org_id=org, provider=provider, email_verified=verified,
+        ))
+
+
+async def _free_grants(factory, tables, org):
+    return [r for r in await _ledger(factory, tables, org) if r.kind == "free_grant"]
+
+
+@pytest.fixture
+def _verification_on(monkeypatch):
+    monkeypatch.setenv("RESEND_API_KEY", "re_test")
+    monkeypatch.setenv("EMAIL_FROM", "DocBot <hi@x.com>")
+
+
+async def test_unverified_user_gets_no_free_grant_until_verified(store, _verification_on):
+    tables, factory = store
+    await _add_user(factory, "u-1", "org-u")
+    with pytest.raises(credit_service.InsufficientCredits):
+        await credit_service.reserve("org-u", 1, "r1", "chat")
+    assert await _free_grants(factory, tables, "org-u") == []
+
+    async with factory() as s, s.begin():
+        await s.execute(text("UPDATE users SET email_verified = 1 WHERE id = 'u-1'"))
+    await credit_service.grant_free_credits("org-u")
+    await credit_service.grant_free_credits("org-u")  # verify twice → still one grant
+    credit_service._granted_period.clear()
+    await credit_service.reserve("org-u", 1, "r2", "chat")
+    assert len(await _free_grants(factory, tables, "org-u")) == 1
+    assert (await _balance(factory, tables, "org-u")).balance_credits == 500
+
+
+async def test_oauth_user_and_personal_account_are_eligible(store, _verification_on):
+    tables, factory = store
+    await _add_user(factory, "g-1", "org-g", provider="google", verified=False)
+    await _add_user(factory, "e-1", None, verified=True)
+    await credit_service.reserve("org-g", 1, "r1", "chat")
+    await credit_service.reserve("user:e-1", 1, "r2", "chat")
+    assert len(await _free_grants(factory, tables, "org-g")) == 1
+    assert len(await _free_grants(factory, tables, "user:e-1")) == 1
+
+
+async def test_dormant_verification_still_grants_unverified(store, monkeypatch):
+    monkeypatch.delenv("RESEND_API_KEY", raising=False)
+    tables, factory = store
+    await _add_user(factory, "u-2", "org-d")
+    await credit_service.reserve("org-d", 1, "r1", "chat")
+    assert len(await _free_grants(factory, tables, "org-d")) == 1

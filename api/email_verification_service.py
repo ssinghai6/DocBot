@@ -40,6 +40,7 @@ sessions.
 
 from __future__ import annotations
 
+import asyncio
 import hashlib
 import logging
 import os
@@ -240,7 +241,7 @@ async def consume_verification_token(
                 raise VerificationTokenInvalid()
 
             user = (await session.execute(
-                select(users_table.c.email).where(
+                select(users_table.c.email, users_table.c.org_id).where(
                     users_table.c.id == row.user_id,
                     users_table.c.email == row.email,
                 )
@@ -256,9 +257,27 @@ async def consume_verification_token(
     from api.funnel_service import record_funnel_event  # DOCBOT-1706
 
     record_funnel_event("email_verified", user_id=row.user_id)
+    await _grant_on_verify(row.user_id, user.org_id)
 
     logger.info("email-verification: marked email verified for user %s", row.user_id)
     return user.email
+
+
+async def _grant_on_verify(user_id: str, org_id: Optional[str]) -> None:
+    """DOCBOT-2332: free credits land on verify, not signup. Best-effort —
+    a credit-store hiccup must not fail verification (``reserve`` retries
+    the grant lazily); the ledger's UNIQUE(kind, ref) keeps it once."""
+    from sqlalchemy.exc import SQLAlchemyError
+
+    from api import credit_service
+
+    billing_org = credit_service.billing_org_for(user_id, org_id)
+    if not billing_org:
+        return
+    try:
+        await credit_service.grant_free_credits(billing_org)
+    except SQLAlchemyError as exc:
+        logger.warning("email-verification: credit grant failed for user %s: %s", user_id, exc.__class__.__name__)
 
 
 # ---------------------------------------------------------------------------
@@ -352,6 +371,30 @@ async def issue_verification_token_and_send(
         return False
     logger.info("email-verification: link sent to user %s", user_id)
     return True
+
+
+_send_tasks: set[asyncio.Task[bool]] = set()
+
+
+def _log_send_failure(task: "asyncio.Task[bool]") -> None:
+    _send_tasks.discard(task)
+    if not task.cancelled() and task.exception() is not None:
+        logger.warning("email-verification: background send crashed: %s", task.exception().__class__.__name__)
+
+
+def issue_verification_in_background(
+    user_id: str,
+    email: str,
+    tokens_table: Any,
+    async_session_factory: Any,
+) -> None:
+    """DOCBOT-2332: signup must not await Resend — otherwise a new address
+    answers measurably slower than an existing one (registration oracle)."""
+    task = asyncio.get_running_loop().create_task(
+        issue_verification_token_and_send(user_id, email, tokens_table, async_session_factory)
+    )
+    _send_tasks.add(task)
+    task.add_done_callback(_log_send_failure)
 
 
 async def resend_verification_if_due(

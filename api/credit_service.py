@@ -75,8 +75,12 @@ from sqlalchemy import (
     UniqueConstraint,
     and_,
     case,
+    column,
     false,
+    or_,
     select,
+    table,
+    true,
     update,
 )
 from sqlalchemy.exc import SQLAlchemyError
@@ -356,11 +360,59 @@ class ReserveResult:
     free_tier: bool
 
 
-async def _ensure_row_and_grant(session: Any, org_id: str, now: datetime) -> str:
+# Lightweight views of the users/organizations tables (owned by index.py).
+_users = table(
+    "users", column("id"), column("org_id"), column("provider"), column("email_verified", Boolean),
+)
+_orgs = table("organizations", column("id"))
+
+
+def _org_members(org_id: str) -> Any:
+    """Users behind a billing account: ``user:<id>`` or a real org id."""
+    if org_id.startswith("user:"):
+        return _users.c.id == org_id[len("user:"):]
+    return _users.c.org_id == org_id
+
+
+async def _grant_eligible(session: Any, org_id: str) -> bool:
+    """DOCBOT-2332: no free grant until a member has a verified email.
+
+    Only enforced when email verification is live; when it is dormant nobody
+    can ever verify, so every org keeps getting the grant. Non-email
+    (OAuth/SAML) members proved their address through the provider.
+    """
+    from api.email_verification_service import is_email_verification_enabled
+
+    if not is_email_verification_enabled():
+        return True
+    row = (
+        await session.execute(
+            select(_users.c.id)
+            .where(_org_members(org_id), or_(_users.c.email_verified == true(), _users.c.provider != "email"))
+            .limit(1)
+        )
+    ).first()
+    return row is not None
+
+
+class UnknownOrg(LookupError):
+    """Manual grant to an org (or personal account) that does not exist."""
+
+
+async def _org_exists(session: Any, org_id: str) -> bool:
+    if org_id.startswith("user:"):
+        stmt = select(_users.c.id).where(_org_members(org_id))
+    else:
+        stmt = select(_orgs.c.id).where(_orgs.c.id == org_id)
+    return (await session.execute(stmt.limit(1))).first() is not None
+
+
+async def _ensure_row_and_grant(session: Any, org_id: str, now: datetime) -> Optional[str]:
     """Upsert the balance row and apply the lazy monthly grant. Write-first.
 
     Returns the period; the caller records it in ``_granted_period`` only
-    after the transaction commits.
+    after the transaction commits. Returns None when the org is not yet
+    eligible (unverified email), so the grant is retried on a later call.
     """
     assert _tables is not None
     ob = _tables.org_balances
@@ -372,6 +424,8 @@ async def _ensure_row_and_grant(session: Any, org_id: str, now: datetime) -> str
     period = current_period(now)
     if _granted_period.get(org_id) == period:
         return period
+    if not await _grant_eligible(session, org_id):
+        return None
     amount = free_monthly_credits()
     inserted = await _credit_once(
         session, org_id, LedgerEntryKind.free_grant, grant_ref(org_id, period),
@@ -451,6 +505,9 @@ async def grant_purchase(org_id: str, credits: int, ref: str, description: str) 
     now = _now()
     async with _session_factory() as session:
         async with session.begin():
+            # DOCBOT-2332: never write a ledger row for a nonexistent org.
+            if not await _org_exists(session, org_id):
+                raise UnknownOrg(org_id)
             period = await _ensure_row_and_grant(session, org_id, now)
             inserted = await _credit_once(
                 session, org_id, LedgerEntryKind.purchase, ref, credits, description, now
@@ -458,11 +515,27 @@ async def grant_purchase(org_id: str, credits: int, ref: str, description: str) 
             balance = (
                 await session.execute(select(ob.c.balance_credits).where(ob.c.org_id == org_id))
             ).scalar_one()
-    _granted_period[org_id] = period
+    if period:
+        _granted_period[org_id] = period
     logger.info(
         "credit_service: purchase org=%s credits=%d duplicate=%s", org_id, credits, not inserted
     )
     return GrantResult(duplicate=not inserted, balance_credits=int(balance))
+
+
+async def grant_free_credits(org_id: str) -> None:
+    """Apply this month's free grant now (DOCBOT-2332: called on email verify).
+
+    Idempotent via the ledger's ``UNIQUE(kind, ref)``; the next ``reserve``
+    would apply it lazily anyway. No-op when the store isn't wired.
+    """
+    if not is_wired():
+        return
+    async with _session_factory() as session:
+        async with session.begin():
+            period = await _ensure_row_and_grant(session, org_id, _now())
+    if period:
+        _granted_period[org_id] = period
 
 
 async def _is_free_tier(session: Any, org_id: str) -> bool:
@@ -538,7 +611,8 @@ async def reserve(org_id: str, estimate: int, run_id: str, route: str) -> Reserv
                         created_at=now,
                     )
                 )
-    _granted_period[org_id] = period
+    if period:
+        _granted_period[org_id] = period
     if failure is not None:
         raise failure
     return ReserveResult(reserved_credits=est, free_tier=free_tier)
@@ -989,7 +1063,9 @@ __all__ = [
     "free_monthly_credits",
     "free_run_ceiling_credits",
     "GrantResult",
+    "grant_free_credits",
     "grant_purchase",
+    "UnknownOrg",
     "grant_ref",
     "is_demo_request",
     "is_enforced",
