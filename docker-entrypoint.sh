@@ -4,7 +4,7 @@
 set -e
 if [ "$(id -u)" = "0" ]; then
   # Only touch entries not already owned by appuser, so restarts stay fast.
-  [ -d /data ] && find /data \! -user appuser -exec chown appuser:appuser {} +
+  [ -d /data ] && find /data \! -user appuser -exec chown -h appuser:appuser {} +  # -h: never follow symlinks planted in the volume
   export HOME=/home/appuser
   exec setpriv --reuid=appuser --regid=appuser --init-groups -- "$@"
 fi
