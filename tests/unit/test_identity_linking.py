@@ -423,4 +423,4 @@ def _run_github_exchange(user: dict, emails: Any) -> dict:
 def _run_google_exchange(info: dict) -> dict:
     ctx = _mock_client({"access_token": "test-token"}, {oauth_service.GOOGLE_USERINFO_URL: info})
     with patch.object(oauth_service.httpx, "AsyncClient", return_value=ctx):
-        return _run(oauth_service.google_exchange_code("code"))
+        return _run(oauth_service.google_exchange_code("code", "verifier"))
