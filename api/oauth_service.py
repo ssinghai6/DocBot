@@ -28,7 +28,10 @@ Environment variables required per provider:
 
 from __future__ import annotations
 
+import base64
 import functools
+import hashlib
+import hmac
 import os
 import logging
 import secrets
@@ -160,8 +163,8 @@ GOOGLE_TOKEN_URL = "https://oauth2.googleapis.com/token"
 GOOGLE_USERINFO_URL = "https://www.googleapis.com/oauth2/v3/userinfo"
 
 
-def google_authorize_url(state: str) -> str:
-    """Build the Google OAuth authorization URL to redirect the user to."""
+def google_authorize_url(state: str, code_challenge: str) -> str:
+    """Build the Google OAuth authorization URL (PKCE S256) to redirect the user to."""
     params = {
         "client_id": os.getenv("GOOGLE_CLIENT_ID", ""),
         "redirect_uri": f"{_app_base_url()}/api/auth/google/callback",
@@ -169,11 +172,13 @@ def google_authorize_url(state: str) -> str:
         "scope": "openid email profile",
         "access_type": "online",
         "state": state,
+        "code_challenge": code_challenge,
+        "code_challenge_method": "S256",
     }
     return f"{GOOGLE_AUTHORIZE_URL}?{urlencode(params)}"
 
 
-async def google_exchange_code(code: str) -> dict:
+async def google_exchange_code(code: str, code_verifier: str) -> dict:
     """Exchange OAuth code for user info dict: {email, name, provider_id}.
     Raises ValueError on failure.
     """
@@ -184,6 +189,7 @@ async def google_exchange_code(code: str) -> dict:
                 "client_id": os.getenv("GOOGLE_CLIENT_ID"),
                 "client_secret": os.getenv("GOOGLE_CLIENT_SECRET"),
                 "code": code,
+                "code_verifier": code_verifier,
                 "grant_type": "authorization_code",
                 "redirect_uri": f"{_app_base_url()}/api/auth/google/callback",
             },
@@ -319,6 +325,33 @@ def validate_oauth_state(state: str) -> bool:
     if expiry is None:
         return False
     return time.time() < expiry
+
+
+OAUTH_STATE_COOKIE = "oauth_state"
+
+
+def pkce_pair() -> tuple[str, str]:
+    """Return (code_verifier, S256 code_challenge) per RFC 7636."""
+    verifier = secrets.token_urlsafe(64)
+    challenge = base64.urlsafe_b64encode(hashlib.sha256(verifier.encode()).digest()).rstrip(b"=").decode()
+    return verifier, challenge
+
+
+def oauth_state_cookie_value(state: str, verifier: str = "") -> str:
+    """Cookie binding the flow to this browser: "state" or "state.verifier"
+    (token_urlsafe never emits '.'). HttpOnly + set by us, so no signature needed:
+    an attacker can only alter their own browser's copy."""
+    return f"{state}.{verifier}" if verifier else state
+
+
+def check_oauth_state_cookie(cookie: Optional[str], state: str) -> Optional[str]:
+    """Return the PKCE verifier ("" if none) when the cookie matches `state`, else None."""
+    if not cookie or not state:
+        return None
+    cookie_state, _, verifier = cookie.partition(".")
+    if not hmac.compare_digest(cookie_state.encode(), state.encode()):
+        return None
+    return verifier
 
 
 def oauth_success_redirect(token: str) -> str:

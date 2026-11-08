@@ -2687,20 +2687,41 @@ async def owner_unlock(raw_request: Request):
     return response
 
 
+def _oauth_start_response(url: str, cookie_value: str) -> JSONResponse:
+    """DOCBOT-2331: bind the OAuth flow to this browser with a short-lived cookie."""
+    from api.oauth_service import OAUTH_STATE_COOKIE
+    response = JSONResponse({"url": url})
+    response.set_cookie(
+        key=OAUTH_STATE_COOKIE, value=cookie_value, httponly=True, samesite="lax",
+        secure=os.getenv("APP_BASE_URL", "").startswith("https"), max_age=600, path="/api/auth",
+    )
+    return response
+
+
 @app.get("/api/auth/github")
 async def github_login():
     """Return GitHub OAuth URL as JSON — frontend navigates directly to avoid proxy redirect issues."""
     from api.oauth_service import github_authorize_url, generate_oauth_state, is_github_configured
     if not is_github_configured():
         raise HTTPException(status_code=503, detail="GitHub OAuth not configured.")
+    from api.oauth_service import oauth_state_cookie_value
     state = generate_oauth_state()
-    return {"url": github_authorize_url(state)}
+    return _oauth_start_response(github_authorize_url(state), oauth_state_cookie_value(state))
 
 
 @app.get("/api/auth/github/callback")
-async def github_callback(code: str, state: str, response: Response, request: Request):
+async def github_callback(code: str, state: str, request: Request):
     """Handle GitHub OAuth callback: exchange code → provision user → set cookie."""
-    from api.oauth_service import github_exchange_code, validate_oauth_state, oauth_success_redirect
+    from api.oauth_service import OAUTH_STATE_COOKIE
+    redirect = await _github_callback(code, state, request)
+    redirect.delete_cookie(OAUTH_STATE_COOKIE, path="/api/auth")
+    return redirect
+
+
+async def _github_callback(code: str, state: str, request: Request) -> Response:
+    from api.oauth_service import (
+        OAUTH_STATE_COOKIE, check_oauth_state_cookie, github_exchange_code, oauth_success_redirect, validate_oauth_state,
+    )
     from api.auth_service import create_user_session
     from api.identity_service import IdentityLinkError, identity_from_oauth_attrs, resolve_provider_login
     from api.audit_service import log_event, AuditEventType
@@ -2708,7 +2729,9 @@ async def github_callback(code: str, state: str, response: Response, request: Re
 
     frontend_url = oauth_success_redirect("")
 
-    if not validate_oauth_state(state):
+    # DOCBOT-2331: state must match this browser's cookie (login-CSRF), then TTL + single use.
+    if check_oauth_state_cookie(request.cookies.get(OAUTH_STATE_COOKIE), state) is None \
+            or not validate_oauth_state(state):
         return RedirectResponse(url=f"{frontend_url.split('?')[0]}?auth_error=invalid_state")
 
     try:
@@ -2749,27 +2772,41 @@ async def github_callback(code: str, state: str, response: Response, request: Re
 @app.get("/api/auth/google")
 async def google_login():
     """Return Google OAuth URL as JSON — frontend navigates directly to avoid proxy redirect issues."""
-    from api.oauth_service import google_authorize_url, generate_oauth_state, is_google_configured
+    from api.oauth_service import (
+        google_authorize_url, generate_oauth_state, is_google_configured, oauth_state_cookie_value, pkce_pair,
+    )
     if not is_google_configured():
         raise HTTPException(status_code=503, detail="Google OAuth not configured.")
     state = generate_oauth_state()
-    return {"url": google_authorize_url(state)}
+    verifier, challenge = pkce_pair()  # verifier lives only in the HttpOnly cookie
+    return _oauth_start_response(google_authorize_url(state, challenge), oauth_state_cookie_value(state, verifier))
 
 
 @app.get("/api/auth/google/callback")
-async def google_callback(code: str, state: str, response: Response, request: Request):
+async def google_callback(code: str, state: str, request: Request):
     """Handle Google OAuth callback: exchange code → provision user → set cookie."""
-    from api.oauth_service import google_exchange_code, validate_oauth_state, _frontend_url
+    from api.oauth_service import OAUTH_STATE_COOKIE
+    redirect = await _google_callback(code, state, request)
+    redirect.delete_cookie(OAUTH_STATE_COOKIE, path="/api/auth")
+    return redirect
+
+
+async def _google_callback(code: str, state: str, request: Request) -> Response:
+    from api.oauth_service import (
+        OAUTH_STATE_COOKIE, check_oauth_state_cookie, google_exchange_code, validate_oauth_state, _frontend_url,
+    )
     from api.auth_service import create_user_session
     from api.identity_service import identity_from_oauth_attrs, resolve_provider_login
     from api.audit_service import log_event, AuditEventType
     from fastapi.responses import RedirectResponse
 
-    if not validate_oauth_state(state):
+    # DOCBOT-2331: state must match this browser's cookie (login-CSRF), then TTL + single use.
+    verifier = check_oauth_state_cookie(request.cookies.get(OAUTH_STATE_COOKIE), state)
+    if not verifier or not validate_oauth_state(state):
         return RedirectResponse(url=f"{_frontend_url()}/chat?auth_error=invalid_state")
 
     try:
-        attrs = await google_exchange_code(code)
+        attrs = await google_exchange_code(code, verifier)
     except Exception as exc:
         logger.warning("Google OAuth exchange failed: %s", exc)
         return RedirectResponse(url=f"{_frontend_url()}/chat?auth_error=google_failed")

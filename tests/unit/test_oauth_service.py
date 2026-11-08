@@ -137,7 +137,7 @@ class TestOAuthUrls:
 
     def test_google_url_contains_client_id(self, monkeypatch):
         monkeypatch.setenv("GOOGLE_CLIENT_ID", "my-google-id")
-        url = google_authorize_url("test-state")
+        url = google_authorize_url("test-state", "chal")
         assert "my-google-id" in url
         assert "test-state" in url
         assert "accounts.google.com" in url
@@ -149,5 +149,5 @@ class TestOAuthUrls:
 
     def test_google_url_includes_openid_scope(self, monkeypatch):
         monkeypatch.setenv("GOOGLE_CLIENT_ID", "id")
-        url = google_authorize_url("s")
+        url = google_authorize_url("s", "chal")
         assert "openid" in url
