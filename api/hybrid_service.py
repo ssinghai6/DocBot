@@ -54,6 +54,14 @@ PROMPT_VERSION_INTENT_CLASSIFICATION = "v1"
 # version applies to the prompt-assembly logic in hybrid_chat() below.
 PROMPT_VERSION_HYBRID_SYNTHESIS = "v1"
 
+# DOCBOT-2335: hard cap on the DB lane (table select + SQL gen + execute) so a
+# hung LLM call degrades to a doc-only answer with a notice instead of a ~180s stall.
+SQL_LANE_TIMEOUT_S = 45.0
+SQL_TIMEOUT_NOTICE = (
+    f"> **Note:** The database query did not finish within {int(SQL_LANE_TIMEOUT_S)}s, "
+    "so this answer does not include database results. Please try again.\n\n"
+)
+
 
 # ---------------------------------------------------------------------------
 # Pydantic model
@@ -611,38 +619,13 @@ async def hybrid_chat(
         doc_context = ""
         doc_citations: list[dict] = []
         sql_metadata: dict | None = None
+        sql_timed_out = False
 
-        if intent == "doc":
-            with lineage.step("retrieve_docs", tool="vector_search+rerank", lane="docs"):
-                doc_context, doc_citations = await rag_retrieve(
-                    question, session_id, vector_stores, lineage=lineage
-                )
-
-        elif intent == "sql" and has_db and connection_id:
-            with lineage.step("run_sql_pipeline", tool="sql_pipeline", lane="db"):
-                sql_metadata = await _collect_sql_result(
-                    connection_id=connection_id,
-                    question=question,
-                    persona=persona,
-                    db_connections_table=db_connections_table,
-                    schema_cache_table=schema_cache_table,
-                    query_history_table=query_history_table,
-                    query_embeddings_table=query_embeddings_table,
-                    async_session_factory=async_session_factory,
-                    expert_personas=expert_personas,
-                    chart_type=chart_type,
-                )
-
-        else:  # hybrid — parallel gather
-            async def _timed_rag():
-                with lineage.step("retrieve_docs", tool="vector_search+rerank", lane="docs"):
-                    return await rag_retrieve(
-                        question, session_id, vector_stores, lineage=lineage
-                    )
-
-            async def _timed_sql():
-                with lineage.step("run_sql_pipeline", tool="sql_pipeline", lane="db"):
-                    return await _collect_sql_result(
+        async def _bounded_sql() -> dict | None:
+            nonlocal sql_timed_out
+            try:
+                return await asyncio.wait_for(
+                    _collect_sql_result(
                         connection_id=connection_id,
                         question=question,
                         persona=persona,
@@ -653,7 +636,34 @@ async def hybrid_chat(
                         async_session_factory=async_session_factory,
                         expert_personas=expert_personas,
                         chart_type=chart_type,
+                    ),
+                    SQL_LANE_TIMEOUT_S,
+                )
+            except TimeoutError:
+                logger.warning("hybrid_chat: SQL lane timed out after %.0fs", SQL_LANE_TIMEOUT_S)
+                sql_timed_out = True
+                return None
+
+        if intent == "doc":
+            with lineage.step("retrieve_docs", tool="vector_search+rerank", lane="docs"):
+                doc_context, doc_citations = await rag_retrieve(
+                    question, session_id, vector_stores, lineage=lineage
+                )
+
+        elif intent == "sql" and has_db and connection_id:
+            with lineage.step("run_sql_pipeline", tool="sql_pipeline", lane="db"):
+                sql_metadata = await _bounded_sql()
+
+        else:  # hybrid — parallel gather
+            async def _timed_rag():
+                with lineage.step("retrieve_docs", tool="vector_search+rerank", lane="docs"):
+                    return await rag_retrieve(
+                        question, session_id, vector_stores, lineage=lineage
                     )
+
+            async def _timed_sql():
+                with lineage.step("run_sql_pipeline", tool="sql_pipeline", lane="db"):
+                    return await _bounded_sql()
 
             rag_task = asyncio.create_task(_timed_rag())
             sql_task = (
@@ -666,7 +676,12 @@ async def hybrid_chat(
                 sql_metadata = await sql_task
 
         if has_db and intent != "doc" and sql_metadata is None:
-            lineage.mark_step("run_sql_pipeline", "error", "SQL query failed; answered without database results")
+            lineage.mark_step(
+                "run_sql_pipeline", "error",
+                "SQL query timed out" if sql_timed_out else "SQL query failed; answered without database results",
+            )
+        if sql_timed_out:
+            yield f"data: {json.dumps({'type': 'token', 'content': SQL_TIMEOUT_NOTICE})}\n\n"
 
         # BUG #3 FIX: forward any chart/analysis_code events captured by
         # _collect_sql_result so the frontend hybrid chart handler receives them.
