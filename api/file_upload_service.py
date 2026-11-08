@@ -23,6 +23,7 @@ from typing import Any, Dict, List, Optional, Tuple
 from sqlalchemy import Table, delete, insert, select
 
 from api.usage_service import meter_upload
+from api.utils import upload_limits
 from api.utils.encryption import encrypt_credentials
 
 logger = logging.getLogger(__name__)
@@ -35,8 +36,10 @@ logger = logging.getLogger(__name__)
 # /tmp literal. Must stay a stable directory, not mkdtemp(): stored
 # db_connections reference these files until the 2-hour TTL sweep.
 _TMP_DIR = Path(tempfile.gettempdir()) / "docbot_uploads"
-_SQLITE_MAX_BYTES = 100 * 1024 * 1024   # 100 MB
-_CSV_MAX_BYTES = 50 * 1024 * 1024        # 50 MB
+# DOCBOT-1616: env-overridable (UPLOAD_SQLITE_MAX_MB / UPLOAD_CSV_MAX_MB); the
+# routes enforce them while streaming, these checks guard direct callers.
+_SQLITE_MAX_BYTES = upload_limits.SQLITE_MAX_BYTES
+_CSV_MAX_BYTES = upload_limits.CSV_MAX_BYTES
 _FILE_TTL_SECONDS = 2 * 60 * 60         # 2 hours
 
 
@@ -66,7 +69,7 @@ async def upload_sqlite(
     """
     if len(file_bytes) > _SQLITE_MAX_BYTES:
         raise ValueError(
-            f"SQLite file exceeds the 100 MB limit ({len(file_bytes) // (1024*1024)} MB uploaded)."
+            f"SQLite file exceeds the {_SQLITE_MAX_BYTES // (1024*1024)} MB limit ({len(file_bytes) // (1024*1024)} MB uploaded)."
         )
 
     _ensure_tmp_dir()
@@ -145,7 +148,12 @@ async def upload_csv(
     """
     if len(file_bytes) > _CSV_MAX_BYTES:
         raise ValueError(
-            f"CSV file exceeds the 50 MB limit ({len(file_bytes) // (1024*1024)} MB uploaded)."
+            f"CSV file exceeds the {_CSV_MAX_BYTES // (1024*1024)} MB limit ({len(file_bytes) // (1024*1024)} MB uploaded)."
+        )
+    # DOCBOT-1616: NUL bytes mean binary / UTF-16 content, not a text CSV.
+    if b"\x00" in file_bytes:
+        raise ValueError(
+            "CSV file contains NUL bytes. Please upload a plain-text CSV (UTF-8 or Latin-1)."
         )
 
     # Parse CSV in executor to get schema info + section metadata

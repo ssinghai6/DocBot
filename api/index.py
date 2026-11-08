@@ -65,7 +65,8 @@ app.add_middleware(
 from api.utils import request_guard
 from api.utils import caller_scope
 from api.utils.caller_scope import CallerScope, owner_values, require_principal, resolve_caller_scope, scope_from_user
-from api.utils.pdf_io import PdfPasswordProtectedError, open_pdf_bytes
+from api.utils import upload_limits
+from api.utils.pdf_io import PdfPasswordProtectedError, PdfTooManyPagesError, extract_pdf_pages
 
 
 @app.middleware("http")
@@ -983,57 +984,57 @@ async def upload_documents(
         all_content = []
         files_info = []
         
+        # DOCBOT-1616: count cap before any file is read.
+        upload_limits.check_file_count(len(files))
+
         for file in files:
-            content = await file.read()
-
+            # DOCBOT-1616: stream into a private temp file, 413 as soon as the
+            # per-file cap is crossed; the file is removed whatever happens.
+            tmp_path, size = await upload_limits.spool_upload(file, upload_limits.MAX_FILE_BYTES)
             try:
-                # DOCBOT-1633: parse from memory; never write the upload to a
-                # predictable /tmp path built from the user's filename.
-                doc = open_pdf_bytes(content)
-            except PdfPasswordProtectedError as e:
-                raise HTTPException(status_code=400, detail=str(e)) from e
-            except Exception as e:
-                logger.error(f"Error opening PDF {file.filename}: {e}")
-                continue
-
-            try:
-                # Extract AcroForm widget values once for the whole document.
-                # LCA and other government forms store field values as PDF
-                # widget annotations, not as visible content text.  PyMuPDF's
-                # get_text("text") misses these entirely, so we extract them
-                # separately and prepend them to page 1 as structured text.
-                form_fields_text = _extract_form_fields(doc)
-
-                for page_num in range(len(doc)):
-                    page = doc[page_num]
-                    text = page.get_text("text")
-
-                    # On page 1, prepend any AcroForm field key-value pairs so
-                    # the vector store contains them regardless of PDF structure.
-                    if page_num == 0 and form_fields_text:
-                        text = form_fields_text + "\n\n" + (text or "")
-
-                    if text and isinstance(text, str) and text.strip():
-                        # Clean up the text
-                        cleaned_text = text.strip()
-                        if len(cleaned_text) > 50:  # Only add meaningful text
-                            all_content.append(Document(
-                                page_content=cleaned_text,
-                                metadata={"source": file.filename, "page": page_num + 1}
-                            ))
-                page_count = len(doc)  # must be read before close(); len() on a closed doc raises
-            except Exception as e:
-                logger.error(f"Error processing PDF {file.filename}: {e}")
-                continue
+                if not upload_limits.has_magic(tmp_path, upload_limits.PDF_MAGIC):
+                    raise HTTPException(
+                        status_code=415,
+                        detail=f"{file.filename or 'File'} is not a PDF. Only PDF documents can be uploaded here.",
+                    )
+                # PyMuPDF is blocking: run it in a worker thread (to_thread
+                # copies contextvars) with a wall-clock timeout. Page cap is
+                # checked before text extraction; AcroForm widget values are
+                # prepended to page 1 (LCA / government forms).
+                try:
+                    page_texts, page_count = await asyncio.wait_for(
+                        asyncio.to_thread(
+                            extract_pdf_pages, tmp_path, upload_limits.PDF_MAX_PAGES, _extract_form_fields
+                        ),
+                        timeout=upload_limits.PDF_PARSE_TIMEOUT_SECONDS,
+                    )
+                except PdfPasswordProtectedError as e:
+                    raise HTTPException(status_code=400, detail=str(e)) from e
+                except PdfTooManyPagesError as e:
+                    raise HTTPException(status_code=413, detail=str(e)) from e
+                except TimeoutError as e:
+                    raise HTTPException(status_code=422, detail="This PDF took too long to process.") from e
+                except Exception as e:
+                    logger.error(f"Error processing PDF {file.filename}: {e}")
+                    continue
             finally:
-                doc.close()
+                upload_limits.remove_quietly(tmp_path)
+
+            for page_num, text in enumerate(page_texts):
+                if text and isinstance(text, str) and text.strip():
+                    cleaned_text = text.strip()
+                    if len(cleaned_text) > 50:  # Only add meaningful text
+                        all_content.append(Document(
+                            page_content=cleaned_text,
+                            metadata={"source": file.filename, "page": page_num + 1}
+                        ))
 
             files_info.append({
                 "filename": file.filename,
                 "pages": page_count,
-                "size": len(content)
+                "size": size
             })
-            meter_upload(len(content), pages=page_count, session_id=session_id)  # DOCBOT-1801
+            meter_upload(size, pages=page_count, session_id=session_id)  # DOCBOT-1801
         
         if not all_content:
             raise HTTPException(status_code=400, detail="No readable text found in documents. Please ensure PDFs contain text, not just images.")
@@ -2085,7 +2086,7 @@ async def db_upload_sqlite(
     Returns connection_id usable with POST /api/db/chat immediately.
     """
     try:
-        file_bytes = await file.read()
+        file_bytes = await upload_limits.read_upload_capped(file, upload_limits.SQLITE_MAX_BYTES)  # DOCBOT-1616
         result = await upload_sqlite(
             file_bytes=file_bytes,
             original_filename=file.filename or "upload.sqlite",
@@ -2099,6 +2100,8 @@ async def db_upload_sqlite(
         )
         funnel_service.record_for_scope("first_upload", scope, {"kind": "sqlite"})
         return result
+    except HTTPException:
+        raise
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc))
     except Exception as exc:
@@ -2120,7 +2123,7 @@ async def db_upload_csv(
     Returns connection_id usable with POST /api/db/chat immediately.
     """
     try:
-        file_bytes = await file.read()
+        file_bytes = await upload_limits.read_upload_capped(file, upload_limits.CSV_MAX_BYTES)  # DOCBOT-1616
         result = await upload_csv(
             file_bytes=file_bytes,
             original_filename=file.filename or "upload.csv",
@@ -2134,6 +2137,8 @@ async def db_upload_csv(
         )
         funnel_service.record_for_scope("first_upload", scope, {"kind": "csv"})
         return result
+    except HTTPException:
+        raise
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc))
     except Exception as exc:

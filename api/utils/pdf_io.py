@@ -8,7 +8,7 @@ needed at all.
 
 from __future__ import annotations
 
-from typing import Any
+from typing import Any, Callable, Optional
 
 PASSWORD_PROTECTED_DETAIL = (
     "This PDF is password-protected. Remove the password and upload it again."
@@ -17,6 +17,10 @@ PASSWORD_PROTECTED_DETAIL = (
 
 class PdfPasswordProtectedError(ValueError):
     """Raised when a PDF needs a user password to open (DOCBOT-2306)."""
+
+
+class PdfTooManyPagesError(ValueError):
+    """Raised when a PDF exceeds the page cap (DOCBOT-1616)."""
 
 
 def open_pdf_bytes(content: bytes) -> Any:
@@ -33,3 +37,38 @@ def open_pdf_bytes(content: bytes) -> Any:
         doc.close()
         raise PdfPasswordProtectedError(PASSWORD_PROTECTED_DETAIL)
     return doc
+
+
+def extract_pdf_pages(
+    path: str,
+    max_pages: int,
+    form_fields_fn: Optional[Callable[[Any], str]] = None,
+) -> tuple[list[str], int]:
+    """Open the PDF at ``path`` and return ``(page_texts, page_count)``.
+
+    Blocking (DOCBOT-1616): callers run it off the event loop. The page cap is
+    checked before any text extraction; the document is always closed here so
+    no PyMuPDF object escapes the worker thread. When ``form_fields_fn``
+    returns text it is prepended to page 1 (AcroForm widget values).
+    """
+    import fitz
+
+    doc = fitz.open(path, filetype="pdf")
+    try:
+        if doc.needs_pass:
+            raise PdfPasswordProtectedError(PASSWORD_PROTECTED_DETAIL)
+        page_count = len(doc)
+        if page_count > max_pages:
+            raise PdfTooManyPagesError(
+                f"This PDF has {page_count} pages; the limit is {max_pages} pages per file."
+            )
+        form_text = form_fields_fn(doc) if form_fields_fn else ""
+        texts: list[str] = []
+        for page_num in range(page_count):
+            text = doc[page_num].get_text("text")
+            if page_num == 0 and form_text:
+                text = form_text + "\n\n" + (text or "")
+            texts.append(text)
+        return texts, page_count
+    finally:
+        doc.close()
