@@ -367,6 +367,11 @@ def is_demo_blocked(method: str, path: str) -> bool:
     return any(path.startswith(prefix) for prefix in _DEMO_BLOCKED_PREFIXES)
 
 
+# Exact paths only. Stripe retries from shared IPs and carries no session;
+# the route authenticates by HMAC signature instead (DOCBOT-2334).
+RATE_LIMIT_EXEMPT_PATHS = frozenset({"/api/billing/webhook"})
+
+
 async def check_ip_rate_limit(request: Request) -> None:
     """Fixed-window per-IP limit. Raises HTTP 429 when exceeded. No-op if disabled."""
     if RATE_LIMIT_PER_MIN <= 0:

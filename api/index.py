@@ -92,7 +92,11 @@ async def abuse_guard(request: Request, call_next):
 
         # Rate-limit only the cost-bearing API surface; leave health/static alone.
         # DOCBOT-2330: /v1 (API-key) routes run the same LLM/E2B pipelines.
-        if request.method in ("POST", "DELETE") and path.startswith(("/api/", "/v1/")):
+        if (
+            request.method in ("POST", "DELETE")
+            and path.startswith(("/api/", "/v1/"))
+            and path not in request_guard.RATE_LIMIT_EXEMPT_PATHS
+        ):
             try:
                 await request_guard.check_ip_rate_limit(request)
             except HTTPException as exc:
