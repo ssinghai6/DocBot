@@ -90,7 +90,8 @@ async def abuse_guard(request: Request, call_next):
             )
 
         # Rate-limit only the cost-bearing API surface; leave health/static alone.
-        if request.method in ("POST", "DELETE") and path.startswith("/api/"):
+        # DOCBOT-2330: /v1 (API-key) routes run the same LLM/E2B pipelines.
+        if request.method in ("POST", "DELETE") and path.startswith(("/api/", "/v1/")):
             try:
                 await request_guard.check_ip_rate_limit(request)
             except HTTPException as exc:
@@ -3542,6 +3543,20 @@ async def _require_v1_resources(key: Any, session_id: str, connection_id: Option
         raise HTTPException(status_code=404, detail="Session or connection not found.")
 
 
+async def _begin_v1_billing(
+    raw_request: Request, route: str, key: Any, session_id: str, connection_id: Optional[str],
+) -> "credit_service.BillingRun":
+    """DOCBOT-2330: reserve credits against the API key's org (402 only when BILLING_ENFORCE).
+
+    Call outside any try that rewrites errors, so a 402 propagates unchanged.
+    """
+    return await credit_service.begin_billing(
+        raw_request, route, session_id=session_id, connection_id=connection_id,
+        session_exists=session_id in VECTOR_STORES,
+        scope=CallerScope(user_id=None, org_id=key.org_id, anon_token=None),
+    )
+
+
 def _parse_sse_event(chunk: str) -> Optional[dict]:
     """Parse one `data: {...}\\n\\n` SSE line back into its dict payload."""
     if not chunk.startswith("data: "):
@@ -3572,7 +3587,9 @@ class V1HybridChatRequest(BaseModel):
         "Requires an API key with the `hybrid:read` scope."
     ),
 )
-async def v1_hybrid_chat(raw_request: Request, request: V1HybridChatRequest, _key=_v1_hybrid_read):
+async def v1_hybrid_chat(
+    raw_request: Request, request: V1HybridChatRequest, _key=_v1_hybrid_read, _cap=_spend_cap,
+):
     from api.hybrid_service import hybrid_chat
     from api.audit_service import log_event, AuditEventType, get_client_ip
 
@@ -3603,43 +3620,45 @@ async def v1_hybrid_chat(raw_request: Request, request: V1HybridChatRequest, _ke
     trace_id: Optional[str] = None
     error_detail: Optional[str] = None
 
-    try:
-        async for chunk in hybrid_chat(
-            question=request.question,
-            session_id=request.session_id,
-            connection_id=request.connection_id,
-            persona=request.persona,
-            has_docs=request.has_docs,
-            messages_table=messages_table,
-            sessions_table=sessions_table,
-            db_connections_table=db_connections_table,
-            schema_cache_table=schema_cache_table,
-            query_history_table=query_history_table,
-            query_embeddings_table=query_embeddings_table,
-            async_session_factory=async_session_factory,
-            expert_personas=EXPERT_PERSONAS,
-            vector_stores=VECTOR_STORES,
-            extracted_fields=EXTRACTED_FIELDS.get(request.session_id),
-            chat_history=_hybrid_history if _hybrid_history else None,
-            chart_type=request.chart_type,
-        ):
-            evt = _parse_sse_event(chunk)
-            if not evt:
-                continue
-            etype = evt.get("type")
-            if etype == "metadata":
-                metadata_evt = evt
-            elif etype == "token":
-                answer_parts.append(evt.get("content", ""))
-            elif etype == "done":
-                citations = evt.get("citations", [])
-                run_id = evt.get("run_id")
-                trace_id = evt.get("trace_id")
-            elif etype == "error":
-                error_detail = evt.get("detail") or evt.get("content") or "An internal error occurred."
-    except Exception as exc:
-        logger.error("v1_hybrid_chat error: %s", type(exc).__name__)
-        raise HTTPException(status_code=502, detail="An internal error occurred.") from exc
+    billing = await _begin_v1_billing(raw_request, "hybrid", _key, request.session_id, request.connection_id)
+    async with billing:
+        try:
+            async for chunk in hybrid_chat(
+                question=request.question,
+                session_id=request.session_id,
+                connection_id=request.connection_id,
+                persona=request.persona,
+                has_docs=request.has_docs,
+                messages_table=messages_table,
+                sessions_table=sessions_table,
+                db_connections_table=db_connections_table,
+                schema_cache_table=schema_cache_table,
+                query_history_table=query_history_table,
+                query_embeddings_table=query_embeddings_table,
+                async_session_factory=async_session_factory,
+                expert_personas=EXPERT_PERSONAS,
+                vector_stores=VECTOR_STORES,
+                extracted_fields=EXTRACTED_FIELDS.get(request.session_id),
+                chat_history=_hybrid_history if _hybrid_history else None,
+                chart_type=request.chart_type,
+            ):
+                evt = _parse_sse_event(chunk)
+                if not evt:
+                    continue
+                etype = evt.get("type")
+                if etype == "metadata":
+                    metadata_evt = evt
+                elif etype == "token":
+                    answer_parts.append(evt.get("content", ""))
+                elif etype == "done":
+                    citations = evt.get("citations", [])
+                    run_id = evt.get("run_id")
+                    trace_id = evt.get("trace_id")
+                elif etype == "error":
+                    error_detail = evt.get("detail") or evt.get("content") or "An internal error occurred."
+        except Exception as exc:
+            logger.error("v1_hybrid_chat error: %s", type(exc).__name__)
+            raise HTTPException(status_code=502, detail="An internal error occurred.") from exc
 
     if error_detail:
         raise HTTPException(status_code=502, detail=error_detail)
@@ -3677,7 +3696,9 @@ class V1AutopilotRequest(BaseModel):
         "Requires an API key with the `autopilot:run` scope."
     ),
 )
-async def v1_autopilot_run(raw_request: Request, request: V1AutopilotRequest, _key=_v1_autopilot_run):
+async def v1_autopilot_run(
+    raw_request: Request, request: V1AutopilotRequest, _key=_v1_autopilot_run, _cap=_spend_cap,
+):
     from api.autopilot_service import run_autopilot
     from api.audit_service import log_event, AuditEventType, get_client_ip
 
@@ -3708,62 +3729,64 @@ async def v1_autopilot_run(raw_request: Request, request: V1AutopilotRequest, _k
     warnings: list[str] = []
     error_detail: Optional[str] = None
 
-    try:
-        # Resolve data sources from persisted state — client-sent flags
-        # are fallback hints only (see api/utils/autopilot_sources.py).
-        from api.utils.autopilot_sources import SourceFlags, resolve_autopilot_sources
-        sources = await resolve_autopilot_sources(
-            session_id=request.session_id,
-            connection_id=request.connection_id,
-            db_connections_table=db_connections_table,
-            async_session_factory=async_session_factory,
-            vector_stores=VECTOR_STORES,
-            org_encryption_keys_table=org_encryption_keys_table,
-            fallback=SourceFlags(
-                has_docs=request.has_docs,
-                has_db=request.has_db,
-                has_csv=request.has_csv,
-            ),
-        )
+    billing = await _begin_v1_billing(raw_request, "autopilot", _key, request.session_id, request.connection_id)
+    async with billing:
+        try:
+            # Resolve data sources from persisted state — client-sent flags
+            # are fallback hints only (see api/utils/autopilot_sources.py).
+            from api.utils.autopilot_sources import SourceFlags, resolve_autopilot_sources
+            sources = await resolve_autopilot_sources(
+                session_id=request.session_id,
+                connection_id=request.connection_id,
+                db_connections_table=db_connections_table,
+                async_session_factory=async_session_factory,
+                vector_stores=VECTOR_STORES,
+                org_encryption_keys_table=org_encryption_keys_table,
+                fallback=SourceFlags(
+                    has_docs=request.has_docs,
+                    has_db=request.has_db,
+                    has_csv=request.has_csv,
+                ),
+            )
 
-        async for chunk in run_autopilot(
-            question=request.question,
-            session_id=request.session_id,
-            connection_id=request.connection_id or "",
-            persona=request.persona,
-            db_connections_table=db_connections_table,
-            schema_cache_table=schema_cache_table,
-            query_history_table=query_history_table,
-            query_embeddings_table=query_embeddings_table,
-            session_artifacts_table=session_artifacts_table,
-            table_embeddings_table=table_embeddings_table,
-            async_session_factory=async_session_factory,
-            expert_personas=EXPERT_PERSONAS,
-            vector_stores=VECTOR_STORES,
-            has_docs=sources.has_docs,
-            has_db=sources.has_db,
-            has_csv=sources.has_csv,
-            chat_history=_autopilot_history if _autopilot_history else None,
-        ):
-            evt = _parse_sse_event(chunk)
-            if not evt:
-                continue
-            etype = evt.get("type")
-            if etype == "plan":
-                plan_steps = evt.get("steps", [])
-            elif etype == "step":
-                steps.append(evt)
-            elif etype == "answer":
-                answer = evt.get("content", "")
-            elif etype == "done":
-                citations = evt.get("citations", [])
-            elif etype == "warning":
-                warnings.append(evt.get("content", ""))
-            elif etype == "error":
-                error_detail = evt.get("content") or "An internal error occurred."
-    except Exception as exc:
-        logger.error("v1_autopilot_run error: %s", type(exc).__name__)
-        raise HTTPException(status_code=502, detail="An internal error occurred.") from exc
+            async for chunk in run_autopilot(
+                question=request.question,
+                session_id=request.session_id,
+                connection_id=request.connection_id or "",
+                persona=request.persona,
+                db_connections_table=db_connections_table,
+                schema_cache_table=schema_cache_table,
+                query_history_table=query_history_table,
+                query_embeddings_table=query_embeddings_table,
+                session_artifacts_table=session_artifacts_table,
+                table_embeddings_table=table_embeddings_table,
+                async_session_factory=async_session_factory,
+                expert_personas=EXPERT_PERSONAS,
+                vector_stores=VECTOR_STORES,
+                has_docs=sources.has_docs,
+                has_db=sources.has_db,
+                has_csv=sources.has_csv,
+                chat_history=_autopilot_history if _autopilot_history else None,
+            ):
+                evt = _parse_sse_event(chunk)
+                if not evt:
+                    continue
+                etype = evt.get("type")
+                if etype == "plan":
+                    plan_steps = evt.get("steps", [])
+                elif etype == "step":
+                    steps.append(evt)
+                elif etype == "answer":
+                    answer = evt.get("content", "")
+                elif etype == "done":
+                    citations = evt.get("citations", [])
+                elif etype == "warning":
+                    warnings.append(evt.get("content", ""))
+                elif etype == "error":
+                    error_detail = evt.get("content") or "An internal error occurred."
+        except Exception as exc:
+            logger.error("v1_autopilot_run error: %s", type(exc).__name__)
+            raise HTTPException(status_code=502, detail="An internal error occurred.") from exc
 
     if error_detail:
         raise HTTPException(status_code=502, detail=error_detail)

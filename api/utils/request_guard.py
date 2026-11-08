@@ -24,7 +24,7 @@ opportunistically every ``_CLEANUP_EVERY`` charges.
 Limits are ON by default with safe values (0 disables any of them):
 
     PUBLIC_DEMO_MODE=true          # block uploads / live-DB / ingestion (off by default)
-    RATE_LIMIT_PER_MIN=60          # per client IP, POST/DELETE /api/*
+    RATE_LIMIT_PER_MIN=60          # per client IP, POST/DELETE /api/* and /v1/*
     SESSION_BUDGET=100             # weighted ops per anonymous session per 7 days
     USER_DAILY_BUDGET=500          # weighted ops per signed-in user per UTC day
 
