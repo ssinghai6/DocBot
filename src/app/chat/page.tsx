@@ -22,7 +22,8 @@ import { useBreakpoint } from "@/lib/useBreakpoint"
 import { resolveChatMode, createAnonymousSessionId, type ChatMode } from "@/lib/chatSession"
 import { VerifyRequestSchema, VerifyResponseSchema } from "@/lib/schemas/emailVerify"
 import { OwnerUnlockResponseSchema } from "@/lib/schemas/ownerUnlock"
-import { signInGateMessage } from "@/lib/signInGate"
+import { gateResponse, onHttpGate } from "@/lib/httpGate"
+import type { Paywall } from "@/components/OutOfCreditsModal"
 
 import {
   AuthMeSchema,
@@ -262,13 +263,31 @@ export default function Home() {
   const textareaRef = useRef<HTMLTextAreaElement>(null);
 
   // Toast helper
-  const showToast = useCallback((type: Toast['type'], message: string) => {
+  // `sticky` toasts stay until closed (DOCBOT-2305: platform-capacity notice).
+  const showToast = useCallback((type: Toast['type'], message: string, sticky = false) => {
     const id = Math.random().toString(36).substring(7);
     setToasts(prev => [...prev, { id, type, message }]);
+    if (sticky) return;
     setTimeout(() => {
       setToasts(prev => prev.filter(t => t.id !== id));
     }, 5000);
   }, []);
+
+  // DOCBOT-2305: one place mapping refused API calls to UI, for every fetch site.
+  const [gatePaywall, setGatePaywall] = useState<Paywall | null>(null);
+  useEffect(() => onHttpGate((gate) => {
+    if (gate.kind === "signin") {
+      setAuthModalTab("login");
+      setAuthError(gate.message);
+      setAuthModalOpen(true);
+    } else if (gate.kind === "rate") {
+      showToast("warning", gate.message);
+    } else if (gate.kind === "credits") {
+      setGatePaywall({ kind: "credits", payload: gate.payload });
+    } else if (gate.kind === "capacity") {
+      showToast("error", gate.message, true);
+    }
+  }), [showToast]);
 
   const dismissToast = useCallback((id: string) => {
     setToasts(prev => prev.filter(t => t.id !== id));
@@ -397,8 +416,9 @@ export default function Home() {
 
     showToast,
     loadQueryHistory: handlers.loadQueryHistory,
-    setAuthModalOpen,
   });
+
+  const shownPaywall = paywall ?? gatePaywall;
 
   // ── Effects ────────────────────────────────────────────────────────────────
 
@@ -582,13 +602,8 @@ export default function Home() {
     setDemoLoading(true);
     try {
       const res = await fetch(`/api/demo/init?dataset=${dataset}`, { method: "POST" });
-      // DOCBOT-1711: demo spend cap reached → offer free sign-in instead of an error.
-      const gated = await signInGateMessage(res);
-      if (gated !== null) {
-        setAuthModalOpen(true);
-        showToast("info", gated);
-        return;
-      }
+      // DOCBOT-1711 / 2305: sign-in, rate, credits or capacity gate → shown by the gate listener.
+      if (await gateResponse(res)) return;
       if (!res.ok) throw new Error("Demo initialization failed");
       const data = await res.json();
       const demo = DEMO_UI[dataset];
@@ -800,17 +815,17 @@ export default function Home() {
           turnstileToken={turnstileToken}
           setTurnstileToken={setTurnstileToken}
           turnstileResetSignal={turnstileResetSignal}
-          onClose={() => setAuthModalOpen(false)}
+          onClose={() => { setAuthModalOpen(false); setAuthError(null); }}
         />
       )}
 
       {/* DOCBOT-1805: out-of-credits / rate-limit paywall */}
-      {paywall && (
+      {shownPaywall && (
         <OutOfCreditsModal
-          paywall={paywall}
+          paywall={shownPaywall}
           isSignedIn={authUser !== null}
-          onSignIn={() => { dismissPaywall(); setAuthModalTab("register"); setAuthModalOpen(true); }}
-          onClose={dismissPaywall}
+          onSignIn={() => { dismissPaywall(); setGatePaywall(null); setAuthModalTab("register"); setAuthModalOpen(true); }}
+          onClose={() => { dismissPaywall(); setGatePaywall(null); }}
         />
       )}
 

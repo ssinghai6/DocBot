@@ -1,6 +1,7 @@
 "use client"
 
 import React, { useState } from "react"
+import { HttpGateError, ensureOk } from "@/lib/httpGate"
 import {
   FileText, Search, ChevronDown, LoaderCircle,
   CircleAlert, Download, CircleCheck,
@@ -74,10 +75,7 @@ export default function EdgarPanel({ onFilingIngested, showToast }: EdgarPanelPr
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ query: searchQuery.trim() }),
       })
-      if (!res.ok) {
-        const err = await res.json()
-        throw new Error(err.detail || "Search failed")
-      }
+      await ensureOk(res, "Search failed")
       const data = await res.json()
       setSearchResults(data.results ?? [])
       if ((data.results ?? []).length === 0) {
@@ -103,15 +101,12 @@ export default function EdgarPanel({ onFilingIngested, showToast }: EdgarPanelPr
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ cik: company.cik, filing_type: filingType, count: filingCount }),
       })
-      if (!res.ok) {
-        const err = await res.json()
-        throw new Error(err.detail || "Failed to list filings")
-      }
+      await ensureOk(res, "Failed to list filings")
       const data = await res.json()
       setFilings(data.filings ?? [])
     } catch (err: unknown) {
       const msg = err instanceof Error ? err.message : "Failed to list filings"
-      showToast("error", msg)
+      if (!(err instanceof HttpGateError)) showToast("error", msg)
     } finally {
       setLoadingFilings(false)
     }
@@ -127,15 +122,12 @@ export default function EdgarPanel({ onFilingIngested, showToast }: EdgarPanelPr
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ cik: selectedCompany.cik, filing_type: filingType, count: filingCount }),
       })
-      if (!res.ok) {
-        const err = await res.json()
-        throw new Error(err.detail || "Failed to list filings")
-      }
+      await ensureOk(res, "Failed to list filings")
       const data = await res.json()
       setFilings(data.filings ?? [])
     } catch (err: unknown) {
       const msg = err instanceof Error ? err.message : "Failed to refresh filings"
-      showToast("error", msg)
+      if (!(err instanceof HttpGateError)) showToast("error", msg)
     } finally {
       setLoadingFilings(false)
     }
@@ -159,10 +151,7 @@ export default function EdgarPanel({ onFilingIngested, showToast }: EdgarPanelPr
           ticker: selectedCompany.ticker,
         }),
       })
-      if (!res.ok) {
-        const err = await res.json()
-        throw new Error(err.detail || "Ingest failed")
-      }
+      await ensureOk(res, "Ingest failed")
       const result: IngestResult = await res.json()
       setIngestResults(prev => ({ ...prev, [filing.accession_number]: result }))
 
@@ -174,7 +163,7 @@ export default function EdgarPanel({ onFilingIngested, showToast }: EdgarPanelPr
     } catch (err: unknown) {
       const msg = err instanceof Error ? err.message : "Ingest failed"
       setIngestResults(prev => ({ ...prev, [filing.accession_number]: { error: msg } }))
-      showToast("error", msg)
+      if (!(err instanceof HttpGateError)) showToast("error", msg)
     } finally {
       setIngesting(null)
     }
@@ -196,10 +185,7 @@ export default function EdgarPanel({ onFilingIngested, showToast }: EdgarPanelPr
           count: filingCount,
         }),
       })
-      if (!res.ok) {
-        const err = await res.json()
-        throw new Error(err.detail || "Batch ingest failed")
-      }
+      await ensureOk(res, "Batch ingest failed")
       const data = await res.json()
       const results: IngestResult[] = data.results ?? []
 
@@ -222,7 +208,7 @@ export default function EdgarPanel({ onFilingIngested, showToast }: EdgarPanelPr
       }
     } catch (err: unknown) {
       const msg = err instanceof Error ? err.message : "Batch ingest failed"
-      showToast("error", msg)
+      if (!(err instanceof HttpGateError)) showToast("error", msg)
     } finally {
       setBatchIngesting(false)
     }
