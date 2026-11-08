@@ -1,6 +1,7 @@
 import type { Metadata } from "next";
 import { Inter, JetBrains_Mono } from "next/font/google";
 import { Analytics } from "@vercel/analytics/react";
+import { connection } from "next/server";
 import "./globals.css";
 
 const inter = Inter({
@@ -43,11 +44,13 @@ export const metadata: Metadata = {
   },
 };
 
-export default function RootLayout({
+export default async function RootLayout({
   children,
 }: Readonly<{
   children: React.ReactNode;
 }>) {
+  // Nonce CSP (DOCBOT-2337): render per request so Next can stamp the nonce.
+  await connection();
   return (
     <html lang="en" className="dark" data-theme="dark">
       <body

@@ -17,17 +17,14 @@ if (process.env.NODE_ENV === "production" && !railwayBackendUrl) {
 const nextConfig: NextConfig = {
   // Required for Docker standalone build (DOCBOT-605)
   output: process.env.DOCKER_BUILD ? "standalone" : undefined,
-  // DOCBOT-1619: CSP + HSTS + framing/nosniff/referrer/permissions headers.
+  // DOCBOT-1619: HSTS + framing/nosniff/referrer/permissions headers.
   // Policy and rationale live in security-headers.mjs.
   async headers() {
     return [
       {
         source: "/:path*",
-        headers: securityHeaders({
-          isDev: process.env.NODE_ENV === "development",
-          isPreview: process.env.VERCEL_ENV === "preview",
-          backendUrl: railwayBackendUrl,
-        }),
+        // CSP is per-request (nonce) in src/proxy.ts, not here (DOCBOT-2337).
+        headers: securityHeaders(),
       },
     ];
   },

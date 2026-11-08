@@ -4,12 +4,15 @@
 // suite can evaluate it with a bare `node` binary (tests/unit/test_security_headers.py).
 //
 // CSP rationale, directive by directive:
-// - script-src 'unsafe-inline': the App Router streams RSC payloads through
-//   inline <script>self.__next_f.push(...)</script> tags. A static header
-//   cannot carry a per-request nonce, and moving to nonces would force every
-//   page to render dynamically (no static landing page / CDN caching). Raw HTML
-//   in model output is never rendered (MarkdownRenderer `skipHtml`), so the
-//   injection surface for inline script is the React tree itself.
+// - script-src (DOCBOT-2337): per-request nonce + 'strict-dynamic', no
+//   'unsafe-inline'. src/proxy.ts mints the nonce and sets this CSP on both the
+//   request (Next reads the nonce from it and stamps its inline RSC/bootstrap
+//   scripts) and the response. That forces dynamic rendering (root layout calls
+//   connection()). 'strict-dynamic' lets nonced scripts load the Turnstile and
+//   Vercel Analytics scripts they inject; the host entries stay as a fallback
+//   for CSP2-only browsers, which ignore 'strict-dynamic'. The CSP is therefore
+//   NOT in the static next.config headers: a second static policy would be
+//   intersected by the browser.
 // - 'unsafe-eval' is DEV ONLY (React dev tooling / HMR). Never in production.
 // - style-src 'unsafe-inline': React `style={}` props, KaTeX inline sizing
 //   styles and next/font's injected @font-face rules.
@@ -57,10 +60,10 @@ export function backendOrigin(raw) {
 }
 
 /**
- * @param {{ isDev: boolean, isPreview?: boolean, backendUrl?: string | null }} opts
+ * @param {{ nonce: string, isDev: boolean, isPreview?: boolean, backendUrl?: string | null }} opts
  * @returns {string}
  */
-export function buildCsp({ isDev, isPreview = false, backendUrl = null }) {
+export function buildCsp({ nonce, isDev, isPreview = false, backendUrl = null }) {
   const api = backendOrigin(backendUrl)
   const live = isPreview && !isDev
 
@@ -69,7 +72,8 @@ export function buildCsp({ isDev, isPreview = false, backendUrl = null }) {
     "default-src": ["'self'"],
     "script-src": [
       "'self'",
-      "'unsafe-inline'",
+      `'nonce-${nonce}'`,
+      "'strict-dynamic'",
       ...(isDev ? ["'unsafe-eval'"] : []),
       ...VERCEL_ANALYTICS,
       ...TURNSTILE,
@@ -106,13 +110,11 @@ export function buildCsp({ isDev, isPreview = false, backendUrl = null }) {
 }
 
 /**
- * Header list for Next.js `headers()`.
- * @param {{ isDev: boolean, isPreview?: boolean, backendUrl?: string | null }} opts
+ * Static header list for Next.js `headers()`. CSP is set per request in src/proxy.ts.
  * @returns {{ key: string, value: string }[]}
  */
-export function securityHeaders(opts) {
+export function securityHeaders() {
   return [
-    { key: "Content-Security-Policy", value: buildCsp(opts) },
     { key: "Strict-Transport-Security", value: HSTS_VALUE },
     { key: "X-Frame-Options", value: "DENY" },
     { key: "X-Content-Type-Options", value: "nosniff" },
