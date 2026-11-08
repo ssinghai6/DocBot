@@ -24,7 +24,7 @@ opportunistically every ``_CLEANUP_EVERY`` charges.
 Limits are ON by default with safe values (0 disables any of them):
 
     PUBLIC_DEMO_MODE=true          # block uploads / live-DB / ingestion (off by default)
-    RATE_LIMIT_PER_MIN=60          # per client IP, POST/DELETE /api/*
+    RATE_LIMIT_PER_MIN=60          # per client IP, POST/DELETE /api/* and /v1/*
     SESSION_BUDGET=100             # weighted ops per anonymous session per 7 days
     USER_DAILY_BUDGET=500          # weighted ops per signed-in user per UTC day
 
@@ -274,6 +274,43 @@ async def _charge(bucket: str, key: str, window_sec: int, limit: int, amount: in
     return None
 
 
+_xff_shape_logged = False
+
+
+def _ip_kind(value: str) -> str:
+    import ipaddress
+
+    try:
+        addr = ipaddress.ip_address(value)
+    except ValueError:
+        return "invalid"
+    return "public" if addr.is_global else "private"
+
+
+def _log_xff_shape_once(request: Request) -> None:
+    """One INFO line describing the X-Forwarded-For chain, so TRUSTED_PROXY_HOPS
+    can be set from real traffic. Logs only entry count, per-position kind
+    (public/private/invalid) and the chosen position — never an address.
+
+    shortcut: diagnostic for DOCBOT-2333; remove once TRUSTED_PROXY_HOPS is set on prod.
+    """
+    global _xff_shape_logged
+    if _xff_shape_logged:
+        return
+    _xff_shape_logged = True
+    fwd = request.headers.get("x-forwarded-for") or ""
+    parts = [p.strip() for p in fwd.split(",") if p.strip()]
+    chosen = max(len(parts) - TRUSTED_PROXY_HOPS, 0) if parts and TRUSTED_PROXY_HOPS > 0 else None
+    logger.info(
+        "xff-shape: TRUSTED_PROXY_HOPS=%d entries=%d kinds(left->right)=%s chosen_index=%s peer_kind=%s",
+        TRUSTED_PROXY_HOPS,
+        len(parts),
+        [_ip_kind(p) for p in parts],
+        "socket-peer" if chosen is None else chosen,
+        _ip_kind(request.client.host) if request.client else "none",
+    )
+
+
 def client_ip(request: Request) -> str:
     """Client IP from the right-most trusted X-Forwarded-For hop (DOCBOT-1606).
 
@@ -284,6 +321,7 @@ def client_ip(request: Request) -> str:
     header is shorter — then every entry was proxy-written). With
     TRUSTED_PROXY_HOPS=0 the header is ignored and the socket peer is used.
     """
+    _log_xff_shape_once(request)
     fwd = request.headers.get("x-forwarded-for") if TRUSTED_PROXY_HOPS > 0 else None
     if fwd:
         parts = [p.strip() for p in fwd.split(",") if p.strip()]
