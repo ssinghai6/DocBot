@@ -98,7 +98,7 @@ def test_register_existing_email_mirrors_verification_response(client, monkeypat
 
 
 # ---------------------------------------------------------------------------
-# Per-account throttle
+# Per-(account, IP) throttle
 # ---------------------------------------------------------------------------
 
 
@@ -110,6 +110,19 @@ def test_sixth_failure_returns_429_even_with_correct_password(client):
     assert int(locked.headers["Retry-After"]) > 0
     # Other accounts are unaffected.
     assert _login(client, "nobody@example.com", "x").status_code == 401
+
+
+def test_failures_from_another_ip_do_not_lock_out_victim(client):
+    """DOCBOT-2336: the counter is per (email, IP), so an attacker can't lock alice out."""
+    attacker = {"X-Forwarded-For": "198.51.100.66"}
+    victim = {"X-Forwarded-For": "203.0.113.7"}
+    for _ in range(5):
+        resp = client.post("/api/auth/login", json={"email": "alice@example.com", "password": "nope"}, headers=attacker)
+        assert resp.status_code == 401
+    locked = client.post("/api/auth/login", json={"email": "alice@example.com", "password": "nope"}, headers=attacker)
+    assert locked.status_code == 429
+    ok = client.post("/api/auth/login", json={"email": "alice@example.com", "password": PASSWORD}, headers=victim)
+    assert ok.status_code == 200
 
 
 def test_unknown_account_is_throttled_too(client):

@@ -92,7 +92,11 @@ async def abuse_guard(request: Request, call_next):
 
         # Rate-limit only the cost-bearing API surface; leave health/static alone.
         # DOCBOT-2330: /v1 (API-key) routes run the same LLM/E2B pipelines.
-        if request.method in ("POST", "DELETE") and path.startswith(("/api/", "/v1/")):
+        if (
+            request.method in ("POST", "DELETE")
+            and path.startswith(("/api/", "/v1/"))
+            and path not in request_guard.RATE_LIMIT_EXEMPT_PATHS
+        ):
             try:
                 await request_guard.check_ip_rate_limit(request)
             except HTTPException as exc:
@@ -2967,8 +2971,9 @@ async def auth_login(body: LoginRequest, response: Response, request: Request):
     from api.audit_service import log_event, AuditEventType
 
     email = body.email.lower().strip()
-    # DOCBOT-1622: per-account throttle, checked before the password.
-    await request_guard.check_login_throttle(email)
+    # DOCBOT-1622/2336: per-(account, IP) throttle, checked before the password.
+    ip = request_guard.client_ip(request)
+    await request_guard.check_login_throttle(email, ip)
 
     async with async_session_factory() as session:
         result = await session.execute(
@@ -2983,7 +2988,7 @@ async def auth_login(body: LoginRequest, response: Response, request: Request):
         body.password, user.password_hash if has_password else dummy_password_hash()
     )
     if not (has_password and password_ok):
-        await request_guard.record_login_failure(email)
+        await request_guard.record_login_failure(email, ip)
         raise HTTPException(status_code=401, detail=LOGIN_FAILED_DETAIL)
 
     # DOCBOT-1713: with Resend configured, an email/password account whose

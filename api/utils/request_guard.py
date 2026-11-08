@@ -119,7 +119,8 @@ EDGAR_BATCH_MAX: int = _env_int("EDGAR_BATCH_MAX", 5)
 SANDBOX_WINDOW_SEC: int = 3600
 SANDBOX_RUNS_PER_HOUR: int = _env_int("SANDBOX_RUNS_PER_HOUR", 60)
 
-# DOCBOT-1622: failed email/password logins per normalized email per window.
+# DOCBOT-1622/2336: failed email/password logins per (normalized email, client IP)
+# per window. The general per-IP limiter still caps total attempts per IP.
 LOGIN_FAILURE_WINDOW_SEC: int = 15 * 60
 LOGIN_FAILURES_PER_WINDOW: int = _env_int("LOGIN_FAILURES_PER_WINDOW", 5)
 
@@ -367,6 +368,11 @@ def is_demo_blocked(method: str, path: str) -> bool:
     return any(path.startswith(prefix) for prefix in _DEMO_BLOCKED_PREFIXES)
 
 
+# Exact paths only. Stripe retries from shared IPs and carries no session;
+# the route authenticates by HMAC signature instead (DOCBOT-2334).
+RATE_LIMIT_EXEMPT_PATHS = frozenset({"/api/billing/webhook"})
+
+
 async def check_ip_rate_limit(request: Request) -> None:
     """Fixed-window per-IP limit. Raises HTTP 429 when exceeded. No-op if disabled."""
     if RATE_LIMIT_PER_MIN <= 0:
@@ -605,8 +611,13 @@ async def enforce_user_budget(user_id: str, endpoint: str) -> None:
         )
 
 
-async def check_login_throttle(email: str) -> None:
-    """Raise 429 once ``email`` has LOGIN_FAILURES_PER_WINDOW failures this window — DOCBOT-1622.
+def _login_key(email: str, ip: str) -> str:
+    # DOCBOT-2336: keyed on (email, IP) so failures from another IP can't lock the victim out.
+    return f"{email}|{ip}"
+
+
+async def check_login_throttle(email: str, ip: str) -> None:
+    """Raise 429 once ``(email, ip)`` has LOGIN_FAILURES_PER_WINDOW failures this window — DOCBOT-1622.
 
     Checked BEFORE the password is verified, so a correct password does not
     bypass an active lockout. A zero-amount charge reads the count without
@@ -615,7 +626,7 @@ async def check_login_throttle(email: str) -> None:
     if LOGIN_FAILURES_PER_WINDOW <= 0:
         return
     retry = await _charge(
-        "login_fail", email, LOGIN_FAILURE_WINDOW_SEC, LOGIN_FAILURES_PER_WINDOW - 1, amount=0
+        "login_fail", _login_key(email, ip), LOGIN_FAILURE_WINDOW_SEC, LOGIN_FAILURES_PER_WINDOW - 1, amount=0
     )
     if retry is not None:
         raise HTTPException(
@@ -625,10 +636,10 @@ async def check_login_throttle(email: str) -> None:
         )
 
 
-async def record_login_failure(email: str) -> None:
-    """Count one failed login against ``email`` (unknown accounts count too, so no enumeration)."""
+async def record_login_failure(email: str, ip: str) -> None:
+    """Count one failed login against ``(email, ip)`` (unknown accounts count too, so no enumeration)."""
     if LOGIN_FAILURES_PER_WINDOW > 0:
-        await _charge("login_fail", email, LOGIN_FAILURE_WINDOW_SEC, LOGIN_FAILURES_PER_WINDOW)
+        await _charge("login_fail", _login_key(email, ip), LOGIN_FAILURE_WINDOW_SEC, LOGIN_FAILURES_PER_WINDOW)
 
 
 def reset_state() -> None:
