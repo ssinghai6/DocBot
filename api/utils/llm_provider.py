@@ -150,6 +150,11 @@ def set_trace_sink(sink: Optional[Callable[[dict], None]]) -> None:
 
 GROQ_MODEL = "openai/gpt-oss-20b"
 GEMINI_MODEL = "gemini-2.5-flash"
+# DOCBOT-2335: the Groq SDK default (60s timeout x 3 attempts) let one hung
+# call stall a request ~180s before the Gemini fallback ran. Bound both.
+GROQ_TIMEOUT_S = 30.0
+GROQ_MAX_RETRIES = 1
+GEMINI_TIMEOUT_S = 30.0
 
 # Groq error types that trigger fallback
 _FALLBACK_STATUS_CODES = {429, 500, 502, 503, 504}
@@ -689,7 +694,7 @@ def _gemini_completion(
         system_instruction=system_instruction,
         generation_config=gen_config,
     )
-    response = model.generate_content(contents)
+    response = model.generate_content(contents, request_options={"timeout": GEMINI_TIMEOUT_S})
     return response.text or ""
 
 
@@ -729,7 +734,9 @@ def _gemini_completion_stream(
         system_instruction=system_instruction,
         generation_config=gen_config,
     )
-    response = model.generate_content(contents, stream=True)
+    response = model.generate_content(
+        contents, stream=True, request_options={"timeout": GEMINI_TIMEOUT_S}
+    )
     for chunk in response:
         if finish_info is not None and getattr(chunk, "candidates", None):
             reason = chunk.candidates[0].finish_reason
@@ -770,7 +777,7 @@ def chat_completion(
         api_key = os.getenv("groq_api_key", "")
         if not api_key:
             raise ValueError("groq_api_key not set")
-        client = Groq(api_key=api_key)
+        client = Groq(api_key=api_key, timeout=GROQ_TIMEOUT_S, max_retries=GROQ_MAX_RETRIES)
         start = time.monotonic()
         response = client.chat.completions.create(
             model=model,
@@ -846,7 +853,7 @@ def chat_completion_stream(
         api_key = os.getenv("groq_api_key", "")
         if not api_key:
             raise ValueError("groq_api_key not set")
-        client = Groq(api_key=api_key)
+        client = Groq(api_key=api_key, timeout=GROQ_TIMEOUT_S, max_retries=GROQ_MAX_RETRIES)
         stream = client.chat.completions.create(
             model=model,
             messages=messages,
