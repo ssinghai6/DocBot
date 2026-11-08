@@ -12,12 +12,16 @@ import type {
   PickedTool,
 } from "@/components/types"
 import { useUIStore } from "@/store/uiStore"
-import { EMPTY_ANSWER_MESSAGE, StreamErrorEvent, fillEmptyAssistant } from "@/lib/chatStream"
+import { EMPTY_ANSWER_MESSAGE, StreamErrorEvent, fillEmptyAssistant, buildRecentHistory } from "@/lib/chatStream"
 import { AutopilotStepEventSchema } from "@/lib/schemas/autopilotStep"
-import { readPaywall } from "@/components/OutOfCreditsModal"
 import type { Paywall } from "@/components/OutOfCreditsModal"
-import { SignInGatedError, signInGateMessage } from "@/lib/signInGate"
-import { PlatformCapacityError, throwIfAtCapacity } from "@/lib/capacity"
+import {
+  HttpGateError,
+  PlatformCapacityError,
+  SignInGatedError,
+  classifyResponse,
+  reportGate,
+} from "@/lib/httpGate"
 
 /**
  * DOCBOT-1510: validate a `lineage` SSE event, attach it to the in-flight
@@ -78,8 +82,6 @@ interface UseChatSubmitParams {
 
   showToast: (type: Toast['type'], message: string) => void
   loadQueryHistory: (connId: string) => void
-  /** DOCBOT-1711: opened when the backend asks an anonymous visitor to sign in. */
-  setAuthModalOpen?: (open: boolean) => void
 }
 
 export function useChatSubmit(params: UseChatSubmitParams) {
@@ -108,7 +110,6 @@ export function useChatSubmit(params: UseChatSubmitParams) {
 
     showToast,
     loadQueryHistory,
-    setAuthModalOpen,
   } = params;
 
   // DOCBOT-1805: 402 (credits) / 429 (rate, demo cap) -> OutOfCreditsModal.
@@ -116,9 +117,10 @@ export function useChatSubmit(params: UseChatSubmitParams) {
 
   /** True when the request was refused by billing/rate limits and the paywall is now shown. */
   const blockedByPaywall = async (response: Response, question: string): Promise<boolean> => {
-    const hit = await readPaywall(response);
-    if (!hit) return false;
-    setPaywall(hit);
+    const gate = await classifyResponse(response);
+    if (gate?.kind === "credits") setPaywall({ kind: "credits", payload: gate.payload });
+    else if (gate?.kind === "rate") setPaywall({ kind: "rate", message: gate.message });
+    else return false;
     // Drop the unanswered turn and put the question back so the user can resend it.
     setMessages(prev => {
       let out = prev;
@@ -132,13 +134,17 @@ export function useChatSubmit(params: UseChatSubmitParams) {
     return true;
   };
 
-  // DOCBOT-1711: 401 / demo-cap 429 → login modal; the thrown message is the backend's prompt.
+  // DOCBOT-1711 / 1615 / 2305: sign-in gate -> AuthModal with the backend's message;
+  // capacity 503 -> sticky toast, never retried. Both shown by the page's gate listener.
   const throwIfSignInGated = async (response: Response): Promise<void> => {
-    await throwIfAtCapacity(response); // DOCBOT-1615 capacity 503 -> readable error, no retry
-    const message = await signInGateMessage(response);
-    if (message === null) return;
-    setAuthModalOpen?.(true);
-    throw new SignInGatedError(message);
+    const gate = await classifyResponse(response);
+    if (gate?.kind === "capacity") {
+      reportGate(gate);
+      throw new PlatformCapacityError(gate.message);
+    }
+    if (gate?.kind !== "signin") return;
+    reportGate(gate);
+    throw new SignInGatedError(gate.message);
   };
 
   const handleSendMessage = async (e?: React.FormEvent) => {
@@ -153,10 +159,7 @@ export function useChatSubmit(params: UseChatSubmitParams) {
 
     // Build recent conversation history (last 6 messages = 3 turns) for
     // follow-up context in DB, CSV, hybrid, and autopilot pipelines.
-    const recentHistory = messages
-      .filter(m => m.content.trim())
-      .slice(-6)
-      .map(m => ({ role: m.role, content: m.content.slice(0, 500) }));
+    const recentHistory = buildRecentHistory(messages);
 
     let personaToSend = selectedPersona;
     let effectiveChatMode = chatMode;
@@ -291,7 +294,7 @@ export function useChatSubmit(params: UseChatSubmitParams) {
               }
               throw new Error(`Autopilot HTTP ${r.status}`);
             } catch (e) {
-              if (e instanceof SignInGatedError || e instanceof PlatformCapacityError) throw e;
+              if (e instanceof HttpGateError) throw e;
               lastErr = e;
               if (attempt === 0) {
                 await new Promise(res => setTimeout(res, 1500));
@@ -529,10 +532,11 @@ export function useChatSubmit(params: UseChatSubmitParams) {
         const msg = error instanceof Error ? error.message : "Unknown error";
         console.error("DB chat error:", error);
         const isFileGone = msg.includes("re-upload") || msg.includes("temporary files");
-        showToast("error", isFileGone ? msg : `Query error: ${msg}`);
+        const gated = error instanceof HttpGateError;
+        if (!gated) showToast("error", isFileGone ? msg : `Query error: ${msg}`);
         setMessages(prev => prev.map((m, i) =>
           i === prev.length - 1 && m.role === "assistant" && m.content === ""
-            ? { ...m, content: isFileGone
+            ? { ...m, content: gated ? msg : isFileGone
                 ? "The uploaded file is no longer available — the server was restarted. Please re-upload your CSV or SQLite file."
                 : "I encountered an error querying your database. Please try again." }
             : m
@@ -648,10 +652,10 @@ export function useChatSubmit(params: UseChatSubmitParams) {
         if (!expired) setMessages(prev => fillEmptyAssistant(prev, EMPTY_ANSWER_MESSAGE));
       } catch (error: unknown) {
         const msg = error instanceof Error ? error.message : "Unknown error";
-        showToast("error", `Error: ${msg}`);
+        if (!(error instanceof HttpGateError)) showToast("error", `Error: ${msg}`);
         setMessages(prev => prev.map((m, i) =>
           i === prev.length - 1 && m.role === "assistant" && m.content === ""
-            ? { ...m, content: error instanceof StreamErrorEvent ? msg : "I encountered an error with the hybrid query. Please try again." }
+            ? { ...m, content: error instanceof StreamErrorEvent || error instanceof HttpGateError ? msg : "I encountered an error with the hybrid query. Please try again." }
             : m
         ));
       } finally {
@@ -682,7 +686,7 @@ export function useChatSubmit(params: UseChatSubmitParams) {
         body: JSON.stringify({
           session_id: sessionId,
           message: userMsg.content,
-          history: messages,
+          history: recentHistory,
           persona: personaToSend,
         })
       });
@@ -739,10 +743,10 @@ export function useChatSubmit(params: UseChatSubmitParams) {
     } catch (error: unknown) {
       const msg = error instanceof Error ? error.message : "Unknown error";
       console.error("Chat error:", error);
-      showToast("error", `Error: ${msg}`);
+      if (!(error instanceof HttpGateError)) showToast("error", `Error: ${msg}`);
       setMessages(prev => prev.map((m, i) =>
         i === prev.length - 1 && m.role === "assistant" && m.content === ""
-          ? { ...m, content: error instanceof StreamErrorEvent ? msg : "I encountered an error processing your request. Please try again." }
+          ? { ...m, content: error instanceof StreamErrorEvent || error instanceof HttpGateError ? msg : "I encountered an error processing your request. Please try again." }
           : m
       ));
     } finally {

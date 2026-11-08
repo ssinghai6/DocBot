@@ -2,6 +2,7 @@
 
 import { useCallback } from "react"
 import { useUIStore } from "@/store/uiStore"
+import { HttpGateError, classifyGate, ensureOk, gateMessage, gateResponse } from "@/lib/httpGate"
 import {
   AuthMeSchema,
   AdminUsersResponseSchema,
@@ -198,13 +199,11 @@ export function useChatHandlers(params: UseChatHandlersParams) {
     setSchemaRefreshing(true);
     try {
       const res = await fetch(`/api/db/refresh-schema/${connId}`, { method: "POST" });
-      if (!res.ok) {
-        const err = await res.json().catch(() => ({}));
-        throw new Error(err.detail || `HTTP ${res.status}`);
-      }
+      await ensureOk(res, `HTTP ${res.status}`);
       await loadSchemaCacheInfo(connId);
       showToast("success", "Schema refreshed");
     } catch (err) {
+      if (err instanceof HttpGateError) return;
       showToast("error", `Schema refresh failed: ${err instanceof Error ? err.message : String(err)}`);
     } finally {
       setSchemaRefreshing(false);
@@ -238,19 +237,6 @@ export function useChatHandlers(params: UseChatHandlersParams) {
     setAutopilotPlan([]);
   }, [setIsDbConnected, setConnectionId, setDbFileName, setDbUploadState, setChatMode, setSelectedPersona, setShowLiveDbForm, setLiveDbConnectState, setLiveDbError, setQueryHistory, setHistoryOpen, setAutopilotMode, setAutopilotSteps, setAutopilotPlan]);
 
-  // Sign-in gate: anonymous upload/DB-connect is refused by the backend — 401
-  // when GATE_UPLOADS is on, or 403 when PUBLIC_DEMO_MODE hard-blocks it. Either
-  // way, pop the login modal and prompt the visitor to sign in for full access
-  // instead of showing a raw error.
-  const promptLoginIfGated = (status: number): boolean => {
-    if (status === 401 || status === 403) {
-      setAuthModalOpen(true);
-      showToast("info", "Sign in (free) to upload your own data");
-      return true;
-    }
-    return false;
-  };
-
   const handleDbUpload = async (file: File, type: "csv" | "sqlite") => {
     setDbUploadState("uploading");
     const formData = new FormData();
@@ -259,14 +245,11 @@ export function useChatHandlers(params: UseChatHandlersParams) {
     try {
       const endpoint = type === "csv" ? "/api/db/upload/csv" : "/api/db/upload";
       const response = await fetch(endpoint, { method: "POST", body: formData });
-      if (promptLoginIfGated(response.status)) {
+      if (await gateResponse(response)) {
         setDbUploadState("idle");
         return;
       }
-      if (!response.ok) {
-        const err = await response.json();
-        throw new Error(err.detail || "Upload failed");
-      }
+      await ensureOk(response, "Upload failed");
       const data = await response.json();
       setDbFileName(file.name);
       setIsCsvConnection(type === "csv");
@@ -312,7 +295,7 @@ export function useChatHandlers(params: UseChatHandlersParams) {
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify(body),
       });
-      if (promptLoginIfGated(response.status)) {
+      if (await gateResponse(response)) {
         setLiveDbConnectState("idle");
         return;
       }
@@ -430,9 +413,11 @@ export function useChatHandlers(params: UseChatHandlersParams) {
         credentials: "include",
         body: JSON.stringify(parsed.data),
       });
-      const data = await res.json();
+      const data: unknown = await res.json().catch(() => null);
       if (!res.ok) {
-        setAuthError(data.detail ?? "Something went wrong.");
+        // DOCBOT-2305: 401/403 (unverified email)/429 (throttle) show the backend's detail.
+        const gate = classifyGate(res.status, data);
+        setAuthError(gate.kind === "other" && gate.message.startsWith("HTTP ") ? "Something went wrong." : gateMessage(gate));
         if (isRegister) bumpTurnstileReset();
         return;
       }
@@ -669,16 +654,13 @@ export function useChatHandlers(params: UseChatHandlersParams) {
       clearInterval(progressInterval);
       setUploadProgress(100);
 
-      if (promptLoginIfGated(response.status)) {
+      if (await gateResponse(response)) {
         setFileUploadState("idle");
         setUploadedFiles([]);
         setUploadProgress(0);
         return;
       }
-      if (!response.ok) {
-        const errData = await response.json();
-        throw new Error(errData.detail || "Failed to upload");
-      }
+      await ensureOk(response, "Failed to upload");
 
       const data = await response.json();
       setSessionId(data.session_id);
@@ -803,10 +785,7 @@ export function useChatHandlers(params: UseChatHandlersParams) {
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ connector_type: connectorType, credentials }),
     });
-    if (!res.ok) {
-      const err = await res.json();
-      throw new Error(err.detail || "Registration failed");
-    }
+    await ensureOk(res, "Registration failed");
     const data = await res.json();
     setConnectors(prev => [...prev, { connector_id: data.connector_id, connector_type: data.connector_type }]);
     showToast("success", `${connectorType} marketplace connected`);
@@ -818,10 +797,7 @@ export function useChatHandlers(params: UseChatHandlersParams) {
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ start_date: startDate, end_date: endDate }),
     });
-    if (!res.ok) {
-      const err = await res.json();
-      throw new Error(err.detail || "Sync failed");
-    }
+    await ensureOk(res, "Sync failed");
     const data = await res.json();
     showToast("success", "Data synced successfully");
     // DOCBOT-1528: refresh the connector list so the persisted
@@ -834,10 +810,7 @@ export function useChatHandlers(params: UseChatHandlersParams) {
   const handleConnectorDisconnect = useCallback(async (connectorId: string) => {
     try {
       const res = await fetch(`/api/connectors/${connectorId}`, { method: "DELETE" });
-      if (!res.ok) {
-        const err = await res.json();
-        throw new Error(err.detail || "Disconnect failed");
-      }
+      await ensureOk(res, "Disconnect failed");
     } catch (e) {
       console.error("Disconnect API error:", e);
     }

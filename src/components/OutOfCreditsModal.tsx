@@ -2,6 +2,7 @@
 
 // DOCBOT-1805: paywall shown when a chat request is refused with HTTP 402
 // (insufficient_credits / account_frozen) or 429 (rate / demo cap).
+// Responses are classified by src/lib/httpGate.ts (DOCBOT-2305).
 
 import React, { useEffect, useState } from "react"
 import { Dialog, DialogContent } from "@/components/ui"
@@ -9,7 +10,6 @@ import {
   CheckoutSessionRequestSchema,
   CheckoutSessionResponseSchema,
   CreditPackCatalogSchema,
-  parseQuotaError,
 } from "@/lib/schemas/billing"
 import type { CreditPack, QuotaErrorPayload } from "@/lib/schemas/billing"
 
@@ -18,24 +18,6 @@ export type Paywall =
   | { kind: "rate"; message: string }
 
 const PAYMENTS_SOON = "Payments open soon — reply to your invite email for more credits."
-
-/** Map a refused chat response to a paywall, or null when it is a normal error. */
-export async function readPaywall(response: Response): Promise<Paywall | null> {
-  if (response.status !== 402 && response.status !== 429) return null
-  let body: unknown = null
-  try {
-    body = await response.json()
-  } catch {
-    // non-JSON body — fall through
-  }
-  const payload = parseQuotaError(body)
-  if (response.status === 402) return payload ? { kind: "credits", payload } : null
-  const detail =
-    body !== null && typeof body === "object" && "detail" in body && typeof body.detail === "string"
-      ? body.detail
-      : null
-  return { kind: "rate", message: payload?.message ?? detail ?? "You've reached the free demo limit." }
-}
 
 const fmtCredits = (n: number) => n.toLocaleString()
 const fmtPrice = (p: CreditPack) =>
