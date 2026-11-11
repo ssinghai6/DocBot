@@ -116,6 +116,21 @@ export const CheckoutSessionResponseSchema = z.object({
 })
 export type CheckoutSessionResponse = z.infer<typeof CheckoutSessionResponseSchema>
 
+// Pro subscription (DOCBOT-1810). past_due keeps plan "pro" during Stripe retries.
+export const SubscriptionCheckoutRequestSchema = z
+  .object({
+    return_path: relativePath.nullable().optional(),
+  })
+  .strict()
+export type SubscriptionCheckoutRequest = z.infer<typeof SubscriptionCheckoutRequestSchema>
+
+export const SubscriptionStatusSchema = z.object({
+  plan: z.enum(["free", "pro"]),
+  status: z.enum(["active", "past_due", "canceled"]).nullable(),
+  current_period_end: timestamp.nullable(),
+})
+export type SubscriptionStatus = z.infer<typeof SubscriptionStatusSchema>
+
 // ── Ledger ─────────────────────────────────────────────────────────────────
 
 export const LedgerEntrySchema = z.object({
