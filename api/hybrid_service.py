@@ -62,7 +62,7 @@ PROMPT_VERSION_HYBRID_SYNTHESIS = "v1"
 # or "sql" (the books), and a 6h exact-match cache then pins that miss, so
 # route these deterministically.
 _TIEOUT_QUESTION_RE = re.compile(
-    r"\b(?:(?:dis)?agree\w*|tie[sd]?|tie-?outs?|match(?:es|ing)?|mismatch\w*|reconcil\w*|"
+    r"\b(?:(?:dis)?agree[sd]?|tie[sd]?|tie-?outs?|match(?:es|ing)?|mismatch\w*|reconcil\w*|"
     r"discrepan\w*|versus|vs)\b",
     re.IGNORECASE,
 )

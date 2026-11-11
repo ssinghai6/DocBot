@@ -91,13 +91,14 @@ async def test_tieout_questions_route_hybrid_without_llm(question):
     llm.assert_not_called()
 
 
-async def test_other_questions_still_use_llm_router():
+@pytest.mark.parametrize("question", ["What are the main risk factors?", "Summarize the lease agreement terms"])
+async def test_other_questions_still_use_llm_router(question):
     with (
         patch("api.utils.llm_provider.achat_completion", new_callable=AsyncMock, return_value="doc") as llm,
         patch("api.utils.llm_cache.get_cached_response", new_callable=AsyncMock, return_value=None),
         patch("api.utils.llm_cache.set_cached_response", new_callable=AsyncMock),
     ):
-        intent = await classify_intent("What are the main risk factors?", has_db=True, has_docs=True,
+        intent = await classify_intent(question, has_db=True, has_docs=True,
                                        session_id="s", async_session_factory=None)
     assert intent == "doc"
     llm.assert_awaited_once()
