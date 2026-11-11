@@ -16,6 +16,7 @@ import hashlib
 import json
 import logging
 import os
+import re
 import time
 from datetime import datetime
 from typing import AsyncGenerator, Literal
@@ -53,6 +54,18 @@ PROMPT_VERSION_INTENT_CLASSIFICATION = "v1"
 # doc/sql context), so there's no single string constant to tag — this
 # version applies to the prompt-assembly logic in hybrid_chat() below.
 PROMPT_VERSION_HYBRID_SYNTHESIS = "v1"
+
+# DOCBOT-2542: a question that asks whether the document and the books agree
+# needs both lanes, or the discrepancy detector never runs. The LLM router
+# (gpt-oss, a reasoning model: temperature 0 is not deterministic) can send
+# "Does segment revenue in Note 12 agree with the books?" to "doc" (Note 12)
+# or "sql" (the books), and a 6h exact-match cache then pins that miss, so
+# route these deterministically.
+_TIEOUT_QUESTION_RE = re.compile(
+    r"\b(?:(?:dis)?agree\w*|tie[sd]?|tie-?outs?|match(?:es|ing)?|mismatch\w*|reconcil\w*|"
+    r"discrepan\w*|versus|vs)\b",
+    re.IGNORECASE,
+)
 
 # DOCBOT-2335: hard cap on the DB lane (table select + SQL gen + execute) so a
 # hung LLM call degrades to a doc-only answer with a notice instead of a ~180s stall.
@@ -164,6 +177,14 @@ async def classify_intent(
 
     if not has_docs:
         result = "sql"
+        if query_history_table is not None:
+            await _log_classification(
+                session_id, question_hash, result, query_history_table, async_session_factory
+            )
+        return result
+
+    if _TIEOUT_QUESTION_RE.search(question):
+        result = "hybrid"
         if query_history_table is not None:
             await _log_classification(
                 session_id, question_hash, result, query_history_table, async_session_factory
