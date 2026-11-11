@@ -44,6 +44,7 @@ class NumericValue:
     kind: str = "plain"               # "currency" | "percent" | "plain"
     doc_file: Optional[str] = None    # doc side: "Source: X, Page N" header
     doc_page: Optional[int] = None
+    dimension: str = ""               # db side: row entity, e.g. "lab services"
 
 
 @dataclass
@@ -221,22 +222,26 @@ def detect_discrepancies(
     seen_ids: set[str] = set()
 
     for dv in doc_values:
-        candidates: list[tuple[bool, float, int, NumericValue]] = []
+        candidates: list[tuple[bool, float, float, int, NumericValue]] = []
         for idx, sv in enumerate(db_values):
             if not _kinds_compatible(dv, sv):
                 continue
             if dv.period and sv.period and dv.period != sv.period:
                 continue
-            sim = _label_similarity(dv.label, sv.label)
+            label_sim = _label_similarity(dv.label, sv.label)
+            # DOCBOT-2542: a row's entity alone names the figure ("Lab Services:
+            # $104.9M" vs {segment: "Lab Services", segment_revenue: ...}); the
+            # column name only adds tokens that dilute Jaccard below threshold.
+            sim = max(label_sim, _label_similarity(dv.label, sv.dimension)) if sv.dimension else label_sim
             if sim < match_threshold:
                 continue
             period_match = bool(dv.period and sv.period == dv.period)
-            candidates.append((period_match, sim, -idx, sv))
+            candidates.append((period_match, sim, label_sim, -idx, sv))
         if not candidates:
             continue
 
         pairs_checked += 1
-        candidates.sort(key=lambda c: (c[0], c[1], c[2]), reverse=True)
+        candidates.sort(key=lambda c: c[:4], reverse=True)
 
         # Align unit scale before comparing. Docs quote figures with explicit
         # units ("$330M", "$5.2 billion") that parse to absolute dollars, while
@@ -245,7 +250,7 @@ def detect_discrepancies(
         # reporting discrepancies (330M vs 325M → 1.5%) surface while true
         # mismatches (annual vs quarterly) stay large and get filtered.
         evaluated: list[tuple[NumericValue, float, float, float, float]] = []
-        for _pm, _sim, _neg_idx, sv in candidates:
+        for *_rank, sv in candidates:
             doc_val, db_val = _align_scale(dv.value, sv.value)
             delta = db_val - doc_val
             rel_diff = abs(delta / doc_val) if doc_val != 0 else (abs(delta) if delta != 0 else 0)
@@ -587,6 +592,8 @@ def _extract_from_rows(rows: list[dict], fallback_dimension: str = "") -> list[N
         period, dimension = _row_period_and_dimension(row)
         dimension = dimension or fallback_dimension
         dim_label = _normalize_label(dimension) if dimension else ""
+        # Ledger account codes ("4100 Revenue - Lab Services") never appear in prose.
+        entity = " ".join(t for t in dim_label.split() if not t.isdigit())
         for col, val in row.items():
             if str(col).lower() in _PERIOD_COLS:
                 continue
@@ -616,6 +623,7 @@ def _extract_from_rows(rows: list[dict], fallback_dimension: str = "") -> list[N
                 source="db",
                 period=period,
                 kind="percent" if col_tokens & _PERCENT_TOKENS else "plain",
+                dimension=entity,
             ))
 
     return results

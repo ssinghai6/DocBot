@@ -63,8 +63,7 @@ def test_discrepancy_precision_recall(capsys):
                   f"detected={detected} expected={expected}")
 
     # Precision is the demo-critical metric — false positives (the -100% /
-    # +19566% garbage) destroy trust. Guard it hard. Recall floor is lenient:
-    # some row-shape cases (segment value labeled by column) are known gaps.
+    # +19566% garbage) destroy trust. Guard it hard. Recall floor is lenient.
     assert precision >= 0.85, f"precision regressed to {precision:.2f}"
     assert recall >= 0.5, f"recall regressed to {recall:.2f}"
     assert fp == 0, f"{fp} false-positive discrepancies (must be 0 for demo trust)"
