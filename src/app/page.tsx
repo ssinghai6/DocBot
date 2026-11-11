@@ -33,6 +33,7 @@ import {
 import { Button, Badge, Card } from "@/components/ui"
 import LogoMark from "@/components/LogoMark"
 import { LegalLinks } from "@/components/LegalPage"
+import { SITE_DESCRIPTION, SITE_URL } from "@/lib/site"
 
 // ── Feature data ──────────────────────────────────────────────────────────────
 
@@ -340,11 +341,35 @@ function DemoVideo() {
   return null
 }
 
+// ── Structured data (DOCBOT-2536) ─────────────────────────────────────────────
+// Only the free tier is listed: it is the one live, locked price. Add packs once self-serve checkout ships.
+const jsonLd = {
+  "@context": "https://schema.org",
+  "@graph": [
+    { "@type": "Organization", "@id": `${SITE_URL}/#org`, name: "DocBot", url: SITE_URL, logo: `${SITE_URL}/logo-hybrid-light.svg` },
+    {
+      "@type": "SoftwareApplication",
+      name: "DocBot",
+      url: SITE_URL,
+      description: SITE_DESCRIPTION,
+      applicationCategory: "BusinessApplication",
+      operatingSystem: "Web",
+      publisher: { "@id": `${SITE_URL}/#org` },
+      offers: { "@type": "Offer", price: "0", priceCurrency: "USD", description: "Free: 3,000 credits per month after email verification" },
+    },
+  ],
+}
+
 // ── Component ─────────────────────────────────────────────────────────────────
 
 export default function LandingPage() {
   return (
     <div className="min-h-screen bg-[var(--color-bg-base)] text-[var(--color-text-primary)]" style={{ scrollBehavior: "smooth" }}>
+      {/* JSON-LD is a data block, not executed script, so the nonce CSP (DOCBOT-2337) does not apply. "<" escaped against tag break-out. */}
+      <script
+        type="application/ld+json"
+        dangerouslySetInnerHTML={{ __html: JSON.stringify(jsonLd).replace(/</g, "\\u003c") }}
+      />
 
       {/* ── Navigation ── */}
       <nav className="fixed top-0 left-0 right-0 z-50 border-b border-[var(--color-border-subtle)] backdrop-blur-md bg-[var(--color-bg-base)]/80">
