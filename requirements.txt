@@ -39,6 +39,8 @@ pymysql==1.2.3
 pandas==3.1.0
 # df.to_markdown() requires tabulate
 tabulate==0.10.0
+# DOCBOT-2014: tie-out workpaper XLSX export
+openpyxl==3.1.5
 # DOCBOT-301: Python code generation via openai/gpt-oss-120b on Groq (uses existing groq package)
 # DOCBOT-406: LangExtract for structured financial document extraction (Google, Gemini-backed)
 langextract==1.7.1

@@ -3408,6 +3408,12 @@ from api.routes.billing_routes import router as billing_router  # noqa: E402
 
 app.include_router(billing_router)
 
+# ── DOCBOT-2014: tie-out workpaper export (XLSX / PDF) ───────────────────────
+from api.routes.tieout_routes import router as tieout_router, wire_tieout_routes  # noqa: E402
+
+app.include_router(tieout_router)
+wire_tieout_routes(answer_lineage_table, sessions_table, db_connections_table, async_session_factory)
+
 # ── DOCBOT-1712: post-signup onboarding (workspace name + use case) ───────────
 from api.routes.onboarding_routes import (  # noqa: E402
     router as onboarding_router,

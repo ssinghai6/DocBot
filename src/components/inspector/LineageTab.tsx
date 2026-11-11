@@ -1,7 +1,7 @@
 "use client"
 
 import { useEffect, useRef } from "react"
-import { TriangleAlert, Database, FileText, GitBranch, Layers, MessageSquare, Search, Sparkles } from "lucide-react"
+import { TriangleAlert, Download, Database, FileText, GitBranch, Layers, MessageSquare, Search, Sparkles } from "lucide-react"
 import type { Lineage, LineageDiscrepancy, LineageSource, LineageStep } from "@/components/types"
 import { useUIStore } from "@/store/uiStore"
 import { Chip, EmptyTab, SectionLabel, fmtMs, fmtNum } from "./shared"
@@ -296,6 +296,21 @@ export default function LineageTab({ lineage }: { lineage: Lineage | null }) {
               <TriangleAlert className="w-3 h-3" />
               <span className="text-[10px] font-semibold uppercase tracking-wider">
                 {lineage.discrepancies.length} discrepanc{lineage.discrepancies.length === 1 ? "y" : "ies"} between docs and data
+              </span>
+              {/* DOCBOT-2014: tie-out workpaper download (same-origin, session cookie) */}
+              <span className="ml-auto flex items-center gap-1">
+                {(["xlsx", "pdf"] as const).map((fmt) => (
+                  <a
+                    key={fmt}
+                    href={`/api/lineage/${encodeURIComponent(lineage.run_id)}/tieout.${fmt}`}
+                    download
+                    className="inline-flex items-center gap-1 text-[10px] px-1.5 h-5 rounded-[3px] border border-[var(--color-amber-500)]/40 hover:bg-[var(--color-amber-500)]/10 uppercase tracking-wider"
+                    aria-label={`Download tie-out workpaper as ${fmt.toUpperCase()}`}
+                  >
+                    <Download className="w-3 h-3" />
+                    {fmt}
+                  </a>
+                ))}
               </span>
             </div>
             <div className="space-y-2">
