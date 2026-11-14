@@ -1,8 +1,9 @@
 name: Deploy AWS dev
 
-# Deploys the API to the AWS dev environment (infra/aws/dev). Never runs for
-# main: production stays on Railway + Vercel. The IAM role trust policy also
-# only accepts tokens for refs/heads/dev.
+# Deploys the API to the AWS dev environment (infra/aws/envs/dev). Never runs for
+# main. The IAM role trust policy only accepts tokens for refs/heads/dev.
+# After a green smoke test the image is tagged tested-<sha>: the only images
+# deploy-aws-prod.yml will promote.
 on:
   push:
     branches: [dev]
@@ -89,3 +90,21 @@ jobs:
           cluster: ${{ env.ECS_CLUSTER }}
           service: ${{ env.ECS_SERVICE }}
           wait-for-service-stability: true
+
+      - name: Smoke test
+        if: vars.AWS_DEV_API_URL != ''
+        env:
+          API_URL: ${{ vars.AWS_DEV_API_URL }}
+          ORIGIN: ${{ vars.AWS_DEV_FRONTEND_ORIGIN }}
+        run: infra/aws/smoke-test.sh "$API_URL" "$ORIGIN"
+
+      - name: Mark image tested (promotable to prod)
+        if: vars.AWS_DEV_API_URL != ''
+        run: |
+          MANIFEST=$(aws ecr batch-get-image --repository-name "$ECR_REPOSITORY" \
+            --image-ids imageTag="$GITHUB_SHA" --query 'images[0].imageManifest' --output text)
+          aws ecr put-image --repository-name "$ECR_REPOSITORY" \
+            --image-tag "tested-$GITHUB_SHA" --image-manifest "$MANIFEST" >/dev/null
+          DIGEST=$(aws ecr describe-images --repository-name "$ECR_REPOSITORY" \
+            --image-ids imageTag="tested-$GITHUB_SHA" --query 'imageDetails[0].imageDigest' --output text)
+          echo "::notice title=Promotable to prod::$GITHUB_SHA -> $DIGEST (run Deploy AWS prod with git_sha=$GITHUB_SHA)"
