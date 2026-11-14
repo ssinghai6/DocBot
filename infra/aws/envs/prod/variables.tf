@@ -83,3 +83,15 @@ variable "alarm_email" {
   default     = ""
   description = "CloudWatch alarm email (SNS). Empty = no alarms."
 }
+
+variable "db_engine_version" {
+  type        = string
+  default     = "16"
+  description = "Must be >= Railway's Postgres major (pg_migrate.sh refuses otherwise)."
+}
+
+variable "trusted_proxy_hops" {
+  type        = number
+  default     = 2
+  description = "Vercel rewrite -> ALB = 2. Confirm from the `xff-shape:` log line on dev before cutover."
+}
