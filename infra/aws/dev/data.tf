@@ -26,6 +26,7 @@ resource "aws_db_instance" "main" {
   multi_az               = false
 
   backup_retention_period    = 3
+  copy_tags_to_snapshot      = true
   auto_minor_version_upgrade = true
   deletion_protection        = var.deletion_protection
   # Dev data: deletion_protection is the guard; no final snapshot on destroy.

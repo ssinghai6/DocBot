@@ -15,7 +15,7 @@ terraform {
 provider "aws" {
   region = var.aws_region
   default_tags {
-    tags = { Project = "docbot", Environment = "dev", ManagedBy = "terraform" }
+    tags = { Project = "docbot", Environment = "shared", ManagedBy = "terraform" }
   }
 }
 
@@ -48,6 +48,22 @@ resource "aws_s3_bucket_versioning" "state" {
   }
 }
 
+# Old state versions are only needed for recovery; keep them 90 days.
+resource "aws_s3_bucket_lifecycle_configuration" "state" {
+  bucket = aws_s3_bucket.state.id
+  rule {
+    id     = "expire-old-state-versions"
+    status = "Enabled"
+    filter {}
+    noncurrent_version_expiration {
+      noncurrent_days = 90
+    }
+    abort_incomplete_multipart_upload {
+      days_after_initiation = 7
+    }
+  }
+}
+
 resource "aws_s3_bucket_server_side_encryption_configuration" "state" {
   bucket = aws_s3_bucket.state.id
   rule {
@@ -72,6 +88,9 @@ resource "aws_dynamodb_table" "lock" {
   attribute {
     name = "LockID"
     type = "S"
+  }
+  point_in_time_recovery {
+    enabled = true
   }
 }
 

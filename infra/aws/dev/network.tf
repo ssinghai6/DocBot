@@ -56,6 +56,7 @@ resource "aws_security_group" "alb" {
     cidr_blocks = ["0.0.0.0/0"]
   }
   egress {
+    description = "To targets and health checks"
     from_port   = 0
     to_port     = 0
     protocol    = "-1"
@@ -90,6 +91,7 @@ resource "aws_security_group" "db" {
   vpc_id      = aws_vpc.main.id
 
   ingress {
+    description     = "Postgres from API tasks"
     from_port       = 5432
     to_port         = 5432
     protocol        = "tcp"
@@ -103,9 +105,16 @@ resource "aws_security_group" "efs" {
   vpc_id      = aws_vpc.main.id
 
   ingress {
+    description     = "NFS from API tasks"
     from_port       = 2049
     to_port         = 2049
     protocol        = "tcp"
     security_groups = [aws_security_group.task.id]
   }
+}
+
+# Lock down the VPC default SG (nothing uses it) so a resource created without an
+# explicit SG gets no access.
+resource "aws_default_security_group" "default" {
+  vpc_id = aws_vpc.main.id
 }

@@ -20,7 +20,8 @@ resource "aws_lb" "api" {
   security_groups    = [aws_security_group.alb.id]
   subnets            = aws_subnet.public[*].id
   # SSE chat/autopilot streams can sit quiet between tokens.
-  idle_timeout = 300
+  idle_timeout               = 300
+  drop_invalid_header_fields = true
 }
 
 resource "aws_lb_target_group" "api" {
