@@ -5,7 +5,7 @@ Terraform for the DocBot API on AWS (ECS Fargate + RDS Postgres + EFS for Chroma
 ```
 infra/aws/
   bootstrap/      S3 state bucket + DynamoDB lock table (local state, apply once)
-  account/        account-wide: GitHub OIDC provider, ECR repo docbot-api
+  account/        account-wide: GitHub OIDC provider, ECR repo docbot-api, budgets, cost anomaly alerts
   modules/app/    network, ALB + ACM, ECS service, RDS, EFS, secrets, deploy role
   envs/dev/       api-dev.docbot.space, deployed on push to `dev`
   envs/prod/      api.docbot.space, promoted by digest with manual approval
@@ -60,6 +60,14 @@ aws secretsmanager put-secret-value --secret-id <arn> --secret-string '<value>'
 ```
 
 Non-secret env vars that differ from the defaults go in `extra_env` in `terraform.tfvars`.
+
+## Spending guardrails (`account/budgets.tf`)
+
+- `docbot-account-monthly-net`: default cost types (credits applied), `monthly_budget_usd` (default $150).
+- `docbot-account-monthly-gross`: same limit, `include_credit = false`, so it shows true burn while the $5K credits pay the bill.
+- Both email `budget_email` at 50%, 80%, 100% actual and 100% forecasted.
+- Cost Anomaly Detection: AWS-services monitor + daily email when an anomaly's impact is >= `anomaly_threshold_usd` ($20). Accounts allow one services monitor; if `aws ce get-anomaly-monitors` already lists one, set `anomaly_monitor_arn` instead of creating another.
+- AWS asks each email address to confirm the anomaly subscription; budgets email without confirmation.
 
 ## Founder steps, in order
 
