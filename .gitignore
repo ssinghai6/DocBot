@@ -63,6 +63,8 @@ next-env.d.ts
 
 # scripts (contain credentials)
 scripts/
+# migration scripts read credentials from env only, never store them (DOCBOT-2515)
+!/infra/aws/scripts/
 
 # confidential project planning docs
 project-tasks/
