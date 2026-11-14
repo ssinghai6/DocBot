@@ -12,18 +12,8 @@ output "acm_validation_records" {
   }]
 }
 
-output "ecr_repository_url" {
-  value = aws_ecr_repository.api.repository_url
-}
-
 output "deploy_role_arn" {
-  description = "Set as GitHub repo variable AWS_DEV_DEPLOY_ROLE_ARN."
-  value       = aws_iam_role.deploy.arn
-}
-
-output "aws_region" {
-  description = "Set as GitHub repo variable AWS_DEV_REGION."
-  value       = var.aws_region
+  value = aws_iam_role.deploy.arn
 }
 
 output "ecs_cluster_name" {
@@ -46,4 +36,12 @@ output "app_secret_arns" {
 output "rds_master_secret_arn" {
   description = "RDS-managed master credentials (rotated by RDS)."
   value       = aws_db_instance.main.master_user_secret[0].secret_arn
+}
+
+output "rds_instance_id" {
+  value = aws_db_instance.main.identifier
+}
+
+output "efs_file_system_id" {
+  value = aws_efs_file_system.chroma.id
 }

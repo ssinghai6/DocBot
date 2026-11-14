@@ -1,0 +1,12 @@
+# cp terraform.tfvars.example terraform.tfvars, then edit.
+aws_region = "us-east-1"
+
+# api_domain        = "api.docbot.space"
+# frontend_url      = "https://www.docbot.space"
+# allowed_origins   = "https://www.docbot.space,https://docbot.space"
+# db_instance_class = "db.t4g.small"
+# db_multi_az       = false
+# app_secret_names  = [...]   # trim to what Railway prod actually sets
+# extra_env = {
+#   EMAIL_FROM = "DocBot <noreply@docbot.space>"
+# }

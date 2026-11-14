@@ -17,12 +17,11 @@ provider "aws" {
   }
 }
 
-locals {
-  name           = "docbot-dev"
-  container_name = "api"
-  container_port = 8000
+# Created by infra/aws/account.
+data "aws_ecr_repository" "api" {
+  name = "docbot-api"
 }
 
-data "aws_availability_zones" "available" {
-  state = "available"
+data "aws_iam_openid_connect_provider" "github" {
+  url = "https://token.actions.githubusercontent.com"
 }

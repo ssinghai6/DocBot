@@ -21,6 +21,7 @@ resource "aws_lb" "api" {
   subnets            = aws_subnet.public[*].id
   # SSE chat/autopilot streams can sit quiet between tokens.
   idle_timeout               = 300
+  enable_deletion_protection = var.deletion_protection
   drop_invalid_header_fields = true
 }
 
