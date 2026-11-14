@@ -11,7 +11,7 @@ infra/aws/
   envs/prod/      api.docbot.space, promoted by digest with manual approval
 ```
 
-Production stays on Railway until the DNS cutover (`docs/dns-cutover.md`). Nothing here creates DNS records or touches Railway or Vercel.
+Production stays on Railway until the DNS cutover: order in `runbooks/cutover.md` (2514), DNS in `docs/dns-cutover.md` (2517), rollback in `docs/rollback.md` (2518). Nothing here creates DNS records or touches Railway or Vercel.
 
 ## Architecture (per environment)
 
