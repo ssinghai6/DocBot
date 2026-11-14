@@ -45,6 +45,8 @@ Internet ──HTTPS──> ALB (<api_domain>, ACM cert, HTTP->HTTPS, idle 300s 
 - **Backups:** RDS PITR (prod 14 days) + final snapshot on delete; EFS daily via AWS Backup (35 days). Restore drill: `docs/backup-restore.md`.
 - **Ops task:** `docbot-<env>-ops` task definition (same image/env/secrets, EFS root at `/efs`) for one-off drills and data copies via `aws ecs run-task` with a command override.
 
+- **Alarms** (`modules/app/alarms.tf`, on when `alarm_email` is set; confirm the SNS email): ALB 5xx > 5% of requests, unhealthy targets, healthy targets < `desired_count` (stands in for ECS running < desired), RDS CPU > 80%, RDS free storage < 2 GiB, RDS connections > 60, EFS burst credits < 500 GiB. Forced tests: `aws cloudwatch set-alarm-state --alarm-name docbot-<env>-rds-cpu-high --state-value ALARM --state-reason drill` (notification path), and `aws ecs update-service --cluster docbot-<env> --service docbot-<env>-api --desired-count 0` (running-below-desired + unhealthy fire within ~5 min; set it back to 1).
+
 ### How DATABASE_URL is built
 
 RDS creates and rotates the master password itself (`manage_master_user_password = true`) and keeps it in a Secrets Manager secret holding JSON `{username, password}`. The task injects `DB_USER`/`DB_PASSWORD` via ECS JSON-key secret references; the container command URL-encodes them into `DATABASE_URL` and `exec`s the same uvicorn command as the Dockerfile. `PGSSLMODE=require` because RDS Postgres 16 requires TLS. Nobody copies or sees the password.

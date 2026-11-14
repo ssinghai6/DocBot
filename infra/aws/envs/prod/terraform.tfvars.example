@@ -1,5 +1,6 @@
 # cp terraform.tfvars.example terraform.tfvars, then edit.
-aws_region = "us-east-1"
+aws_region  = "us-east-1"
+alarm_email = "you@example.com" # confirm the SNS email after apply
 
 # api_domain        = "api.docbot.space"
 # frontend_url      = "https://www.docbot.space"

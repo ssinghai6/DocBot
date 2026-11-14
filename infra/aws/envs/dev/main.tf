@@ -16,6 +16,7 @@ module "app" {
   db_skip_final_snapshot   = true # dev data; deletion_protection is the guard
   log_retention_days       = 14
 
+  alarm_email      = var.alarm_email
   app_secret_names = var.app_secret_names
   extra_env        = var.extra_env
 

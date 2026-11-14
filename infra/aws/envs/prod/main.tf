@@ -27,6 +27,7 @@ module "app" {
   db_skip_final_snapshot   = false
   log_retention_days       = 30
 
+  alarm_email      = var.alarm_email
   app_secret_names = var.app_secret_names
   extra_env        = var.extra_env
 
