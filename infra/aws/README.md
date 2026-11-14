@@ -42,6 +42,9 @@ Internet ──HTTPS──> ALB (<api_domain>, ACM cert, HTTP->HTTPS, idle 300s 
 - **Network:** 2 AZs, public subnets only, no NAT gateway (saves ~$33/mo per env). Tasks get a public IP for egress (ECR, Secrets Manager, LLM and E2B APIs) and accept traffic only from the ALB. Private subnets: DOCBOT-2521.
 - **Chroma on EFS** is SQLite: keep `desired_count <= 1` (enforced by a variable validation) until the vector store moves to pgvector.
 
+- **Backups:** RDS PITR (prod 14 days) + final snapshot on delete; EFS daily via AWS Backup (35 days). Restore drill: `docs/backup-restore.md`.
+- **Ops task:** `docbot-<env>-ops` task definition (same image/env/secrets, EFS root at `/efs`) for one-off drills and data copies via `aws ecs run-task` with a command override.
+
 ### How DATABASE_URL is built
 
 RDS creates and rotates the master password itself (`manage_master_user_password = true`) and keeps it in a Secrets Manager secret holding JSON `{username, password}`. The task injects `DB_USER`/`DB_PASSWORD` via ECS JSON-key secret references; the container command URL-encodes them into `DATABASE_URL` and `exec`s the same uvicorn command as the Dockerfile. `PGSSLMODE=require` because RDS Postgres 16 requires TLS. Nobody copies or sees the password.

@@ -48,3 +48,8 @@ output "rds_instance_id" {
 output "efs_file_system_id" {
   value = module.app.efs_file_system_id
 }
+
+output "ops_task_definition_family" {
+  description = "One-off ops/drill tasks (docs/backup-restore.md)."
+  value       = module.app.ops_task_definition_family
+}

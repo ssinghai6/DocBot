@@ -32,6 +32,8 @@ resource "aws_db_instance" "main" {
   deletion_protection        = var.deletion_protection
   skip_final_snapshot        = var.db_skip_final_snapshot
   final_snapshot_identifier  = var.db_skip_final_snapshot ? null : "${local.name}-final"
+  # Keep PITR backups after an instance delete whenever we keep a final snapshot.
+  delete_automated_backups = var.db_skip_final_snapshot
 }
 
 # ------------------------------------------------- EFS for Chroma (CHROMA_DIR)
@@ -45,6 +47,15 @@ resource "aws_efs_mount_target" "chroma" {
   file_system_id  = aws_efs_file_system.chroma.id
   subnet_id       = aws_subnet.public[count.index].id
   security_groups = [aws_security_group.efs.id]
+}
+
+# Daily EFS backups via the AWS Backup default plan (35-day retention,
+# aws/efs/automatic-backup-vault). Chroma is small, so this costs cents.
+resource "aws_efs_backup_policy" "chroma" {
+  file_system_id = aws_efs_file_system.chroma.id
+  backup_policy {
+    status = var.efs_backup ? "ENABLED" : "DISABLED"
+  }
 }
 
 # The image runs as appuser (uid/gid 1000); the access point forces that

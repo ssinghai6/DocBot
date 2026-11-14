@@ -75,7 +75,12 @@ variable "db_multi_az" {
 }
 
 variable "db_backup_retention_days" {
-  type = number
+  type        = number
+  description = "RDS automated backup / PITR window (days)."
+  validation {
+    condition     = var.db_backup_retention_days >= 1 && var.db_backup_retention_days <= 35
+    error_message = "Must be 1-35 days."
+  }
 }
 
 variable "db_skip_final_snapshot" {
@@ -123,4 +128,10 @@ variable "github_oidc_subjects" {
 variable "deploy_can_push_images" {
   type        = bool
   description = "Let the deploy role push new images (dev builds; prod only promotes)."
+}
+
+variable "efs_backup" {
+  type        = bool
+  default     = true
+  description = "Daily AWS Backup of the Chroma EFS (35-day retention)."
 }
