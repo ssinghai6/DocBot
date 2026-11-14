@@ -48,6 +48,8 @@ USER root
 COPY docker-entrypoint.sh /usr/local/bin/docker-entrypoint.sh
 ENTRYPOINT ["/usr/local/bin/docker-entrypoint.sh"]
 
-# Start server using Railway's PORT env var
+# Start server on the host's PORT (Railway sets it; ECS sets it in the task env).
+# exec: uvicorn gets SIGTERM directly. The graceful cap lets lifespan cleanup run
+# before the host's kill timeout (ECS default stopTimeout 30s) even with SSE open.
 EXPOSE 8000
-CMD ["sh", "-c", "uvicorn api.index:app --host 0.0.0.0 --port ${PORT:-8000}"]
+CMD ["sh", "-c", "exec uvicorn api.index:app --host 0.0.0.0 --port ${PORT:-8000} --timeout-graceful-shutdown 25"]
