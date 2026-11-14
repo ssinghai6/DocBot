@@ -68,9 +68,13 @@ aws secretsmanager put-secret-value --secret-id <arn> --secret-string '<value>'
 
 Non-secret env vars that differ from the defaults go in `extra_env` in `terraform.tfvars`.
 
+## Cost
+
+~$101/mo prod, ~$60 dev 24/7 or ~$43 with `desired_count = 0` (scale-to-zero toggle). Details, idle options and the monthly Cost Explorer evidence commands: `docs/cost.md`.
+
 ## Spending guardrails (`account/budgets.tf`)
 
-- `docbot-account-monthly-net`: default cost types (credits applied), `monthly_budget_usd` (default $150).
+- `docbot-account-monthly-net`: default cost types (credits applied), `monthly_budget_usd` (default $200; planned run rate ~$150-165, see `docs/cost.md`).
 - `docbot-account-monthly-gross`: same limit, `include_credit = false`, so it shows true burn while the $5K credits pay the bill.
 - Both email `budget_email` at 50%, 80%, 100% actual and 100% forecasted.
 - Cost Anomaly Detection: AWS-services monitor + daily email when an anomaly's impact is >= `anomaly_threshold_usd` ($20). Accounts allow one services monitor; if `aws ce get-anomaly-monitors` already lists one, set `anomaly_monitor_arn` instead of creating another.

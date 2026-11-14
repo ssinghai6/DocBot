@@ -13,7 +13,7 @@ variable "budget_email" {
 
 variable "monthly_budget_usd" {
   type    = number
-  default = 150
+  default = 200
 }
 
 variable "anomaly_threshold_usd" {
