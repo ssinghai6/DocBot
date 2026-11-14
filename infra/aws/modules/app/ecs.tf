@@ -191,6 +191,26 @@ resource "aws_ecs_service" "api" {
 # same image, env and secrets as the API, plus the EFS *root* at /efs (AWS
 # Backup restores land in /aws-backup-restore_<ts>/ outside the access point).
 # Run with: aws ecs run-task --task-definition <family> --overrides '{"containerOverrides":[{"name":"ops","command":[...]}]}'
+# Ops tasks get ECS Exec (SSM) so a laptop can port-forward to RDS through
+# them (docs/db-access.md). The API task role stays without any permissions.
+resource "aws_iam_role" "ops_task" {
+  name               = "${local.name}-ops-task"
+  assume_role_policy = data.aws_iam_policy_document.ecs_tasks_assume.json
+}
+
+resource "aws_iam_role_policy" "ops_task_exec" {
+  name = "ecs-exec"
+  role = aws_iam_role.ops_task.id
+  policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [{
+      Effect   = "Allow"
+      Action   = ["ssmmessages:CreateControlChannel", "ssmmessages:CreateDataChannel", "ssmmessages:OpenControlChannel", "ssmmessages:OpenDataChannel"]
+      Resource = "*" # ssmmessages has no resource-level permissions
+    }]
+  })
+}
+
 resource "aws_ecs_task_definition" "ops" {
   family                   = "${local.name}-ops"
   requires_compatibilities = ["FARGATE"]
@@ -198,7 +218,7 @@ resource "aws_ecs_task_definition" "ops" {
   cpu                      = 512
   memory                   = 1024
   execution_role_arn       = aws_iam_role.execution.arn
-  task_role_arn            = aws_iam_role.task.arn
+  task_role_arn            = aws_iam_role.ops_task.arn
 
   runtime_platform {
     operating_system_family = "LINUX"
