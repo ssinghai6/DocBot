@@ -24,7 +24,7 @@ from api.sandbox_service import SandboxResult
 from api.utils import request_guard, sandbox_policy
 
 _OK = SandboxResult(stdout="ok", stderr="", charts=[], error=None, execution_time_ms=1)
-_ENV_NAMES = ("RAILWAY_ENVIRONMENT", "RAILWAY_ENVIRONMENT_NAME", "ENVIRONMENT", "APP_ENV")
+_ENV_NAMES = ("RAILWAY_ENVIRONMENT", "RAILWAY_ENVIRONMENT_NAME", "ECS_CONTAINER_METADATA_URI_V4", "ENVIRONMENT", "APP_ENV")
 
 
 @pytest.fixture(autouse=True)
@@ -87,6 +87,7 @@ class TestAuth:
     @pytest.mark.parametrize("name,value", [
         ("RAILWAY_ENVIRONMENT", "production"),
         ("RAILWAY_ENVIRONMENT_NAME", "staging"),
+        ("ECS_CONTAINER_METADATA_URI_V4", "http://169.254.170.2/v4/task-id"),
         ("ENVIRONMENT", "production"),
         ("APP_ENV", "prod"),
     ])

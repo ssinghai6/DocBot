@@ -91,7 +91,10 @@ def init_sentry() -> bool:
         return False
     import sentry_sdk
 
-    environment = os.getenv("RAILWAY_ENVIRONMENT", "local")
+    # Host-neutral (DOCBOT-2505): explicit SENTRY_ENVIRONMENT, then Railway's, then APP_ENV.
+    environment = (
+        os.getenv("SENTRY_ENVIRONMENT") or os.getenv("RAILWAY_ENVIRONMENT") or os.getenv("APP_ENV") or "local"
+    )
     sentry_sdk.init(
         dsn=dsn,
         traces_sample_rate=0.0,

@@ -1,6 +1,6 @@
 // DOCBOT-2337: per-request CSP nonce. Policy lives in security-headers.mjs.
 import { NextResponse, type NextRequest } from "next/server";
-import { buildCsp } from "../security-headers.mjs";
+import { backendUrlFromEnv, buildCsp } from "../security-headers.mjs";
 
 export function proxy(request: NextRequest) {
   const nonce = Buffer.from(crypto.randomUUID()).toString("base64");
@@ -8,7 +8,7 @@ export function proxy(request: NextRequest) {
     nonce,
     isDev: process.env.NODE_ENV === "development",
     isPreview: process.env.VERCEL_ENV === "preview",
-    backendUrl: process.env.RAILWAY_BACKEND_URL,
+    backendUrl: backendUrlFromEnv(),
   });
   // Next reads the nonce from the request CSP and applies it to its scripts.
   const requestHeaders = new Headers(request.headers);

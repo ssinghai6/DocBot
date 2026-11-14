@@ -20,8 +20,8 @@
 //   files use object URLs. No remote images are loaded.
 // - font-src 'self' data:: next/font self-hosts Inter/JetBrains Mono and the
 //   KaTeX fonts are bundled from node_modules — no Google Fonts CDN at runtime.
-// - connect-src: API calls go through the same-origin /api rewrite; the Railway
-//   origin is listed too so a direct call never silently fails. Vercel Web
+// - connect-src: API calls go through the same-origin /api rewrite; the backend
+//   origin (BACKEND_URL, legacy RAILWAY_BACKEND_URL) is listed too so a direct call never silently fails. Vercel Web
 //   Analytics and the MSAL (Azure SQL Entra sign-in) token endpoint are allowed.
 // - Vercel preview deployments inject the vercel.live feedback toolbar; its
 //   origins are allowed only when VERCEL_ENV === "preview".
@@ -42,6 +42,19 @@ const TURNSTILE = ["https://challenges.cloudflare.com"]
 export const HSTS_VALUE = "max-age=31536000; includeSubDomains"
 export const PERMISSIONS_POLICY =
   "camera=(), microphone=(), geolocation=(), payment=(), usb=(), browsing-topics=()"
+
+/**
+ * Backend URL for the /api and /v1 rewrites and the CSP connect-src.
+ * BACKEND_URL wins; RAILWAY_BACKEND_URL is the legacy name and still works on
+ * its own, so existing deploys see no change. A bare host gets https://.
+ * @param {Record<string, string | undefined>} [env]
+ * @returns {string | undefined}
+ */
+export function backendUrlFromEnv(env = process.env) {
+  const raw = (env.BACKEND_URL ?? "").trim() || (env.RAILWAY_BACKEND_URL ?? "").trim()
+  if (!raw) return undefined
+  return raw.startsWith("http") ? raw : `https://${raw}`
+}
 
 /**
  * Normalize a backend URL (with or without scheme) to its origin, or null.

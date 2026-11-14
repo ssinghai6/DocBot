@@ -251,13 +251,15 @@ async def update_user_role_in_org(caller: Any, target_user_id: str, new_role: st
 
 
 def is_deployed_environment() -> bool:
-    """True on any hosted deploy (Railway) or an explicit production env — DOCBOT-1607.
+    """True on any hosted deploy (Railway, AWS ECS) or an explicit production env — DOCBOT-1607.
 
     Railway injects RAILWAY_ENVIRONMENT / RAILWAY_ENVIRONMENT_NAME into every
-    service; ENVIRONMENT / APP_ENV = prod|production covers other hosts.
+    service; ECS (Fargate) injects ECS_CONTAINER_METADATA_URI_V4 into every
+    task (DOCBOT-2505); ENVIRONMENT / APP_ENV = prod|production covers other hosts.
     """
-    if os.getenv("RAILWAY_ENVIRONMENT", "").strip() or os.getenv("RAILWAY_ENVIRONMENT_NAME", "").strip():
-        return True
+    for name in ("RAILWAY_ENVIRONMENT", "RAILWAY_ENVIRONMENT_NAME", "ECS_CONTAINER_METADATA_URI_V4"):
+        if os.getenv(name, "").strip():
+            return True
     for name in ("ENVIRONMENT", "APP_ENV"):
         if os.getenv(name, "").strip().lower() in ("prod", "production"):
             return True

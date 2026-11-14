@@ -310,3 +310,31 @@ def test_markdown_skips_raw_html_and_uses_url_transform() -> None:
     assert re.search(r"<ReactMarkdown[^>]*\bskipHtml\b", src, re.S)
     assert "urlTransform={urlTransform}" in src
     assert "rehype-raw" not in src
+
+
+def _backend_url(env: dict[str, str]) -> str | None:
+    assert NODE is not None
+    module = (REPO_ROOT / "security-headers.mjs").as_uri()
+    script = (
+        f"import {{ backendUrlFromEnv }} from {json.dumps(module)};"
+        f"process.stdout.write(JSON.stringify(backendUrlFromEnv({json.dumps(env)}) ?? null));"
+    )
+    out = subprocess.run(  # nosec B603 - fixed argv, local node, no shell
+        [NODE, "--input-type=module", "-e", script], capture_output=True, text=True, check=True, timeout=30
+    )
+    return json.loads(out.stdout)
+
+
+@needs_node
+@pytest.mark.parametrize("env,expected", [
+    # Legacy name alone: exactly the old next.config behaviour (DOCBOT-2505).
+    ({"RAILWAY_BACKEND_URL": "https://x.up.railway.app"}, "https://x.up.railway.app"),
+    ({"RAILWAY_BACKEND_URL": " x.up.railway.app "}, "https://x.up.railway.app"),
+    ({"BACKEND_URL": "https://api.docbot.space", "RAILWAY_BACKEND_URL": "https://x.up.railway.app"},
+     "https://api.docbot.space"),
+    ({"BACKEND_URL": "  ", "RAILWAY_BACKEND_URL": "x.up.railway.app"}, "https://x.up.railway.app"),
+    ({"BACKEND_URL": "api-dev.docbot.space"}, "https://api-dev.docbot.space"),
+    ({}, None),
+])
+def test_backend_url_from_env(env: dict[str, str], expected: str | None) -> None:
+    assert _backend_url(env) == expected
