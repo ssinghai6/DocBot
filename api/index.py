@@ -79,6 +79,14 @@ async def abuse_guard(request: Request, call_next):
     """
     path = request.url.path
 
+    # DOCBOT-2514: cutover write freeze applies to everyone, owner included.
+    if request_guard.is_write_frozen(request.method, path):
+        return JSONResponse(
+            status_code=503,
+            content={"detail": "DocBot is in a short maintenance window. Changes are paused; please retry shortly."},
+            headers={"Retry-After": "600"},
+        )
+
     # Owner presenting OWNER_KEY bypasses every guard.
     owner = request_guard.is_owner(request)
 

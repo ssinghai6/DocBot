@@ -98,6 +98,10 @@ def _env_int(name: str, default: int) -> int:
 
 
 PUBLIC_DEMO_MODE: bool = _env_bool("PUBLIC_DEMO_MODE")
+# DOCBOT-2514: cutover write freeze. Every write method on /api and /v1 gets a
+# 503 (owner included) so a final pg_dump and /data copy see no new writes.
+# Stripe retries webhooks on 503, so payments land after the cutover.
+WRITE_FREEZE: bool = _env_bool("WRITE_FREEZE")
 RATE_LIMIT_PER_MIN: int = _env_int("RATE_LIMIT_PER_MIN", 60)
 RATE_LIMIT_WINDOW_SEC: int = 60
 SESSION_BUDGET: int = _env_int("SESSION_BUDGET", 100)
@@ -357,6 +361,11 @@ def is_owner(request: Request) -> bool:
     if not expected or not cookie:
         return False
     return hmac.compare_digest(cookie.encode(), expected.encode())
+
+
+def is_write_frozen(method: str, path: str) -> bool:
+    """True if WRITE_FREEZE is on and this is a write to the API surface."""
+    return WRITE_FREEZE and method.upper() not in ("GET", "HEAD", "OPTIONS") and path.startswith(("/api/", "/v1/"))
 
 
 def is_demo_blocked(method: str, path: str) -> bool:
