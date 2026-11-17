@@ -2,6 +2,7 @@
 aws_region = "us-east-1"
 # create_github_oidc_provider = true  # false if the account already has token.actions.githubusercontent.com
 budget_email = "you@example.com"
-# monthly_budget_usd    = 200   # applies to both the net and the gross (credits excluded) budget
+# monthly_budget_usd    = 250   # account-wide: applies to both the net and the gross (credits excluded) budget
+# env_budgets_usd       = { dev = 60, prod = 150 }  # gross per env, by Environment cost allocation tag
 # anomaly_threshold_usd = 20
 # anomaly_monitor_arn   = ""    # set if `aws ce get-anomaly-monitors` already lists an AWS services monitor
