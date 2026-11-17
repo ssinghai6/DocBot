@@ -31,7 +31,8 @@ read -rs TARGET_DATABASE_URL && export TARGET_DATABASE_URL   # RDS via the port 
 
 RDS is not publicly reachable. The founder's laptop reaches it through the
 access path DevOps provides for DOCBOT-2515 (an SSM port forward on
-`localhost:15432`). The RDS user and password come from its Secrets Manager
+`localhost:15432`, steps in `infra/aws/docs/db-access.md`; it leaves
+`TARGET_DATABASE_URL=...@localhost:15432/docbot?sslmode=require` working as is). The RDS user and password come from its Secrets Manager
 secret in the console.
 
 ## Go / no-go (all must be true at T-1h; F signs)
