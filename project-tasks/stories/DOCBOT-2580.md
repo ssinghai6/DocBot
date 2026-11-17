@@ -17,8 +17,10 @@ In:
 - CLAUDE.md: Plane Sync Rule replaces the Jira rule; tracker pointers updated.
 - Commit `plane_sync.py`, `validate_stories.py` and `README-plane.md` (no secrets in them) so every worktree has them.
 
+- `.github/workflows/plane-sync.yml`: branch created -> In Progress, PR opened -> Testing, merged to main -> Done, merged to dev -> Testing; skips if the `PLANE_API_KEY` repo secret is missing.
+
 Out:
-- A GitHub Action that moves states on PR events (possible later; needs the key as a repo secret).
+- Auto-cancel on PR closed without merge (done by hand).
 
 ## Acceptance criteria
 - [ ] Given a ticket not in Plane, when `--set-state DOCBOT-XXXX "In Progress" --title "T"` runs, then the issue is created in In Progress with `external_id=DOCBOT-XXXX`.
@@ -45,4 +47,4 @@ Blocks: none.
 - [ ] no secrets / no banned claims
 
 ## Open questions
-- Add the GitHub Action later so Plane also updates when the founder merges a PR outside a Claude session?
+- Should a PR closed without merge move its ticket back to Todo?

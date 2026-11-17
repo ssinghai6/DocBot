@@ -392,6 +392,7 @@ Update the ticket at each of these moments, in the same session:
 - After any merge that changes the backlog or story files, re-run the full sync. It is idempotent and never moves a state backwards.
 - Key: `PLANE_API_KEY` env var, else macOS Keychain item `PLANE_API_KEY`. Never write the key to a file, commit, PR, log or memory. If neither is set, ask the founder to run `! security add-generic-password -a docbot -s PLANE_API_KEY -w '<token>'` and stop the Plane step, not the code work.
 - If Plane rejects a write (403 from its Cloudflare WAF on attack-like text), fix the encoding in `waf_safe()`; never drop the content.
+- `.github/workflows/plane-sync.yml` does the same moves on GitHub events (branch created, PR opened, PR merged) using repo secret `PLANE_API_KEY`, so merges made outside a session still update Plane. Still run the commands yourself in-session; they are idempotent.
 - Jira (`scripts/jira_update_status.py`, project SCRUM) is retired. Do not update it.
 
 ## README Update Rule
