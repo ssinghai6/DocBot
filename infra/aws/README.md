@@ -96,7 +96,7 @@ Prerequisites: Terraform >= 1.9, AWS CLI, admin credentials (SSO) for the chosen
    terraform output acm_validation_records      # add these CNAMEs at the DNS host
    terraform plan -out=tfplan && terraform apply tfplan   # waits for ACM ISSUED
    ```
-   Then: CNAME `api-dev.docbot.space` -> `terraform output -raw alb_dns_name`; fill the secrets (`terraform output app_secret_arns`); set GitHub repo **variables** `AWS_DEV_DEPLOY_ROLE_ARN`, `AWS_DEV_REGION` (and `AWS_DEV_API_URL=https://api-dev.docbot.space` for the post-deploy smoke test); push to `dev` or run "Deploy AWS dev".
+   Then: CNAME `api-dev.docbot.space` -> `terraform output -raw alb_dns_name`; fill the secrets (`terraform output app_secret_arns`); set GitHub repo **variables** `AWS_DEV_DEPLOY_ROLE_ARN`, `AWS_DEV_REGION` and `AWS_DEV_API_URL`; push to `dev` or run "Deploy AWS dev". Details and the manual smoke checklist: `docs/first-deploy.md`.
 4. **Prod:** same as dev in `envs/prod` (cert for `api.docbot.space`; do **not** point the CNAME at the ALB yet, that is the cutover). Set repo variables `AWS_PROD_DEPLOY_ROLE_ARN`, `AWS_PROD_REGION`, `AWS_PROD_API_URL`, and create the GitHub environment `aws-prod` (required reviewer: founder; deployment branches: `main` only).
 
 ### Already applied PR #86's flat `infra/aws/dev`?
