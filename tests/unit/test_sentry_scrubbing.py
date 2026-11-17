@@ -1,6 +1,8 @@
 """DOCBOT-1618: Sentry events must never carry raw secrets."""
 
 import json
+
+import pytest
 from unittest.mock import patch
 
 from api.utils import sentry_setup
@@ -116,3 +118,20 @@ def test_init_kwargs(monkeypatch):
     assert kwargs["traces_sample_rate"] == 0.0
     assert kwargs["before_send"] is sentry_setup.before_send
     assert kwargs["before_breadcrumb"] is sentry_setup.before_breadcrumb
+
+
+@pytest.mark.parametrize("env,expected", [
+    ({}, "local"),
+    ({"RAILWAY_ENVIRONMENT": "production"}, "production"),  # Railway prod unchanged
+    ({"APP_ENV": "production"}, "production"),  # AWS ECS (DOCBOT-2505)
+    ({"SENTRY_ENVIRONMENT": "aws-dev", "APP_ENV": "production"}, "aws-dev"),
+])
+def test_init_environment_is_host_neutral(monkeypatch, env, expected):
+    monkeypatch.setenv("SENTRY_DSN", "https://public@o0.ingest.sentry.io/0")
+    for name in ("SENTRY_ENVIRONMENT", "RAILWAY_ENVIRONMENT", "APP_ENV"):
+        monkeypatch.delenv(name, raising=False)
+    for name, value in env.items():
+        monkeypatch.setenv(name, value)
+    with patch("sentry_sdk.init") as init:
+        init_sentry()
+    assert init.call_args.kwargs["environment"] == expected

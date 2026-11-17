@@ -1,15 +1,15 @@
 import type { NextConfig } from "next";
-import { securityHeaders } from "./security-headers.mjs";
+import { backendUrlFromEnv, securityHeaders } from "./security-headers.mjs";
 
-const rawUrl = process.env.RAILWAY_BACKEND_URL?.trim();
-const railwayBackendUrl = rawUrl && !rawUrl.startsWith("http") ? `https://${rawUrl}` : rawUrl;
+// BACKEND_URL, falling back to the legacy RAILWAY_BACKEND_URL (host-neutral).
+const backendUrl = backendUrlFromEnv();
 
-if (process.env.NODE_ENV === "production" && !railwayBackendUrl) {
+if (process.env.NODE_ENV === "production" && !backendUrl) {
   // Hard error at build time — there is no Python serverless fallback.
-  // The entire backend runs on Railway. Set RAILWAY_BACKEND_URL in Vercel project settings.
+  // The entire backend runs on a separate host (Railway today, AWS later).
   throw new Error(
-    "[next.config.ts] RAILWAY_BACKEND_URL is not set. " +
-      "All API requests proxy to the Railway backend — this env var is required for production builds. " +
+    "[next.config.ts] BACKEND_URL (or legacy RAILWAY_BACKEND_URL) is not set. " +
+      "All API requests proxy to the backend — this env var is required for production builds. " +
       "Add it in Vercel → Project Settings → Environment Variables."
   );
 }
@@ -17,30 +17,25 @@ if (process.env.NODE_ENV === "production" && !railwayBackendUrl) {
 const nextConfig: NextConfig = {
   // Required for Docker standalone build (DOCBOT-605)
   output: process.env.DOCKER_BUILD ? "standalone" : undefined,
-  // DOCBOT-1619: CSP + HSTS + framing/nosniff/referrer/permissions headers.
+  // DOCBOT-1619: HSTS + framing/nosniff/referrer/permissions headers.
   // Policy and rationale live in security-headers.mjs.
   async headers() {
     return [
       {
         source: "/:path*",
-        headers: securityHeaders({
-          isDev: process.env.NODE_ENV === "development",
-          isPreview: process.env.VERCEL_ENV === "preview",
-          backendUrl: railwayBackendUrl,
-        }),
+        // CSP is per-request (nonce) in src/proxy.ts, not here (DOCBOT-2337).
+        headers: securityHeaders(),
       },
     ];
   },
   async rewrites() {
-    return [
-      {
-        source: "/api/:path*",
-        destination:
-          process.env.NODE_ENV === "development"
-            ? "http://127.0.0.1:8000/api/:path*"
-            : `${railwayBackendUrl}/api/:path*`,
-      },
-    ];
+    const backend =
+      process.env.NODE_ENV === "development" ? "http://127.0.0.1:8000" : backendUrl;
+    // DOCBOT-2339: /v1/* (Developer API, DOCBOT-1530) proxies exactly like /api/*.
+    return ["api", "v1"].map((prefix) => ({
+      source: `/${prefix}/:path*`,
+      destination: `${backend}/${prefix}/:path*`,
+    }));
   },
 };
 

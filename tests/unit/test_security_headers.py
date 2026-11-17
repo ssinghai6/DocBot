@@ -130,15 +130,19 @@ def test_main_app_health_route_has_headers() -> None:
 
 NODE = shutil.which("node")
 needs_node = pytest.mark.skipif(NODE is None, reason="node binary not available")
+NONCE = "dGVzdC1ub25jZQ=="
 
 
 def _frontend_headers(opts: dict[str, object]) -> dict[str, str]:
+    """Static headers plus the per-request CSP (as src/proxy.ts builds it)."""
     assert NODE is not None
     module = (REPO_ROOT / "security-headers.mjs").as_uri()
+    csp_opts = {"nonce": NONCE, **opts}
     script = (
-        f"import {{ securityHeaders }} from {json.dumps(module)};"
-        f"const h = securityHeaders({json.dumps(opts)});"
-        "process.stdout.write(JSON.stringify(Object.fromEntries(h.map(x => [x.key, x.value]))));"
+        f"import {{ securityHeaders, buildCsp }} from {json.dumps(module)};"
+        "const h = Object.fromEntries(securityHeaders().map(x => [x.key, x.value]));"
+        f"h['Content-Security-Policy'] = buildCsp({json.dumps(csp_opts)});"
+        "process.stdout.write(JSON.stringify(h));"
     )
     out = subprocess.run(  # nosec B603 - fixed argv, local node, no shell
         [NODE, "--input-type=module", "-e", script],
@@ -164,6 +168,11 @@ def test_frontend_prod_csp() -> None:
     h = _frontend_headers({"isDev": False, "backendUrl": "docbot-api.up.railway.app"})
     d = _directives(h["Content-Security-Policy"])
     assert "'unsafe-eval'" not in d["script-src"]
+    # DOCBOT-2337: nonce + strict-dynamic, no inline script allowance.
+    assert "'unsafe-inline'" not in d["script-src"]
+    assert f"'nonce-{NONCE}'" in d["script-src"]
+    assert "'strict-dynamic'" in d["script-src"]
+    assert "'unsafe-inline'" in d["style-src"]
     assert d["frame-ancestors"] == ["'none'"]
     assert d["object-src"] == ["'none'"]
     assert "data:" in d["img-src"] and "blob:" in d["img-src"]
@@ -216,10 +225,48 @@ def test_frontend_bad_backend_url_is_dropped() -> None:
     assert not any(src.startswith("http://[") for src in d["connect-src"])
 
 
+@needs_node
+@pytest.mark.parametrize("opts", [{"isDev": True}, {"isDev": False, "isPreview": True}])
+def test_frontend_csp_never_allows_inline_script(opts: dict[str, object]) -> None:
+    d = _directives(_frontend_headers(opts)["Content-Security-Policy"])
+    assert "'unsafe-inline'" not in d["script-src"]
+    assert f"'nonce-{NONCE}'" in d["script-src"]
+
+
+@needs_node
+def test_static_headers_carry_no_csp() -> None:
+    # A static CSP would be intersected with the per-request nonce CSP.
+    assert NODE is not None
+    module = (REPO_ROOT / "security-headers.mjs").as_uri()
+    script = (
+        f"import {{ securityHeaders }} from {json.dumps(module)};"
+        "process.stdout.write(JSON.stringify(securityHeaders().map(x => x.key)));"
+    )
+    out = subprocess.run(  # nosec B603 - fixed argv, local node, no shell
+        [NODE, "--input-type=module", "-e", script],
+        capture_output=True,
+        text=True,
+        check=True,
+        timeout=30,
+    )
+    keys = json.loads(out.stdout)
+    assert "Content-Security-Policy" not in keys
+    assert "Strict-Transport-Security" in keys
+
+
 def test_next_config_wires_security_headers() -> None:
     cfg = (REPO_ROOT / "next.config.ts").read_text()
     assert 'from "./security-headers.mjs"' in cfg
     assert "async headers()" in cfg
+
+
+def test_proxy_sets_nonce_csp() -> None:
+    proxy = (REPO_ROOT / "src" / "proxy.ts").read_text()
+    assert "export function proxy(" in proxy
+    assert "buildCsp(" in proxy
+    assert "_next/static" in proxy  # static assets excluded from the matcher
+    layout = (REPO_ROOT / "src" / "app" / "layout.tsx").read_text()
+    assert "await connection()" in layout  # nonce needs dynamic rendering
 
 
 # ── MarkdownRenderer media policy (DOCBOT-2006) ─────────────────────────────
@@ -263,3 +310,31 @@ def test_markdown_skips_raw_html_and_uses_url_transform() -> None:
     assert re.search(r"<ReactMarkdown[^>]*\bskipHtml\b", src, re.S)
     assert "urlTransform={urlTransform}" in src
     assert "rehype-raw" not in src
+
+
+def _backend_url(env: dict[str, str]) -> str | None:
+    assert NODE is not None
+    module = (REPO_ROOT / "security-headers.mjs").as_uri()
+    script = (
+        f"import {{ backendUrlFromEnv }} from {json.dumps(module)};"
+        f"process.stdout.write(JSON.stringify(backendUrlFromEnv({json.dumps(env)}) ?? null));"
+    )
+    out = subprocess.run(  # nosec B603 - fixed argv, local node, no shell
+        [NODE, "--input-type=module", "-e", script], capture_output=True, text=True, check=True, timeout=30
+    )
+    return json.loads(out.stdout)
+
+
+@needs_node
+@pytest.mark.parametrize("env,expected", [
+    # Legacy name alone: exactly the old next.config behaviour (DOCBOT-2505).
+    ({"RAILWAY_BACKEND_URL": "https://x.up.railway.app"}, "https://x.up.railway.app"),
+    ({"RAILWAY_BACKEND_URL": " x.up.railway.app "}, "https://x.up.railway.app"),
+    ({"BACKEND_URL": "https://api.docbot.space", "RAILWAY_BACKEND_URL": "https://x.up.railway.app"},
+     "https://api.docbot.space"),
+    ({"BACKEND_URL": "  ", "RAILWAY_BACKEND_URL": "x.up.railway.app"}, "https://x.up.railway.app"),
+    ({"BACKEND_URL": "api-dev.docbot.space"}, "https://api-dev.docbot.space"),
+    ({}, None),
+])
+def test_backend_url_from_env(env: dict[str, str], expected: str | None) -> None:
+    assert _backend_url(env) == expected

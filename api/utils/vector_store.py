@@ -85,8 +85,8 @@ def _resolve_persist_dir() -> Path:
     except OSError as exc:
         logger.error(
             "CHROMA_DIR %s is not writable (%s); falling back to %s — documents "
-            "will NOT survive redeploys. On Railway set RAILWAY_RUN_UID=0 or fix "
-            "the volume permissions.",
+            "will NOT survive redeploys. The image entrypoint chowns /data only; "
+            "mount the volume under /data or fix its permissions.",
             path, type(exc).__name__, default,
         )
         return default

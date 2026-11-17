@@ -1,6 +1,8 @@
 import type { Metadata } from "next";
 import { Inter, JetBrains_Mono } from "next/font/google";
 import { Analytics } from "@vercel/analytics/react";
+import { connection } from "next/server";
+import { SITE_DESCRIPTION, SITE_URL } from "@/lib/site";
 import "./globals.css";
 
 const inter = Inter({
@@ -18,13 +20,12 @@ const jetbrainsMono = JetBrains_Mono({
 });
 
 export const metadata: Metadata = {
-  metadataBase: new URL(
-    process.env.VERCEL_URL ? `https://${process.env.VERCEL_URL}` : "http://localhost:3000"
-  ),
-  title: "DocBot — AI Document + Database Analyst",
-  description:
-    "Analytical-grade AI that chats with your PDFs, queries live databases, and runs Python sandboxes. Hybrid Docs+DB synthesis with discrepancy detection.",
-  keywords: ["AI", "analytics", "document", "database", "SQL", "hybrid", "finance", "investor"],
+  metadataBase: new URL(SITE_URL),
+  title: "DocBot | Reconcile client PDFs against live books",
+  description: SITE_DESCRIPTION,
+  keywords: ["tie-out", "financial statement reconciliation", "month-end close", "fractional CFO software", "10-K vs general ledger"],
+  // "./" resolves per route, so every page self-canonicalizes.
+  alternates: { canonical: "./" },
   authors: [{ name: "Sanshrit Singhai" }],
   icons: {
     icon: [
@@ -36,18 +37,28 @@ export const metadata: Metadata = {
     apple: "/logo-hybrid-light.svg",
   },
   openGraph: {
-    title: "DocBot — AI Document + Database Analyst",
-    description: "Analytical-grade AI for docs, databases, and hybrid analysis.",
+    title: "DocBot | Reconcile client PDFs against live books",
+    description: SITE_DESCRIPTION,
+    url: "./",
+    siteName: "DocBot",
     type: "website",
     images: [{ url: "/og-image.png", width: 1200, height: 630 }],
   },
+  twitter: {
+    card: "summary_large_image",
+    title: "DocBot | Reconcile client PDFs against live books",
+    description: SITE_DESCRIPTION,
+    images: ["/og-image.png"],
+  },
 };
 
-export default function RootLayout({
+export default async function RootLayout({
   children,
 }: Readonly<{
   children: React.ReactNode;
 }>) {
+  // Nonce CSP (DOCBOT-2337): render per request so Next can stamp the nonce.
+  await connection();
   return (
     <html lang="en" className="dark" data-theme="dark">
       <body

@@ -79,6 +79,14 @@ async def abuse_guard(request: Request, call_next):
     """
     path = request.url.path
 
+    # DOCBOT-2514: cutover write freeze applies to everyone, owner included.
+    if request_guard.is_write_frozen(request.method, path):
+        return JSONResponse(
+            status_code=503,
+            content={"detail": "DocBot is in a short maintenance window. Changes are paused; please retry shortly."},
+            headers={"Retry-After": "600"},
+        )
+
     # Owner presenting OWNER_KEY bypasses every guard.
     owner = request_guard.is_owner(request)
 
@@ -92,7 +100,11 @@ async def abuse_guard(request: Request, call_next):
 
         # Rate-limit only the cost-bearing API surface; leave health/static alone.
         # DOCBOT-2330: /v1 (API-key) routes run the same LLM/E2B pipelines.
-        if request.method in ("POST", "DELETE") and path.startswith(("/api/", "/v1/")):
+        if (
+            request.method in ("POST", "DELETE")
+            and path.startswith(("/api/", "/v1/"))
+            and path not in request_guard.RATE_LIMIT_EXEMPT_PATHS
+        ):
             try:
                 await request_guard.check_ip_rate_limit(request)
             except HTTPException as exc:
@@ -2967,8 +2979,9 @@ async def auth_login(body: LoginRequest, response: Response, request: Request):
     from api.audit_service import log_event, AuditEventType
 
     email = body.email.lower().strip()
-    # DOCBOT-1622: per-account throttle, checked before the password.
-    await request_guard.check_login_throttle(email)
+    # DOCBOT-1622/2336: per-(account, IP) throttle, checked before the password.
+    ip = request_guard.client_ip(request)
+    await request_guard.check_login_throttle(email, ip)
 
     async with async_session_factory() as session:
         result = await session.execute(
@@ -2983,7 +2996,7 @@ async def auth_login(body: LoginRequest, response: Response, request: Request):
         body.password, user.password_hash if has_password else dummy_password_hash()
     )
     if not (has_password and password_ok):
-        await request_guard.record_login_failure(email)
+        await request_guard.record_login_failure(email, ip)
         raise HTTPException(status_code=401, detail=LOGIN_FAILED_DETAIL)
 
     # DOCBOT-1713: with Resend configured, an email/password account whose
@@ -3402,6 +3415,12 @@ wire_email_verification(users_table, email_verification_tokens_table, async_sess
 from api.routes.billing_routes import router as billing_router  # noqa: E402
 
 app.include_router(billing_router)
+
+# ── DOCBOT-2014: tie-out workpaper export (XLSX / PDF) ───────────────────────
+from api.routes.tieout_routes import router as tieout_router, wire_tieout_routes  # noqa: E402
+
+app.include_router(tieout_router)
+wire_tieout_routes(answer_lineage_table, sessions_table, db_connections_table, async_session_factory)
 
 # ── DOCBOT-1712: post-signup onboarding (workspace name + use case) ───────────
 from api.routes.onboarding_routes import (  # noqa: E402

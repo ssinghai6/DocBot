@@ -9,44 +9,46 @@
 # `pip install -r requirements-dev.txt` in a fresh Python 3.12 venv, then run
 # `pytest tests/ -m "not external and not postgres"`. Majors are ignored by
 # Dependabot (DOCBOT-1630) and must be upgraded deliberately.
-# numpy stays on 1.x (was `numpy<2.0.0`).
-numpy==1.26.4
-fastapi==0.162.0
+# DOCBOT-2340: numpy 2.x (pandas>=3.1 requires numpy>=2.0.2). Was pinned to 1.x.
+numpy==2.5.4
+fastapi==0.162.5
 uvicorn==0.54.0
 apscheduler==3.11.3
 groq==0.37.1
-pydantic==2.14.1
-langchain==1.4.7
-langchain-core==1.6.13
+pydantic==2.14.3
+langchain==1.5.0
+langchain-core==1.8.0
 langchain-community==0.4.2
 langchain-text-splitters==1.1.3
 langchain-groq==1.1.3
 python-dotenv==1.2.4
-pymupdf==2.0
-python-multipart==0.0.32
+pymupdf==2.1
+python-multipart==0.0.33
 langchain-huggingface==1.2.3
 asyncpg==0.32.0
-sqlalchemy[asyncio]==2.1.6
+sqlalchemy[asyncio]==2.1.8
 psycopg2-binary==2.9.13
-e2b-code-interpreter==2.11.3
+e2b-code-interpreter==2.11.9
 # DOCBOT-201: credential encryption
 cryptography==50.0.2
 # DOCBOT-203: AST-based SQL validation
-sqlglot==30.24.0
+sqlglot==30.31.0
 # DOCBOT-205: MySQL connector (not mysqlclient — build issues on Railway)
-pymysql==1.2.3
+pymysql==1.2.4
 # DOCBOT-207: CSV parsing and type inference
-pandas==3.0.6
+pandas==3.1.1
 # df.to_markdown() requires tabulate
 tabulate==0.10.0
+# DOCBOT-2014: tie-out workpaper XLSX export
+openpyxl==3.1.5
 # DOCBOT-301: Python code generation via openai/gpt-oss-120b on Groq (uses existing groq package)
 # DOCBOT-406: LangExtract for structured financial document extraction (Google, Gemini-backed)
-langextract==1.7.1
+langextract==1.7.2
 # DOCBOT-208: Azure SQL / Microsoft Entra Service Principal auth
-pyodbc==5.3.0
-azure-identity==1.26.0
+pyodbc==5.5.0
+azure-identity==1.27.0
 # DOCBOT-405: Analytical Autopilot — LangGraph state machine
-langgraph==1.2.17
+langgraph==1.2.21
 # DOCBOT-601: SAML 2.0 SSO (Okta, Azure AD)
 python3-saml==1.16.0
 # DOCBOT-701: Consumer OAuth (GitHub, Google) + email/password auth
@@ -65,6 +67,6 @@ google-generativeai==0.8.6
 beautifulsoup4==4.15.0
 lxml==6.1.3
 # DOCBOT-1401: thin observability — Sentry error tracking (no APM/tracing)
-sentry-sdk[fastapi]==2.73.0
+sentry-sdk[fastapi]==2.75.0
 # DOCBOT-1509: LangSmith tracing (metadata only; OFF unless both vars are set)
-langsmith==0.14.12
+langsmith==0.14.17

@@ -4,12 +4,15 @@
 // suite can evaluate it with a bare `node` binary (tests/unit/test_security_headers.py).
 //
 // CSP rationale, directive by directive:
-// - script-src 'unsafe-inline': the App Router streams RSC payloads through
-//   inline <script>self.__next_f.push(...)</script> tags. A static header
-//   cannot carry a per-request nonce, and moving to nonces would force every
-//   page to render dynamically (no static landing page / CDN caching). Raw HTML
-//   in model output is never rendered (MarkdownRenderer `skipHtml`), so the
-//   injection surface for inline script is the React tree itself.
+// - script-src (DOCBOT-2337): per-request nonce + 'strict-dynamic', no
+//   'unsafe-inline'. src/proxy.ts mints the nonce and sets this CSP on both the
+//   request (Next reads the nonce from it and stamps its inline RSC/bootstrap
+//   scripts) and the response. That forces dynamic rendering (root layout calls
+//   connection()). 'strict-dynamic' lets nonced scripts load the Turnstile and
+//   Vercel Analytics scripts they inject; the host entries stay as a fallback
+//   for CSP2-only browsers, which ignore 'strict-dynamic'. The CSP is therefore
+//   NOT in the static next.config headers: a second static policy would be
+//   intersected by the browser.
 // - 'unsafe-eval' is DEV ONLY (React dev tooling / HMR). Never in production.
 // - style-src 'unsafe-inline': React `style={}` props, KaTeX inline sizing
 //   styles and next/font's injected @font-face rules.
@@ -17,8 +20,8 @@
 //   files use object URLs. No remote images are loaded.
 // - font-src 'self' data:: next/font self-hosts Inter/JetBrains Mono and the
 //   KaTeX fonts are bundled from node_modules — no Google Fonts CDN at runtime.
-// - connect-src: API calls go through the same-origin /api rewrite; the Railway
-//   origin is listed too so a direct call never silently fails. Vercel Web
+// - connect-src: API calls go through the same-origin /api rewrite; the backend
+//   origin (BACKEND_URL, legacy RAILWAY_BACKEND_URL) is listed too so a direct call never silently fails. Vercel Web
 //   Analytics and the MSAL (Azure SQL Entra sign-in) token endpoint are allowed.
 // - Vercel preview deployments inject the vercel.live feedback toolbar; its
 //   origins are allowed only when VERCEL_ENV === "preview".
@@ -41,6 +44,19 @@ export const PERMISSIONS_POLICY =
   "camera=(), microphone=(), geolocation=(), payment=(), usb=(), browsing-topics=()"
 
 /**
+ * Backend URL for the /api and /v1 rewrites and the CSP connect-src.
+ * BACKEND_URL wins; RAILWAY_BACKEND_URL is the legacy name and still works on
+ * its own, so existing deploys see no change. A bare host gets https://.
+ * @param {Record<string, string | undefined>} [env]
+ * @returns {string | undefined}
+ */
+export function backendUrlFromEnv(env = process.env) {
+  const raw = (env.BACKEND_URL ?? "").trim() || (env.RAILWAY_BACKEND_URL ?? "").trim()
+  if (!raw) return undefined
+  return raw.startsWith("http") ? raw : `https://${raw}`
+}
+
+/**
  * Normalize a backend URL (with or without scheme) to its origin, or null.
  * @param {string | undefined | null} raw
  * @returns {string | null}
@@ -57,10 +73,10 @@ export function backendOrigin(raw) {
 }
 
 /**
- * @param {{ isDev: boolean, isPreview?: boolean, backendUrl?: string | null }} opts
+ * @param {{ nonce: string, isDev: boolean, isPreview?: boolean, backendUrl?: string | null }} opts
  * @returns {string}
  */
-export function buildCsp({ isDev, isPreview = false, backendUrl = null }) {
+export function buildCsp({ nonce, isDev, isPreview = false, backendUrl = null }) {
   const api = backendOrigin(backendUrl)
   const live = isPreview && !isDev
 
@@ -69,7 +85,8 @@ export function buildCsp({ isDev, isPreview = false, backendUrl = null }) {
     "default-src": ["'self'"],
     "script-src": [
       "'self'",
-      "'unsafe-inline'",
+      `'nonce-${nonce}'`,
+      "'strict-dynamic'",
       ...(isDev ? ["'unsafe-eval'"] : []),
       ...VERCEL_ANALYTICS,
       ...TURNSTILE,
@@ -106,13 +123,11 @@ export function buildCsp({ isDev, isPreview = false, backendUrl = null }) {
 }
 
 /**
- * Header list for Next.js `headers()`.
- * @param {{ isDev: boolean, isPreview?: boolean, backendUrl?: string | null }} opts
+ * Static header list for Next.js `headers()`. CSP is set per request in src/proxy.ts.
  * @returns {{ key: string, value: string }[]}
  */
-export function securityHeaders(opts) {
+export function securityHeaders() {
   return [
-    { key: "Content-Security-Policy", value: buildCsp(opts) },
     { key: "Strict-Transport-Security", value: HSTS_VALUE },
     { key: "X-Frame-Options", value: "DENY" },
     { key: "X-Content-Type-Options", value: "nosniff" },

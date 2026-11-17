@@ -42,6 +42,14 @@ ENV FASTEMBED_CACHE_PATH=/home/appuser/.cache/fastembed
 RUN python -c "from chromadb.utils.embedding_functions import ONNXMiniLM_L6_V2; ONNXMiniLM_L6_V2()(['warm']); from fastembed.rerank.cross_encoder import TextCrossEncoder; TextCrossEncoder('Xenova/ms-marco-MiniLM-L-6-v2')" \
  || echo "model pre-download skipped; will download on first use"
 
-# Start server using Railway's PORT env var
+# DOCBOT-2338: entrypoint runs as root just long enough to chown /data
+# (Railway volumes mount root-owned), then execs the CMD as appuser via setpriv.
+USER root
+COPY docker-entrypoint.sh /usr/local/bin/docker-entrypoint.sh
+ENTRYPOINT ["/usr/local/bin/docker-entrypoint.sh"]
+
+# Start server on the host's PORT (Railway sets it; ECS sets it in the task env).
+# exec: uvicorn gets SIGTERM directly. The graceful cap lets lifespan cleanup run
+# before the host's kill timeout (ECS default stopTimeout 30s) even with SSE open.
 EXPOSE 8000
-CMD ["sh", "-c", "uvicorn api.index:app --host 0.0.0.0 --port ${PORT:-8000}"]
+CMD ["sh", "-c", "exec uvicorn api.index:app --host 0.0.0.0 --port ${PORT:-8000} --timeout-graceful-shutdown 25"]

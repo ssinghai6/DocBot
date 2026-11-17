@@ -59,6 +59,20 @@ GOLD_CASES: list[DiscrepancyCase] = [
         ),
     ),
 
+    DiscrepancyCase(
+        name="segment_value_labeled_by_ledger_account",
+        doc_context="NOTE 12 — SEGMENT INFORMATION — FY2025\nLab Services: $104.9M",
+        sql_metadata={"result_preview": [
+            {"account": "4100 Revenue - Lab Services", "debit": 0, "credit": 102_700_000},
+        ]},
+        expected={"lab services"},
+        note=(
+            "DOCBOT-2542: the segment is named only by the row's account text; "
+            "before entity matching, the code + 'revenue' + column tokens kept "
+            "label Jaccard under 0.55 and the gap never fired."
+        ),
+    ),
+
     # --- TRUE NEGATIVES: matching values, must NOT flag -----------------------
     DiscrepancyCase(
         name="q4_revenue_matches",

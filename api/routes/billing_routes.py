@@ -3,6 +3,8 @@
 * ``GET  /api/billing/packs``    — public pack catalogue (no Stripe ids).
 * ``POST /api/billing/checkout`` — org admin (every signup is admin of its
   personal org, DOCBOT-1702). ``org_id`` comes from the session only.
+* ``POST /api/billing/webhook`` — Stripe webhook (DOCBOT-2334). No session;
+  authenticated by ``Stripe-Signature`` only. Exempt from the IP limiter.
 * ``POST /admin/credits/grant``  — platform operator; manual credit for the
   Payment Link flow, idempotent on ``reference``.
 
@@ -13,10 +15,10 @@ from __future__ import annotations
 
 from typing import Any
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Request
 from sqlalchemy.exc import SQLAlchemyError
 
-from api import billing_service, credit_service
+from api import billing_service, credit_service, funnel_service
 from api.billing_models import (
     AdminCreditGrantRequest,
     AdminCreditGrantResponse,
@@ -45,7 +47,7 @@ async def create_checkout(body: CheckoutSessionRequest, user: Any = _rbac_admin)
     org_id = require_admin_org_id(user)
     try:
         return await billing_service.checkout_url(
-            body.pack_id, org_id, getattr(user, "email", None), body.return_path
+            body.pack_id, org_id, getattr(user, "email", None), body.return_path, getattr(user, "id", None)
         )
     except billing_service.PackNotFound:
         raise HTTPException(status_code=404, detail="Unknown credit pack.") from None
@@ -53,6 +55,37 @@ async def create_checkout(body: CheckoutSessionRequest, user: Any = _rbac_admin)
         raise HTTPException(status_code=503, detail=PAYMENTS_DISABLED) from None
     except billing_service.PaymentProviderError:
         raise HTTPException(status_code=502, detail="Payment provider error. Try again shortly.") from None
+
+
+@router.post(billing_service.WEBHOOK_PATH)
+async def stripe_webhook(request: Request) -> dict[str, bool]:
+    payload = await request.body()
+    try:
+        event = billing_service.verify_webhook(payload, request.headers.get("stripe-signature"))
+    except billing_service.WebhookNotConfigured:
+        raise HTTPException(status_code=503, detail="Webhook not configured.") from None
+    except billing_service.InvalidSignature:
+        raise HTTPException(status_code=400, detail="Invalid signature.") from None
+    grant = billing_service.checkout_grant(event)
+    if grant is None:
+        return {"received": True}
+    if not credit_service.is_wired():
+        raise HTTPException(status_code=503, detail="Credit store unavailable.")  # Stripe retries
+    try:
+        result = await credit_service.grant_purchase(
+            grant.org_id, grant.credits, grant.session_id, f"Stripe checkout ({grant.pack_id or 'pack'})"
+        )
+    except credit_service.UnknownOrg:
+        # Retrying can't fix it; ack so Stripe stops, operator reconciles from the log.
+        billing_service.logger.error("billing webhook: unknown org for session %s", grant.session_id)
+        return {"received": True}
+    except SQLAlchemyError:
+        raise HTTPException(status_code=503, detail="Credit store unavailable.") from None
+    if not result.duplicate:
+        funnel_service.record_paid(
+            grant.user_id, grant.org_id, {"pack_id": grant.pack_id, "credits": grant.credits}
+        )
+    return {"received": True}
 
 
 @router.post("/admin/credits/grant", response_model=AdminCreditGrantResponse)
