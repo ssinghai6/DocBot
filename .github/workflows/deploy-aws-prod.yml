@@ -126,7 +126,11 @@ jobs:
           ORIGIN: ${{ vars.AWS_PROD_FRONTEND_ORIGIN }}
           # Before the DNS cutover, set AWS_PROD_ALB_DNS so the test hits the ALB, not Railway.
           SMOKE_CONNECT_TO: ${{ vars.AWS_PROD_ALB_DNS }}
-        run: infra/aws/smoke-test.sh "$API_URL" "$ORIGIN"
+        run: |
+          # Pre-cutover the runbook keeps prod at 0 tasks; nothing to test then.
+          DESIRED=$(aws ecs describe-services --cluster "$ECS_CLUSTER" --services "$ECS_SERVICE" --query 'services[0].desiredCount' --output text)
+          if [ "$DESIRED" = "0" ]; then echo "::notice::desiredCount is 0, smoke test skipped"; exit 0; fi
+          infra/aws/smoke-test.sh "$API_URL" "$ORIGIN"
 
       # The ECS circuit breaker already rolls back tasks that never get healthy;
       # this also rolls back when tasks are healthy but the smoke test fails.

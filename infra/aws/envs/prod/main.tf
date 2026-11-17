@@ -27,9 +27,12 @@ module "app" {
   db_skip_final_snapshot   = false
   log_retention_days       = 30
 
-  alarm_email      = var.alarm_email
-  app_secret_names = var.app_secret_names
-  extra_env        = var.extra_env
+  alarm_email        = var.alarm_email
+  alarm_5xx_percent  = 2 # DOCBOT-2518 rollback trigger
+  db_engine_version  = var.db_engine_version
+  trusted_proxy_hops = var.trusted_proxy_hops
+  app_secret_names   = var.app_secret_names
+  extra_env          = var.extra_env
 
   ecr_repository_url = data.aws_ecr_repository.api.repository_url
   ecr_repository_arn = data.aws_ecr_repository.api.arn

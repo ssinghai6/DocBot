@@ -75,7 +75,7 @@ locals {
     set -e
     DATABASE_URL="$(python -c 'import os, urllib.parse as u; e = os.environ; q = lambda k: u.quote(e[k], safe=""); print("postgresql://%s:%s@%s/%s" % (q("DB_USER"), q("DB_PASSWORD"), e["DB_HOST"], e["DB_NAME"]))')"
     export DATABASE_URL
-    exec uvicorn api.index:app --host 0.0.0.0 --port "$PORT"
+    exec uvicorn api.index:app --host 0.0.0.0 --port "$PORT" --timeout-graceful-shutdown 25
   SH
 
   plain_env = merge(var.extra_env, {
@@ -91,6 +91,8 @@ locals {
     DB_HOST          = aws_db_instance.main.endpoint # host:port
     DB_NAME          = aws_db_instance.main.db_name
     PGSSLMODE        = "require" # read by asyncpg; RDS PG16 forces SSL
+    # Vercel rewrite + ALB each append to X-Forwarded-For.
+    TRUSTED_PROXY_HOPS = tostring(var.trusted_proxy_hops)
   })
 }
 

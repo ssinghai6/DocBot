@@ -152,3 +152,15 @@ variable "alarm_db_connections" {
   default     = 60
   description = "db.t4g.micro allows ~80 connections, db.t4g.small ~170."
 }
+
+variable "db_engine_version" {
+  type        = string
+  default     = "16"
+  description = "Postgres major. Must be >= Railway's major or pg_migrate.sh refuses the restore (it prints both)."
+}
+
+variable "trusted_proxy_hops" {
+  type        = number
+  default     = 2
+  description = "TRUSTED_PROXY_HOPS: proxies appending to X-Forwarded-For (Vercel rewrite + ALB). Confirm from the `xff-shape:` log line on dev."
+}

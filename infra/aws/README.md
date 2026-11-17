@@ -11,7 +11,7 @@ infra/aws/
   envs/prod/      api.docbot.space, promoted by digest with manual approval
 ```
 
-Production stays on Railway until the DNS cutover (`docs/dns-cutover.md`). Nothing here creates DNS records or touches Railway or Vercel.
+Production stays on Railway until the DNS cutover: order in `runbooks/cutover.md` (2514), DNS in `docs/dns-cutover.md` (2517), rollback in `docs/rollback.md` (2518). Nothing here creates DNS records or touches Railway or Vercel.
 
 ## Architecture (per environment)
 
@@ -52,7 +52,7 @@ Internet ──HTTPS──> ALB (<api_domain>, ACM cert, HTTP->HTTPS, idle 300s 
 
 ### How DATABASE_URL is built
 
-RDS creates and rotates the master password itself (`manage_master_user_password = true`) and keeps it in a Secrets Manager secret holding JSON `{username, password}`. The task injects `DB_USER`/`DB_PASSWORD` via ECS JSON-key secret references; the container command URL-encodes them into `DATABASE_URL` and `exec`s the same uvicorn command as the Dockerfile. `PGSSLMODE=require` because RDS Postgres 16 requires TLS. Nobody copies or sees the password.
+RDS creates and rotates the master password itself (`manage_master_user_password = true`) and keeps it in a Secrets Manager secret holding JSON `{username, password}`. The task injects `DB_USER`/`DB_PASSWORD` via ECS JSON-key secret references; the container command URL-encodes them into `DATABASE_URL` and `exec`s the same uvicorn command as the Dockerfile. `PGSSLMODE=require` because RDS Postgres 16 requires TLS. `db_engine_version` (default 16) must be >= the Railway Postgres major or `pg_migrate.sh` refuses the restore. `TRUSTED_PROXY_HOPS` comes from `trusted_proxy_hops` (default 2: Vercel rewrite + ALB); confirm it from the `xff-shape:` log line on dev. Nobody copies or sees the password.
 
 ### Secrets
 
@@ -86,6 +86,10 @@ Non-secret env vars that differ from the defaults go in `extra_env` in `terrafor
 
 Prerequisites: Terraform >= 1.9, AWS CLI, admin credentials (SSO) for the chosen account, region `us-east-1`. Every `backend.hcl` needs `bucket` and `region` from the bootstrap outputs.
 
+0. **Sync `dev` with `main`** (DOCBOT-2502; `dev` has its own commits, so a normal merge, not fast-forward):
+   ```bash
+   git fetch origin && git checkout dev && git merge origin/main && git push origin dev
+   ```
 1. **Bootstrap** (once, local state; keep `bootstrap/terraform.tfstate` outside the repo):
    ```bash
    cd infra/aws/bootstrap && terraform init
