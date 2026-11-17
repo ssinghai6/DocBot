@@ -57,7 +57,7 @@ data "aws_iam_policy_document" "deploy" {
   statement {
     sid       = "PassTaskRoles"
     actions   = ["iam:PassRole"]
-    resources = [aws_iam_role.execution.arn, aws_iam_role.task.arn]
+    resources = distinct([aws_iam_role.execution.arn, aws_iam_role.task.arn, aws_ecs_task_definition.ops.task_role_arn])
     condition {
       test     = "StringEquals"
       variable = "iam:PassedToService"

@@ -1,0 +1,159 @@
+name: Deploy AWS prod
+
+# Promotes an image that already passed Deploy AWS dev (tagged tested-<sha>) to
+# the AWS prod environment (infra/aws/envs/prod). No rebuild: prod runs the exact
+# digest dev ran. The deploy job uses the GitHub environment "aws-prod"
+# (required reviewer = founder, deployment branch = main), and the prod IAM role
+# trusts only the OIDC sub repo:<repo>:environment:aws-prod. Not "production":
+# Vercel owns that environment and it has no protection rules.
+on:
+  workflow_dispatch:
+    inputs:
+      git_sha:
+        description: "40-char commit SHA whose dev image passed the smoke test (see the dev run's 'Promotable to prod' notice)"
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+concurrency:
+  group: deploy-aws-prod
+  cancel-in-progress: false
+
+env:
+  ECR_REPOSITORY: docbot-api
+  ECS_CLUSTER: docbot-prod
+  ECS_SERVICE: docbot-prod-api
+  TASK_FAMILY: docbot-prod-api
+  OPS_TASK_FAMILY: docbot-prod-ops
+  CONTAINER_NAME: api
+
+jobs:
+  check:
+    name: Check AWS prod is configured
+    runs-on: ubuntu-latest
+    outputs:
+      configured: ${{ steps.check.outputs.configured }}
+    steps:
+      - id: check
+        env:
+          ROLE_ARN: ${{ vars.AWS_PROD_DEPLOY_ROLE_ARN }}
+          REGION: ${{ vars.AWS_PROD_REGION }}
+          SHA: ${{ inputs.git_sha }}
+        run: |
+          if ! printf '%s' "$SHA" | grep -Eq '^[0-9a-f]{40}$'; then
+            echo "::error::git_sha must be a full 40-char lowercase commit SHA"; exit 1
+          fi
+          if [ -z "$ROLE_ARN" ] || [ -z "$REGION" ]; then
+            echo "::notice title=AWS prod deploy skipped::Set repo variables AWS_PROD_DEPLOY_ROLE_ARN and AWS_PROD_REGION (infra/aws/README.md)."
+            echo "configured=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "configured=true" >> "$GITHUB_OUTPUT"
+          fi
+
+  promote:
+    name: Promote tested digest (approval required)
+    needs: check
+    if: needs.check.outputs.configured == 'true' && github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    environment: aws-prod
+    permissions:
+      contents: read
+      id-token: write
+    env:
+      SHA: ${{ inputs.git_sha }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - uses: aws-actions/configure-aws-credentials@e1253824e5c10ff9df46874f81ed3ec929e19cfd # v6.3.0
+        with:
+          role-to-assume: ${{ vars.AWS_PROD_DEPLOY_ROLE_ARN }}
+          aws-region: ${{ vars.AWS_PROD_REGION }}
+
+      - name: Resolve tested digest
+        id: digest
+        run: |
+          DIGEST=$(aws ecr describe-images --repository-name "$ECR_REPOSITORY" \
+            --image-ids imageTag="tested-$SHA" --query 'imageDetails[0].imageDigest' --output text 2>/dev/null) || true
+          if [ -z "$DIGEST" ] || [ "$DIGEST" = "None" ]; then
+            echo "::error::No image tagged tested-$SHA. Deploy that commit to dev (with AWS_DEV_API_URL set) first."; exit 1
+          fi
+          REGISTRY=$(aws ecr describe-repositories --repository-names "$ECR_REPOSITORY" --query 'repositories[0].repositoryUri' --output text)
+          echo "image=$REGISTRY@$DIGEST" >> "$GITHUB_OUTPUT"
+          PREV=$(aws ecs describe-services --cluster "$ECS_CLUSTER" --services "$ECS_SERVICE" \
+            --query 'services[0].taskDefinition' --output text)
+          echo "prev=$PREV" >> "$GITHUB_OUTPUT"
+          {
+            echo "### Promote $SHA"
+            echo "- digest: \`$DIGEST\`"
+            echo "- previous task definition (rollback = re-run with the previous SHA): \`$PREV\`"
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      # Tags are write-once (no moving `prod` tag), so the dev deploy role cannot
+      # repoint what prod runs. Re-promoting the same SHA hits ImageAlreadyExists: fine.
+      - name: Tag prod-<sha> (protected from ECR lifecycle expiry)
+        run: |
+          MANIFEST=$(aws ecr batch-get-image --repository-name "$ECR_REPOSITORY" \
+            --image-ids imageTag="tested-$SHA" --query 'images[0].imageManifest' --output text)
+          aws ecr put-image --repository-name "$ECR_REPOSITORY" --image-tag "prod-$SHA" \
+            --image-manifest "$MANIFEST" >/dev/null 2>err.txt \
+            || grep -q ImageAlreadyExistsException err.txt || { cat err.txt; exit 1; }
+
+      - name: Fetch current task definition
+        run: |
+          aws ecs describe-task-definition --task-definition "$TASK_FAMILY" \
+            --query taskDefinition > task-definition.json
+
+      - id: render
+        uses: aws-actions/amazon-ecs-render-task-definition@8d79160660ad39c402a16e5fc7cd2a32e8f7d6b7 # v1.9.1
+        with:
+          task-definition: task-definition.json
+          container-name: ${{ env.CONTAINER_NAME }}
+          image: ${{ steps.digest.outputs.image }}
+
+      - uses: aws-actions/amazon-ecs-deploy-task-definition@a00d4d57ac0de1a99b39fe469f3d898d38717c2b # v2.6.4
+        with:
+          task-definition: ${{ steps.render.outputs.task-definition }}
+          cluster: ${{ env.ECS_CLUSTER }}
+          service: ${{ env.ECS_SERVICE }}
+          wait-for-service-stability: true
+
+      - name: Smoke test
+        if: vars.AWS_PROD_API_URL != ''
+        env:
+          API_URL: ${{ vars.AWS_PROD_API_URL }}
+          ORIGIN: ${{ vars.AWS_PROD_FRONTEND_ORIGIN }}
+          # Before the DNS cutover, set AWS_PROD_ALB_DNS so the test hits the ALB, not Railway.
+          SMOKE_CONNECT_TO: ${{ vars.AWS_PROD_ALB_DNS }}
+        run: infra/aws/smoke-test.sh "$API_URL" "$ORIGIN"
+
+      # The ECS circuit breaker already rolls back tasks that never get healthy;
+      # this also rolls back when tasks are healthy but the smoke test fails.
+      - name: Roll back to the previous task definition
+        if: failure() && steps.digest.outputs.prev != ''
+        env:
+          PREV: ${{ steps.digest.outputs.prev }}
+        run: |
+          aws ecs update-service --cluster "$ECS_CLUSTER" --service "$ECS_SERVICE" --task-definition "$PREV" >/dev/null
+          aws ecs wait services-stable --cluster "$ECS_CLUSTER" --services "$ECS_SERVICE"
+          echo "::error::Rolled back to $PREV"
+
+      # Ops tasks (drills, migrations) run the digest prod runs, never a tag.
+      # After the rollback step, so a failure here never rolls back a healthy deploy.
+      - name: Fetch ops task definition
+        run: |
+          aws ecs describe-task-definition --task-definition "$OPS_TASK_FAMILY" \
+            --query taskDefinition > ops-task-definition.json
+
+      - id: render-ops
+        uses: aws-actions/amazon-ecs-render-task-definition@8d79160660ad39c402a16e5fc7cd2a32e8f7d6b7 # v1.9.1
+        with:
+          task-definition: ops-task-definition.json
+          container-name: ops
+          image: ${{ steps.digest.outputs.image }}
+
+      - name: Register ops task definition (no service)
+        uses: aws-actions/amazon-ecs-deploy-task-definition@a00d4d57ac0de1a99b39fe469f3d898d38717c2b # v2.6.4
+        with:
+          task-definition: ${{ steps.render-ops.outputs.task-definition }}
