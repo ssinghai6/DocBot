@@ -5,6 +5,6 @@ alarm_email = "you@example.com" # confirm the SNS email after apply
 # api_domain          = "api-dev.docbot.space"
 # frontend_url        = "https://dev.docbot.space"       # the Vercel Preview URL for branch dev
 # allowed_origins     = "https://dev.docbot.space"
-# desired_count       = 1     # 0 = scale to zero (see infra/aws/docs/dev-cost.md)
+# desired_count       = 1     # 0 = scale to zero (see infra/aws/docs/cost.md)
 # use_fargate_spot    = true
 # deletion_protection = true
