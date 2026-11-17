@@ -50,3 +50,9 @@ variable "github_repo" {
   type    = string
   default = "ssinghai6/DocBot"
 }
+
+variable "alarm_email" {
+  type        = string
+  default     = ""
+  description = "CloudWatch alarm email (SNS). Empty = no alarms."
+}

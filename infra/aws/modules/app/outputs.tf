@@ -49,3 +49,7 @@ output "efs_file_system_id" {
 output "ops_task_definition_family" {
   value = aws_ecs_task_definition.ops.family
 }
+
+output "alarm_topic_arn" {
+  value = one(aws_sns_topic.alarms[*].arn)
+}

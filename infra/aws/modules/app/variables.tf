@@ -135,3 +135,20 @@ variable "efs_backup" {
   default     = true
   description = "Daily AWS Backup of the Chroma EFS (35-day retention)."
 }
+
+variable "alarm_email" {
+  type        = string
+  default     = ""
+  description = "Email for CloudWatch alarms via SNS. Empty disables alarms."
+}
+
+variable "alarm_5xx_percent" {
+  type    = number
+  default = 5
+}
+
+variable "alarm_db_connections" {
+  type        = number
+  default     = 60
+  description = "db.t4g.micro allows ~80 connections, db.t4g.small ~170."
+}
