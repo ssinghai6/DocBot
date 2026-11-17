@@ -83,3 +83,9 @@ docs/
 # never committed.
 finetune/data/
 finetune/output/
+# AWS dev Terraform (infra/aws): keep .terraform.lock.hcl committed
+infra/aws/**/.terraform/
+*.tfstate
+*.tfstate.*
+infra/aws/**/terraform.tfvars
+infra/aws/**/tfplan

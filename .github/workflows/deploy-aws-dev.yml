@@ -1,0 +1,91 @@
+name: Deploy AWS dev
+
+# Deploys the API to the AWS dev environment (infra/aws/dev). Never runs for
+# main: production stays on Railway + Vercel. The IAM role trust policy also
+# only accepts tokens for refs/heads/dev.
+on:
+  push:
+    branches: [dev]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: deploy-aws-dev
+  cancel-in-progress: false
+
+env:
+  ECR_REPOSITORY: docbot-api
+  ECS_CLUSTER: docbot-dev
+  ECS_SERVICE: docbot-dev-api
+  TASK_FAMILY: docbot-dev-api
+  CONTAINER_NAME: api
+
+jobs:
+  check:
+    name: Check AWS dev is configured
+    runs-on: ubuntu-latest
+    outputs:
+      configured: ${{ steps.check.outputs.configured }}
+    steps:
+      - id: check
+        env:
+          ROLE_ARN: ${{ vars.AWS_DEV_DEPLOY_ROLE_ARN }}
+          REGION: ${{ vars.AWS_DEV_REGION }}
+        run: |
+          if [ -z "$ROLE_ARN" ] || [ -z "$REGION" ]; then
+            echo "::notice title=AWS dev deploy skipped::Set repo variables AWS_DEV_DEPLOY_ROLE_ARN and AWS_DEV_REGION (see infra/aws/README.md) to enable this workflow."
+            echo "configured=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "configured=true" >> "$GITHUB_OUTPUT"
+          fi
+
+  deploy:
+    name: Build, push, deploy
+    needs: check
+    if: needs.check.outputs.configured == 'true' && github.ref == 'refs/heads/dev'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      id-token: write
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - uses: aws-actions/configure-aws-credentials@e1253824e5c10ff9df46874f81ed3ec929e19cfd # v6.3.0
+        with:
+          role-to-assume: ${{ vars.AWS_DEV_DEPLOY_ROLE_ARN }}
+          aws-region: ${{ vars.AWS_DEV_REGION }}
+
+      - id: ecr
+        uses: aws-actions/amazon-ecr-login@03f1aad4c6c7ffd436567f42f9384779290529bd # v2.1.7
+
+      - name: Build and push image
+        id: image
+        env:
+          REGISTRY: ${{ steps.ecr.outputs.registry }}
+        run: |
+          IMAGE="$REGISTRY/$ECR_REPOSITORY:$GITHUB_SHA"
+          docker build --platform linux/amd64 -t "$IMAGE" -t "$REGISTRY/$ECR_REPOSITORY:dev" .
+          docker push "$IMAGE"
+          docker push "$REGISTRY/$ECR_REPOSITORY:dev"
+          echo "image=$IMAGE" >> "$GITHUB_OUTPUT"
+
+      - name: Fetch current task definition
+        run: |
+          aws ecs describe-task-definition --task-definition "$TASK_FAMILY" \
+            --query taskDefinition > task-definition.json
+
+      - id: render
+        uses: aws-actions/amazon-ecs-render-task-definition@8d79160660ad39c402a16e5fc7cd2a32e8f7d6b7 # v1.9.1
+        with:
+          task-definition: task-definition.json
+          container-name: ${{ env.CONTAINER_NAME }}
+          image: ${{ steps.image.outputs.image }}
+
+      - uses: aws-actions/amazon-ecs-deploy-task-definition@a00d4d57ac0de1a99b39fe469f3d898d38717c2b # v2.6.4
+        with:
+          task-definition: ${{ steps.render.outputs.task-definition }}
+          cluster: ${{ env.ECS_CLUSTER }}
+          service: ${{ env.ECS_SERVICE }}
+          wait-for-service-stability: true
