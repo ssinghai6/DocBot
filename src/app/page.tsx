@@ -32,6 +32,7 @@ import {
 } from "lucide-react"
 import { Button, Badge, Card } from "@/components/ui"
 import LogoMark from "@/components/LogoMark"
+import WaitlistForm from "@/components/WaitlistForm"
 import { LegalLinks } from "@/components/LegalPage"
 import { SITE_DESCRIPTION, SITE_URL } from "@/lib/site"
 
@@ -745,6 +746,22 @@ export default function LandingPage() {
             </p>
           </div>
           <DemoVideo />
+        </div>
+      </section>
+
+      {/* ── Early access (DOCBOT-2581) ── */}
+      <section id="early-access" className="py-20 px-4 sm:px-6 lg:px-8 border-t border-[var(--color-border-subtle)]">
+        <div className="max-w-md mx-auto">
+          <div className="text-center mb-6">
+            <Badge variant="info" className="mb-4">Get early access</Badge>
+            <h2 className="text-2xl sm:text-3xl font-bold text-[var(--color-text-primary)] mb-3">
+              Join the waitlist
+            </h2>
+            <p className="text-[var(--color-text-secondary)]">
+              Tell us who you are and we&apos;ll get back to you soon.
+            </p>
+          </div>
+          <WaitlistForm source="landing" />
         </div>
       </section>
 
