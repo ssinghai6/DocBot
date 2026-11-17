@@ -33,7 +33,7 @@ module "app" {
 
   ecr_repository_url = data.aws_ecr_repository.api.repository_url
   ecr_repository_arn = data.aws_ecr_repository.api.arn
-  image_tag          = "prod" # placeholder; deploy-aws-prod.yml deploys by digest
+  image_tag          = "prod" # never pushed: deploy-aws-prod.yml registers api + ops revisions by digest. After an apply that changes a task def, re-run the last promote before using ops tasks.
 
   github_oidc_provider_arn = data.aws_iam_openid_connect_provider.github.arn
   # Only jobs that run in the GitHub environment "aws-prod" (required reviewer,
