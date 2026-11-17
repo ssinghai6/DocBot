@@ -128,7 +128,19 @@ jobs:
           SMOKE_CONNECT_TO: ${{ vars.AWS_PROD_ALB_DNS }}
         run: infra/aws/smoke-test.sh "$API_URL" "$ORIGIN"
 
+      # The ECS circuit breaker already rolls back tasks that never get healthy;
+      # this also rolls back when tasks are healthy but the smoke test fails.
+      - name: Roll back to the previous task definition
+        if: failure() && steps.digest.outputs.prev != ''
+        env:
+          PREV: ${{ steps.digest.outputs.prev }}
+        run: |
+          aws ecs update-service --cluster "$ECS_CLUSTER" --service "$ECS_SERVICE" --task-definition "$PREV" >/dev/null
+          aws ecs wait services-stable --cluster "$ECS_CLUSTER" --services "$ECS_SERVICE"
+          echo "::error::Rolled back to $PREV"
+
       # Ops tasks (drills, migrations) run the digest prod runs, never a tag.
+      # After the rollback step, so a failure here never rolls back a healthy deploy.
       - name: Fetch ops task definition
         run: |
           aws ecs describe-task-definition --task-definition "$OPS_TASK_FAMILY" \
@@ -145,14 +157,3 @@ jobs:
         uses: aws-actions/amazon-ecs-deploy-task-definition@a00d4d57ac0de1a99b39fe469f3d898d38717c2b # v2.6.4
         with:
           task-definition: ${{ steps.render-ops.outputs.task-definition }}
-
-      # The ECS circuit breaker already rolls back tasks that never get healthy;
-      # this also rolls back when tasks are healthy but the smoke test fails.
-      - name: Roll back to the previous task definition
-        if: failure() && steps.digest.outputs.prev != ''
-        env:
-          PREV: ${{ steps.digest.outputs.prev }}
-        run: |
-          aws ecs update-service --cluster "$ECS_CLUSTER" --service "$ECS_SERVICE" --task-definition "$PREV" >/dev/null
-          aws ecs wait services-stable --cluster "$ECS_CLUSTER" --services "$ECS_SERVICE"
-          echo "::error::Rolled back to $PREV"
