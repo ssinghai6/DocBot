@@ -35,8 +35,9 @@ module "app" {
   image_tag          = "prod" # placeholder; deploy-aws-prod.yml deploys by digest
 
   github_oidc_provider_arn = data.aws_iam_openid_connect_provider.github.arn
-  # Only jobs that run in the GitHub environment "production" (required reviewer,
-  # deployment branch main) can assume this role.
-  github_oidc_subjects   = ["repo:${var.github_repo}:environment:production"]
+  # Only jobs that run in the GitHub environment "aws-prod" (required reviewer,
+  # deployment branch main) can assume this role. Not "production": Vercel already
+  # owns that environment and it has no protection rules.
+  github_oidc_subjects   = ["repo:${var.github_repo}:environment:aws-prod"]
   deploy_can_push_images = false # prod never builds; it promotes a dev-tested digest
 }
