@@ -69,6 +69,7 @@ Every story is only "done" when ALL of the following are true. No exceptions.
 | EPIC-12 | UI Redesign & Finance Vertical | 5 | ✅ Done | Progressive disclosure UI (tabbed sidebar, collapsible sections, Cmd+K command palette), unified file upload, 3-color palette, finance-focused copy, guided onboarding empty state. |
 | EPIC-13 | Sandbox Demo Mode | 5 | ✅ Done | Pre-loaded TechCorp 10-K + SQLite financial database via `/api/demo/init`. One-click hybrid analysis demo with deliberate discrepancies for showcase. |
 | EPIC-15 | AI Engineering Maturity | 6 | ✅ Done (8/8) | DOCBOT-1501/1502 (tracing+dashboard), 1503 (eval CI gate), 1504 (structured-output validation), 1505 (multi-agent spike) — merged 2026-10-03. DOCBOT-1509 (LangSmith tracing, metadata only) — merged 2026-10-06. DOCBOT-1506 (exact-match response cache), 1507 (prompt versioning), 1508 (per-session cost ceiling) — merged 2026-10-07. Gap analysis 2026-09-27 (ai-engineer + senior-project-manager agents). |
+| EPIC-26 | Pre-seed Readiness | 7 | 🟡 In progress | DOCBOT-2601–2610 (19 pts) + pulled-in 2543/2546/2547/2548/2531/2533/2536/2537 (15 pts). Investor call 2026-12-01. Positioning: tie-out wedge + analyst vision + privacy tiers. AWS Wave A test env before Dec 1, cutover after. |
 
 ---
 
@@ -2705,3 +2706,136 @@ Lane totals: devops 63 · senior-dev 10 · founder 24.
 | DOCBOT-2573 | BYOK "contact us" | Firm pricing CTA + org flag recording BYOK interest; real BYOK stays EPIC-19 | 1 | none | To do |
 | DOCBOT-2574 | Priority support | Support channel + written response target + in-app contact link with org/plan context | 1 | none | To do |
 | DOCBOT-2575 | Client workspace offboarding | Archive/delete workspace purges sessions, vectors, connections, lineage (audit rows kept append-only) | 3 | 2563 | To do |
+
+---
+
+## EPIC-26 — Pre-seed Readiness (2026-11-17 → 2026-12-01 investor call)
+
+Source plan: `~/.claude/plans/overall-i-m-lost-right-validated-mochi.md`. Pitch materials: `project-tasks/preseed/` (gitignored).
+
+### 1. The story (lock this first)
+
+| Layer | Line |
+|---|---|
+| **Wedge (what we sell now)** | "DocBot ties out the numbers in a board pack, lender report or 10-K against the client's books, and cites both sides when they disagree. Built for fractional CFOs and small advisory firms." |
+| **Vision (5-year)** | "An agentic AI analyst that unifies documents and live databases into one grounded, cited answer and catches when they disagree. It runs multi-step investigations, NL-to-SQL and sandboxed Python, and improves through an eval loop." |
+| **Privacy** | "Your data can stay in your infrastructure. Embeddings and reranking already run locally. The LLM can point at a model you host. Single-tenant deploy into your AWS account is the next product." |
+| **Why now** | LLMs are good enough to read filings but bad at arithmetic and tie-out. Nobody owns the cited docs↔DB check. |
+| **Why you** | Solo founder shipped about 700 tests' worth of product, plus a measured eval harness, in months. |
+
+### Claim audit: honest wording for your proposed line
+
+| Your phrase | Status in code | Say instead |
+|---|---|---|
+| "unifies documents and live databases… catches when they disagree" | Shipped (`api/hybrid_service.py`, `api/utils/discrepancy_detector.py`, tie-out eval PR #101/#102) | Keep |
+| "multi-step autonomous investigations" | Shipped (`api/autopilot_service.py`, `deep_retrieve()`) | Keep |
+| "NL-to-SQL, sandboxed Python" | Shipped (`api/db_service.py` 7-step pipeline, `api/sandbox_service.py` E2B) | Keep |
+| "self-improving eval and fine-tuning loop" | Partly shipped: traces (`trace_service.py`), LLM judge (`eval_service.py`), and an **offline** QLoRA router distillation (`finetune/`). Nothing retrains automatically in prod. | "Eval loop: every run is traced and judged, and failures train an open-weight router model offline" |
+| "enterprise-grade security (SSO, RBAC, encryption, audit)" | Features shipped. No SOC 2. EPIC-16 is partly merged. | "SSO, RBAC, encryption at rest and an append-only audit log are built in. SOC 2 is on the roadmap." Never say "enterprise-grade". |
+| "runs on your infra / offline" | **Not shipped.** LLM is hard-wired to Groq/Gemini (`api/utils/llm_provider.py`). E2B is a third-party sandbox. | Today: "local embeddings + reranker". After DOCBOT-2609: "private model mode, demoed offline". Single-tenant AWS = roadmap (docbot-platform BYOC). |
+| LLM extraction baseline 20/20 | Not a RAG benchmark | Never cite. Cite only the DOCBOT-2543 live tie-out number. |
+
+---
+
+### 2. Everything open today (inventory)
+
+| Track | Open items | Pitch-critical before Dec 1? |
+|---|---|---|
+| GTM / revenue (EPIC-25) | 2546–2553 sales ops, 2531–2535 GTM, all To do | **Yes:** list, outreach, calls, trust page |
+| AI proof | 2543 founder live eval run (not done), 2544 nightly, 2545 gold set v2 | **2543 yes**, rest after |
+| Landing / SEO | PR #99 (2536, needs `NEXT_PUBLIC_SITE_URL` on Vercel), 2537–2540 | **2536 + 2537 yes** (investors visit the site) |
+| Payments | PR #103 (1810 Pro + dunning), held | No. Design partners pay with a Stripe Payment Link or invoice. |
+| AWS (2501–2530, 2576) | PR #86 + #106–#118 open, Wave A not applied | Test env yes (founder's ask). **Cutover no.** |
+| Firm workspace (2561–2575) | All To do | No. Pitch it as the first post-raise build. |
+| Platform (docbot-platform, PLAT-) | Frozen | No. It is the privacy/BYOC roadmap slide. |
+| Hygiene | Dependabot #97/#62/#59/#119/#120, PR #87 docs | No. #97/#62/#59 (trl, bitsandbytes, datasets) touch `finetune/` deps only. |
+
+---
+
+### 3. New EPIC-26: Pre-seed readiness (DOCBOT-2601..2610)
+
+| ID | Title | Pts | Pri | Acceptance criteria | Owner | Due |
+|---|---|---|---|---|---|---|
+| DOCBOT-2601 | Positioning one-pager | 1 | P0 | Wedge, vision, privacy and why-now lines from §1; banned-claims list; founder signs off | founder + PM agent | 11-18 |
+| DOCBOT-2602 | Pitch deck v1 → v2 (12 slides) | 3 | P0 | Slides: problem, wedge demo moment, product, how it works, proof (eval number), privacy/deploy options, market (SAM $60–240M from market-gtm-plan), business model (locked pricing), traction (calls/quotes), competition, roadmap, team + ask. Every claim maps to the §1 audit | founder + PM agent | v1 11-22, v2 11-28 |
+| DOCBOT-2603 | Demo script + 3-min backup video | 2 | P0 | Golden path on docbot.space: Try Demo → tie-out question → flagged discrepancy with both citations → XLSX export (2014) → autopilot question. Video recorded and playable offline in case the live demo fails | founder | 11-26 |
+| DOCBOT-2604 | Prod golden-path hardening + freeze | 2 | P0 | Golden path run 10× on prod with 10/10 success and p95 latency recorded; blockers fixed; **no merges to main from 11-27 except fixes** | senior-dev agent + founder | 11-27 |
+| DOCBOT-2605 | Data room lite | 2 | P0 | One folder/page: deck PDF, eval result (2543), architecture diagram, security posture page (2531), roadmap, cap table, metrics (signups, calls, LOIs) | founder | 11-29 |
+| DOCBOT-2606 | Investor Q&A prep | 1 | P0 | Written answers to the top 20 questions (solo founder, why not ChatGPT/Copilot, data privacy, moat, LLM cost, why fractional CFOs, raise size). Two mock calls held | founder + PM agent | 11-29 |
+| DOCBOT-2607 | Raise ask + use of funds + 18-month milestones | 1 | P0 | Amount, instrument (SAFE cap), 18-month plan tied to the $100K ARR goal, Firm workspace, single-tenant deploy, first hire | founder | 11-25 |
+| DOCBOT-2608 | Deployment-options + data-flow page | 1 | P1 | Diagram of what leaves the box today (LLM calls to Groq/Gemini, E2B code runs) vs. what stays local (embeddings, reranker, encrypted creds); three tiers: Hosted (now), Private model (2609), Single-tenant in your AWS (docbot-platform). Feeds deck slide + trust page | PM agent | 11-24 |
+| DOCBOT-2609 | Private model mode (OpenAI-compatible LLM endpoint) | 5 | P1 | `LLM_BASE_URL` / `LLM_MODEL` / `LLM_API_KEY` env in `api/utils/llm_provider.py` routes all chat calls to a self-hosted OpenAI-compatible server (Ollama/vLLM). Groq→Gemini fallback disabled in this mode so no data leaves. Python sandbox reports "unavailable in private mode" instead of calling E2B. Demoed with Wi-Fi off on the demo dataset. Unit tests mock the endpoint. Branch `feature/DOCBOT-2609-private-model-mode` | senior-dev agent | 11-26 (stretch; drop if P0 slips) |
+| DOCBOT-2610 | Investor list + follow-up pipeline | 1 | P1 | 15–25 more angels/pre-seed funds (fintech/AI infra) beyond Dec 1, with intros requested from the Dec 1 investor if it goes well | founder | 11-30 |
+| **Total** | | **19** | | | | |
+
+### Existing tickets pulled into the 14 days
+
+| ID | Title | Pts | Why now | Due |
+|---|---|---|---|---|
+| DOCBOT-2543 | Founder live tie-out eval run (`python -m tests.eval.tieout_eval --mode live --runs 10`) | 1 | The only accuracy number allowed on the deck | 11-18 |
+| DOCBOT-2546 | ICP list (cut to 150 named by 11-21) | 2 | Traction slide needs conversations | 11-21 |
+| DOCBOT-2547 | Outreach drafts | 1 | Same | 11-19 |
+| DOCBOT-2548 | Discovery call script + qualifiers | 1 | Turns calls into quotes and LOIs | 11-20 |
+| DOCBOT-2531 | Trust package (security page, DPA, questionnaire), now with privacy tiers from 2608 | 3 | Simulated buyer panel: 18/20 passed on trust | 11-25 |
+| DOCBOT-2533 | Design-partner offer + order form ($500/mo × 6) | 2 | Lets a yes become an LOI before Dec 1 | 11-24 |
+| DOCBOT-2536 | Merge PR #99 (set `NEXT_PUBLIC_SITE_URL` on Vercel) | 2 | Site investors see | 11-19 |
+| DOCBOT-2537 | Landing copy realignment to wedge line + /landing dedupe | 3 | Site matches deck | 11-24 |
+| **Total** | | **15** | | |
+
+**Traction target by Dec 1** (realistic from zero; replaces the W2 gate of 30 calls): 150 contacted, **≥12 calls booked, ≥6 held, ≥3 quotable pain statements, 1 LOI or verbal design-partner yes.** Even 6 real calls beat a slide of assumptions.
+
+### AWS test env (founder's ask). Wave A only before Dec 1, no cutover
+
+docbot.space keeps serving from Vercel + Railway until cutover. "Test" = the AWS `dev` env at `api-dev.docbot.space` (dev doubles as staging per the 11-14 rescope).
+
+| ID | Title | Pts | Owner | Due |
+|---|---|---|---|---|
+| DOCBOT-2501 | PR #86 review + checklist | 2 | devops agent | 11-19 |
+| DOCBOT-2502 | Fast-forward `dev` to `main` | 1 | founder | 11-20 |
+| DOCBOT-2503 | Merge #86, account/region, credits, bootstrap apply | 2 | founder | 11-20 |
+| DOCBOT-2504 | Dev apply, ACM, api-dev CNAME, dev secrets | 3 | founder | 11-21 |
+| DOCBOT-2505 | First deploy + smoke (PR #112) | 3 | devops agent | 11-23 |
+| DOCBOT-2506 | Vercel Preview env → api-dev | 1 | founder | 11-24 |
+| DOCBOT-2507 | Dev scale-to-zero + cost evidence (PR #115) | 2 | devops agent | 11-30 |
+| DOCBOT-2508 | Shared module + `envs/prod` (PR #106) | 8 | devops agent | merge by 11-30, **apply after Dec 1** |
+| DOCBOT-2511 / 2512 | Alarms (PR #109), promote-by-digest (PR #113) | 6 | devops agent | merge by 11-30 |
+| **Total** | | **28** | | |
+
+Founder AWS time before Dec 1: about 4 hours (checklist in `project-tasks/exec-plan/founder-actions-aws.md`, items 1–9 plus the applies). If Wave A slips, it slips. The pitch does not depend on it.
+
+---
+
+### 4. Day-by-day to Dec 1
+
+| Day | Founder | Agents (parallel) |
+|---|---|---|
+| Tue 11-17 | Approve this plan; sign off positioning (2601) | PM agent drafts 2601, 2547, 2548 |
+| Wed 11-18 | Run 2543 live eval; answer AWS checklist items 1–9 | devops agent: 2501 review |
+| Thu 11-19 | Approve outreach; build 50 prospects; send first 25; set Vercel var → merge #99 | senior-dev agent: 2537 copy |
+| Fri 11-20 | 50 more prospects, send 25; AWS bootstrap apply (2502/2503) | PM agent: deck v1 outline, 2608 diagram |
+| Sat–Sun 11-21/22 | Dev apply (2504); finish deck v1; list at 150 | senior-dev agent: 2609 private mode |
+| Mon 11-23 | Follow-ups; first calls | devops agent: 2505 smoke on api-dev |
+| Tue 11-24 | Calls; DP order form (2533) | PM agent: trust package (2531) |
+| Wed 11-25 | Calls; raise ask + use of funds (2607) | merge 2537, 2609 if green |
+| Thu 11-26 | (Thanksgiving: light day) Record demo video (2603) | — |
+| Fri 11-27 | **Prod freeze.** Golden path 10× (2604); deck v2 with call quotes | senior-dev agent fixes only |
+| Sat 11-28 | Mock call #1 with a friend; revise | PM agent: Q&A doc (2606) |
+| Sun 11-29 | Data room (2605); mock call #2 | — |
+| Mon 11-30 | Final golden-path run on prod; investor list (2610); rest | devops agent: merge 2507/2508/2511/2512 code PRs (no apply) |
+| **Tue 12-01** | **Investor call** | — |
+
+---
+
+### 5. After Dec 1: one ordered sequence
+
+| Phase | Dates | Focus | Tickets | Exit gate |
+|---|---|---|---|---|
+| P1: Follow-up + test→prod | Dec 2–20 | Investor follow-ups; AWS prod apply, 7-day soak, rehearsals, **cutover api.docbot.space → AWS**, then Railway sunset | 2576, 2513, 2509, 2510, 2514–2519, 2520 (AWS Wave B, 30 pts + 2520) | Prod smoke on AWS passes; Railway cancelled; at least 2 paid DPs |
+| P2: Design partners live | Dec 14 – Jan 10 | Onboard DPs on their own month-end docs; case studies | 2550, 2532, 2553, 1810 (merge PR #103), 2544, 2545 | 3 paid DPs (W4 gate, now about Dec 20) |
+| P3: Firm workspace | Jan 5 – Feb 1 | Per-client workspaces and invites, the thing Firm buyers pay for | 2562–2568, 2570, 2575, 2569 | Firm tier sellable |
+| P4: Privacy tier 2 | Feb+ (or when a buyer asks) | Single-tenant deploy in the customer's AWS = docbot-platform EPIC-01..03 (PLAT-) | per docbot-platform EPICS.md | First isolation contract |
+| Parked | — | Platform EPIC-06/07, AWS Wave C P3 (2522, 2524–2530), SOC 2 groundwork | — | Post-raise |
+
+Rule from here: **one ticket per session**. Weekly Friday check against the gates (DOCBOT-2551). If more than half the gates miss, re-prioritize, don't add tracks.
+
+---
