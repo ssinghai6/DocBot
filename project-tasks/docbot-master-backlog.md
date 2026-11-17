@@ -95,6 +95,7 @@ New ticket AC:
 |---|---|---|---|---|---|---|
 | DOCBOT-2577 | QBO/Xero CSV export intake for DP onboarding (CSV only, no connector) | 5 | P0 | QBO and Xero P&L, balance sheet, trial balance and GL CSV exports upload through the existing CSV path; title rows, date-range header, 'Total' rows, indented sub-accounts and parenthesized negatives handled in `csv_preprocessor`; a tie-out question on each fixture returns cited rows; fixtures + tests in `tests/` | 2532 | senior-dev |
 | DOCBOT-2578 | DB_ENCRYPTION_KEY MultiFernet dual-key rotation | 3 | P1 | `DB_ENCRYPTION_KEY` accepts an ordered key list (new key first) via MultiFernet; decrypt works with old or new key; a re-encrypt script rotates stored creds and per-org DEK wrapping (1529) idempotently; tests cover old-only, both, new-only; 2509 runbook uses it | none | senior-dev |
+| DOCBOT-2579 | Merge dev into main before prod apply | 1 | P1 | `dev` (with `infra/aws/**` and `.github/workflows/deploy-aws-prod.yml`) merged into `main`, because the `aws-prod` GitHub environment only accepts branch `main`; the merge also triggers a Railway prod deploy, so it runs in a quiet window and a golden-path smoke (health, PDF chat with citation, CSV query, login, billing debit) passes on prod afterwards | none (dev PRs #106-#117 merged) | founder |
 
 ---
 
@@ -105,7 +106,7 @@ Capacity: solo founder + AI agents at 28 pts per 2-week sprint (20 over the holi
 | Sprint | Dates | Cap | Tickets (in order) | Pts | Founder pts | E share | Gate check |
 |---|---|---|---|---|---|---|---|
 | S0 | 11-17 to 12-01 (EPIC-26 window) | EPIC-26 lanes | 2551, 2532, 2550 | 8 | 0 | 0% | EPIC-26 by 12-01: 150 contacted, >= 12 calls booked, >= 6 held, >= 3 quotable pains, 1 LOI or verbal DP yes. Hook live: 'free tie-out of your last month' |
-| S1 | 12-02 to 12-15 | 28 | 2577, 2549, 2812, 3501, 3512, 2578, 2576, 2513, 3510, 3513 | 28 | 4 | 50% | >= 1 DP onboarded through 2577 CSV intake; sandbox egress off; prod env applied, soak clock running |
+| S1 | 12-02 to 12-15 | 28 | 2577, 2549, 2812, 3501, 3512, 2578, 2579, 2576, 2513, 3510, 3513 | 29 (1 over cap: 2579 added 2026-11-17) | 5 | 50% | >= 1 DP onboarded through 2577 CSV intake; sandbox egress off; prod env applied, soak clock running |
 | S2 | 12-16 to 12-29 (holidays, cap 20) | 20 | 2509, 2510, 2514, 1613, 1614, 2517, 2544 | 20 | 3 | 0% | W4 (about 12-20): 3 paid DPs; G1 (1613/1614) closed; key rotation proven on prod env |
 | S3 | 12-30 to 01-12 (New Year, cap 26) | 26 | 2515, 2516, 2518, 1810, 2545, 2401, 1628, 1626 | 26 | 0 | 0% | 3 DPs stable >= 2 weeks (cutover precondition); rehearsals + rollback drill passed; W8 (about 01-06): >= $2.5K MRR or 4 paying logos |
 | S4 | 01-13 to 01-26 | 28 | 2519, 2402, 2403, 2406, 2562, 2565, 2312, 2609 | 28 | 3 | 0% | Cutover 2519 mid-January (go/no-go needs 3 stable DPs); Stage A P0 merged |
@@ -456,6 +457,7 @@ Builds on 1530 and 2907.
 | DOCBOT-2512 | Promote-by-digest dev to prod | 3 | P1 | PR #113 open | 0 | - | devops | EPIC-25 AWS |
 | DOCBOT-2513 | 7-day prod-env soak + cost check | 2 | P1 | Open | 1 | S1 | devops | EPIC-25 AWS |
 | DOCBOT-2578 | NEW: DB_ENCRYPTION_KEY MultiFernet dual-key rotation (needed for 2509) | 3 | P1 | New (2026-11-17) | 1 | S1 | senior-dev | EPIC-25 AWS |
+| DOCBOT-2579 | NEW: Merge dev into main before prod apply (needed for 2576) | 1 | P1 | New (2026-11-17) | 1 | S1 | founder | EPIC-25 AWS |
 | DOCBOT-2509 | Secrets rotation | 5 | P1 | Open (Wave B) | 1 | S2 | devops | EPIC-25 AWS |
 | DOCBOT-2510 | Prod restore drill | 3 | P1 | Open (Wave B) | 1 | S2 | devops | EPIC-25 AWS |
 | DOCBOT-2514 | Cutover runbook + go/no-go | 3 | P1 | Write-freeze code merged (PR #111); runbook open | 1 | S2 | devops | EPIC-25 AWS |
