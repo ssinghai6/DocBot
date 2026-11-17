@@ -1,6 +1,6 @@
 # GitHub Actions OIDC -> per-env deploy role. Only the exact sub claims in
 # var.github_oidc_subjects can assume it (dev: refs/heads/dev; prod:
-# environment:production). The OIDC provider itself is account-wide (infra/aws/account).
+# environment:aws-prod). The OIDC provider itself is account-wide (infra/aws/account).
 
 data "aws_iam_policy_document" "deploy_assume" {
   statement {
@@ -57,7 +57,7 @@ data "aws_iam_policy_document" "deploy" {
   statement {
     sid       = "PassTaskRoles"
     actions   = ["iam:PassRole"]
-    resources = [aws_iam_role.execution.arn, aws_iam_role.task.arn]
+    resources = distinct([aws_iam_role.execution.arn, aws_iam_role.task.arn, aws_ecs_task_definition.ops.task_role_arn])
     condition {
       test     = "StringEquals"
       variable = "iam:PassedToService"
