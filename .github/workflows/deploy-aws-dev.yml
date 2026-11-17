@@ -67,10 +67,14 @@ jobs:
           REGISTRY: ${{ steps.ecr.outputs.registry }}
         run: |
           IMAGE="$REGISTRY/$ECR_REPOSITORY:$GITHUB_SHA"
+          echo "image=$IMAGE" >> "$GITHUB_OUTPUT"
+          # SHA tags are immutable (account/main.tf): a re-run reuses the image it already pushed.
+          if aws ecr describe-images --repository-name "$ECR_REPOSITORY" --image-ids imageTag="$GITHUB_SHA" >/dev/null 2>&1; then
+            echo "::notice::$IMAGE already in ECR, not rebuilding"; exit 0
+          fi
           docker build --platform linux/amd64 -t "$IMAGE" -t "$REGISTRY/$ECR_REPOSITORY:dev" .
           docker push "$IMAGE"
           docker push "$REGISTRY/$ECR_REPOSITORY:dev"
-          echo "image=$IMAGE" >> "$GITHUB_OUTPUT"
 
       - name: Fetch current task definition
         run: |

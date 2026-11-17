@@ -37,8 +37,14 @@ resource "aws_iam_openid_connect_provider" "github" {
 }
 
 resource "aws_ecr_repository" "api" {
-  name                 = "docbot-api"
-  image_tag_mutability = "MUTABLE" # dev moves the `dev` tag; deploys pin SHA tags / digests
+  name = "docbot-api"
+  # Only `dev` moves. Every other tag (<sha>, tested-<sha>, prod-<sha>) is write-once,
+  # so the dev deploy role cannot repoint an image prod already tested or ran.
+  image_tag_mutability = "IMMUTABLE_WITH_EXCLUSION"
+  image_tag_mutability_exclusion_filter {
+    filter      = "dev"
+    filter_type = "WILDCARD"
+  }
   image_scanning_configuration {
     scan_on_push = true
   }
