@@ -1,6 +1,6 @@
 # GitHub Actions OIDC -> per-env deploy role. Only the exact sub claims in
 # var.github_oidc_subjects can assume it (dev: refs/heads/dev; prod:
-# environment:production). The OIDC provider itself is account-wide (infra/aws/account).
+# environment:aws-prod). The OIDC provider itself is account-wide (infra/aws/account).
 
 data "aws_iam_policy_document" "deploy_assume" {
   statement {
