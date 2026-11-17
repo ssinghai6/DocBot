@@ -36,7 +36,7 @@ Internet ──HTTPS──> ALB (<api_domain>, ACM cert, HTTP->HTTPS, idle 300s 
 | ALB deletion protection | var (default on) | on |
 | Logs | 14 days | 30 days |
 | VPC | 10.40.0.0/16 | 10.41.0.0/16 |
-| Deploy role trusts | `ref:refs/heads/dev` | `environment:production` |
+| Deploy role trusts | `ref:refs/heads/dev` | `environment:aws-prod` |
 | Image | built on push to `dev` | the same digest, promoted (no rebuild) |
 
 - **Network:** 2 AZs, public subnets only, no NAT gateway (saves ~$33/mo per env). Tasks get a public IP for egress (ECR, Secrets Manager, LLM and E2B APIs) and accept traffic only from the ALB. Private subnets: DOCBOT-2521.
@@ -93,7 +93,7 @@ Prerequisites: Terraform >= 1.9, AWS CLI, admin credentials (SSO) for the chosen
    terraform plan -out=tfplan && terraform apply tfplan   # waits for ACM ISSUED
    ```
    Then: CNAME `api-dev.docbot.space` -> `terraform output -raw alb_dns_name`; fill the secrets (`terraform output app_secret_arns`); set GitHub repo **variables** `AWS_DEV_DEPLOY_ROLE_ARN`, `AWS_DEV_REGION` (and `AWS_DEV_API_URL=https://api-dev.docbot.space` for the post-deploy smoke test); push to `dev` or run "Deploy AWS dev".
-4. **Prod:** same as dev in `envs/prod` (cert for `api.docbot.space`; do **not** point the CNAME at the ALB yet, that is the cutover). Set repo variables `AWS_PROD_DEPLOY_ROLE_ARN`, `AWS_PROD_REGION`, `AWS_PROD_API_URL`, and create the GitHub environment `production` (required reviewer: founder; deployment branches: `main` only).
+4. **Prod:** same as dev in `envs/prod` (cert for `api.docbot.space`; do **not** point the CNAME at the ALB yet, that is the cutover). Set repo variables `AWS_PROD_DEPLOY_ROLE_ARN`, `AWS_PROD_REGION`, `AWS_PROD_API_URL`, and create the GitHub environment `aws-prod` (required reviewer: founder; deployment branches: `main` only).
 
 ### Already applied PR #86's flat `infra/aws/dev`?
 
