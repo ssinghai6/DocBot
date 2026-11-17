@@ -2,9 +2,10 @@ name: Deploy AWS prod
 
 # Promotes an image that already passed Deploy AWS dev (tagged tested-<sha>) to
 # the AWS prod environment (infra/aws/envs/prod). No rebuild: prod runs the exact
-# digest dev ran. The deploy job uses the GitHub environment "production"
+# digest dev ran. The deploy job uses the GitHub environment "aws-prod"
 # (required reviewer = founder, deployment branch = main), and the prod IAM role
-# trusts only the OIDC sub repo:<repo>:environment:production.
+# trusts only the OIDC sub repo:<repo>:environment:aws-prod. Not "production":
+# Vercel owns that environment and it has no protection rules.
 on:
   workflow_dispatch:
     inputs:
@@ -25,6 +26,7 @@ env:
   ECS_CLUSTER: docbot-prod
   ECS_SERVICE: docbot-prod-api
   TASK_FAMILY: docbot-prod-api
+  OPS_TASK_FAMILY: docbot-prod-ops
   CONTAINER_NAME: api
 
 jobs:
@@ -55,7 +57,7 @@ jobs:
     needs: check
     if: needs.check.outputs.configured == 'true' && github.ref == 'refs/heads/main'
     runs-on: ubuntu-latest
-    environment: production
+    environment: aws-prod
     permissions:
       contents: read
       id-token: write
@@ -88,15 +90,15 @@ jobs:
             echo "- previous task definition (rollback = re-run with the previous SHA): \`$PREV\`"
           } >> "$GITHUB_STEP_SUMMARY"
 
-      - name: Tag prod-<sha> (protected from ECR lifecycle expiry) and move prod
+      # Tags are write-once (no moving `prod` tag), so the dev deploy role cannot
+      # repoint what prod runs. Re-promoting the same SHA hits ImageAlreadyExists: fine.
+      - name: Tag prod-<sha> (protected from ECR lifecycle expiry)
         run: |
           MANIFEST=$(aws ecr batch-get-image --repository-name "$ECR_REPOSITORY" \
             --image-ids imageTag="tested-$SHA" --query 'images[0].imageManifest' --output text)
-          for TAG in "prod-$SHA" prod; do
-            aws ecr put-image --repository-name "$ECR_REPOSITORY" --image-tag "$TAG" \
-              --image-manifest "$MANIFEST" >/dev/null 2>err.txt \
-              || grep -q ImageAlreadyExistsException err.txt || { cat err.txt; exit 1; }
-          done
+          aws ecr put-image --repository-name "$ECR_REPOSITORY" --image-tag "prod-$SHA" \
+            --image-manifest "$MANIFEST" >/dev/null 2>err.txt \
+            || grep -q ImageAlreadyExistsException err.txt || { cat err.txt; exit 1; }
 
       - name: Fetch current task definition
         run: |
@@ -129,6 +131,24 @@ jobs:
           DESIRED=$(aws ecs describe-services --cluster "$ECS_CLUSTER" --services "$ECS_SERVICE" --query 'services[0].desiredCount' --output text)
           if [ "$DESIRED" = "0" ]; then echo "::notice::desiredCount is 0, smoke test skipped"; exit 0; fi
           infra/aws/smoke-test.sh "$API_URL" "$ORIGIN"
+
+      # Ops tasks (drills, migrations) run the digest prod runs, never a tag.
+      - name: Fetch ops task definition
+        run: |
+          aws ecs describe-task-definition --task-definition "$OPS_TASK_FAMILY" \
+            --query taskDefinition > ops-task-definition.json
+
+      - id: render-ops
+        uses: aws-actions/amazon-ecs-render-task-definition@8d79160660ad39c402a16e5fc7cd2a32e8f7d6b7 # v1.9.1
+        with:
+          task-definition: ops-task-definition.json
+          container-name: ops
+          image: ${{ steps.digest.outputs.image }}
+
+      - name: Register ops task definition (no service)
+        uses: aws-actions/amazon-ecs-deploy-task-definition@a00d4d57ac0de1a99b39fe469f3d898d38717c2b # v2.6.4
+        with:
+          task-definition: ${{ steps.render-ops.outputs.task-definition }}
 
       # The ECS circuit breaker already rolls back tasks that never get healthy;
       # this also rolls back when tasks are healthy but the smoke test fails.
