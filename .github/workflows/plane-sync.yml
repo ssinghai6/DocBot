@@ -57,6 +57,12 @@ jobs:
           HEAD: ${{ github.event.pull_request.head.ref || github.ref_name }}
         run: |
           if [ -z "$PLANE_API_KEY" ]; then echo "::warning::PLANE_API_KEY secret not set; skipping"; exit 0; fi
+          # tolerate a pasted token with quotes/whitespace; report only its shape, never the value
+          raw_len=${#PLANE_API_KEY}
+          PLANE_API_KEY=$(printf '%s' "$PLANE_API_KEY" | tr -d "[:space:]\"'")
+          case "$PLANE_API_KEY" in plane_api_*) pfx=yes;; *) pfx=no;; esac
+          echo "key shape: raw_len=$raw_len clean_len=${#PLANE_API_KEY} plane_api_prefix=$pfx"
+          export PLANE_API_KEY
           pip install -q requests
           if [ "$EVENT" = "push" ] || [ "$EVENT" = "workflow_dispatch" ]; then
             exec python3 scripts/plane_sync.py --source-ref HEAD
@@ -74,7 +80,9 @@ jobs:
           else
             state="Testing"; note="PR #$PR_NUM open into $BASE"
           fi
+          failed=0
           for id in $ids; do
             python3 scripts/plane_sync.py --set-state "$id" "$state" --note "$note" ${title:+--title "$title"} \
-              || echo "::warning::Plane update failed for $id"
+              || { echo "::error::Plane update failed for $id"; failed=1; }
           done
+          exit $failed  # red run, never blocks merges (not a required check)
