@@ -2,7 +2,7 @@
 # for egress (ECR, Secrets Manager, LLM APIs) but accept traffic only from the ALB.
 
 resource "aws_vpc" "main" {
-  cidr_block           = "10.40.0.0/16"
+  cidr_block           = var.vpc_cidr
   enable_dns_support   = true
   enable_dns_hostnames = true
   tags                 = { Name = local.name }

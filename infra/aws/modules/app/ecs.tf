@@ -1,26 +1,6 @@
-resource "aws_ecr_repository" "api" {
-  name                 = "docbot-api"
-  image_tag_mutability = "MUTABLE" # the workflow also moves the `dev` tag
-  image_scanning_configuration {
-    scan_on_push = true
-  }
-}
-
-resource "aws_ecr_lifecycle_policy" "api" {
-  repository = aws_ecr_repository.api.name
-  policy = jsonencode({
-    rules = [{
-      rulePriority = 1
-      description  = "Keep last 20 images"
-      selection    = { tagStatus = "any", countType = "imageCountMoreThan", countNumber = 20 }
-      action       = { type = "expire" }
-    }]
-  })
-}
-
 resource "aws_cloudwatch_log_group" "api" {
   name              = "/ecs/${local.name}-api"
-  retention_in_days = 14
+  retention_in_days = var.log_retention_days
 }
 
 # Created empty on purpose: no placeholder value, so a task cannot start (and no
@@ -98,7 +78,7 @@ locals {
     exec uvicorn api.index:app --host 0.0.0.0 --port "$PORT"
   SH
 
-  plain_env = {
+  plain_env = merge(var.extra_env, {
     PORT             = tostring(local.container_port)
     APP_AUTH_MODE    = "required"
     BILLING_ENFORCE  = "true"
@@ -111,15 +91,15 @@ locals {
     DB_HOST          = aws_db_instance.main.endpoint # host:port
     DB_NAME          = aws_db_instance.main.db_name
     PGSSLMODE        = "require" # read by asyncpg; RDS PG16 forces SSL
-  }
+  })
 }
 
 resource "aws_ecs_task_definition" "api" {
   family                   = "${local.name}-api"
   requires_compatibilities = ["FARGATE"]
   network_mode             = "awsvpc"
-  cpu                      = 1024
-  memory                   = 2048
+  cpu                      = var.task_cpu
+  memory                   = var.task_memory
   execution_role_arn       = aws_iam_role.execution.arn
   task_role_arn            = aws_iam_role.task.arn
 
@@ -142,7 +122,7 @@ resource "aws_ecs_task_definition" "api" {
 
   container_definitions = jsonencode([{
     name         = local.container_name
-    image        = "${aws_ecr_repository.api.repository_url}:dev"
+    image        = "${var.ecr_repository_url}:${var.image_tag}"
     essential    = true
     command      = ["sh", "-c", local.start_command]
     portMappings = [{ containerPort = local.container_port, protocol = "tcp" }]
@@ -159,7 +139,7 @@ resource "aws_ecs_task_definition" "api" {
       logDriver = "awslogs"
       options = {
         awslogs-group         = aws_cloudwatch_log_group.api.name
-        awslogs-region        = var.aws_region
+        awslogs-region        = data.aws_region.current.region
         awslogs-stream-prefix = "api"
       }
     }
