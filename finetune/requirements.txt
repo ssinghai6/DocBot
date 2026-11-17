@@ -19,4 +19,4 @@ peft>=0.21.2
 trl>=0.29.1
 bitsandbytes>=0.43.0
 accelerate>=0.34.2
-datasets>=2.20.0
+datasets>=2.21.0
