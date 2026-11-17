@@ -58,7 +58,10 @@ DocBot is an AI-powered document + database analyst, fully deployed on Railway (
 | `src/hooks/` | Custom hooks: useChatHandlers (DB/auth/file handlers), useChatSubmit (message submission) |
 | `tests/external/test_llm_extraction_baseline.py` | LLM extraction baseline (20 hand-picked contexts, external API keys). Not a RAG benchmark — retrieval is bypassed. |
 | `requirements.txt` | Python dependencies |
-| `project-tasks/docbot-v2-project-tracking.md` | 40+ user stories, 11 epics, sprint plan, Definition of Done — **primary ticket tracker** |
+| `project-tasks/docbot-master-backlog.md` | Phase/sprint backlog — **source of truth for tickets**, synced to Plane |
+| `project-tasks/stories/DOCBOT-XXXX.md` | Full user story per ticket (AC, test, DoD); becomes the Plane description |
+| `scripts/plane_sync.py` | Plane sync (full backlog) and `--set-state` per-ticket status updates |
+| `project-tasks/docbot-v2-project-tracking.md` | Epic history, sprint plan, Definition of Done |
 | `project-tasks/docbot-db-master-plan.md` | Full architecture, security model, phased build plan |
 
 ## Current Architecture (v2 — live on Railway)
@@ -141,7 +144,7 @@ One ticket per branch. One branch per session when possible.
 
 ## Ticket Reference
 
-All work is tracked in `project-tasks/docbot-v2-project-tracking.md`.
+All work is tracked in Plane (see Plane Sync Rule), fed from `project-tasks/docbot-master-backlog.md` and `project-tasks/stories/`. Epic history lives in `project-tasks/docbot-v2-project-tracking.md`.
 
 **Current state (2026-03-29):**
 - EPIC-01 through EPIC-06 — **Done** (archived)
@@ -370,20 +373,27 @@ Always prefer to create utils and helper functions whenever required.
 Always have Author: Sanshrit Singhai
 Never use Co-Authored-By Claude
 
-## Jira Sync Rule
+## Plane Sync Rule (replaced Jira on 2026-11-17)
 
-**Whenever a DOCBOT ticket is implemented and its branch is merged into `main`, immediately update the corresponding Jira ticket to Done.**
+**Plane is the live ticket board. Keep it current without being asked.** Board: https://app.plane.so/docbot/projects/1bf5510f-0a6c-40e7-a81f-97f0e5ab39e4/issues
 
-- Jira project: `https://dbdocbot.atlassian.net` — project key `SCRUM`
-- Credentials: stored in `scripts/jira_update_status.py` (EMAIL + API_TOKEN)
-- Done transition ID: `51`
-- Also transition all subtasks of the story to Done
-- Run `python scripts/jira_update_status.py --dry-run` first to verify, then without `--dry-run`
-- Use `--epic EPIC-XX` to target a single epic
+Update the ticket at each of these moments, in the same session:
 
-**How to update:**
-1. Add the new ticket to the `TICKETS` list in `scripts/jira_update_status.py`
-2. Run `python scripts/jira_update_status.py` (script auto-resolves SCRUM keys by summary search)
+| Moment | Plane state | Command |
+|---|---|---|
+| Asked to build something with no DOCBOT ticket | create it | add a story file + backlog row (below), then `--set-state DOCBOT-XXXX "In Progress" --title "<title>"` |
+| Work starts (branch created) | `In Progress` | `python3 scripts/plane_sync.py --set-state DOCBOT-XXXX "In Progress"` |
+| PR opened, CI running, or waiting on founder test/review | `Testing` | `... --set-state DOCBOT-XXXX Testing --note "PR #N"` |
+| PR merged into `main` (or the founder confirms a founder-only task is done) | `Done` | `... --set-state DOCBOT-XXXX Done --note "PR #N merged"` |
+| Dropped / superseded | `Cancelled` | `... --set-state DOCBOT-XXXX Cancelled --note "<why>"` |
+
+- Merged into `dev` only (AWS work) is `Testing`, not `Done`. Done = live on `main`/prod or verified by the founder.
+- New ticket = next free DOCBOT id in `project-tasks/docbot-master-backlog.md` + `project-tasks/stories/DOCBOT-XXXX.md` from the story template (`python3 scripts/validate_stories.py --only XXXX` must pass). Then run the full sync so the description, labels and module are filled: `git fetch origin && python3 scripts/plane_sync.py` (reads `origin/main`; dry-run first with `--dry-run`).
+- After any merge that changes the backlog or story files, re-run the full sync. It is idempotent and never moves a state backwards.
+- Key: `PLANE_API_KEY` env var, else macOS Keychain item `PLANE_API_KEY`. Never write the key to a file, commit, PR, log or memory. If neither is set, ask the founder to run `! security add-generic-password -a docbot -s PLANE_API_KEY -w '<token>'` and stop the Plane step, not the code work.
+- If Plane rejects a write (403 from its Cloudflare WAF on attack-like text), fix the encoding in `waf_safe()`; never drop the content.
+- `.github/workflows/plane-sync.yml` does the same moves on GitHub events (branch created, PR opened, PR merged) and runs the full sync on every push to `main` that touches the backlog, stories or sync script, using repo secret `PLANE_API_KEY` (set 2026-11-17). Manual full sync: `gh workflow run plane-sync.yml`. Still run the commands yourself in-session; they are idempotent.
+- Jira (`scripts/jira_update_status.py`, project SCRUM) is retired. Do not update it.
 
 ## README Update Rule
 
