@@ -45,3 +45,7 @@ output "rds_instance_id" {
 output "efs_file_system_id" {
   value = aws_efs_file_system.chroma.id
 }
+
+output "ops_task_definition_family" {
+  value = aws_ecs_task_definition.ops.family
+}

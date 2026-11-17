@@ -94,6 +94,33 @@ locals {
   })
 }
 
+locals {
+  api_container = {
+    name         = local.container_name
+    image        = "${var.ecr_repository_url}:${var.image_tag}"
+    essential    = true
+    command      = ["sh", "-c", local.start_command]
+    portMappings = [{ containerPort = local.container_port, protocol = "tcp" }]
+    environment  = [for k, v in local.plain_env : { name = k, value = v }]
+    secrets = concat(
+      [for k, s in aws_secretsmanager_secret.app : { name = k, valueFrom = s.arn }],
+      [
+        { name = "DB_USER", valueFrom = "${local.db_secret_arn}:username::" },
+        { name = "DB_PASSWORD", valueFrom = "${local.db_secret_arn}:password::" },
+      ],
+    )
+    mountPoints = [{ sourceVolume = "data", containerPath = "/data", readOnly = false }]
+    logConfiguration = {
+      logDriver = "awslogs"
+      options = {
+        awslogs-group         = aws_cloudwatch_log_group.api.name
+        awslogs-region        = data.aws_region.current.region
+        awslogs-stream-prefix = "api"
+      }
+    }
+  }
+}
+
 resource "aws_ecs_task_definition" "api" {
   family                   = "${local.name}-api"
   requires_compatibilities = ["FARGATE"]
@@ -120,30 +147,7 @@ resource "aws_ecs_task_definition" "api" {
     }
   }
 
-  container_definitions = jsonencode([{
-    name         = local.container_name
-    image        = "${var.ecr_repository_url}:${var.image_tag}"
-    essential    = true
-    command      = ["sh", "-c", local.start_command]
-    portMappings = [{ containerPort = local.container_port, protocol = "tcp" }]
-    environment  = [for k, v in local.plain_env : { name = k, value = v }]
-    secrets = concat(
-      [for k, s in aws_secretsmanager_secret.app : { name = k, valueFrom = s.arn }],
-      [
-        { name = "DB_USER", valueFrom = "${local.db_secret_arn}:username::" },
-        { name = "DB_PASSWORD", valueFrom = "${local.db_secret_arn}:password::" },
-      ],
-    )
-    mountPoints = [{ sourceVolume = "data", containerPath = "/data", readOnly = false }]
-    logConfiguration = {
-      logDriver = "awslogs"
-      options = {
-        awslogs-group         = aws_cloudwatch_log_group.api.name
-        awslogs-region        = data.aws_region.current.region
-        awslogs-stream-prefix = "api"
-      }
-    }
-  }])
+  container_definitions = jsonencode([local.api_container])
 }
 
 resource "aws_ecs_service" "api" {
@@ -181,4 +185,54 @@ resource "aws_ecs_service" "api" {
     # The GitHub workflow registers new revisions; don't roll them back on apply.
     ignore_changes = [task_definition]
   }
+}
+
+# One-off ops tasks (backup/restore drills, Chroma copy onto EFS, row counts):
+# same image, env and secrets as the API, plus the EFS *root* at /efs (AWS
+# Backup restores land in /aws-backup-restore_<ts>/ outside the access point).
+# Run with: aws ecs run-task --task-definition <family> --overrides '{"containerOverrides":[{"name":"ops","command":[...]}]}'
+resource "aws_ecs_task_definition" "ops" {
+  family                   = "${local.name}-ops"
+  requires_compatibilities = ["FARGATE"]
+  network_mode             = "awsvpc"
+  cpu                      = 512
+  memory                   = 1024
+  execution_role_arn       = aws_iam_role.execution.arn
+  task_role_arn            = aws_iam_role.task.arn
+
+  runtime_platform {
+    operating_system_family = "LINUX"
+    cpu_architecture        = "X86_64"
+  }
+
+  volume {
+    name = "data"
+    efs_volume_configuration {
+      file_system_id     = aws_efs_file_system.chroma.id
+      transit_encryption = "ENABLED"
+      authorization_config {
+        access_point_id = aws_efs_access_point.chroma.id
+        iam             = "DISABLED"
+      }
+    }
+  }
+
+  volume {
+    name = "efsroot"
+    efs_volume_configuration {
+      file_system_id     = aws_efs_file_system.chroma.id
+      root_directory     = "/"
+      transit_encryption = "ENABLED"
+    }
+  }
+
+  container_definitions = jsonencode([merge(local.api_container, {
+    name         = "ops"
+    command      = ["sh", "-c", "echo pass a command override; exit 1"]
+    portMappings = []
+    mountPoints = [
+      { sourceVolume = "data", containerPath = "/data", readOnly = false },
+      { sourceVolume = "efsroot", containerPath = "/efs", readOnly = false },
+    ]
+  })])
 }
