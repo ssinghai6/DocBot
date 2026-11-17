@@ -404,6 +404,10 @@ api_keys_table = register_api_keys_table(metadata)
 from api import funnel_service  # noqa: E402
 funnel_events_table = funnel_service.register_funnel_events_table(metadata)
 
+# ── DOCBOT-2581: waitlist (replaces payments until company setup exists) ─────
+from api.waitlist_service import register_waitlist_table  # noqa: E402
+waitlist_table = register_waitlist_table(metadata)
+
 # ── EPIC-06: RBAC dependencies (DOCBOT-603) ──────────────────────────────────
 # Imported here so Depends() objects can be declared at module level.
 # require_role() checks is_auth_enforcement_active() at request time — safe to import early.
@@ -3415,6 +3419,12 @@ wire_email_verification(users_table, email_verification_tokens_table, async_sess
 from api.routes.billing_routes import router as billing_router  # noqa: E402
 
 app.include_router(billing_router)
+
+# ── DOCBOT-2581: waitlist signup + admin read ────────────────────────────────
+from api.routes.waitlist_routes import router as waitlist_router, wire_waitlist  # noqa: E402
+
+app.include_router(waitlist_router)
+wire_waitlist(waitlist_table, async_session_factory)
 
 # ── DOCBOT-2014: tie-out workpaper export (XLSX / PDF) ───────────────────────
 from api.routes.tieout_routes import router as tieout_router, wire_tieout_routes  # noqa: E402

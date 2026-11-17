@@ -824,6 +824,7 @@ export default function Home() {
         <OutOfCreditsModal
           paywall={shownPaywall}
           isSignedIn={authUser !== null}
+          email={authUser?.email}
           onSignIn={() => { dismissPaywall(); setGatePaywall(null); setAuthModalTab("register"); setAuthModalOpen(true); }}
           onClose={() => { dismissPaywall(); setGatePaywall(null); }}
         />
