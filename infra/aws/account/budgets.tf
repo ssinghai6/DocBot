@@ -13,7 +13,13 @@ variable "budget_email" {
 
 variable "monthly_budget_usd" {
   type    = number
-  default = 200
+  default = 250
+}
+
+variable "env_budgets_usd" {
+  type        = map(number)
+  default     = { dev = 60, prod = 150 }
+  description = "Per-env gross monthly budgets, filtered on the Environment tag (activate it as a cost allocation tag in Billing first)."
 }
 
 variable "anomaly_threshold_usd" {
@@ -47,6 +53,36 @@ resource "aws_budgets_budget" "monthly" {
 
   cost_types {
     include_credit = each.value
+  }
+
+  dynamic "notification" {
+    for_each = local.budget_alerts
+    content {
+      comparison_operator        = "GREATER_THAN"
+      threshold                  = notification.value[0]
+      threshold_type             = "PERCENTAGE"
+      notification_type          = notification.value[1]
+      subscriber_email_addresses = [var.budget_email]
+    }
+  }
+}
+
+# Gross (credits excluded) per env, so dev/prod burn shows even while credits pay.
+resource "aws_budgets_budget" "env" {
+  for_each     = var.env_budgets_usd
+  name         = "docbot-${each.key}-monthly-gross"
+  budget_type  = "COST"
+  limit_amount = tostring(each.value)
+  limit_unit   = "USD"
+  time_unit    = "MONTHLY"
+
+  cost_types {
+    include_credit = false
+  }
+
+  cost_filter {
+    name   = "TagKeyValue"
+    values = [format("user:Environment$%s", each.key)] # TagKeyValue syntax: user:<key>$<value>
   }
 
   dynamic "notification" {

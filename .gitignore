@@ -87,3 +87,5 @@ infra/aws/**/.terraform/
 *.tfstate.*
 infra/aws/**/terraform.tfvars
 infra/aws/**/tfplan
+# root docs/ rule above must not swallow the AWS runbooks
+!infra/aws/docs/
