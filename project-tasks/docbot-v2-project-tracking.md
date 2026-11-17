@@ -2573,3 +2573,135 @@ All feature development complete through EPIC-13. Monetization sprint begins:
 - Added "Built by Sanshrit Singhai" with portfolio link in footer
 
 **Test suite: 599 passed, 0 failed**
+
+
+---
+
+## EPIC-25 — $100K ARR Run-Rate Sprint (2026-11-11 → 2027-02-11)
+
+Plans (local, gitignored): `project-tasks/exec-plan/{revenue-100k-plan,market-gtm-plan,aws-migration-exec-plan}.html`. Target $8,333 MRR. Gates W2 30 calls, W4 3 paid DPs, W8 $4K, W12 $8.3K; >50% miss → reprioritize.
+
+### Status of existing tickets in this sprint
+| ID | Title | Status |
+|---|---|---|
+| DOCBOT-2014 | Tie-out export (XLSX/PDF) | Merged — PR #100 |
+| DOCBOT-1810 | Pro subscription + dunning | PR #103 open — held for founder review (Stripe config + price-id filter follow-up) |
+
+### Revenue / sales ops (DOCBOT-2546..2553)
+| ID | Title | Pts | Pri | Acceptance criteria | Owner |
+|---|---|---|---|---|---|
+| DOCBOT-2546 | ICP prospect list (400 named) | 2 | P0 | 400 fractional CFOs / small advisory firms with source link; 200 by W1 | Founder + PM |
+| DOCBOT-2547 | Outreach sequence drafts | 1 | P0 | 3-touch email + LinkedIn drafts, each answering one panel objection; founder sends | PM |
+| DOCBOT-2548 | Discovery call script + qualification | 1 | P0 | Script, 5 qualifiers, disqualifiers, notes template | PM |
+| DOCBOT-2549 | Design-partner agreement template | 1 | P0 | $500/mo x 6; scope, data handling, exit; lawyer review | Founder |
+| DOCBOT-2550 | Tie-out demo script on prospect docs | 2 | P0 | 15-min demo on prospect 10-K/board pack vs books; proof-method wording only | PM + AI |
+| DOCBOT-2551 | Weekly gate tracker | 1 | P0 | Calls, demos, DPs, Pro, packs, MRR vs gates every Friday | Orchestrator |
+| DOCBOT-2552 | Enterprise target list + pooled one-pager | 2 | P1 | 20 targets; $25-60K/yr; honest security posture, no SOC 2 claim | Founder + PM |
+| DOCBOT-2553 | Design-partner case studies (3) | 2 | P1 | Hours saved per close, discrepancies found; client approval | PM |
+
+### AWS migration (DOCBOT-2501..2530, + DOCBOT-2576)
+Source: project-tasks/exec-plan/aws-migration-exec-plan.html. Founder checklist: project-tasks/exec-plan/founder-actions-aws.md.
+
+**Rescope 2026-11-14: $5K AWS credits, leave Railway.** G3 (cost gate) is MET via credits. The prod cutover is now in scope. Decisions: dev doubles as staging (no `envs/staging`); add `envs/prod` instead. Prod = on-demand Fargate (no Spot), RDS backups ≥7d + deletion protection + final snapshot, alarms. Prod RDS/EFS are created in private DB subnets and on one customer-managed KMS key from day one, because neither can be changed in place later (pulled forward from 2521/2523; the rest of those stories stays in Wave C). Prod data is never restored into dev.
+
+Gates: G0 none/$0 · G1 EPIC-16 security gate (required for 2519 only) · G2 dev smoke passed (2505) · G3 cost gate, **met 2026-11-14** · G4 cutover readiness = 7-day prod-env soak ≥99.5% (2513) + restore drill (2510) + rotation handled (2509) + rollback drill ≤15 min (2518) · G5 EPIC-24 Stage A merged (E5 only).
+
+Lanes: **devops** = `infra/aws/**`, `.github/workflows/**` · **senior-dev** = `api/**`, `Dockerfile`, next config, `infra/aws/scripts/**` (migration scripts) · **founder** = any AWS/DNS/Vercel/Railway/GitHub-settings action, every `terraform apply`, and every secret value.
+
+| Wave | Scope | Pts | Stories |
+|---|---|---|---|
+| A (now) | Dev live + prod env up with no traffic | 33 | 12 |
+| B | Cutover prep + cutover (2519) | 30 | 8 |
+| C (post-cutover) | Railway sunset, hardening, platform handoff | 34 (10 active P1/P2, 24 deferred P3) | 11 |
+| **Total** | | **97** | **31** |
+
+| Epic | Pts | Stories |
+|---|---|---|
+| AWS-E1 Dev env live | 14 | 7 |
+| AWS-E2 Prod environment (was Staging parity) | 27 | 7 |
+| AWS-E3 Prod cutover | 24 | 7 |
+| AWS-E4 Hardening | 19 | 6 |
+| AWS-E5 Platform handoff | 13 | 4 |
+| **Total** | **97** | **31** |
+
+Lane totals: devops 63 · senior-dev 10 · founder 24.
+
+| ID | Wave | Epic | Title | Pts | Pri | AC (short) | Deps | Gate | Owner |
+|---|---|---|---|---|---|---|---|---|---|
+| DOCBOT-2501 | A | AWS-E1 | PR #86 pre-merge review and checklist sign-off | 2 | P1 | Every #86 checklist item ticked in a PR comment; `terraform fmt -check` + `validate` pass; checkov/tfsec findings triaged (accept-for-dev or mapped to a story); action SHAs match tags | none | G0 | devops |
+| DOCBOT-2502 | A | AWS-E1 | Fast-forward `dev` to `main` before the first deploy | 1 | P1 | `git rev-list --count origin/dev..origin/main` = 0 after the #86 merge; image from `dev` contains `docker-entrypoint.sh` | 2501 | G0 | founder |
+| DOCBOT-2503 | A | AWS-E1 | Founder-only: merge #86, pick account + region, confirm credits, apply bootstrap | 2 | P1 | #86 merged; credits visible on the chosen account (Billing → Credits) with expiry + eligible services recorded in founder-actions-aws.md; state bucket versioned, SSE, 4 public-access blocks; lock table exists; root MFA on, no IAM user access keys | 2501, 2502 | G0 | founder |
+| DOCBOT-2504 | A | AWS-E1 | Founder-only: dev apply with ACM, api-dev CNAME and dev secrets | 3 | P1 | Plan reviewed (no resources outside #86, no destroys); `monthly_budget_usd=60`; ACM ISSUED; `dig +short api-dev.docbot.space CNAME` = ALB; 5 secrets filled; dev `DB_ENCRYPTION_KEY` is new (hash ≠ prod) | 2503 | G3 | founder |
+| DOCBOT-2505 | A | AWS-E1 | First deploy + backend smoke test (prep now: smoke script) | 3 | P1 | Prep (before apply): a repeatable smoke script exists. After apply: "Deploy AWS dev" green; `/api/health` = ok/db ok; PDF Q&A with citation; CSV query in E2B; SSE stream >120s; Chroma survives `--force-new-deployment`; no secret values in CloudWatch logs | 2504 (prep: none) | G2 (exit) | devops (senior-dev fixes app blockers) |
+| DOCBOT-2506 | A | AWS-E1 | Founder-only: Vercel Preview env for branch dev | 1 | P1 | `RAILWAY_BACKEND_URL=https://api-dev.docbot.space` on Preview scoped to branch `dev`; `vercel env ls production` unchanged; signup/login/chat work on preview URL | 2505 | G0 | founder |
+| DOCBOT-2507 | A | AWS-E1 | Dev scale-to-zero + cost evidence (replaces "destroy within 72h") | 2 | P1 | Dev ECS scales to 0 off-hours via scheduled scaling (Terraform ignores `desired_count` drift) or a documented one-command toggle; dev RDS stop/start documented (auto-restarts after 7 days); `env` cost-allocation tag active; 7 days of Cost Explorer data show dev run rate ≤$50/mo; findings in `infra/aws/README.md` | 2505 | G3 | devops |
+| DOCBOT-2508 | A | AWS-E2 | Shared module + `envs/prod` (dev doubles as staging) | 8 | P1 | `infra/aws/modules/app` used by `envs/dev` and `envs/prod`; dev `plan` after refactor = 0 changes (`moved` blocks); prod: own state key, `use_fargate_spot=false`, RDS `backup_retention_period ≥7`, `deletion_protection=true`, `skip_final_snapshot=false`, RDS + EFS in private DB subnets, RDS + EFS on one CMK with rotation, EFS backup policy on, own OIDC role trusted only for `environment:aws-prod`, `desired_count ≤1` (Chroma on EFS) | 2501 | G3 | devops |
+| DOCBOT-2576 | A | AWS-E2 | Founder-only: prod apply, prod secrets, GitHub `aws-prod` environment | 3 | P1 | Prod plan reviewed (no destroys, no dev resources touched); ACM for `api.docbot.space` ISSUED (validation CNAME added; `api` itself still points to Railway); every prod secret filled from Railway values via console, `DB_ENCRYPTION_KEY` copied unchanged; GitHub Environment `aws-prod` with founder as required reviewer; repo vars `AWS_PROD_DEPLOY_ROLE_ARN`/`AWS_PROD_REGION` set | 2508, 2511 | G3 | founder |
+| DOCBOT-2511 | A | AWS-E2 | Alarms and notifications (prod + dev budget) | 3 | P1 | Prod alarms: ALB 5xx rate, unhealthy targets, ECS running < desired, RDS CPU/free storage/connections, EFS burst credits → SNS email; AWS Budgets on prod and on total account spend vs credits; each alarm shown firing in a forced test | 2508 | G3 | devops |
+| DOCBOT-2512 | A | AWS-E2 | Promote-by-digest dev → prod with manual approval | 3 | P1 | Prod deploys the digest dev already tested, no rebuild; GitHub Environment `aws-prod` approval required; OIDC trust uses `environment:aws-prod` sub; prod ECR tags immutable | 2508 | G3 | devops |
+| DOCBOT-2513 | A | AWS-E2 | 7-day prod-env soak + cost check (replaces 14-day staging soak) | 2 | P1 | Prod env (no customer traffic) synthetic health check every 5 min for 7 days ≥99.5%; one promote-by-digest run during soak; prod idle run rate recorded (target ≤$120/mo) and months-of-credit-runway stated vs expiry | 2576, 2511, 2512 | G4 part | devops |
+| DOCBOT-2509 | B | AWS-E2 | Secrets rotation: RDS-managed + app keys | 5 | P1 | RDS secret rotation triggers an EventBridge forced ECS redeploy; `/api/health` recovers ≤5 min in a forced-rotation test on prod env; runbook for Groq/Gemini/E2B/OWNER_KEY; `DB_ENCRYPTION_KEY` dual-key path proven or follow-up ticket filed (senior-dev if app change) | 2508 | G4 part | devops |
+| DOCBOT-2510 | B | AWS-E2 | Prod restore drill (RDS PITR + EFS) | 3 | P1 | Restore prod RDS to a new instance with equal per-table row counts; restore EFS so a restored session answers; RTO/RPO recorded; drill resources deleted after | 2576 | G4 part | devops |
+| DOCBOT-2514 | B | AWS-E3 | Cutover runbook + go/no-go checklist | 3 | P1 | Timed steps (T-7d stable hostname, T-48h TTL 60s, T-0 write freeze, final dump, restore, verify, DNS flip, T+14d sunset), owner per step, comms template, go/no-go list incl. external callback URLs (Stripe, OAuth, SAML); dry-read signed by founder | 2508 | G3 | devops |
+| DOCBOT-2515 | B | AWS-E3 | Postgres rehearsal: Railway → prod RDS | 5 | P1 | Scripts in `infra/aws/scripts/`: `pg_dump -Fc` from Railway, `pg_restore --no-owner` into **prod RDS** (never dev); per-table row counts + checksums match; audit-log immutability trigger present and blocks UPDATE; sequences > max(id); encrypted connection decrypts with the carried-over key; duration recorded; rehearsal DB dropped before cutover | 2514, 2576 | G3 | senior-dev (devops support) |
+| DOCBOT-2516 | B | AWS-E3 | Chroma /data ADR + rehearsal (EFS copy vs re-embed) | 5 | P1 | ADR picks (A) tar `/data/chroma` from Railway onto prod EFS or (B) re-embed from kept source text; chosen path rehearsed on prod EFS; 20 sampled sessions top-5 chunk IDs Jaccard ≥0.9 vs Railway; ADR records `desired_count ≤1` until pgvector (PLAT-0208) | 2514, 2576 | G3 | senior-dev |
+| DOCBOT-2517 | B | AWS-E3 | DNS cutover plan: stable `api.docbot.space` + lowered TTL | 3 | P1 | **Start in Wave A**: `api.docbot.space` → Railway (Railway custom domain) and Vercel prod `RAILWAY_BACKEND_URL` switched to it ≥7 days before cutover; external callbacks (Stripe webhook, OAuth, SAML ACS) use the stable hostname; TTL 60s ≥48h before; post-flip check from 3 resolvers shows ALB ≤10 min | none (plan doc: 2514) | G3 | founder (devops writes plan) |
+| DOCBOT-2518 | B | AWS-E3 | Rollback plan + drill | 3 | P1 | Triggers written (5xx >2% for 10 min, failed health, p95 >2x baseline, data mismatch); drill flips a test hostname between ALB and Railway ≤15 min; data-loss window for writes on AWS before rollback stated and accepted by founder | 2515, 2516, 2517 | G4 part | devops |
+| DOCBOT-2519 | B | AWS-E3 | Founder-only: prod cutover execution | 3 | P1 | Go/no-go signed; write freeze announced; final dump/restore counts match; DNS flipped; 1-hour watch with no rollback trigger; prod smoke (health, PDF chat, CSV, hybrid, login, billing debit) passes | 2509, 2510, 2513, 2518 | G1 + G4 | founder |
+| DOCBOT-2520 | C | AWS-E3 | Railway sunset (stop paying) | 2 | P1 | Railway warm + read-only 14 days; final pg_dump + /data tarball archived to S3 (CMK, 90-day retention); Railway services + volume deleted and plan cancelled; `RAILWAY_BACKEND_URL` renamed provider-neutral in Vercel (founder) and code (senior-dev) | 2519 | G3 | founder (senior-dev rename) |
+| DOCBOT-2521 | C | AWS-E4 | Private subnets for tasks + ADR on NAT vs VPC endpoints | 5 | P2 | ECS tasks move to private subnets (RDS/EFS already private via 2508); ADR prices NAT (~$33/mo + data) vs endpoints; LLM/E2B egress still needs NAT; static egress IP noted for customer DB allowlists; smoke passes after move | 2519 | G3 | devops |
+| DOCBOT-2523 | C | AWS-E4 | KMS CMKs for Secrets Manager, logs, ECR, S3 (RDS/EFS done in 2508) | 3 | P2 | CMKs with annual rotation and least-privilege policies on the remaining services; `aws kms describe-key` evidence saved | 2519 | G3 | devops |
+| DOCBOT-2522 | C | AWS-E4 | WAF on the ALB | 3 | P3 | Managed rule groups + per-IP rate rule in count mode 7 days, then block; upload/SSE false positives fixed; 10-min SSE + 20MB PDF pass | 2521 | G3 | devops |
+| DOCBOT-2524 | C | AWS-E4 | CloudTrail, GuardDuty, Config baseline | 3 | P3 | Multi-region trail with validation to Object Lock bucket; GuardDuty on; Config starter pack; test call visible ≤15 min | 2519 | G3 | devops |
+| DOCBOT-2525 | C | AWS-E4 | IaC security scanning in CI | 2 | P3 | checkov/tfsec + tflint on PRs touching `infra/aws/**`; committed baseline with reasons; new HIGH fails | 2508 | G3 | devops |
+| DOCBOT-2526 | C | AWS-E4 | SOC 2 groundwork: control map + human access | 3 | P3 | CC6/CC7/CC8 mapped to AWS evidence; humans via IAM Identity Center + MFA, no IAM user keys; quarterly access review template; no SOC 2 claim in copy | 2524 | G3 | founder |
+| DOCBOT-2527 | C | AWS-E5 | Extract modules aligned with PLAT-0405/0406 | 5 | P3 | network, rds-postgres, ecs-api, monitoring modules cut from prod; delta doc for pgvector ≥0.8, Multi-AZ, 3 AZs, CloudFront, `use_lockfile` | 2519 | G5 | devops |
+| DOCBOT-2528 | C | AWS-E5 | Tag engine copy base for PLAT-0102 | 2 | P3 | Post-cutover, post-Stage-A SHA tagged `engine-base-YYYYMMDD`; tag + digest + infra version recorded | 2519 | G5 | devops |
+| DOCBOT-2529 | C | AWS-E5 | Re-point PLAT-0411 import from Railway to RDS | 3 | P3 | Delta doc: source is RDS + EFS (or S3); Chroma→pgvector references PLAT-0208 eval gate | 2527 | G5 | devops |
+| DOCBOT-2530 | C | AWS-E5 | Account + state migration plan into PLAT-0400 org | 3 | P3 | Plan moves the account(s) and tfstate into the Organizations layout; rollback step; founder review | 2527 | G5 | founder |
+
+### GTM (DOCBOT-2531..2535)
+| ID | title | pts | pri | AC | owner |
+|---|---|---|---|---|---|
+| DOCBOT-2531 | Trust package: security page, DPA template, security questionnaire answers | 3 | P0 | Public page states SSO/RBAC/encryption/audit log, read-only access, retention, sub-processors, and "no SOC 2 yet" with a roadmap date; DPA template reviewed; questionnaire answers ready to send; no "enterprise-grade" wording | product-manager + founder |
+| DOCBOT-2532 | Proof-run playbook (QBO/Xero CSV + PDF to cited tie-out table) | 5 | P0 | Runbook takes a closed month (CSV export + board pack PDF) to a match/mismatch table with PDF page + data row per line in <60 min; tested on demo set + one public 10-K; output opens in Excel | product-manager (ai-engineer for eval) |
+| DOCBOT-2533 | Design-partner offer and order form ($500/mo x 6) | 2 | P0 | Order form states client workspaces included, 6-month term, proof-run before first invoice, 8-slot cap, 2027-01-15 end; Stripe link/invoice tested; matches locked pricing exactly | founder |
+| DOCBOT-2534 | Pitch/landing copy alignment to locked buyer line | 2 | P1 | Hero uses buyer-facing line verbatim; "enterprise-grade security" and public fine-tuning claims removed ("eval loop"); LLM extraction baseline never cited as accuracy; coordinated with SEO landing PR (2536-2540) | senior-developer |
+| DOCBOT-2535 | Launch content + outreach drafts + funnel tracker | 3 | P1 | Drafts: 3 public 10-K tie-out posts, 40 DMs, 3 emails, launch post; weekly tracker DM->call, call->proof-run, proof-run->paid; nothing sent by agents | product-manager |
+
+### SEO (DOCBOT-2536..2540) — 2536 = PR #99 (open, held: needs NEXT_PUBLIC_SITE_URL on Vercel)
+| Ticket | Title | Scope | Points | Depends on | Status |
+|---|---|---|---|---|---|
+| DOCBOT-2536 | Landing SEO foundation | Buyer-line title/description, OG/Twitter, self-canonical, metadataBase from NEXT_PUBLIC_SITE_URL / Vercel prod URL, robots.ts (disallow /chat, /api/, /onboarding, /verify), sitemap.ts, Organization + SoftwareApplication JSON-LD (free-tier Offer only) | 2 | none | PR #99 open |
+| DOCBOT-2537 | Landing copy realignment + /landing dedupe | H1/badge/sub-head to buyer line; remove 3 "Enterprise" claims (page.tsx L430/614/784); 308 /landing to / and delete duplicate page | 3 | 2536 | To do |
+| DOCBOT-2538 | FAQ block + FAQPage JSON-LD + llms.txt | 5-question FAQ on / (answer-shaped, locked pricing only), FAQPage schema, public/llms.txt | 2 | 2537 | To do |
+| DOCBOT-2539 | Content pages: /tie-out, /fractional-cfo, /compare/chatgpt, /compare/suralink | Static server-component pages with method-first copy, author byline, last-reviewed date; add to sitemap | 5 | 2536 | To do |
+| DOCBOT-2540 | Search Console/Bing verification + AI-citation tracking | Verify domain (needs owner DNS/Vercel access, human step), submit sitemap, monthly 20-prompt citation audit sheet across ChatGPT/Perplexity/Claude/Gemini | 2 | 2536 deployed | To do |
+
+### AI proof (DOCBOT-2541..2545) — 2541 = PR #101 merged; 2542 = PR #102
+| ID | title | pts | pri | AC | owner |
+|---|---|---|---|---|---|
+| DOCBOT-2541 | Tie-out accuracy eval harness (PR #101) | 3 | P0 | 12-question gold set over demo data (14 figures: 5 flagged, 9 tie); pure-code scorer: values within 0.1%, doc page + DB citation, flag iff gold, no false positives; `--mode live\|offline --runs N`, pass rate per question; scorer + gold-consistency tests in CI; live test `@pytest.mark.external`; method in tests/eval/README.md section 5 | ai-engineer |
+| DOCBOT-2542 | Fix flaky segment tie-out question (PR #102) | 2 | P0 | "Does segment revenue in Note 12 agree with the books?" flags exactly Lab Services for all 9 plausible SQL shapes and every router outcome (offline scripted matrix 27/27, main 5/27); 16 unit tests, 10 fail on main; live >= 9/10 confirmed by DOCBOT-2543 | ai-engineer |
+| DOCBOT-2543 | Founder live run + record the public tie-out number | 1 | P0 | After #101 and #102 merge: `python -m tests.eval.tieout_eval --mode live --runs 10` run with real keys; output saved with date, model (GROQ_MODEL), N and commit SHA; segment_note12 >= 9/10, else reopen 2542; claim wording on the proof section updated with the measured X/120 | founder |
+| DOCBOT-2544 | Scheduled live tie-out eval with spend cap | 2 | P1 | nightly-eval.yml (or weekly) runs `pytest tests/eval/test_tieout_eval.py -m external` with a repo Groq secret; capped runs (EVAL_TIEOUT_RUNS) to stay under a stated $ budget; fails the job when any question drops below 90%; result posted to the job summary | ai-engineer |
+| DOCBOT-2545 | Gold set v2: public 10-K + accounting-export shapes | 3 | P1 | >= 10 more questions over one real public 10-K and a QBO/Xero-style CSV export (the proof-run inputs from DOCBOT-2532); each gold value traced to a page/row; scorer unchanged; README states which corpus a cited number used | ai-engineer |
+
+### Build — Firm workspace (DOCBOT-2561..2575)
+| Ticket | Title | Scope | Points | Depends on | Status |
+|---|---|---|---|---|---|
+| DOCBOT-2561 | Firm per-client workspace gap analysis | Promise-vs-code audit of Firm tier (fragments/firm-gaps.html) | 1 | none | Draft done |
+| DOCBOT-2562 | Client workspace data model | `client_workspaces` (id, org_id, name, created_at, archived_at); nullable `workspace_id` on sessions, db_connections, marketplace_connections, answer_lineage, audit_log (ADD COLUMN IF NOT EXISTS) | 5 | none | To do |
+| DOCBOT-2563 | Workspace scoping in CallerScope | Active workspace (header/cookie, membership-verified) on CallerScope; scope_filter / connection_access_clause / run_row_accessible filter by it; stamp on insert; Chroma collection per workspace | 5 | 2562 | To do |
+| DOCBOT-2564 | Workspace switcher + CRUD | Admin create/rename/archive API (Pydantic) + sidebar switcher (Zod) | 3 | 2563 | To do |
+| DOCBOT-2565 | Org invites (DOCBOT-1709) | `org_invites` (hashed token, email, role, expiry); admin create/revoke; accept joins firm org; audit events | 5 | none | To do |
+| DOCBOT-2566 | Multi-org membership | `org_members` table replaces single users.org_id as source of truth; org switcher for users in personal + firm org | 5 | 2565 | To do |
+| DOCBOT-2567 | Seats + offboarding | Seat limit per org enforced at invite accept; remove member; revoke their sessions/API keys | 3 | 2565 | To do |
+| DOCBOT-2568 | Per-workspace access grants | Member-to-workspace grants; non-admins see only granted clients | 3 | 2563, 2565 | To do |
+| DOCBOT-2569 | Firm billing per client workspace | Stripe subscription quantity = active workspaces (reuse DOCBOT-1810 webhook/lifecycle), proration on add/archive, STRIPE_FIRM_PRICE_ID | 5 | 1810, 2562 | To do |
+| DOCBOT-2570 | Audit log per workspace | workspace_id on events, filter + per-client CSV export, log invite/role/workspace events | 3 | 2562 | To do |
+| DOCBOT-2571 | Microsoft sign-in (Entra OIDC) | Multi-tenant Entra ID OIDC consumer login next to Google; JIT via identity_service | 3 | none | To do |
+| DOCBOT-2572 | Per-org SAML + domain enforcement | Move SAML config from global env to per-org; verified domain; "require SSO" for org (Enterprise) | 5 | 2565 | Later |
+| DOCBOT-2573 | BYOK "contact us" | Firm pricing CTA + org flag recording BYOK interest; real BYOK stays EPIC-19 | 1 | none | To do |
+| DOCBOT-2574 | Priority support | Support channel + written response target + in-app contact link with org/plan context | 1 | none | To do |
+| DOCBOT-2575 | Client workspace offboarding | Archive/delete workspace purges sessions, vectors, connections, lineage (audit rows kept append-only) | 3 | 2563 | To do |
