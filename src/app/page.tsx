@@ -91,7 +91,7 @@ const features = [
   },
   {
     icon: <ShieldCheck className="w-6 h-6" />,
-    title: "Enterprise Security",
+    title: "Security Built In",
     description:
       "RBAC with viewer/analyst/admin roles, append-only audit logging, PII auto-masking, SAML SSO, and Fernet-encrypted credential storage.",
     iconColor: "text-[var(--color-success-500)]",
@@ -428,7 +428,7 @@ export default function LandingPage() {
             <div>
               <Badge variant="info" className="mb-6 text-sm px-3 py-1 gap-2 normal-case tracking-normal">
                 <Zap className="w-3.5 h-3.5" />
-                Enterprise Document Intelligence
+                Financial Document Intelligence
               </Badge>
 
               <h1 className="text-4xl sm:text-5xl lg:text-6xl font-bold leading-tight text-[var(--color-text-primary)] mb-6">
@@ -612,7 +612,7 @@ export default function LandingPage() {
           <div className="text-center mb-16">
             <Badge variant="info" className="mb-4">What DocBot Does</Badge>
             <h2 className="text-3xl sm:text-4xl font-bold text-[var(--color-text-primary)] mb-4">
-              Enterprise-grade intelligence across every data source
+              One analyst across every data source
             </h2>
             <p className="text-lg text-[var(--color-text-secondary)] max-w-2xl mx-auto">
               DocBot unifies your documents and databases into a single conversational
@@ -798,7 +798,7 @@ export default function LandingPage() {
             </span>
             <span className="flex items-center gap-2">
               <CircleCheck className="w-4 h-4 text-[var(--color-success-500)]" />
-              Enterprise-ready from day one
+              SSO, RBAC and audit log built in
             </span>
           </div>
         </div>
