@@ -154,3 +154,24 @@ def test_zod_mirror_has_same_fields():
     for model in (waitlist_models.WaitlistRequest, waitlist_models.WaitlistEntry):
         for field in model.model_fields:
             assert re.search(rf"\b{field}\b", ts), f"{field} missing from waitlist.ts"
+
+
+SRC = Path(__file__).resolve().parents[2] / "src"
+CONTACT = "sanshrit.singhai@docbot.space"
+
+
+def test_form_error_state_names_status_and_contact_email():
+    """A failed submit must say why (status-specific) and offer the founder's email."""
+    form = (SRC / "components" / "WaitlistForm.tsx").read_text()
+    assert "Something went wrong" not in form  # the old opaque message
+    for status in ("429", "422", "503", "0"):
+        assert f"status === {status}" in form
+    assert "(error ${status})" in form  # any other status (e.g. 404) is surfaced
+    assert 'role="alert"' in form and "mailto:${CONTACT_EMAIL}" in form
+    assert 'role="status"' in form  # success state still rendered
+
+
+def test_contact_email_points_to_founder():
+    legal = (SRC / "components" / "LegalPage.tsx").read_text()
+    assert f'"{CONTACT}"' in legal
+    assert "Contact us" in legal and "mailto:${CONTACT_EMAIL}" in legal

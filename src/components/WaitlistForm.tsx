@@ -6,8 +6,18 @@ import React, { useState } from "react"
 import { authInputCx, authPrimaryBtnCx } from "@/components/OAuthButtons"
 import { WaitlistRequestSchema, WaitlistResponseSchema } from "@/lib/schemas/waitlist"
 import type { WaitlistSource } from "@/lib/schemas/waitlist"
+import { CONTACT_EMAIL } from "@/components/LegalPage"
 
 const labelCx = "block text-[12px] font-medium text-[var(--color-text-secondary)] mb-1"
+
+/** Human message for a failed POST /api/waitlist (status 0 = network error). */
+export function waitlistErrorMessage(status: number): string {
+  if (status === 429) return "Too many attempts. Please wait a minute and try again."
+  if (status === 422) return "Some details look invalid. Check the form and try again."
+  if (status === 503) return "DocBot is in a short maintenance window. Please try again shortly."
+  if (status === 0) return "We couldn't reach DocBot. Check your connection and try again."
+  return `We couldn't add you to the waitlist (error ${status}).`
+}
 
 interface Props {
   source: WaitlistSource
@@ -44,15 +54,18 @@ export default function WaitlistForm({ source, defaultEmail = "" }: Props) {
         credentials: "include",
         body: JSON.stringify(parsed.data),
       })
-      if (res.ok && WaitlistResponseSchema.safeParse(await res.json()).success) {
+      // A 2xx means the row was stored; don't turn a stray non-JSON body into an error.
+      const body: unknown = res.ok ? await res.json().catch(() => null) : null
+      if (res.ok && (body === null || WaitlistResponseSchema.safeParse(body).success)) {
         setDone(true)
       } else {
-        setError(res.status === 429 ? "Too many attempts. Please try again in a minute." : "Something went wrong. Please try again.")
+        setError(waitlistErrorMessage(res.status))
       }
     } catch {
-      setError("Something went wrong. Please try again.")
+      setError(waitlistErrorMessage(0))
+    } finally {
+      setSubmitting(false)
     }
-    setSubmitting(false)
   }
 
   if (done) {
@@ -91,7 +104,13 @@ export default function WaitlistForm({ source, defaultEmail = "" }: Props) {
       <div aria-hidden="true" className="absolute -left-[9999px] h-0 w-0 overflow-hidden">
         <label>Website<input tabIndex={-1} autoComplete="off" value={website} onChange={e => setWebsite(e.target.value)} /></label>
       </div>
-      {error && <p role="alert" className="text-[12px] text-[var(--color-error-500,#ef4444)]">{error}</p>}
+      {error && (
+        <p role="alert" className="text-[12px] text-[var(--color-error-500,#ef4444)]">
+          {error} You can also email{" "}
+          <a href={`mailto:${CONTACT_EMAIL}`} className="underline">{CONTACT_EMAIL}</a>{" "}
+          and we&apos;ll add you by hand.
+        </p>
+      )}
       <button type="submit" disabled={submitting} className={authPrimaryBtnCx}>
         {submitting ? "Sending…" : "Join the waitlist"}
       </button>
