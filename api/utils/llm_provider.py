@@ -45,6 +45,8 @@ import contextvars
 import json
 import logging
 import os
+import queue
+import threading
 import time
 import uuid
 from collections import OrderedDict
@@ -155,6 +157,9 @@ GEMINI_MODEL = "gemini-2.5-flash"
 GROQ_TIMEOUT_S = 30.0
 GROQ_MAX_RETRIES = 1
 GEMINI_TIMEOUT_S = 30.0
+# DOCBOT-2583: streaming has a Gemini fallback, so a Groq 429 must not sit in
+# SDK backoff (7-15 s per retry); fail straight to the fallback instead.
+GROQ_STREAM_MAX_RETRIES = 0
 
 # Groq error types that trigger fallback
 _FALLBACK_STATUS_CODES = {429, 500, 502, 503, 504}
@@ -734,10 +739,34 @@ def _gemini_completion_stream(
         system_instruction=system_instruction,
         generation_config=gen_config,
     )
+    # retry=None: no SDK-level retry/backoff on 429 (DOCBOT-2583).
     response = model.generate_content(
-        contents, stream=True, request_options={"timeout": GEMINI_TIMEOUT_S}
+        contents, stream=True, request_options={"timeout": GEMINI_TIMEOUT_S, "retry": None}
     )
-    for chunk in response:
+
+    # DOCBOT-2583: request timeout does not bound stream iteration, so pull
+    # chunks from a daemon thread and enforce a deadline on each one.
+    q: "queue.Queue" = queue.Queue()
+    end = object()
+
+    def _pump() -> None:
+        try:
+            for chunk in response:
+                q.put(chunk)
+            q.put(end)
+        except Exception as exc:  # surfaced to the consumer below
+            q.put(exc)
+
+    threading.Thread(target=_pump, daemon=True).start()
+    while True:
+        try:
+            chunk = q.get(timeout=GEMINI_TIMEOUT_S)
+        except queue.Empty:
+            raise TimeoutError(f"Gemini stream stalled for {GEMINI_TIMEOUT_S:.0f}s") from None
+        if chunk is end:
+            return
+        if isinstance(chunk, Exception):
+            raise chunk
         if finish_info is not None and getattr(chunk, "candidates", None):
             reason = chunk.candidates[0].finish_reason
             if getattr(reason, "name", reason) in ("MAX_TOKENS", 2):
@@ -853,7 +882,7 @@ def chat_completion_stream(
         api_key = os.getenv("groq_api_key", "")
         if not api_key:
             raise ValueError("groq_api_key not set")
-        client = Groq(api_key=api_key, timeout=GROQ_TIMEOUT_S, max_retries=GROQ_MAX_RETRIES)
+        client = Groq(api_key=api_key, timeout=GROQ_TIMEOUT_S, max_retries=GROQ_STREAM_MAX_RETRIES)
         stream = client.chat.completions.create(
             model=model,
             messages=messages,

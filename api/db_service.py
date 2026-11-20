@@ -1644,7 +1644,7 @@ async def run_sql_pipeline(
         # >= 5 gate killed legitimate small-result visualisations.
         if len(rows) >= 1:
             try:
-                from api.sandbox_service import generate_analysis_code, run_python as run_sandbox
+                from api.sandbox_service import df_preamble, generate_analysis_code, run_python as run_sandbox
 
                 analysis_persona = (
                     expert_personas.get(persona, expert_personas.get("Generalist", {}))
@@ -1658,7 +1658,9 @@ async def run_sql_pipeline(
                 )
                 if analysis_code:
                     yield f"data: {_json_dumps({'type': 'analysis_code', 'code': analysis_code})}\n\n"
-                    sandbox_result = await run_sandbox(analysis_code, allow_pip_egress=True)
+                    sandbox_result = await run_sandbox(
+                        df_preamble(result_dicts[:50]) + analysis_code, allow_pip_egress=True
+                    )
                     for idx, chart_b64 in enumerate(sandbox_result.charts):
                         meta = (
                             sandbox_result.chart_metadata[idx]

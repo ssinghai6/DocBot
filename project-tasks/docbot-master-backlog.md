@@ -461,6 +461,7 @@ Builds on 1530 and 2907.
 | DOCBOT-2580 | NEW: Plane auto-sync rule and per-ticket state command | 1 | P2 | In progress (2026-11-17) | 0 | - | PM | EPIC-26 Pre-seed |
 | DOCBOT-2581 | NEW: Waitlist instead of payments | 3 | P1 | In progress (2026-11-17) | 0 | - | senior-dev | EPIC-26 Pre-seed |
 | DOCBOT-2582 | NEW: Remove "enterprise" claims from landing page | 1 | P1 | In progress (2026-11-17) | 0 | - | frontend | EPIC-26 Pre-seed |
+| DOCBOT-2583 | NEW: Demo chat hangs when Groq rate-limits | 3 | P0 | In progress (2026-11-20) | 0 | - | senior-dev | EPIC-26 Pre-seed |
 | DOCBOT-2509 | Secrets rotation | 5 | P1 | Open (Wave B) | 1 | S2 | devops | EPIC-25 AWS |
 | DOCBOT-2510 | Prod restore drill | 3 | P1 | Open (Wave B) | 1 | S2 | devops | EPIC-25 AWS |
 | DOCBOT-2514 | Cutover runbook + go/no-go | 3 | P1 | Write-freeze code merged (PR #111); runbook open | 1 | S2 | devops | EPIC-25 AWS |
