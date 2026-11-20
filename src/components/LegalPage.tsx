@@ -8,7 +8,7 @@ import Link from "next/link"
 import LogoMark from "@/components/LogoMark"
 
 export const COMPANY_NAME = process.env.NEXT_PUBLIC_COMPANY_NAME || "DocBot"
-export const CONTACT_EMAIL = process.env.NEXT_PUBLIC_CONTACT_EMAIL || "support@docbot.space"
+export const CONTACT_EMAIL = process.env.NEXT_PUBLIC_CONTACT_EMAIL || "sanshrit.singhai@docbot.space"
 export const LEGAL_LAST_UPDATED = "October 28, 2026"
 
 const linkCx =
@@ -20,6 +20,7 @@ export function LegalLinks({ className = "" }: { className?: string }) {
     <nav aria-label="Legal" className={`flex items-center gap-4 ${className}`}>
       <Link href="/terms" className={linkCx}>Terms</Link>
       <Link href="/privacy" className={linkCx}>Privacy</Link>
+      <a href={`mailto:${CONTACT_EMAIL}`} className={linkCx}>Contact us</a>
     </nav>
   )
 }

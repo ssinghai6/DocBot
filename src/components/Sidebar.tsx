@@ -1,6 +1,7 @@
 "use client"
 
 import React, { useState } from "react"
+import Link from "next/link"
 import {
   X, Menu, Trash, Keyboard,
   Database, LogOut, ShieldCheck, Shield,
@@ -241,7 +242,7 @@ export default function Sidebar(props: SidebarProps) {
       `}>
         <div className="flex-1 min-h-0 overflow-y-auto p-4 flex flex-col">
         {/* Logo */}
-        <div className="flex items-center gap-2.5 mb-4 h-11">
+        <Link href="/" aria-label="DocBot home" className="flex items-center gap-2.5 mb-4 h-11 cursor-pointer hover:opacity-80 transition-opacity">
           <div className="w-8 h-8 rounded-[5px] bg-[var(--color-cyan-500)]/10 border border-[var(--color-cyan-500)]/30 flex items-center justify-center">
             <LogoMark className="w-4 h-4" />
           </div>
@@ -252,7 +253,7 @@ export default function Sidebar(props: SidebarProps) {
             </h2>
             <p className="text-[10px] text-[var(--color-text-tertiary)] mt-0.5">Analytical workspace</p>
           </div>
-        </div>
+        </Link>
 
         {/* Auth widget */}
         {authChecked && (
