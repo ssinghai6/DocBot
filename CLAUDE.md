@@ -105,6 +105,9 @@ Next.js proxies `/api/*` to `localhost:8000` in development.
 | Variable | Required | Notes |
 |----------|----------|-------|
 | `groq_api_key` | Yes | Groq API key |
+| `LLM_PRIMARY` | No | `groq` (default) or `bedrock` (DOCBOT-2584): same gpt-oss models on Amazon Bedrock, paid from AWS credits. Set back to `groq` to roll back |
+| `BEDROCK_API_KEY` | Bedrock | Bedrock long-term API key (IAM user limited to `bedrock:InvokeModel*` on the gpt-oss models). Founder sets it in Railway only |
+| `BEDROCK_REGION` | No | Bedrock region, default `us-west-2` |
 | `huggingface_api_key` | No | Only used when `EMBEDDINGS_PROVIDER=hf` or `RERANKER_PROVIDER=hf` (embeddings/reranking are local and free by default) |
 | `EMBEDDINGS_PROVIDER` | No | `local` (default, ONNX) or `hf` (HF API, falls back to local on error) |
 | `RERANKER_PROVIDER` | No | `local` (default), `hf`, or `off` |

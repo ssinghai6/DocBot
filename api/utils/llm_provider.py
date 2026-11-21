@@ -201,6 +201,9 @@ _COST_PER_1K_TOKENS: dict[str, tuple[float, float]] = {
     GROQ_MODEL: (0.000075, 0.0003),       # openai/gpt-oss-20b: $0.075 / $0.30 per 1M
     "openai/gpt-oss-120b": (0.00015, 0.0006),  # GROQ_CODE_MODEL: $0.15 / $0.60 per 1M
     GEMINI_MODEL: (0.000075, 0.0003),
+    # DOCBOT-2584: Bedrock ids for the same models (aws.amazon.com/bedrock/pricing, re-check)
+    "openai.gpt-oss-20b-1:0": (0.00007, 0.0003),
+    "openai.gpt-oss-120b-1:0": (0.00015, 0.0006),
 }
 
 
@@ -436,16 +439,14 @@ def _get_groq_llm(
     temperature: float = 0,
     streaming: bool = False,
 ) -> BaseChatModel:
-    """Create a Groq ChatModel instance."""
+    """Create a Groq ChatModel instance (pointed at Bedrock when LLM_PRIMARY=bedrock)."""
     from langchain_groq import ChatGroq
 
-    key = api_key or os.getenv("groq_api_key", "")
-    if not key:
-        raise ValueError("Groq API key not available (groq_api_key env var)")
-
+    _, key, base_url, model_id = _primary_target(GROQ_MODEL, api_key)
     return ChatGroq(
-        model=GROQ_MODEL,
+        model=model_id,
         api_key=key,
+        base_url=base_url,
         temperature=temperature,
         streaming=streaming,
     )
@@ -606,19 +607,20 @@ async def call_llm(
 
     # Try Groq first
     try:
+        provider, _, _, model_id = _primary_target(GROQ_MODEL, groq_api_key)
         groq_llm = _get_groq_llm(groq_api_key, temperature, streaming=False)
         start = time.monotonic()
         response = await groq_llm.ainvoke([HumanMessage(content=prompt)])
         elapsed = time.monotonic() - start
-        logger.info("LLM call completed via Groq in %.2fs", elapsed)
+        logger.info("LLM call completed via %s in %.2fs", provider, elapsed)
         in_tok, out_tok = _token_usage_from_response(response)
         _log_llm_call(
-            provider="groq", model=GROQ_MODEL, latency_ms=elapsed * 1000,
+            provider=provider, model=model_id, latency_ms=elapsed * 1000,
             success=True, fallback_triggered=False, caller=caller,
             input_tokens=in_tok, output_tokens=out_tok, run_id=run_id,
             prompt_version=prompt_version,
         )
-        return response.content
+        return _strip_reasoning(response.content) if provider == "bedrock" else response.content
     except ValueError:
         # Groq key not available — go straight to Gemini
         logger.warning("Groq unavailable (no API key), using Gemini")
@@ -662,6 +664,70 @@ async def call_llm(
 # in a separate field rather than inline <think> tags, so the <think>-stripping
 # in sandbox_service is a harmless no-op for this model.
 GROQ_CODE_MODEL = "openai/gpt-oss-120b"
+
+# DOCBOT-2584: LLM_PRIMARY=bedrock sends the same gpt-oss models to Amazon
+# Bedrock (paid from AWS credits) instead of Groq. Bedrock's Chat Completions
+# route is <base>/openai/v1/chat/completions, the exact path the Groq SDK
+# appends to base_url, so the Groq client is reused as is. Unset/"groq" = old
+# behaviour, so flipping the env var back is the rollback.
+_BEDROCK_MODEL_IDS = {
+    GROQ_MODEL: "openai.gpt-oss-20b-1:0",
+    GROQ_CODE_MODEL: "openai.gpt-oss-120b-1:0",
+}
+
+
+def _primary_target(model: str, api_key: Optional[str] = None) -> tuple[str, str, Optional[str], str]:
+    """(provider, api_key, base_url, model_id) for the primary LLM. ValueError if no key."""
+    if os.getenv("LLM_PRIMARY", "groq").strip().lower() == "bedrock":
+        key = os.getenv("BEDROCK_API_KEY", "")
+        if not key:
+            raise ValueError("BEDROCK_API_KEY not set")
+        region = os.getenv("BEDROCK_REGION", "us-west-2").strip()
+        return "bedrock", key, f"https://bedrock-runtime.{region}.amazonaws.com", _BEDROCK_MODEL_IDS.get(model, model)
+    key = api_key or os.getenv("groq_api_key", "")
+    if not key:
+        raise ValueError("groq_api_key not set")
+    return "groq", key, None, model
+
+
+_REASONING_OPEN, _REASONING_CLOSE = "<reasoning>", "</reasoning>"
+
+
+def _partial_tag_len(text: str, tag: str) -> int:
+    """Length of the longest suffix of `text` that could be the start of `tag`."""
+    for n in range(min(len(text), len(tag) - 1), 0, -1):
+        if tag.startswith(text[-n:]):
+            return n
+    return 0
+
+
+def _strip_reasoning_stream(chunks: Iterator[str]) -> Iterator[str]:
+    """Drop <reasoning>...</reasoning> spans (Bedrock gpt-oss puts chain of thought inline)."""
+    buf, inside = "", False
+    for chunk in chunks:
+        buf += chunk
+        out = []
+        while True:
+            tag = _REASONING_CLOSE if inside else _REASONING_OPEN
+            i = buf.find(tag)
+            if i < 0:
+                break
+            if not inside:
+                out.append(buf[:i])
+            buf, inside = buf[i + len(tag):], not inside
+        hold = _partial_tag_len(buf, tag)
+        if not inside:
+            out.append(buf[:len(buf) - hold])
+        buf = buf[len(buf) - hold:]
+        text = "".join(out)
+        if text:
+            yield text
+    if not inside and buf:
+        yield buf
+
+
+def _strip_reasoning(text: str) -> str:
+    return "".join(_strip_reasoning_stream(iter([text])))
 
 
 def _gemini_completion(
@@ -800,32 +866,31 @@ def chat_completion(
         DOCBOT-1507: the PROMPT_VERSION_* constant active at the call site —
         carried into the persisted llm_calls row alongside `caller`.
     """
-    # Try Groq first
+    # Try Groq (or Bedrock, DOCBOT-2584) first
     try:
         from groq import Groq
-        api_key = os.getenv("groq_api_key", "")
-        if not api_key:
-            raise ValueError("groq_api_key not set")
-        client = Groq(api_key=api_key, timeout=GROQ_TIMEOUT_S, max_retries=GROQ_MAX_RETRIES)
+        provider, api_key, base_url, model_id = _primary_target(model)
+        client = Groq(api_key=api_key, base_url=base_url, timeout=GROQ_TIMEOUT_S, max_retries=GROQ_MAX_RETRIES)
         start = time.monotonic()
         response = client.chat.completions.create(
-            model=model,
+            model=model_id,
             messages=messages,
             temperature=temperature,
             max_tokens=max_tokens,
         )
         elapsed = time.monotonic() - start
-        logger.info("chat_completion via Groq (%s) in %.2fs", model, elapsed)
+        logger.info("chat_completion via %s (%s) in %.2fs", provider, model_id, elapsed)
         usage = getattr(response, "usage", None)
         _log_llm_call(
-            provider="groq", model=model, latency_ms=elapsed * 1000,
+            provider=provider, model=model_id, latency_ms=elapsed * 1000,
             success=True, fallback_triggered=False, caller=caller,
             input_tokens=safe_int(getattr(usage, "prompt_tokens", None)),
             output_tokens=safe_int(getattr(usage, "completion_tokens", None)),
             run_id=run_id,
             prompt_version=prompt_version,
         )
-        return response.choices[0].message.content.strip()
+        text = response.choices[0].message.content
+        return (_strip_reasoning(text) if provider == "bedrock" else text).strip()
     except Exception as exc:
         if isinstance(exc, ValueError) or _is_retriable_error(exc):
             logger.warning("Groq chat_completion failed (%s), falling back to Gemini", str(exc)[:200])
@@ -874,31 +939,36 @@ def chat_completion_stream(
         DOCBOT-2008: when passed, ``finish_info["finish_reason"]`` is set to
         ``"length"`` if the stream stopped at max_tokens (Groq or Gemini).
     """
-    # Try Groq first
+    # Try Groq (or Bedrock, DOCBOT-2584) first
     start = time.monotonic()
     yielded = False
+    provider, model_id = "groq", model
     try:
         from groq import Groq
-        api_key = os.getenv("groq_api_key", "")
-        if not api_key:
-            raise ValueError("groq_api_key not set")
-        client = Groq(api_key=api_key, timeout=GROQ_TIMEOUT_S, max_retries=GROQ_STREAM_MAX_RETRIES)
+        provider, api_key, base_url, model_id = _primary_target(model)
+        client = Groq(api_key=api_key, base_url=base_url, timeout=GROQ_TIMEOUT_S, max_retries=GROQ_STREAM_MAX_RETRIES)
         stream = client.chat.completions.create(
-            model=model,
+            model=model_id,
             messages=messages,
             temperature=temperature,
             max_tokens=max_tokens,
             stream=True,
         )
-        for chunk in stream:
-            if finish_info is not None and chunk.choices[0].finish_reason:
-                finish_info["finish_reason"] = chunk.choices[0].finish_reason
-            delta = chunk.choices[0].delta
-            if delta and delta.content:
-                yielded = True
-                yield delta.content
+
+        def _tokens() -> Iterator[str]:
+            for chunk in stream:
+                if finish_info is not None and chunk.choices[0].finish_reason:
+                    finish_info["finish_reason"] = chunk.choices[0].finish_reason
+                delta = chunk.choices[0].delta
+                if delta and delta.content:
+                    yield delta.content
+
+        tokens = _strip_reasoning_stream(_tokens()) if provider == "bedrock" else _tokens()
+        for token in tokens:
+            yielded = True
+            yield token
         _log_llm_call(
-            provider="groq", model=model, latency_ms=(time.monotonic() - start) * 1000,
+            provider=provider, model=model_id, latency_ms=(time.monotonic() - start) * 1000,
             success=True, fallback_triggered=False, caller=caller, run_id=run_id,
             prompt_version=prompt_version,
         )
@@ -907,9 +977,9 @@ def chat_completion_stream(
         if yielded:
             # DOCBOT-2307: tokens already reached the client — a Gemini
             # fallback would restart the answer and duplicate text. Stop.
-            logger.error("Groq streaming failed mid-answer (%s), not falling back", type(exc).__name__)
+            logger.error("%s streaming failed mid-answer (%s), not falling back", provider, type(exc).__name__)
             _log_llm_call(
-                provider="groq", model=model, latency_ms=(time.monotonic() - start) * 1000,
+                provider=provider, model=model_id, latency_ms=(time.monotonic() - start) * 1000,
                 success=False, fallback_triggered=False, caller=caller, run_id=run_id,
                 error_message=f"{type(exc).__name__}: {str(exc)[:200]}",
                 error_class=type(exc).__name__,
