@@ -964,12 +964,18 @@ def chat_completion_stream(
                     yield delta.content
 
         tokens = _strip_reasoning_stream(_tokens()) if provider == "bedrock" else _tokens()
+        out_chars = 0
         for token in tokens:
             yielded = True
+            out_chars += len(token)
             yield token
+        # DOCBOT-2584: streams report no usage; estimate (~4 chars/token) so the
+        # daily spend caps count chat answers instead of logging a null cost.
         _log_llm_call(
             provider=provider, model=model_id, latency_ms=(time.monotonic() - start) * 1000,
             success=True, fallback_triggered=False, caller=caller, run_id=run_id,
+            input_tokens=sum(len(str(m.get("content", ""))) for m in messages) // 4,
+            output_tokens=out_chars // 4,
             prompt_version=prompt_version,
         )
         return  # success — don't fall through

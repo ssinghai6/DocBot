@@ -67,3 +67,15 @@ def test_chat_completion_uses_bedrock(monkeypatch):
     assert groq_cls.call_args.kwargs["base_url"] == "https://bedrock-runtime.us-east-1.amazonaws.com"
     assert client.chat.completions.create.call_args.kwargs["model"] == "openai.gpt-oss-20b-1:0"
     assert log.call_args.kwargs["provider"] == "bedrock"
+
+
+def test_stream_logs_estimated_tokens(monkeypatch):
+    _bedrock_env(monkeypatch)
+    chunk = SimpleNamespace(choices=[SimpleNamespace(finish_reason=None, delta=SimpleNamespace(content="abcdefgh"))])
+    client = MagicMock()
+    client.chat.completions.create.return_value = iter([chunk])
+    with patch("groq.Groq", return_value=client), patch.object(lp, "_log_llm_call") as log:
+        assert "".join(lp.chat_completion_stream([{"role": "user", "content": "x" * 400}])) == "abcdefgh"
+    kw = log.call_args.kwargs
+    assert (kw["input_tokens"], kw["output_tokens"]) == (100, 2)
+    assert lp._estimate_cost_usd(kw["model"], kw["input_tokens"], kw["output_tokens"]) > 0
