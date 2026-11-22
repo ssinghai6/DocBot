@@ -23,6 +23,7 @@ Public API:
 
 from __future__ import annotations
 
+import json
 import logging
 import os
 import re
@@ -309,6 +310,42 @@ def _build_examples(doc_type: str):
 # ---------------------------------------------------------------------------
 
 
+def _first_json_object(text: str) -> str:
+    """The first parseable ``{...}`` in ``text``, re-serialized; ``text`` unchanged if there is none."""
+    decoder = json.JSONDecoder()
+    for i, ch in enumerate(text):
+        if ch == "{":
+            try:
+                obj, _ = decoder.raw_decode(text, i)
+            except ValueError:
+                continue
+            if isinstance(obj, dict):
+                return json.dumps(obj)
+    return text
+
+
+def _bedrock_language_model():
+    """LangExtract's OpenAI provider, minus the inline reasoning Bedrock models put before the JSON.
+
+    gpt-oss on Bedrock wraps its JSON in reasoning plus fences or a stray ``{`` (seen live:
+    ``<reasoning>..</reasoning>```json{..}``` and ``</reasoning>{\n{"extractions": ..}``), which
+    LangExtract cannot parse. Hand it the first JSON object that parses instead.
+    """
+    import dataclasses
+
+    from langextract.providers.openai import OpenAILanguageModel
+
+    from api.utils.llm_provider import _strip_reasoning
+
+    class BedrockLanguageModel(OpenAILanguageModel):
+        @staticmethod
+        def _response_to_scored_output(response):
+            out = OpenAILanguageModel._response_to_scored_output(response)
+            return dataclasses.replace(out, output=_first_json_object(_strip_reasoning(out.output or "")))
+
+    return BedrockLanguageModel
+
+
 def _extraction_target(gemini_api_key: str) -> Optional[tuple[str, str, dict]]:
     """(provider, model_id, lx.extract kwargs), or None when no model is configured.
 
@@ -318,20 +355,14 @@ def _extraction_target(gemini_api_key: str) -> Optional[tuple[str, str, dict]]:
     from api.utils.llm_provider import _bedrock_conn, _bedrock_enabled
 
     if _bedrock_enabled():
-        import langextract as lx
-
         try:
             key, base_url = _bedrock_conn()
         except ValueError:
             return None
         model_id = os.getenv("BEDROCK_EXTRACT_MODEL", "").strip() or "openai.gpt-oss-120b-1:0"
-        config = lx.factory.ModelConfig(
-            model_id=model_id,
-            provider="OpenAILanguageModel",
-            provider_kwargs={"api_key": key, "base_url": f"{base_url}/openai/v1"},
-        )
-        # non-Gemini providers: fenced JSON, no Gemini schema constraints (LangExtract docs)
-        return "bedrock", model_id, {"config": config, "fence_output": True, "use_schema_constraints": False}
+        model = _bedrock_language_model()(model_id=model_id, api_key=key, base_url=f"{base_url}/openai/v1")
+        # bare JSON (cleaned above), no Gemini schema constraints
+        return "bedrock", model_id, {"model": model, "fence_output": False, "use_schema_constraints": False}
     if not gemini_api_key:
         return None
     return "gemini", "gemini-2.5-flash", {"model_id": "gemini-2.5-flash", "api_key": gemini_api_key}

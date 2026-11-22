@@ -680,7 +680,7 @@ async def _rephrase_with_history(
 ) -> str:
     """Rephrase a follow-up question into a standalone question using chat history.
 
-    Uses a quick LLM call (max_tokens=200, temperature=0) so the downstream
+    Uses a quick LLM call (max_tokens=1000, temperature=0) so the downstream
     SQL pipeline gets full context even when the user says things like
     "now filter that to Q1 only".
     """
@@ -707,7 +707,7 @@ async def _rephrase_with_history(
             lambda: chat_completion(
                 [{"role": "user", "content": prompt}],
                 temperature=0,
-                max_tokens=200,
+                max_tokens=1000,
                 caller="sql_rephrase_question",
                 prompt_version=PROMPT_VERSION_SQL_REPHRASE,
             ),
@@ -1828,7 +1828,7 @@ async def _select_relevant_tables(question: str, schema: List[Dict[str, Any]]) -
         raw = await achat_completion(
             [{"role": "user", "content": prompt}],
             temperature=0,
-            max_tokens=200,
+            max_tokens=1000,
             caller="sql_table_selector",
             prompt_version=PROMPT_VERSION_SQL_TABLE_SELECTOR,
         )
@@ -1852,7 +1852,7 @@ async def _select_relevant_tables(question: str, schema: List[Dict[str, Any]]) -
                     },
                 ],
                 temperature=0,
-                max_tokens=200,
+                max_tokens=1000,
                 caller="sql_table_selector_retry",
                 prompt_version=PROMPT_VERSION_SQL_TABLE_SELECTOR,
             )

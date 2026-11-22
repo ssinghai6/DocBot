@@ -210,7 +210,7 @@ async def classify_intent(
                 {"role": "user", "content": question},
             ],
             model=_MODEL,
-            max_tokens=200,
+            max_tokens=1000,
             temperature=0,
             caller="intent_classification",
             prompt_version=PROMPT_VERSION_INTENT_CLASSIFICATION,

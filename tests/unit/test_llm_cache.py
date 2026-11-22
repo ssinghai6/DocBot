@@ -352,3 +352,18 @@ class TestTenantScoping:
         assert await llm_cache.get_cached_response(h, "m") is None
         with bind_principal(_ORG_A):
             assert await llm_cache.get_cached_response(h, "m") is None
+
+
+# ---------------------------------------------------------------------------
+# DOCBOT-2585: keyed on the model that actually serves the slot
+# ---------------------------------------------------------------------------
+
+
+async def test_bedrock_model_swap_misses_old_rows(wired_cache, monkeypatch):
+    monkeypatch.setenv("LLM_PRIMARY", "bedrock")
+    monkeypatch.setenv("BEDROCK_MODEL", "openai.gpt-oss-20b-1:0")
+    await llm_cache.set_cached_response("h", "openai/gpt-oss-20b", "SELECT 1")
+    assert await llm_cache.get_cached_response("h", "openai/gpt-oss-20b") == "SELECT 1"
+
+    monkeypatch.setenv("BEDROCK_MODEL", "openai.gpt-oss-120b-1:0")
+    assert await llm_cache.get_cached_response("h", "openai/gpt-oss-20b") is None

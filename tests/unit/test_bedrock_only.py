@@ -1,7 +1,6 @@
 """DOCBOT-2585: every LLM path (models, fallback, LangExtract) can run on Bedrock."""
 
 import asyncio
-import sys
 from types import SimpleNamespace
 from unittest.mock import MagicMock, patch
 
@@ -102,14 +101,31 @@ def test_extraction_runs_on_bedrock(monkeypatch):
     from api import document_extractor as de
 
     _bedrock_env(monkeypatch)
-    fake_lx = MagicMock()
-    monkeypatch.setitem(sys.modules, "langextract", fake_lx)
+    model_cls = MagicMock()
+    monkeypatch.setattr(de, "_bedrock_language_model", lambda: model_cls)
     provider, model_id, kwargs = de._extraction_target("")
     assert (provider, model_id) == ("bedrock", "openai.gpt-oss-120b-1:0")
-    cfg = fake_lx.factory.ModelConfig.call_args.kwargs
-    assert cfg["provider"] == "OpenAILanguageModel"
-    assert cfg["provider_kwargs"]["base_url"] == "https://bedrock-runtime.us-east-1.amazonaws.com/openai/v1"
-    assert kwargs["fence_output"] is True and "api_key" not in kwargs
+    assert model_cls.call_args.kwargs["base_url"] == "https://bedrock-runtime.us-east-1.amazonaws.com/openai/v1"
+    assert kwargs["model"] is model_cls.return_value
+    assert kwargs["fence_output"] is False and "api_key" not in kwargs
+
+
+@pytest.mark.parametrize("raw", [
+    # shapes gpt-oss returned on Bedrock (after reasoning is stripped)
+    '```json{"extractions": [{"metric": "$330 million"}]}```',
+    '{\n{\n  "extractions": [{"metric": "$330 million"}]\n}',
+    '{"extractions": [{"metric": "$330 million"}]}',
+])
+def test_first_json_object(raw):
+    from api import document_extractor as de
+
+    assert de._first_json_object(raw) == '{"extractions": [{"metric": "$330 million"}]}'
+
+
+def test_first_json_object_leaves_non_json():
+    from api import document_extractor as de
+
+    assert de._first_json_object("no json {here") == "no json {here"
 
 
 def test_extraction_gemini_when_bedrock_off(monkeypatch):

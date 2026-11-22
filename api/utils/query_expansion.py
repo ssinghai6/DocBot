@@ -202,7 +202,7 @@ def expand_query_llm(question: str, *, hf_api_key: str | None = None) -> list[st
                 },
                 {"role": "user", "content": question},
             ],
-            max_tokens=150,
+            max_tokens=1000,
             caller="query_expansion_llm_rewrite",
             prompt_version=PROMPT_VERSION_QUERY_EXPANSION,
         )
