@@ -787,6 +787,11 @@ async def generate_analysis_code(
 # ---------------------------------------------------------------------------
 
 
+def df_preamble(result_dicts: list) -> str:
+    """DOCBOT-2583: bind `df` in the sandbox (the codegen prompt promises it)."""
+    return f"df = pd.DataFrame(json.loads({_stdlib_json.dumps(_stdlib_json.dumps(result_dicts, default=str))}))\n"
+
+
 async def run_python(
     code: str,
     timeout_seconds: int = 25,

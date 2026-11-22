@@ -893,6 +893,8 @@ async def hybrid_chat(
             from api.utils.exceptions import StreamInterruptedError
             detail = str(exc) if isinstance(exc, StreamInterruptedError) else "Synthesis failed. Please try again."
             yield f"data: {json.dumps({'type': 'error', 'detail': detail})}\n\n"
+            # DOCBOT-2583: always close the stream so the client never waits forever.
+            yield f"data: {json.dumps({'type': 'done', 'citations': [], 'run_id': run_id})}\n\n"
             return
 
         # DOCBOT-1518: active discrepancy gate. detect_discrepancies() above
