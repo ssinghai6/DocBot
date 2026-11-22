@@ -1,17 +1,17 @@
-name: Plane Sync
+name: OpenProject Sync
 
-# DOCBOT-2580: keeps Plane ticket states true even when a PR is merged outside
+# DOCBOT-2586 (was DOCBOT-2580 for Plane): keeps OpenProject (pm.docbot.space) ticket states true even when a PR is merged outside
 # a Claude session. Ticket ids (DOCBOT-XXXX) come from the branch name and PR
-# title. Mapping (same as the Plane Sync Rule in CLAUDE.md):
+# title. Mapping (same as the OpenProject Sync Rule in CLAUDE.md):
 #   branch created                 -> In Progress
 #   PR opened / reopened / ready   -> Testing   (created from the PR title if missing)
 #   PR merged into main            -> Done
 #   PR merged into dev             -> Testing   (AWS work: not live until main)
 #   PR closed without merge        -> no change (cancel by hand)
 #   push to main touching the backlog, stories or sync script -> full sync
-#   (descriptions, labels, modules, new tickets), same as running it locally
-# Needs repo secret PLANE_API_KEY; without it the job skips with a warning.
-# Never a required check: a Plane outage must not block merges.
+#   (descriptions, epics, sprints, points, new tickets), same as running it locally
+# Needs repo secret OPENPROJECT_API_KEY; without it the job skips with a warning.
+# Never a required check: the board server being down must not block merges.
 
 on:
   create:
@@ -23,19 +23,21 @@ on:
       - "project-tasks/docbot-master-backlog.md"
       - "project-tasks/docbot-v2-project-tracking.md"
       - "project-tasks/stories/**"
+      - "project-tasks/yc-10-day-plan.md"
       - "scripts/plane_sync.py"
+      - "scripts/openproject_sync.py"
   workflow_dispatch: {}
 
-# one Plane writer at a time, so a merge's state move and full sync never race into duplicates
+# one board writer at a time, so a merge's state move and full sync never race into duplicates
 concurrency:
-  group: plane-sync
+  group: openproject-sync
   cancel-in-progress: false
 
 permissions:
   contents: read
 
 jobs:
-  plane:
+  openproject:
     runs-on: ubuntu-latest
     if: github.event_name != 'create' || github.ref_type == 'branch'
     steps:
@@ -47,7 +49,7 @@ jobs:
           python-version: "3.12"
       - name: Move tickets
         env:
-          PLANE_API_KEY: ${{ secrets.PLANE_API_KEY }}
+          OPENPROJECT_API_KEY: ${{ secrets.OPENPROJECT_API_KEY }}
           EVENT: ${{ github.event_name }}
           ACTION: ${{ github.event.action }}
           MERGED: ${{ github.event.pull_request.merged }}
@@ -56,16 +58,13 @@ jobs:
           PR_TITLE: ${{ github.event.pull_request.title }}
           HEAD: ${{ github.event.pull_request.head.ref || github.ref_name }}
         run: |
-          if [ -z "$PLANE_API_KEY" ]; then echo "::warning::PLANE_API_KEY secret not set; skipping"; exit 0; fi
-          # tolerate a pasted token with quotes/whitespace; report only its shape, never the value
-          raw_len=${#PLANE_API_KEY}
-          PLANE_API_KEY=$(printf '%s' "$PLANE_API_KEY" | tr -d "[:space:]\"'")
-          case "$PLANE_API_KEY" in plane_api_*) pfx=yes;; *) pfx=no;; esac
-          echo "key shape: raw_len=$raw_len clean_len=${#PLANE_API_KEY} plane_api_prefix=$pfx"
-          export PLANE_API_KEY
+          if [ -z "$OPENPROJECT_API_KEY" ]; then echo "::warning::OPENPROJECT_API_KEY secret not set; skipping"; exit 0; fi
+          # tolerate a pasted token with quotes/whitespace; never print it
+          OPENPROJECT_API_KEY=$(printf '%s' "$OPENPROJECT_API_KEY" | tr -d "[:space:]\"'")
+          export OPENPROJECT_API_KEY
           pip install -q requests
           if [ "$EVENT" = "push" ] || [ "$EVENT" = "workflow_dispatch" ]; then
-            exec python3 scripts/plane_sync.py --source-ref HEAD
+            exec python3 scripts/openproject_sync.py --source-ref HEAD
           fi
           ids=$(printf '%s\n%s\n' "$HEAD" "$PR_TITLE" | grep -oE 'DOCBOT-[0-9]{3,5}' | sort -u)
           if [ -z "$ids" ]; then echo "no DOCBOT id in branch or title; nothing to do"; exit 0; fi
@@ -82,7 +81,7 @@ jobs:
           fi
           failed=0
           for id in $ids; do
-            python3 scripts/plane_sync.py --set-state "$id" "$state" --note "$note" ${title:+--title "$title"} \
-              || { echo "::error::Plane update failed for $id"; failed=1; }
+            python3 scripts/openproject_sync.py --set-state "$id" "$state" --note "$note" ${title:+--title "$title"} \
+              || { echo "::error::OpenProject update failed for $id"; failed=1; }
           done
           exit $failed  # red run, never blocks merges (not a required check)
