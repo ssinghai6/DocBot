@@ -49,8 +49,9 @@ def op_status(state: str) -> str:
 
 
 def ahead(cur: str, want: str) -> bool:
-    """True if the board is at or past `want`. Never move backwards; Rejected / On hold etc. are kept."""
-    if cur not in STATUS_ORDER:
+    """True if the board is at or past `want`. Never move backwards; Rejected / On hold etc. are kept,
+    and On hold (unknown status) is only a starting value, so a triaged ticket is never pushed back to it."""
+    if cur not in STATUS_ORDER or want not in STATUS_ORDER:
         return True
     return want in STATUS_ORDER and STATUS_ORDER.index(cur) >= STATUS_ORDER.index(want)
 
@@ -91,8 +92,8 @@ def historical_spec() -> dict:
 YC_PLAN = "project-tasks/yc-10-day-plan.md"
 ROADMAP = "project-tasks/docbot-enterprise-roadmap.md"
 OLD_PRIORITY = {"must have": "High", "should have": "Normal", "nice to have": "Low", "could have": "Low"}
-UNKNOWN_NOTE = ("**Status not recorded in the repo docs** (not in the shipped list, not in the current backlog). "
-                "Parked as On hold: triage to Closed, Rejected or New.")
+UNKNOWN_NOTE = ("**Status was not recorded in the repo docs** when loaded (not in the shipped list, not in the "
+                "current backlog), so it started On hold. The board status and its comments are the truth.")
 
 
 def shipped_ids() -> set[str]:
@@ -207,7 +208,7 @@ def norm(text: str | None) -> str:
 def _self_test() -> None:
     assert op_status("Testing") == "In testing" and op_status("Todo") == "New" and op_status("Done") == "Closed"
     assert ahead("Closed", "In progress") and ahead("Rejected", "Closed") and ahead("On hold", "New")
-    assert not ahead("New", "In progress")
+    assert not ahead("New", "In progress") and ahead("New", "On hold")
     assert epic_of("EPIC-25 AWS migration") == EPICS["EPIC-25"] and epic_of(ps.SAFETY) == SAFETY_EPIC
     assert epic_of(ps.HISTORICAL_MODULE) == HISTORICAL_EPIC
     s = ps.Story("9999", "Terraform", "5", "P1", "Open", "1", "S2", "devops", "EPIC-25 AWS", "test")

@@ -378,6 +378,7 @@ Always prefer to create utils and helper functions whenever required.
 
 ## Commit
 Always have Author: Sanshrit Singhai
+Always end the commit message with `Co-Authored-By: Sanshrit Singhai <97412712+ssinghai6@users.noreply.github.com>`
 Never use Co-Authored-By Claude
 
 ## OpenProject Sync Rule (replaced Plane on 2026-11-22, Jira on 2026-11-17)
