@@ -44,6 +44,8 @@ openpyxl==3.1.5
 # DOCBOT-301: Python code generation via openai/gpt-oss-120b on Groq (uses existing groq package)
 # DOCBOT-406: LangExtract for structured financial document extraction (Google, Gemini-backed)
 langextract==1.7.2
+# DOCBOT-2585: LangExtract OpenAI-compatible provider, used to run extraction on Bedrock
+openai==1.109.1
 # DOCBOT-208: Azure SQL / Microsoft Entra Service Principal auth
 pyodbc==5.5.0
 azure-identity==1.27.0
