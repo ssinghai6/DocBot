@@ -69,7 +69,8 @@ def story_markdown(s: ps.Story, stories_dir: str | None) -> str:
             ("Backlog status", s.status), ("Acceptance criteria", s.ac), ("Dependencies", s.deps), ("Due", s.due),
             ("Why now", s.why)]
     body = "\n\n".join(f"**{k}:** {v}" for k, v in rows if v and v != "-")
-    return f"{head}{body}\n\n_Source: {s.src}_"
+    src = s.src.split(" @ ")[0]  # no git ref: CI (HEAD) and local (origin/main) runs must write the same text
+    return f"{head}{body}\n\n_Source: {src}_"
 
 
 def story_spec(s: ps.Story, stories_dir: str | None) -> dict:
@@ -140,7 +141,7 @@ def tracker_sections(text: str, ref: str, shipped: set[str]) -> list[tuple[str, 
         # no Status line: EPIC-01..15 are all recorded as shipped in CLAUDE.md "Ticket Reference"
         state = ("Done" if not status or "done" in status or tid.removeprefix("DOCBOT-") in shipped
                  else "In Progress" if "progress" in status else "Backlog")
-        desc = re.sub(r"\n-{3,}\s*$", "", sec.strip()) + f"\n\n_Source: {ps.TRACKER} @ {ref}_"
+        desc = re.sub(r"\n-{3,}\s*$", "", sec.strip()) + f"\n\n_Source: {ps.TRACKER}_"
         out.append((tid, archive_spec(tid, title, state, field("Story Points"), field("Priority"), desc)))
     return out
 
@@ -169,7 +170,7 @@ def table_rows(text: str, src: str, ref: str, shipped: set[str]) -> list[tuple[s
                 state = "?"
             skip = {header[0], "title", "pts", "points", "pri"}
             rows_md = [f"**{k.capitalize()}:** {v}" for k, v in d.items() if k not in skip and v and v != "-"]
-            desc = "\n\n".join(([UNKNOWN_NOTE] if state == "?" else []) + rows_md + [f"_Source: {src} @ {ref}_"])
+            desc = "\n\n".join(([UNKNOWN_NOTE] if state == "?" else []) + rows_md + [f"_Source: {src}_"])
             out.append((f"DOCBOT-{sid}", archive_spec(f"DOCBOT-{sid}", title, state, d.get("pts") or d.get("points", ""),
                                                       d.get("pri", ""), desc)))
     return out
@@ -211,10 +212,10 @@ def _self_test() -> None:
     assert not ahead("New", "In progress") and ahead("New", "On hold")
     assert epic_of("EPIC-25 AWS migration") == EPICS["EPIC-25"] and epic_of(ps.SAFETY) == SAFETY_EPIC
     assert epic_of(ps.HISTORICAL_MODULE) == HISTORICAL_EPIC
-    s = ps.Story("9999", "Terraform", "5", "P1", "Open", "1", "S2", "devops", "EPIC-25 AWS", "test")
+    s = ps.Story("9999", "Terraform", "5", "P1", "Open", "1", "S2", "devops", "EPIC-25 AWS", "test @ HEAD")
     sp = story_spec(s, None)
     assert sp["sprint"] == "S2" and sp["storyPoints"] == 5 and sp["priority"] == "High" and sp["status"] == "New"
-    assert "**Lane:** devops" in sp["description"]
+    assert "**Lane:** devops" in sp["description"] and sp["description"].endswith("_Source: test_")
     sp2 = story_spec(ps.Story("9998", "FAQ", "", "-", "To do", "1", "-", "x", "EPIC-25 SEO", "t"), None)
     assert sp2["sprint"] is None and sp2["storyPoints"] is None and sp2["priority"] == "Normal"
     assert epic_code("DOCBOT-101") == "EPIC-01" and epic_code("DOCBOT-2704") == "EPIC-27"
