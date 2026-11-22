@@ -204,6 +204,10 @@ _COST_PER_1K_TOKENS: dict[str, tuple[float, float]] = {
     # DOCBOT-2584: Bedrock ids for the same models (aws.amazon.com/bedrock/pricing, re-check)
     "openai.gpt-oss-20b-1:0": (0.00007, 0.0003),
     "openai.gpt-oss-120b-1:0": (0.00015, 0.0006),
+    # DOCBOT-2585: open-weight alternatives selectable via BEDROCK_*_MODEL (us-east-1 on-demand)
+    "zai.glm-4.7-flash": (0.00007, 0.0004),
+    "nvidia.nemotron-nano-3-30b": (0.00006, 0.00024),
+    "nvidia.nemotron-super-3-120b": (0.00015, 0.00065),
 }
 
 
@@ -517,8 +521,8 @@ def get_llm(
         logger.info("LLM provider: Groq (primary)")
         return llm
     except (ValueError, ImportError) as exc:
-        logger.warning("Groq LLM unavailable (%s), falling back to Gemini", exc)
-        return _get_gemini_llm(gemini_api_key, temperature, streaming)
+        logger.warning("Groq LLM unavailable (%s), falling back", exc)
+        return _get_fallback_llm(gemini_api_key, temperature, streaming)
 
 
 def _is_retriable_error(exc: Exception) -> bool:
@@ -639,20 +643,21 @@ async def call_llm(
                 str(exc)[:200],
             )
 
-    # Fallback to Gemini
-    gemini_llm = _get_gemini_llm(gemini_api_key, temperature, streaming=False)
+    # Fallback: Gemini, or a second Bedrock model (DOCBOT-2585)
+    fb_provider, fb_model = _fallback_label()
+    fallback_llm = _get_fallback_llm(gemini_api_key, temperature, streaming=False)
     start = time.monotonic()
-    response = await gemini_llm.ainvoke([HumanMessage(content=prompt)])
+    response = await fallback_llm.ainvoke([HumanMessage(content=prompt)])
     elapsed = time.monotonic() - start
-    logger.info("LLM call completed via Gemini (fallback) in %.2fs", elapsed)
+    logger.info("LLM call completed via %s (fallback) in %.2fs", fb_provider, elapsed)
     in_tok, out_tok = _token_usage_from_response(response)
     _log_llm_call(
-        provider="gemini", model=GEMINI_MODEL, latency_ms=elapsed * 1000,
+        provider=fb_provider, model=fb_model, latency_ms=elapsed * 1000,
         success=True, fallback_triggered=True, caller=caller,
         input_tokens=in_tok, output_tokens=out_tok, run_id=run_id,
         prompt_version=prompt_version,
     )
-    return response.content
+    return _strip_reasoning(response.content) if fb_provider == "bedrock" else response.content
 
 
 # ---------------------------------------------------------------------------
@@ -674,23 +679,112 @@ _BEDROCK_MODEL_IDS = {
     GROQ_MODEL: "openai.gpt-oss-20b-1:0",
     GROQ_CODE_MODEL: "openai.gpt-oss-120b-1:0",
 }
+# DOCBOT-2585: swap the Bedrock model per slot without a deploy.
+_BEDROCK_MODEL_ENV = {GROQ_MODEL: "BEDROCK_MODEL", GROQ_CODE_MODEL: "BEDROCK_CODE_MODEL"}
+
+
+def _bedrock_enabled() -> bool:
+    return os.getenv("LLM_PRIMARY", "groq").strip().lower() == "bedrock"
+
+
+def _bedrock_conn() -> tuple[str, str]:
+    """(api_key, base_url) for Bedrock. ValueError if no key."""
+    key = os.getenv("BEDROCK_API_KEY", "")
+    if not key:
+        raise ValueError("BEDROCK_API_KEY not set")
+    region = os.getenv("BEDROCK_REGION", "us-west-2").strip()
+    return key, f"https://bedrock-runtime.{region}.amazonaws.com"
+
+
+def _bedrock_model_id(model: str) -> str:
+    env = _BEDROCK_MODEL_ENV.get(model)
+    model_id = (os.getenv(env, "") if env else "").strip() or _BEDROCK_MODEL_IDS.get(model, model)
+    if model_id not in _COST_PER_1K_TOKENS:
+        # Unpriced = null cost = invisible to the daily spend caps.
+        logger.warning("Bedrock model %s has no cost entry; spend caps will not count it", model_id)
+    return model_id
 
 
 def _primary_target(model: str, api_key: Optional[str] = None) -> tuple[str, str, Optional[str], str]:
     """(provider, api_key, base_url, model_id) for the primary LLM. ValueError if no key."""
-    if os.getenv("LLM_PRIMARY", "groq").strip().lower() == "bedrock":
-        key = os.getenv("BEDROCK_API_KEY", "")
-        if not key:
-            raise ValueError("BEDROCK_API_KEY not set")
-        region = os.getenv("BEDROCK_REGION", "us-west-2").strip()
-        return "bedrock", key, f"https://bedrock-runtime.{region}.amazonaws.com", _BEDROCK_MODEL_IDS.get(model, model)
+    if _bedrock_enabled():
+        key, base_url = _bedrock_conn()
+        return "bedrock", key, base_url, _bedrock_model_id(model)
     key = api_key or os.getenv("groq_api_key", "")
     if not key:
         raise ValueError("groq_api_key not set")
     return "groq", key, None, model
 
 
-_REASONING_OPEN, _REASONING_CLOSE = "<reasoning>", "</reasoning>"
+def _bedrock_fallback() -> Optional[tuple[str, str, str]]:
+    """(api_key, base_url, model_id) when the fallback stays on Bedrock, else None (Gemini).
+
+    DOCBOT-2585: with LLM_PRIMARY=bedrock and BEDROCK_FALLBACK_MODEL set, a failed
+    primary call retries on a second Bedrock model instead of Gemini.
+    """
+    model_id = os.getenv("BEDROCK_FALLBACK_MODEL", "").strip()
+    if not (_bedrock_enabled() and model_id):
+        return None
+    key, base_url = _bedrock_conn()
+    return key, base_url, model_id
+
+
+def _fallback_label() -> tuple[str, str]:
+    """(provider, model) the fallback path logs."""
+    fb = _bedrock_fallback()
+    return ("bedrock", fb[2]) if fb else ("gemini", GEMINI_MODEL)
+
+
+def _fallback_completion(messages: List[dict], temperature: float = 0, max_tokens: int = 800) -> str:
+    fb = _bedrock_fallback()
+    if not fb:
+        return _gemini_completion(messages, temperature, max_tokens)
+    from groq import Groq
+    key, base_url, model_id = fb
+    client = Groq(api_key=key, base_url=base_url, timeout=GROQ_TIMEOUT_S, max_retries=GROQ_MAX_RETRIES)
+    response = client.chat.completions.create(
+        model=model_id, messages=messages, temperature=temperature, max_tokens=max_tokens,
+    )
+    return _strip_reasoning(response.choices[0].message.content or "").strip()
+
+
+def _fallback_completion_stream(
+    messages: List[dict], temperature: float = 0, max_tokens: int = 800, finish_info: Optional[dict] = None,
+) -> Iterator[str]:
+    fb = _bedrock_fallback()
+    if not fb:
+        yield from _gemini_completion_stream(messages, temperature, max_tokens, finish_info)
+        return
+    from groq import Groq
+    key, base_url, model_id = fb
+    client = Groq(api_key=key, base_url=base_url, timeout=GROQ_TIMEOUT_S, max_retries=GROQ_STREAM_MAX_RETRIES)
+    stream = client.chat.completions.create(
+        model=model_id, messages=messages, temperature=temperature, max_tokens=max_tokens, stream=True,
+    )
+
+    def _tokens() -> Iterator[str]:
+        for chunk in stream:
+            if finish_info is not None and chunk.choices[0].finish_reason:
+                finish_info["finish_reason"] = chunk.choices[0].finish_reason
+            delta = chunk.choices[0].delta
+            if delta and delta.content:
+                yield delta.content
+
+    yield from _strip_reasoning_stream(_tokens())
+
+
+def _get_fallback_llm(api_key: Optional[str] = None, temperature: float = 0, streaming: bool = False) -> BaseChatModel:
+    fb = _bedrock_fallback()
+    if not fb:
+        return _get_gemini_llm(api_key, temperature, streaming)
+    from langchain_groq import ChatGroq
+    key, base_url, model_id = fb
+    return ChatGroq(model=model_id, api_key=key, base_url=base_url, temperature=temperature, streaming=streaming)
+
+
+# Bedrock open-weight models put chain of thought inline: gpt-oss as
+# <reasoning>, Qwen/GLM/Nemotron as <think>.
+_REASONING_TAGS = (("<reasoning>", "</reasoning>"), ("<think>", "</think>"))
 
 
 def _partial_tag_len(text: str, tag: str) -> int:
@@ -702,13 +796,19 @@ def _partial_tag_len(text: str, tag: str) -> int:
 
 
 def _strip_reasoning_stream(chunks: Iterator[str]) -> Iterator[str]:
-    """Drop <reasoning>...</reasoning> spans (Bedrock gpt-oss puts chain of thought inline)."""
+    """Drop inline chain-of-thought spans (every pair in _REASONING_TAGS)."""
+    for open_tag, close_tag in _REASONING_TAGS:
+        chunks = _strip_tag_stream(chunks, open_tag, close_tag)
+    return chunks
+
+
+def _strip_tag_stream(chunks: Iterator[str], open_tag: str, close_tag: str) -> Iterator[str]:
     buf, inside = "", False
     for chunk in chunks:
         buf += chunk
         out = []
         while True:
-            tag = _REASONING_CLOSE if inside else _REASONING_OPEN
+            tag = close_tag if inside else open_tag
             i = buf.find(tag)
             if i < 0:
                 break
@@ -897,13 +997,14 @@ def chat_completion(
         else:
             logger.error("Groq chat_completion error (%s), attempting Gemini", str(exc)[:200])
 
-    # Fallback to Gemini
+    # Fallback: Gemini, or a second Bedrock model (DOCBOT-2585)
+    fb_provider, fb_model = _fallback_label()
     start = time.monotonic()
-    result = _gemini_completion(messages, temperature, max_tokens)
+    result = _fallback_completion(messages, temperature, max_tokens)
     elapsed = time.monotonic() - start
-    logger.info("chat_completion via Gemini (fallback) in %.2fs", elapsed)
+    logger.info("chat_completion via %s (fallback) in %.2fs", fb_provider, elapsed)
     _log_llm_call(
-        provider="gemini", model=GEMINI_MODEL, latency_ms=elapsed * 1000,
+        provider=fb_provider, model=fb_model, latency_ms=elapsed * 1000,
         success=True, fallback_triggered=True, caller=caller, run_id=run_id,
         prompt_version=prompt_version,
     )
@@ -997,18 +1098,19 @@ def chat_completion_stream(
         else:
             logger.error("Groq streaming error (%s), attempting Gemini", str(exc)[:200])
 
-    # Fallback to Gemini streaming
+    # Fallback streaming: Gemini, or a second Bedrock model (DOCBOT-2585)
+    fb_provider, fb_model = _fallback_label()
     start = time.monotonic()
     try:
-        yield from _gemini_completion_stream(messages, temperature, max_tokens, finish_info)
+        yield from _fallback_completion_stream(messages, temperature, max_tokens, finish_info)
         _log_llm_call(
-            provider="gemini", model=GEMINI_MODEL, latency_ms=(time.monotonic() - start) * 1000,
+            provider=fb_provider, model=fb_model, latency_ms=(time.monotonic() - start) * 1000,
             success=True, fallback_triggered=True, caller=caller, run_id=run_id,
             prompt_version=prompt_version,
         )
     except Exception as exc:
         _log_llm_call(
-            provider="gemini", model=GEMINI_MODEL, latency_ms=(time.monotonic() - start) * 1000,
+            provider=fb_provider, model=fb_model, latency_ms=(time.monotonic() - start) * 1000,
             success=False, fallback_triggered=True, caller=caller, run_id=run_id,
             error_message=f"{type(exc).__name__}: {str(exc)[:200]}",
             error_class=type(exc).__name__,

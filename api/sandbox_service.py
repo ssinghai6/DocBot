@@ -973,7 +973,7 @@ def _rephrase_for_csv(
             [{"role": "user", "content": rephrase_prompt}],
             model=GROQ_CODE_MODEL,
             temperature=0,
-            max_tokens=200,
+            max_tokens=1000,
             caller="sandbox_rephrase_question",
             prompt_version=PROMPT_VERSION_SANDBOX_REPHRASE,
         ).strip()

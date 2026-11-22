@@ -23,7 +23,9 @@ Public API:
 
 from __future__ import annotations
 
+import json
 import logging
+import os
 import re
 import textwrap
 from typing import Optional
@@ -308,6 +310,64 @@ def _build_examples(doc_type: str):
 # ---------------------------------------------------------------------------
 
 
+def _first_json_object(text: str) -> str:
+    """The first parseable ``{...}`` in ``text``, re-serialized; ``text`` unchanged if there is none."""
+    decoder = json.JSONDecoder()
+    for i, ch in enumerate(text):
+        if ch == "{":
+            try:
+                obj, _ = decoder.raw_decode(text, i)
+            except ValueError:
+                continue
+            if isinstance(obj, dict):
+                return json.dumps(obj)
+    return text
+
+
+def _bedrock_language_model():
+    """LangExtract's OpenAI provider, minus the inline reasoning Bedrock models put before the JSON.
+
+    gpt-oss on Bedrock wraps its JSON in reasoning plus fences or a stray ``{`` (seen live:
+    ``<reasoning>..</reasoning>```json{..}``` and ``</reasoning>{\n{"extractions": ..}``), which
+    LangExtract cannot parse. Hand it the first JSON object that parses instead.
+    """
+    import dataclasses
+
+    from langextract.providers.openai import OpenAILanguageModel
+
+    from api.utils.llm_provider import _strip_reasoning
+
+    class BedrockLanguageModel(OpenAILanguageModel):
+        @staticmethod
+        def _response_to_scored_output(response):
+            out = OpenAILanguageModel._response_to_scored_output(response)
+            return dataclasses.replace(out, output=_first_json_object(_strip_reasoning(out.output or "")))
+
+    return BedrockLanguageModel
+
+
+def _extraction_target(gemini_api_key: str) -> Optional[tuple[str, str, dict]]:
+    """(provider, model_id, lx.extract kwargs), or None when no model is configured.
+
+    DOCBOT-2585: with LLM_PRIMARY=bedrock, LangExtract runs on Bedrock through its
+    OpenAI-compatible provider (BEDROCK_EXTRACT_MODEL, default gpt-oss-120b).
+    """
+    from api.utils.llm_provider import _bedrock_conn, _bedrock_enabled
+
+    if _bedrock_enabled():
+        try:
+            key, base_url = _bedrock_conn()
+        except ValueError:
+            return None
+        model_id = os.getenv("BEDROCK_EXTRACT_MODEL", "").strip() or "openai.gpt-oss-120b-1:0"
+        model = _bedrock_language_model()(model_id=model_id, api_key=key, base_url=f"{base_url}/openai/v1")
+        # bare JSON (cleaned above), no Gemini schema constraints
+        return "bedrock", model_id, {"model": model, "fence_output": False, "use_schema_constraints": False}
+    if not gemini_api_key:
+        return None
+    return "gemini", "gemini-2.5-flash", {"model_id": "gemini-2.5-flash", "api_key": gemini_api_key}
+
+
 async def extract_document_fields(
     text: str,
     session_id: str,
@@ -321,8 +381,10 @@ async def extract_document_fields(
 
     Returns an empty list on any error — never raises.
     """
-    if not text or not gemini_api_key:
+    target = _extraction_target(gemini_api_key)
+    if not text or not target:
         return []
+    provider, model_id, lx_kwargs = target
 
     doc_type = detect_document_type(text)
     prompt_version = _PROMPT_VERSIONS.get(doc_type, "v1")
@@ -345,10 +407,9 @@ async def extract_document_fields(
                 text_or_documents=text,
                 prompt_description=prompt,
                 examples=examples,
-                model_id="gemini-2.5-flash",
-                api_key=gemini_api_key,
                 show_progress=False,
                 max_workers=2,  # free tier: 10 RPM cap
+                **lx_kwargs,
             ),
         )
         # DOCBOT-1507: this call bypasses llm_provider's chat_completion/call_llm
@@ -356,7 +417,7 @@ async def extract_document_fields(
         # gets its own log_external_llm_call here rather than via that choke
         # point — the only LLM path in the codebase that does.
         log_external_llm_call(
-            provider="gemini", model="gemini-2.5-flash",
+            provider=provider, model=model_id,
             latency_ms=(_time.monotonic() - _start) * 1000,
             success=True, caller="document_extraction",
             prompt_version=prompt_version,
@@ -405,7 +466,7 @@ async def extract_document_fields(
 
     except Exception as exc:
         log_external_llm_call(
-            provider="gemini", model="gemini-2.5-flash",
+            provider=provider, model=model_id,
             latency_ms=(_time.monotonic() - _start) * 1000,
             success=False, caller="document_extraction",
             prompt_version=prompt_version,
