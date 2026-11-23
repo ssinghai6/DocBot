@@ -25,6 +25,7 @@ from sqlalchemy.pool import StaticPool
 
 import api.api_key_service as api_key_service
 import api.index as idx
+import api.routes.v1_routes as v1_routes
 from api import rbac_service
 from api.api_key_service import APIKeyRecord
 from api.utils import request_guard
@@ -97,6 +98,7 @@ async def db(monkeypatch):
             ])
 
     monkeypatch.setattr(idx, "async_session_factory", factory)
+    monkeypatch.setitem(v1_routes._d, "async_session_factory", factory)  # DOCBOT-3901: /v1 lives in v1_routes
     monkeypatch.setattr(rbac_service, "_users_table", idx.users_table)
     monkeypatch.setattr(rbac_service, "_user_sessions_table", idx.user_sessions_table)
     monkeypatch.setattr(rbac_service, "_async_session_factory", factory)
