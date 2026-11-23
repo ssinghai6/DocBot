@@ -65,6 +65,9 @@ E2B_MICRO_USD_PER_SECOND = 28
 # DOCBOT-1801: billing attribution on the pre-existing llm_calls table. No-op
 # on a fresh DB (register_llm_calls_table already declares the columns).
 LLM_CALLS_BILLING_MIGRATIONS: list[str] = [
+    # DOCBOT-2583: prod table predates the prompt_version column (DOCBOT-1507).
+    "ALTER TABLE llm_calls ADD COLUMN IF NOT EXISTS prompt_version TEXT",
+    "CREATE INDEX IF NOT EXISTS ix_llm_calls_prompt_version ON llm_calls (prompt_version)",
     "ALTER TABLE llm_calls ADD COLUMN IF NOT EXISTS org_id TEXT",
     "ALTER TABLE llm_calls ADD COLUMN IF NOT EXISTS user_id TEXT",
     "ALTER TABLE llm_calls ADD COLUMN IF NOT EXISTS key_source TEXT",

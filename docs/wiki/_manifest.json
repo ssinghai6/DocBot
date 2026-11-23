@@ -1,0 +1,533 @@
+[
+ {
+  "wiki_title": "Home",
+  "slug": "home",
+  "parent_slug": null,
+  "kind": "generated",
+  "source": "docs/wiki/00-index.md",
+  "sensitive": false,
+  "notes": "Wiki start page. Links use the page slug as a relative URL (/projects/docbot/wiki/<slug>)."
+ },
+ {
+  "wiki_title": "Product",
+  "slug": "product",
+  "parent_slug": null,
+  "kind": "section",
+  "source": null,
+  "sensitive": false,
+  "notes": "What DocBot does and how to run it."
+ },
+ {
+  "wiki_title": "DocBot README",
+  "slug": "product-readme",
+  "parent_slug": "product",
+  "kind": "copy",
+  "source": "README.md",
+  "sensitive": false,
+  "notes": "STALE (last commit 2026-10-28): 686+ tests badge, Railway-only architecture, banned 'No other tool' claim (README.md:48). Import as-is with a stale banner; fix in repo on next phase completion."
+ },
+ {
+  "wiki_title": "Architecture",
+  "slug": "architecture",
+  "parent_slug": null,
+  "kind": "section",
+  "source": null,
+  "sensitive": false,
+  "notes": "Technical architecture written by the ai-engineer agent, plus decision records."
+ },
+ {
+  "wiki_title": "Architecture diagrams",
+  "slug": "architecture-00-diagrams",
+  "parent_slug": "architecture",
+  "kind": "generated",
+  "source": "docs/wiki/architecture/00-diagrams.md",
+  "sensitive": false,
+  "notes": "Written by the main session; diagrams rendered from docs/wiki/architecture/archify-input.md (a spec, not a page; excluded). docbot-architecture.html/.json/.png are its render artifacts."
+ },
+ {
+  "wiki_title": "System Overview",
+  "slug": "architecture-01-system-overview",
+  "parent_slug": "architecture",
+  "kind": "generated",
+  "source": "docs/wiki/architecture/01-system-overview.md",
+  "sensitive": false,
+  "notes": "ai-engineer agent."
+ },
+ {
+  "wiki_title": "Request Flows",
+  "slug": "architecture-02-request-flows",
+  "parent_slug": "architecture",
+  "kind": "generated",
+  "source": "docs/wiki/architecture/02-request-flows.md",
+  "sensitive": false,
+  "notes": "ai-engineer agent."
+ },
+ {
+  "wiki_title": "Data Model",
+  "slug": "architecture-03-data-model",
+  "parent_slug": "architecture",
+  "kind": "generated",
+  "source": "docs/wiki/architecture/03-data-model.md",
+  "sensitive": false,
+  "notes": "ai-engineer agent."
+ },
+ {
+  "wiki_title": "Endpoint Reference",
+  "slug": "architecture-04-endpoint-reference",
+  "parent_slug": "architecture",
+  "kind": "generated",
+  "source": "docs/wiki/architecture/04-endpoint-reference.md",
+  "sensitive": false,
+  "notes": "ai-engineer agent. Internal routes; the public API lives under Public API."
+ },
+ {
+  "wiki_title": "AI / LLM Architecture",
+  "slug": "architecture-05-ai-llm-architecture",
+  "parent_slug": "architecture",
+  "kind": "generated",
+  "source": "docs/wiki/architecture/05-ai-llm-architecture.md",
+  "sensitive": false,
+  "notes": "ai-engineer agent."
+ },
+ {
+  "wiki_title": "Security Architecture",
+  "slug": "architecture-06-security-architecture",
+  "parent_slug": "architecture",
+  "kind": "generated",
+  "source": "docs/wiki/architecture/06-security-architecture.md",
+  "sensitive": false,
+  "notes": "ai-engineer agent."
+ },
+ {
+  "wiki_title": "Deployment and Operations",
+  "slug": "architecture-07-deployment-and-ops",
+  "parent_slug": "architecture",
+  "kind": "generated",
+  "source": "docs/wiki/architecture/07-deployment-and-ops.md",
+  "sensitive": false,
+  "notes": "ai-engineer agent. Should state Railway today, AWS cutover mid-January (master backlog S4)."
+ },
+ {
+  "wiki_title": "Frontend Architecture",
+  "slug": "architecture-08-frontend-architecture",
+  "parent_slug": "architecture",
+  "kind": "generated",
+  "source": "docs/wiki/architecture/08-frontend-architecture.md",
+  "sensitive": false,
+  "notes": "ai-engineer agent."
+ },
+ {
+  "wiki_title": "ADR: Multi-agent Autopilot (DOCBOT-1505)",
+  "slug": "adr-multi-agent-autopilot",
+  "parent_slug": "architecture",
+  "kind": "copy",
+  "source": "project-tasks/docbot-multi-agent-architecture-decision.md",
+  "sensitive": false,
+  "notes": "Decision record dated 2026-09-29. Current as a record."
+ },
+ {
+  "wiki_title": "Fine-tuning pipeline (DOCBOT-1523)",
+  "slug": "finetune-pipeline",
+  "parent_slug": "architecture",
+  "kind": "copy",
+  "source": "finetune/README.md",
+  "sensitive": false,
+  "notes": "Tier 3 of the AI-maturity plan. Last commit 2026-10-10; strategy defers fine-tuning indefinitely, so mark as 'built, not in use'."
+ },
+ {
+  "wiki_title": "Public API",
+  "slug": "public-api",
+  "parent_slug": null,
+  "kind": "section",
+  "source": null,
+  "sensitive": false,
+  "notes": "Public API plan written by the senior-developer agent."
+ },
+ {
+  "wiki_title": "Developer API: Current State",
+  "slug": "api-01-current-state",
+  "parent_slug": "public-api",
+  "kind": "generated",
+  "source": "docs/wiki/api/01-current-state.md",
+  "sensitive": false,
+  "notes": "senior-developer agent."
+ },
+ {
+  "wiki_title": "Public API and Developer Portal Plan",
+  "slug": "api-02-public-api-plan",
+  "parent_slug": "public-api",
+  "kind": "generated",
+  "source": "docs/wiki/api/02-public-api-plan.md",
+  "sensitive": false,
+  "notes": "senior-developer agent."
+ },
+ {
+  "wiki_title": "DocBot API v1 Reference (Proposed)",
+  "slug": "api-03-public-api-reference",
+  "parent_slug": "public-api",
+  "kind": "generated",
+  "source": "docs/wiki/api/03-public-api-reference.md",
+  "sensitive": false,
+  "notes": "senior-developer agent."
+ },
+ {
+  "wiki_title": "Public API Implementation Backlog",
+  "slug": "api-04-implementation-backlog",
+  "parent_slug": "public-api",
+  "kind": "generated",
+  "source": "docs/wiki/api/04-implementation-backlog.md",
+  "sensitive": false,
+  "notes": "senior-developer agent. New ticket IDs must come from the master backlog's next free DOCBOT id."
+ },
+ {
+  "wiki_title": "Planning and Backlog",
+  "slug": "planning",
+  "parent_slug": null,
+  "kind": "section",
+  "source": null,
+  "sensitive": false,
+  "notes": "Backlog, roadmap, stories. Live ticket status is on the OpenProject board, not here."
+ },
+ {
+  "wiki_title": "Master backlog",
+  "slug": "master-backlog",
+  "parent_slug": "planning",
+  "kind": "copy",
+  "source": "project-tasks/docbot-master-backlog.md",
+  "sensitive": false,
+  "notes": "Source of truth for tickets (feeds openproject_sync.py). Repo copy (2026-11-22) is newer than the plans-folder copy. Stale line 16 / row 8: 'After merge' still says Plane; OpenProject replaced Plane on 2026-11-22."
+ },
+ {
+  "wiki_title": "Enterprise roadmap (EPIC-27 to EPIC-40)",
+  "slug": "enterprise-roadmap",
+  "parent_slug": "planning",
+  "kind": "copy",
+  "source": "project-tasks/docbot-enterprise-roadmap.md",
+  "sensitive": false,
+  "notes": "Draft 2026-11-17. Open conflict: keeps EPIC-19 BYOK in DocBot, strategy moved it to the platform."
+ },
+ {
+  "wiki_title": "User stories",
+  "slug": "user-stories",
+  "parent_slug": "planning",
+  "kind": "generated",
+  "source": "project-tasks/stories/",
+  "sensitive": false,
+  "notes": "One index page for the 96 DOCBOT-XXXX.md story files (id, title, epic, sprint, status, link to the OpenProject work package). Do not create one wiki page per story: the stories are already the work-package descriptions."
+ },
+ {
+  "wiki_title": "Epic history (v2 project tracking)",
+  "slug": "epic-history",
+  "parent_slug": "planning",
+  "kind": "copy",
+  "source": "project-tasks/docbot-v2-project-tracking.md",
+  "sensitive": false,
+  "notes": "190 KB. STALE: header 'Last Updated 2026-03-31', recommends Linear, EPIC-25 says 'tracked in Plane (Jira dropped 2026-11-17)', no EPIC-16..24 sections. Keep as history; split into child pages if the wiki rejects the size."
+ },
+ {
+  "wiki_title": "Operations and Runbooks",
+  "slug": "operations",
+  "parent_slug": null,
+  "kind": "section",
+  "source": null,
+  "sensitive": false,
+  "notes": "How we build, ship and run DocBot."
+ },
+ {
+  "wiki_title": "Engineering conventions (CLAUDE.md)",
+  "slug": "engineering-conventions",
+  "parent_slug": "operations",
+  "kind": "copy",
+  "source": "CLAUDE.md",
+  "sensitive": false,
+  "notes": "Current (2026-11-23) for rules and the OpenProject sync rule. Partly stale: 'Current state (2026-03-29)' block and '686+ tests'. Contains no secrets, but strip the personal commit-author lines if the wiki is ever shared."
+ },
+ {
+  "wiki_title": "OpenProject board sync",
+  "slug": "openproject-sync",
+  "parent_slug": "operations",
+  "kind": "copy",
+  "source": "scripts/README-openproject.md",
+  "sensitive": false,
+  "notes": "Current. Board ops and Lightsail server notes. Never paste the API key into the wiki."
+ },
+ {
+  "wiki_title": "Proof-run playbook (DOCBOT-2532)",
+  "slug": "proof-run-playbook",
+  "parent_slug": "operations",
+  "kind": "copy",
+  "source": "project-tasks/playbooks/DOCBOT-2532-proof-run.md",
+  "sensitive": false,
+  "notes": "Current (2026-11-17). Operator runbook for the free tie-out offer."
+ },
+ {
+  "wiki_title": "AWS migration exec plan",
+  "slug": "aws-migration-plan",
+  "parent_slug": "operations",
+  "kind": "copy",
+  "source": "/Users/sanshritsinghai/Desktop/Personal_Projects/DocBot-plans/04-aws-migration/aws-migration-exec-plan.html",
+  "sensitive": false,
+  "notes": "HTML only: convert to Markdown on import. STALE dates: says cutover Dec 2-20; master backlog now has cutover 2519 mid-January (S4, 01-13 to 01-26). No story statuses for merged #105/#111/#114."
+ },
+ {
+  "wiki_title": "Founder actions: AWS",
+  "slug": "founder-aws-actions",
+  "parent_slug": "operations",
+  "kind": "copy",
+  "source": "/Users/sanshritsinghai/Desktop/Personal_Projects/DocBot-plans/04-aws-migration/founder-actions-aws.md",
+  "sensitive": true,
+  "notes": "Founder-only account/credit steps. Answers table empty; step 18 timing tied to the old Dec cutover."
+ },
+ {
+  "wiki_title": "Testing and QA",
+  "slug": "testing",
+  "parent_slug": null,
+  "kind": "section",
+  "source": null,
+  "sensitive": false,
+  "notes": "Eval harness, regression, robustness data."
+ },
+ {
+  "wiki_title": "Evaluation harness",
+  "slug": "eval-harness",
+  "parent_slug": "testing",
+  "kind": "copy",
+  "source": "tests/eval/README.md",
+  "sensitive": false,
+  "notes": "Current (2026-11-11)."
+ },
+ {
+  "wiki_title": "Manual regression checklist",
+  "slug": "manual-regression-checklist",
+  "parent_slug": "testing",
+  "kind": "copy",
+  "source": "project-tasks/manual-regression-checklist.md",
+  "sensitive": false,
+  "notes": "STALE (2026-03-29): tests AUTH_REQUIRED guest mode (now APP_AUTH_MODE), Amazon/Shopify; no signup, credits, Stripe, TieOutCard, export, QuickBite demo. Update before 2604/1613."
+ },
+ {
+  "wiki_title": "Robustness and benchmark test data",
+  "slug": "robustness-test-data",
+  "parent_slug": "testing",
+  "kind": "copy",
+  "source": "project-tasks/docbot-robustness-test-data.md",
+  "sensitive": false,
+  "notes": "Research plan 2026-11-17. RB-01..25 placeholders are now DOCBOT-3501..3525; add a one-line note."
+ },
+ {
+  "wiki_title": "Business (sensitive)",
+  "slug": "business",
+  "parent_slug": null,
+  "kind": "section",
+  "source": null,
+  "sensitive": true,
+  "notes": "Strategy, pricing, revenue, fundraising. Wiki is private; founder decides later who may see this subtree. Consider a separate OpenProject project or restricted role before inviting anyone."
+ },
+ {
+  "wiki_title": "Strategy and pricing 2027",
+  "slug": "strategy-2027",
+  "parent_slug": "business",
+  "kind": "copy",
+  "source": "/Users/sanshritsinghai/Desktop/Personal_Projects/DocBot-plans/03-strategy-pricing/docbot-strategy-2027.md",
+  "sensitive": true,
+  "notes": "Pricing source of truth. Plans-folder copy (updated 11-17) is newer than the original on unpushed branch docs/DOCBOT-2400-strategy-roadmap. Stale: cutover 'Dec 2-20' (now mid-January); free credits 3,000 vs code default 500."
+ },
+ {
+  "wiki_title": "Pre-seed 14-day plan (to Dec 1)",
+  "slug": "preseed-plan-dec1",
+  "parent_slug": "business",
+  "kind": "copy",
+  "source": "/Users/sanshritsinghai/Desktop/Personal_Projects/DocBot-plans/01-investor-pitch/preseed-14day-plan-dec1.md",
+  "sensitive": true,
+  "notes": "Current through 2026-12-01. P1 still says AWS cutover Dec 2-20; 11-27 freeze vs 11-30 infra merge conflict. Archive after the call."
+ },
+ {
+  "wiki_title": "Pitch deck: main",
+  "slug": "pitch-deck-main",
+  "parent_slug": "business",
+  "kind": "copy",
+  "source": "/Users/sanshritsinghai/Desktop/Personal_Projects/DocBot-plans/01-investor-pitch/pitch-deck-main.md",
+  "sensitive": true,
+  "notes": "Current (2026-11-22). Names investors; keep private."
+ },
+ {
+  "wiki_title": "Pitch deck: technical",
+  "slug": "pitch-deck-technical",
+  "parent_slug": "business",
+  "kind": "copy",
+  "source": "/Users/sanshritsinghai/Desktop/Personal_Projects/DocBot-plans/01-investor-pitch/pitch-deck-technical.md",
+  "sensitive": true,
+  "notes": "Current (2026-11-22), verified against origin/main ef23130. Cross-check with Architecture pages once they land."
+ },
+ {
+  "wiki_title": "Founder plan: one-pager",
+  "slug": "founder-plan-one-pager",
+  "parent_slug": "business",
+  "kind": "copy",
+  "source": "/Users/sanshritsinghai/Desktop/Personal_Projects/DocBot-plans/01-investor-pitch/founder-plan/one-pager.md",
+  "sensitive": true,
+  "notes": "Current (2026-11-22)."
+ },
+ {
+  "wiki_title": "Founder plan: summary",
+  "slug": "founder-plan-summary",
+  "parent_slug": "business",
+  "kind": "copy",
+  "source": "/Users/sanshritsinghai/Desktop/Personal_Projects/DocBot-plans/01-investor-pitch/founder-plan/summary.md",
+  "sensitive": true,
+  "notes": "Current (2026-11-22)."
+ },
+ {
+  "wiki_title": "Founder plan: business plan",
+  "slug": "founder-plan-business-plan",
+  "parent_slug": "business",
+  "kind": "copy",
+  "source": "/Users/sanshritsinghai/Desktop/Personal_Projects/DocBot-plans/01-investor-pitch/founder-plan/business-plan.md",
+  "sensitive": true,
+  "notes": "Current (2026-11-22)."
+ },
+ {
+  "wiki_title": "Founder plan: CFO model",
+  "slug": "founder-plan-cfo",
+  "parent_slug": "business",
+  "kind": "copy",
+  "source": "/Users/sanshritsinghai/Desktop/Personal_Projects/DocBot-plans/01-investor-pitch/founder-plan/cfo.md",
+  "sensitive": true,
+  "notes": "Current (2026-11-22). Append founder-plan/cfo-sources.md as a 'Sources' section on import."
+ },
+ {
+  "wiki_title": "Revenue plan",
+  "slug": "revenue-plan",
+  "parent_slug": "business",
+  "kind": "copy",
+  "source": "/Users/sanshritsinghai/Desktop/Personal_Projects/DocBot-plans/02-gtm-revenue/revenue-100k-plan.html",
+  "sensitive": true,
+  "notes": "HTML only: convert on import. Check against EPIC-25 revision (>= $5K MRR + 6 logos by 2027-02-28; $100K ARR is the stretch) and the mid-January cutover."
+ },
+ {
+  "wiki_title": "Market and GTM plan",
+  "slug": "market-gtm-plan",
+  "parent_slug": "business",
+  "kind": "copy",
+  "source": "/Users/sanshritsinghai/Desktop/Personal_Projects/DocBot-plans/02-gtm-revenue/market-gtm-plan.html",
+  "sensitive": true,
+  "notes": "HTML only: convert on import. STALE: 30-day calendar from 11-16 has slipped; /fractional-cfo page promises per-client workspaces not built (2562-2568)."
+ },
+ {
+  "wiki_title": "Archive",
+  "slug": "archive",
+  "parent_slug": null,
+  "kind": "section",
+  "source": null,
+  "sensitive": false,
+  "notes": "Historical or superseded docs, kept for context. Each page gets a banner naming what replaced it."
+ },
+ {
+  "wiki_title": "YC W27 10-day plan (Oct 2026)",
+  "slug": "archive-yc-w27-plan",
+  "parent_slug": "archive",
+  "kind": "copy",
+  "source": "project-tasks/yc-10-day-plan.md",
+  "sensitive": true,
+  "notes": "Historical (deadline 2026-11-02). Still the only acceptance criteria for open EPIC-16/17/20/23 tickets until those land in story files. Contains old pricing (Pro $49, 100 credits)."
+ },
+ {
+  "wiki_title": "Demo plan (May 2026)",
+  "slug": "archive-demo-plan",
+  "parent_slug": "archive",
+  "kind": "copy",
+  "source": "/Users/sanshritsinghai/Desktop/Personal_Projects/DocBot-plans/01-investor-pitch/demo-plan.md",
+  "sensitive": true,
+  "notes": "Superseded: TechCorp demo (now QuickBite), literal [DISCREPANCY] marker, AUTH_REQUIRED. Replaced by DOCBOT-2603 demo script."
+ },
+ {
+  "wiki_title": "Decentralized docs idea",
+  "slug": "archive-decentralized-docs-idea",
+  "parent_slug": "archive",
+  "kind": "copy",
+  "source": "/Users/sanshritsinghai/Desktop/Personal_Projects/DocBot-plans/06-roadmap-backlog/decentralized-docs-idea.md",
+  "sensitive": false,
+  "notes": "Conflicts: reuses EPIC-25 and DOCBOT-2501..2508 (AWS ids). Hash chain is DOCBOT-3804 in the roadmap."
+ },
+ {
+  "wiki_title": "Founder ops notes (Oct 2026)",
+  "slug": "archive-founder-ops",
+  "parent_slug": "archive",
+  "kind": "copy",
+  "source": "/Users/sanshritsinghai/Desktop/Personal_Projects/DocBot-plans/02-gtm-revenue/founder-ops.md",
+  "sensitive": true,
+  "notes": "Partly outdated: says Stripe not merged, no AWS. Plans README already lists it as archived."
+ },
+ {
+  "wiki_title": "Plane sync (retired)",
+  "slug": "archive-plane-sync",
+  "parent_slug": "archive",
+  "kind": "copy",
+  "source": "scripts/README-plane.md",
+  "sensitive": false,
+  "notes": "Plane replaced by OpenProject 2026-11-22. plane_sync.py stays only for its backlog parser."
+ },
+ {
+  "wiki_title": "Doc status audit (2026-11-17)",
+  "slug": "archive-doc-status-audit",
+  "parent_slug": "archive",
+  "kind": "copy",
+  "source": "/Users/sanshritsinghai/Desktop/Personal_Projects/DocBot-plans/00-doc-status-audit.md",
+  "sensitive": true,
+  "notes": "Snapshot audit of the plans folder; its contradictions list is still useful. Superseded by docs/wiki/_inventory.md."
+ },
+ {
+  "wiki_title": "Investor demo sprint (Mar 2026)",
+  "slug": "archive-investor-demo-sprint",
+  "parent_slug": "archive",
+  "kind": "copy",
+  "source": "/Users/sanshritsinghai/Desktop/Personal_Projects/DocBot-plans/_archive/investor-demo-sprint-mar.md",
+  "sensitive": true,
+  "notes": "Historical."
+ },
+ {
+  "wiki_title": "Positioning, AWS and GTM plan (Nov 2026)",
+  "slug": "archive-positioning-plan",
+  "parent_slug": "archive",
+  "kind": "copy",
+  "source": "/Users/sanshritsinghai/Desktop/Personal_Projects/DocBot-plans/_archive/positioning-aws-gtm-100k-plan.md",
+  "sensitive": true,
+  "notes": "Executed; produced the exec-plan HTMLs."
+ },
+ {
+  "wiki_title": "Founder idea (Oct 2026)",
+  "slug": "archive-founder-idea",
+  "parent_slug": "archive",
+  "kind": "copy",
+  "source": "/Users/sanshritsinghai/Desktop/Personal_Projects/DocBot-plans/_archive/founder-idea.md",
+  "sensitive": true,
+  "notes": "Superseded by strategy section 2-3 (ICP and pricing lock)."
+ },
+ {
+  "wiki_title": "Strategy roadmap draft (Oct 2026)",
+  "slug": "archive-strategy-draft",
+  "parent_slug": "archive",
+  "kind": "copy",
+  "source": "/Users/sanshritsinghai/Desktop/Personal_Projects/DocBot-plans/_archive/strategy-roadmap-draft.md",
+  "sensitive": true,
+  "notes": "Superseded by strategy-2027. Near-duplicate; candidate to exclude entirely."
+ },
+ {
+  "wiki_title": "Unit economics (Mar 2026)",
+  "slug": "archive-unit-economics",
+  "parent_slug": "archive",
+  "kind": "copy",
+  "source": "/Users/sanshritsinghai/Desktop/Personal_Projects/DocBot-plans/_archive/unit-economics-mar.md",
+  "sensitive": true,
+  "notes": "Superseded by strategy section 3 (Llama costs, paid HF embeddings, old tiers)."
+ },
+ {
+  "wiki_title": "docbot-platform plan (Oct 2026)",
+  "slug": "archive-platform-plan",
+  "parent_slug": "archive",
+  "kind": "copy",
+  "source": "/Users/sanshritsinghai/Desktop/Personal_Projects/DocBot-plans/_archive/docbot-platform-plan.md",
+  "sensitive": false,
+  "notes": "Superseded by docbot-platform/docs/PLAN.md (separate repo; GCP to AWS switch)."
+ }
+]

@@ -13,6 +13,7 @@ import {
 } from "@/lib/schemas/billing"
 import type { CreditPack, QuotaErrorPayload } from "@/lib/schemas/billing"
 import WaitlistForm from "@/components/WaitlistForm"
+import { ContactLink } from "@/components/LegalPage"
 
 export type Paywall =
   | { kind: "credits"; payload: QuotaErrorPayload }
@@ -106,7 +107,7 @@ export default function OutOfCreditsModal({ paywall, isSignedIn, onSignIn, onClo
       <>
         <p className="text-[13px] text-[var(--color-text-secondary)]">{paywall.payload.message}</p>
         <p className="text-[12px] text-[var(--color-text-tertiary)]">
-          Reply to your invite email or contact support and we&apos;ll sort it out.
+          Reply to your invite email or write to <ContactLink /> and we&apos;ll sort it out.
         </p>
         <div className="flex justify-end pt-2">
           <button className={btnGhost} onClick={onClose}>Close</button>

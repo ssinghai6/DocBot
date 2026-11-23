@@ -787,6 +787,11 @@ async def generate_analysis_code(
 # ---------------------------------------------------------------------------
 
 
+def df_preamble(result_dicts: list) -> str:
+    """DOCBOT-2583: bind `df` in the sandbox (the codegen prompt promises it)."""
+    return f"df = pd.DataFrame(json.loads({_stdlib_json.dumps(_stdlib_json.dumps(result_dicts, default=str))}))\n"
+
+
 async def run_python(
     code: str,
     timeout_seconds: int = 25,
@@ -968,7 +973,7 @@ def _rephrase_for_csv(
             [{"role": "user", "content": rephrase_prompt}],
             model=GROQ_CODE_MODEL,
             temperature=0,
-            max_tokens=200,
+            max_tokens=1000,
             caller="sandbox_rephrase_question",
             prompt_version=PROMPT_VERSION_SANDBOX_REPHRASE,
         ).strip()

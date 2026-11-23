@@ -460,6 +460,18 @@ Builds on 1530 and 2907.
 | DOCBOT-2579 | NEW: Merge dev into main before prod apply (needed for 2576) | 1 | P1 | New (2026-11-17) | 1 | S1 | founder | EPIC-25 AWS |
 | DOCBOT-2580 | NEW: Plane auto-sync rule and per-ticket state command | 1 | P2 | In progress (2026-11-17) | 0 | - | PM | EPIC-26 Pre-seed |
 | DOCBOT-2581 | NEW: Waitlist instead of payments | 3 | P1 | In progress (2026-11-17) | 0 | - | senior-dev | EPIC-26 Pre-seed |
+| DOCBOT-2582 | NEW: Remove "enterprise" claims from landing page | 1 | P1 | In progress (2026-11-17) | 0 | - | frontend | EPIC-26 Pre-seed |
+| DOCBOT-2583 | NEW: Demo chat hangs when Groq rate-limits | 3 | P0 | In progress (2026-11-20) | 0 | - | senior-dev | EPIC-26 Pre-seed |
+| DOCBOT-2584 | NEW: Run gpt-oss on Amazon Bedrock (AWS credits) behind LLM_PRIMARY | 3 | P1 | Done (2026-11-22, PR #134) | 0 | - | senior-dev | EPIC-26 Pre-seed |
+| DOCBOT-2585 | NEW: All LLM calls on Bedrock (fallback + LangExtract) and swappable open-weight models | 3 | P1 | In progress (2026-11-22) | 0 | - | senior-dev | EPIC-26 Pre-seed |
+| DOCBOT-2586 | NEW: Move ticket tracking from Plane to self-hosted OpenProject (pm.docbot.space) | 2 | P2 | Done (PR #136, #137, 2026-11-22) | 0 | - | PM | EPIC-26 Pre-seed |
+| DOCBOT-2587 | NEW: OpenProject sync keeps sprints set on the board | 1 | P2 | Done (PR #142, 2026-11-23) | 0 | - | PM | EPIC-26 Pre-seed |
+| DOCBOT-2588 | NEW: OpenProject lifecycle: planned, picked into sprint, closed; bug type | 1 | P2 | Done (PR #143, 2026-11-23) | 0 | - | PM | EPIC-26 Pre-seed |
+| DOCBOT-2589 | NEW: Docs wiki in OpenProject + detailed architecture, diagrams, endpoint reference | 3 | P2 | In progress (2026-11-23) | 0 | - | PM | EPIC-26 Pre-seed |
+| DOCBOT-2590 | NEW: Public API audit + plan for token-gated docbot.space/apis playground (docs/wiki/api) | 2 | P2 | In progress (2026-11-23) | 0 | - | senior-dev | EPIC-26 Pre-seed |
+| DOCBOT-2591 | BUG: /v1/connectors list/register/sync ignore the API key's org (cross-tenant) | 2 | P0 | Todo (found 2026-11-23) | 0 | - | senior-dev | EPIC-26 Pre-seed |
+| DOCBOT-2592 | BUG: /v1/hybrid/chat returns pre-correction answer; intent/has_sql/has_docs null | 2 | P1 | Todo (found 2026-11-23) | 0 | - | senior-dev | EPIC-26 Pre-seed |
+| DOCBOT-2593 | BUG: admin panel /admin/* calls not rewritten by Next.js (verify on prod) | 1 | P1 | Todo (found 2026-11-23) | 0 | - | senior-dev | EPIC-26 Pre-seed |
 | DOCBOT-2509 | Secrets rotation | 5 | P1 | Open (Wave B) | 1 | S2 | devops | EPIC-25 AWS |
 | DOCBOT-2510 | Prod restore drill | 3 | P1 | Open (Wave B) | 1 | S2 | devops | EPIC-25 AWS |
 | DOCBOT-2514 | Cutover runbook + go/no-go | 3 | P1 | Write-freeze code merged (PR #111); runbook open | 1 | S2 | devops | EPIC-25 AWS |

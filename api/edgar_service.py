@@ -220,7 +220,7 @@ async def ingest_edgar_filing(
 
     # ── 7. Run structured extraction (async, non-blocking) ───────────────
     gemini_key = os.getenv("GEMINI_API_KEY") or ""
-    if gemini_key and is_extractable_document(text):
+    if is_extractable_document(text):  # extractor returns [] when no model is configured
         try:
             fields = await extract_document_fields(text, session_id, gemini_key)
             if fields:

@@ -135,7 +135,7 @@ async def compress_session(
                 },
             ],
             temperature=0.3,
-            max_tokens=300,
+            max_tokens=1000,
             caller="context_compression",
             prompt_version=PROMPT_VERSION_CONTEXT_COMPRESSION,
         )

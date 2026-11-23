@@ -168,6 +168,13 @@ def _scoped_key(prompt_hash: str) -> str:
     return hash_prompt(f"{_KEY_VERSION}|{_caller_scope()}|{prompt_hash}")
 
 
+def _serving_model(model: str) -> str:
+    """The model id that actually answers ``model``, so a model swap never serves the old model's rows."""
+    from api.utils.llm_provider import _bedrock_enabled, _bedrock_model_id
+
+    return _bedrock_model_id(model) if _bedrock_enabled() else model
+
+
 # ---------------------------------------------------------------------------
 # Read path
 # ---------------------------------------------------------------------------
@@ -187,6 +194,7 @@ async def get_cached_response(prompt_hash: str, model: str) -> Optional[str]:
         return None
 
     prompt_hash = _scoped_key(prompt_hash)
+    model = _serving_model(model)
     try:
         now = datetime.now(timezone.utc)
         async with _async_session_factory() as session:
@@ -242,6 +250,7 @@ async def set_cached_response(
         return
 
     prompt_hash = _scoped_key(prompt_hash)
+    model = _serving_model(model)
     try:
         now = datetime.now(timezone.utc)
         expires_at = now + timedelta(seconds=ttl_seconds)

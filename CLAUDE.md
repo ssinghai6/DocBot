@@ -58,9 +58,9 @@ DocBot is an AI-powered document + database analyst, fully deployed on Railway (
 | `src/hooks/` | Custom hooks: useChatHandlers (DB/auth/file handlers), useChatSubmit (message submission) |
 | `tests/external/test_llm_extraction_baseline.py` | LLM extraction baseline (20 hand-picked contexts, external API keys). Not a RAG benchmark — retrieval is bypassed. |
 | `requirements.txt` | Python dependencies |
-| `project-tasks/docbot-master-backlog.md` | Phase/sprint backlog — **source of truth for tickets**, synced to Plane |
-| `project-tasks/stories/DOCBOT-XXXX.md` | Full user story per ticket (AC, test, DoD); becomes the Plane description |
-| `scripts/plane_sync.py` | Plane sync (full backlog) and `--set-state` per-ticket status updates |
+| `project-tasks/docbot-master-backlog.md` | Phase/sprint backlog — **source of truth for tickets**, synced to OpenProject |
+| `project-tasks/stories/DOCBOT-XXXX.md` | Full user story per ticket (AC, test, DoD); becomes the OpenProject description |
+| `scripts/openproject_sync.py` | OpenProject sync (all tickets) and `--set-state` per-ticket status updates; backlog parser still in `scripts/plane_sync.py` |
 | `project-tasks/docbot-v2-project-tracking.md` | Epic history, sprint plan, Definition of Done |
 | `project-tasks/docbot-db-master-plan.md` | Full architecture, security model, phased build plan |
 
@@ -105,6 +105,12 @@ Next.js proxies `/api/*` to `localhost:8000` in development.
 | Variable | Required | Notes |
 |----------|----------|-------|
 | `groq_api_key` | Yes | Groq API key |
+| `LLM_PRIMARY` | No | `groq` (default) or `bedrock` (DOCBOT-2584): same gpt-oss models on Amazon Bedrock, paid from AWS credits. Set back to `groq` to roll back |
+| `BEDROCK_API_KEY` | Bedrock | Bedrock long-term API key (IAM user limited to `bedrock:InvokeModel*` on the gpt-oss models). Founder sets it in Railway only |
+| `BEDROCK_REGION` | No | Bedrock region, default `us-west-2` |
+| `BEDROCK_MODEL` / `BEDROCK_CODE_MODEL` | No | Bedrock model id for the default and code slots (DOCBOT-2585). Defaults `openai.gpt-oss-20b-1:0` / `openai.gpt-oss-120b-1:0`. Unpriced ids log a warning and are invisible to the spend caps |
+| `BEDROCK_FALLBACK_MODEL` | No | With `LLM_PRIMARY=bedrock`, failed calls retry on this Bedrock model instead of Gemini |
+| `BEDROCK_EXTRACT_MODEL` | No | With `LLM_PRIMARY=bedrock`, LangExtract runs on this Bedrock model (default gpt-oss-120b) instead of Gemini |
 | `huggingface_api_key` | No | Only used when `EMBEDDINGS_PROVIDER=hf` or `RERANKER_PROVIDER=hf` (embeddings/reranking are local and free by default) |
 | `EMBEDDINGS_PROVIDER` | No | `local` (default, ONNX) or `hf` (HF API, falls back to local on error) |
 | `RERANKER_PROVIDER` | No | `local` (default), `hf`, or `off` |
@@ -145,7 +151,7 @@ One ticket per branch. One branch per session when possible.
 
 ## Ticket Reference
 
-All work is tracked in Plane (see Plane Sync Rule), fed from `project-tasks/docbot-master-backlog.md` and `project-tasks/stories/`. Epic history lives in `project-tasks/docbot-v2-project-tracking.md`.
+All work is tracked in OpenProject at https://pm.docbot.space (see OpenProject Sync Rule), fed from `project-tasks/docbot-master-backlog.md` and `project-tasks/stories/`. Epic history lives in `project-tasks/docbot-v2-project-tracking.md`.
 
 **Current state (2026-03-29):**
 - EPIC-01 through EPIC-06 — **Done** (archived)
@@ -372,29 +378,36 @@ Always prefer to create utils and helper functions whenever required.
 
 ## Commit
 Always have Author: Sanshrit Singhai
+Always end the commit message with `Co-Authored-By: Sanshrit Singhai <97412712+ssinghai6@users.noreply.github.com>`
 Never use Co-Authored-By Claude
 
-## Plane Sync Rule (replaced Jira on 2026-11-17)
+## OpenProject Sync Rule (replaced Plane on 2026-11-22, Jira on 2026-11-17)
 
-**Plane is the live ticket board. Keep it current without being asked.** Board: https://app.plane.so/docbot/projects/1bf5510f-0a6c-40e7-a81f-97f0e5ab39e4/issues
+**OpenProject is the live ticket board. Keep it current without being asked.** Board: https://pm.docbot.space/projects/docbot/work_packages (backlog + sprints: `/projects/docbot/backlogs`). Self-hosted on AWS Lightsail; ops notes in `scripts/README-openproject.md`.
 
-Update the ticket at each of these moments, in the same session:
+Lifecycle: **planned -> board (New) -> picked (In progress, into the current sprint) -> PR (In testing) -> merged (Closed)**. Update the ticket at each of these moments, in the same session:
 
-| Moment | Plane state | Command |
+| Moment | State | Command |
 |---|---|---|
-| Asked to build something with no DOCBOT ticket | create it | add a story file + backlog row (below), then `--set-state DOCBOT-XXXX "In Progress" --title "<title>"` |
-| Work starts (branch created) | `In Progress` | `python3 scripts/plane_sync.py --set-state DOCBOT-XXXX "In Progress"` |
+| Anything planned (new story, bug, epic or plan doc adds tickets) | `New` on the board | add backlog rows + story files (below), merge, then full sync. A planned ticket must be on the board before the session ends, even if nobody builds it yet |
+| Bug found | `New`, type Bug | `--set-state DOCBOT-XXXX Todo --title "<title>" --type Bug` (plus a backlog row) |
+| Asked to build something with no DOCBOT ticket | create it | add a story file + backlog row (below), then `--set-state DOCBOT-XXXX "In Progress" --title "<title>"` (add `--type Bug` for a bug) |
+| Founder asks to pick a story or bug / work starts (branch created) | `In Progress` | `python3 scripts/openproject_sync.py --set-state DOCBOT-XXXX "In Progress"`. Puts it in the active sprint if it has none |
 | PR opened, CI running, or waiting on founder test/review | `Testing` | `... --set-state DOCBOT-XXXX Testing --note "PR #N"` |
 | PR merged into `main` (or the founder confirms a founder-only task is done) | `Done` | `... --set-state DOCBOT-XXXX Done --note "PR #N merged"` |
 | Dropped / superseded | `Cancelled` | `... --set-state DOCBOT-XXXX Cancelled --note "<why>"` |
 
+States map to OpenProject statuses: Todo/Backlog -> New, In Progress -> In progress, Testing -> In testing, Done -> Closed, Cancelled -> Rejected.
+
+- Close only the ticket that shipped. A PR that ships part of a story leaves it `Testing`/`In Progress`; an epic closes by hand when all its stories are Closed (its % done rolls up on its own).
+- Sprints: 2 weeks, S0..S7. Start one from Backlogs -> Start sprint (builds the sprint board), finish it there, then start the next. A sprint set on the board is kept by the sync.
+- Views: Work packages sidebar `1. Epics: progress`, `2. Roadmap`, `3. Done`, `4. Remaining`, `5. Current sprint`; Boards `Status board` and `DocBot: S<n>`. The default list hides Closed/Rejected.
 - Merged into `dev` only (AWS work) is `Testing`, not `Done`. Done = live on `main`/prod or verified by the founder.
-- New ticket = next free DOCBOT id in `project-tasks/docbot-master-backlog.md` + `project-tasks/stories/DOCBOT-XXXX.md` from the story template (`python3 scripts/validate_stories.py --only XXXX` must pass). Then run the full sync so the description, labels and module are filled: `git fetch origin && python3 scripts/plane_sync.py` (reads `origin/main`; dry-run first with `--dry-run`).
-- After any merge that changes the backlog or story files, re-run the full sync. It is idempotent and never moves a state backwards.
-- Key: `PLANE_API_KEY` env var, else macOS Keychain item `PLANE_API_KEY`. Never write the key to a file, commit, PR, log or memory. If neither is set, ask the founder to run `! security add-generic-password -a docbot -s PLANE_API_KEY -w '<token>'` and stop the Plane step, not the code work.
-- If Plane rejects a write (403 from its Cloudflare WAF on attack-like text), fix the encoding in `waf_safe()`; never drop the content.
-- `.github/workflows/plane-sync.yml` does the same moves on GitHub events (branch created, PR opened, PR merged) and runs the full sync on every push to `main` that touches the backlog, stories or sync script, using repo secret `PLANE_API_KEY` (set 2026-11-17). Manual full sync: `gh workflow run plane-sync.yml`. Still run the commands yourself in-session; they are idempotent.
-- Jira (`scripts/jira_update_status.py`, project SCRUM) is retired. Do not update it.
+- New ticket = next free DOCBOT id in `project-tasks/docbot-master-backlog.md` + `project-tasks/stories/DOCBOT-XXXX.md` from the story template (`python3 scripts/validate_stories.py --only XXXX` must pass). Then run the full sync so the description, epic, sprint and points are filled: `git fetch origin && python3 scripts/openproject_sync.py` (reads `origin/main`; dry-run first with `--dry-run`).
+- The full sync loads every ticket in the repo docs: current backlog (Epic -> Feature -> User story, sprints S0..S7), old epics EPIC-01..23 from `docbot-v2-project-tracking.md` / `yc-10-day-plan.md`, and the EPIC-27..40 parking lot. It is idempotent and never moves a state backwards. Re-run it after any merge that changes those files.
+- Key: `OPENPROJECT_API_KEY` env var, else macOS Keychain item `OPENPROJECT_API_KEY`. Never write the key to a file, commit, PR, log or memory. If neither is set, ask the founder to run `! security add-generic-password -a docbot -s OPENPROJECT_API_KEY -w '<token>'` (token from My account -> Access tokens on the board) and stop the board step, not the code work.
+- `.github/workflows/openproject-sync.yml` does the same moves on GitHub events (branch created, PR opened, PR merged) and runs the full sync on every push to `main` that touches the backlog, stories or sync script, using repo secret `OPENPROJECT_API_KEY`. Manual full sync: `gh workflow run openproject-sync.yml`. Still run the commands yourself in-session; they are idempotent.
+- Plane (`scripts/plane_sync.py`) and Jira (`scripts/jira_update_status.py`) are retired. Do not update them. `plane_sync.py` stays only because the backlog parser lives in it.
 
 ## README Update Rule
 
