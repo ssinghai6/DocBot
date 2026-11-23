@@ -130,3 +130,24 @@ def test_unknown_format_rejected(client):
 def test_anonymous_rejected_when_auth_required(client, monkeypatch):
     monkeypatch.setenv("AUTH_REQUIRED", "true")
     assert client.get("/api/lineage/run-abc/tieout.xlsx").status_code == 401
+
+
+@pytest.mark.asyncio
+async def test_wait_pending_writes_lets_inflight_lineage_land():
+    # DOCBOT-2604: export clicked before the background insert committed 404'd on prod
+    import asyncio
+
+    from api import lineage_service
+
+    landed = []
+
+    async def slow_write():
+        await asyncio.sleep(0.05)
+        landed.append(True)
+
+    task = asyncio.get_running_loop().create_task(slow_write())
+    lineage_service._pending_writes.add(task)
+    task.add_done_callback(lineage_service._pending_writes.discard)
+    await lineage_service.wait_pending_writes()
+    assert landed == [True]
+    await lineage_service.wait_pending_writes()  # nothing pending is a no-op
