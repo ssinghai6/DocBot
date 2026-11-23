@@ -55,7 +55,7 @@ A key is accepted **only** on the `/v1/*` routes. Every `/api/*` route uses the 
 | POST | `/v1/connectors` | `connectors:manage` | connector registry + `save_connector` | **Bug: `save_connector` called without `org_id`**, so the row is not owned by the key's org | `api/index.py:3917-3960`, `api/connector_store.py:140-145` |
 | POST | `/v1/connectors/{id}/sync` | `connectors:manage` | `commerce_service.sync_connector_data` | **Bug: `_get_connector` has no org check**, any key with this scope can sync any org's connector by id | `api/index.py:3445-3451`, `:3963-3981` |
 
-The `/api/connectors*` equivalents were org-scoped in DOCBOT-1602 (`api/routes/connector_routes.py:47-86`, `:191`, `:205`); the `/v1` copies were not. This is a cross-tenant gap and must be fixed before any public launch (see backlog, `NEW-01`).
+The `/api/connectors*` equivalents were org-scoped in DOCBOT-1602 (`api/routes/connector_routes.py:47-86`, `:191`, `:205`); the `/v1` copies were not. This is a cross-tenant gap and must be fixed before any public launch (see backlog, `DOCBOT-2591`).
 
 ### Resource scoping for `/v1/hybrid/chat` and `/v1/autopilot/run`
 
@@ -68,7 +68,7 @@ The `/v1` handler collapses the internal SSE stream by event type (`api/index.py
 1. **`replace` events are dropped.** When the discrepancy check rewrites the answer, `hybrid_service` emits `{"type": "replace", "content": <full corrected answer>}` (`api/hybrid_service.py:946-954`, DOCBOT-2004). The `/v1` loop has no `replace` branch, so API callers get the **original, uncorrected** answer while the UI and lineage get the corrected one.
 2. **`intent` / `has_sql` / `has_docs` can come back `null`.** A second `metadata` event carrying SQL details (`api/hybrid_service.py:714-723`, no `intent` key) overwrites the first (`api/index.py:3728-3729`), so whenever SQL ran these fields are `null` in the JSON response.
 
-Both are fixed by NEW-12 (merge metadata events, honor `replace`, add a regression test).
+Both are fixed by DOCBOT-2592 (merge metadata events, honor `replace`, add a regression test).
 
 ## 4. How the key is sent
 
@@ -183,27 +183,27 @@ Error you will see with a bad key:
 {"detail": "Invalid or revoked API key."}
 ```
 
-Do not use the `/v1/connectors*` routes until `NEW-01` ships (see section 3). Until `NEW-12` ships, `intent`/`has_sql`/`has_docs` may be `null` and `answer` may be the pre-correction text (section 3).
+Do not use the `/v1/connectors*` routes until `DOCBOT-2591` ships (see section 3). Until `DOCBOT-2592` ships, `intent`/`has_sql`/`has_docs` may be `null` and `answer` may be the pre-correction text (section 3).
 
 ## Gap table: what "docbot.space/apis" needs vs what exists
 
 | Need | Present? | Gap | Backlog |
 |---|---|---|---|
-| Key-gated programmatic API | Yes, 7 `/v1` routes | Connectors routes leak across orgs | NEW-01 |
-| Correct hybrid answers over `/v1` | Partly | `replace` dropped, metadata overwritten | NEW-12 |
+| Key-gated programmatic API | Yes, 7 `/v1` routes | Connectors routes leak across orgs | DOCBOT-2591 |
+| Correct hybrid answers over `/v1` | Partly | `replace` dropped, metadata overwritten | DOCBOT-2592 |
 | Versioned namespace | Yes, `/v1` | Routes live in `index.py`, inline models, no Zod mirror (violates F-4) | DOCBOT-3901 |
-| Key types test vs live | No | Only `dk_live_` | DOCBOT-2907 + NEW-03 |
+| Key types test vs live | No | Only `dk_live_` | DOCBOT-2907 + DOCBOT-2597 |
 | Key expiry | No | No `expires_at` | DOCBOT-2907 |
-| Self-serve key for non-admins | No | Admin-only mint | NEW-04 |
-| Safe sandbox data to play with | No | `/v1` cannot reach demo sessions by design | NEW-03 |
-| Create sessions/upload via API | No | No `/v1` session or upload route | NEW-05, NEW-07 |
-| Plain doc chat and DB query via API | No | Only hybrid and autopilot | NEW-06 |
+| Self-serve key for non-admins | No | Admin-only mint | DOCBOT-2598 |
+| Safe sandbox data to play with | No | `/v1` cannot reach demo sessions by design | DOCBOT-2597 |
+| Create sessions/upload via API | No | No `/v1` session or upload route | DOCBOT-2599, DOCBOT-2612 |
+| Plain doc chat and DB query via API | No | Only hybrid and autopilot | DOCBOT-2611 |
 | Per-key rate limit with 429 + headers | No | Sleeping in-memory bucket | DOCBOT-3901 |
-| Per-key usage and credit view | No | `api_key_id` only in audit metadata; no balance route | NEW-08 |
+| Per-key usage and credit view | No | `api_key_id` only in audit metadata; no balance route | DOCBOT-2613 |
 | Consistent error envelope | No | Plain `{"detail": ...}`; 402 uses `QuotaErrorPayload` | DOCBOT-3901 |
-| Idempotency for POST | No | Retries double-charge | NEW-09 |
-| Optional streaming | No | `/v1` is buffered only | NEW-10 |
-| Public OpenAPI for `/v1` only | No | Default `/openapi.json` exposes all routes | NEW-02, DOCBOT-3901 |
+| Idempotency for POST | No | Retries double-charge | DOCBOT-2614 |
+| Optional streaming | No | `/v1` is buffered only | DOCBOT-2615 |
+| Public OpenAPI for `/v1` only | No | Default `/openapi.json` exposes all routes | DOCBOT-2596, DOCBOT-3901 |
 | Docs + playground page | No | No `/apis` page, no renderer | DOCBOT-3905 |
 | Audit of key usage | Yes | `api_key_use` event per call | none |
 | SSRF on DB connect via API | N/A | No `/v1` DB connect; keep it that way in v1 | none |

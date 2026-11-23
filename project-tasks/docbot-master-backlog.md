@@ -68,7 +68,7 @@ Gate consistency: the old revenue-plan W2 gate (30 calls) is replaced by EPIC-26
 | EPIC-36 | Workpaper Review and Sign-off | 2, 3 (if pulled) | R | 11 | 39 | 2 | 0 | parking lot |
 | EPIC-37 | Connectors: Accounting, Warehouse, Content | 1, 2, 3 (if pulled) | R | 12 | 65 | 0 | 0 | parking lot |
 | EPIC-38 | Admin Console and Customer Observability | 2, 3 (if pulled) | E | 8 | 34 | 0 | 0 | parking lot |
-| EPIC-39 | API, SDK and MCP Server | 2, 3 (if pulled) | E | 7 | 30 | 0 | 0 | parking lot |
+| EPIC-39 | API, SDK and MCP Server (+ API playground 2596-2599, 2611-2618) | 1, 2, 3 | E | 19 | 63 | 0 | 36 | parking lot + section 8 (2026-11-23) |
 | EPIC-40 | Enterprise GTM Enablement and Commercial Ops | 1, 2 (if pulled) | R | 12 | 28 | 2 | 0 | parking lot |
 | **All** | | | | **278** | **956** | **54** | **201** | |
 
@@ -118,6 +118,7 @@ Capacity: solo founder + AI agents at 28 pts per 2-week sprint (20 over the holi
 
 - Phase 1: 170 of 170 pts scheduled; enterprise share 14% (2812, the four robustness items and Wave C SOC 2 evidence). The roadmap's 80/20 split is superseded by decision 1.
 - Phase 2: 23 of 242 pts committed (S8); the rest is reserve.
+- 2026-11-23 (DOCBOT-2595, founder ask for the token-gated docbot.space/apis playground): EPIC-39 API slice added outside the script-checked totals above. S1 +21 pts (2596, 3901, 2907, 2597, 2598, 3905), S2 +18 pts (2599, 2611-2616); 2617, 2618 not scheduled. Both sprints are now over capacity: re-plan before S1 starts. Depends on bugs 2591 and 2592 (Phase 0, being fixed now).
 
 ---
 
@@ -215,7 +216,7 @@ References 2571, 2572, 2567, 1626, 1703.
 | DOCBOT-2904 | SCIM groups mapped to roles and workspace grants | 3 | P2 | 2 | Group add grants role/workspace; group removal revokes | 2903, 3001 | senior-dev | parked |
 | DOCBOT-2905 | Org session policy: idle timeout, max session, IP allowlist | 3 | P2 | 2 | Each policy enforced per org with tests | 2566 | senior-dev | parked |
 | DOCBOT-2906 | Step-up re-auth (<= 15 min) before export, API key, role or SSO change | 3 | P2 | 2 | Stale auth returns step_up_required; UI re-prompts; tests per action | 2901 | senior-dev | parked |
-| DOCBOT-2907 | Scoped API keys with expiry + service accounts | 3 | P1 | 2 | Keys carry scopes + expiry; expired key 401; service account survives member removal | 1530 | senior-dev | parked |
+| DOCBOT-2907 | API key modes (test/live), expiry, owner, scopes + service accounts | 3 | P1 | 1 | `dk_test_`/`dk_live_` keys with `mode`, `expires_at`, `created_by`; expired key 401 `expired_key`; existing rows backfill `live`; scopes `sessions:read/write`, `query:run`, `usage:read`; service account survives member removal (refined 2026-11-23, docs/wiki/api/04) | 1530, 3901 | senior-dev | S1 |
 | DOCBOT-2908 | Login and SSO events in audit log + simple anomaly flag | 2 | P2 | 2 | Login/SSO events logged; flag on new country or >= 10 failures/hour | 2570 | senior-dev | parked |
 | DOCBOT-2909 | Passkeys (WebAuthn) | 5 | P3 | 3 | Register + login; usable as MFA factor | 2901 | senior-dev | parked |
 | DOCBOT-2910 | Okta Integration Network and Entra app gallery listings | 3 | P3 | 3 | Both listings approved | 2902, 2903 | founder | parked |
@@ -395,17 +396,17 @@ Builds on `audit_service.py`, 2570, 1807, 1811, 1530.
 | DOCBOT-3807 | Support access: JIT, customer-approved, time-boxed, logged | 5 | P1 | 2 | No access without approval; auto-expiry; audit event | 3804 | senior-dev | parked |
 | DOCBOT-3808 | Admin alerts: new member, SSO change, export spike | 3 | P3 | 3 | Email alert per event type | 3801 | senior-dev | parked |
 
-### 7.13 EPIC-39: API, SDK and MCP Server (7 stories, 30 pts, track E)
+### 7.13 EPIC-39: API, SDK and MCP Server (7 stories, 32 pts, track E)
 
-Builds on 1530 and 2907.
+Builds on 1530 and 2907. Pulled on 2026-11-23 (founder ask: token-gated docbot.space/apis playground, plan in `docs/wiki/api/04-implementation-backlog.md`): 3901 and 3905 (refined) plus 2907 in S1; 12 new stories DOCBOT-2596..2599 and 2611..2618 in section 8 (track `EPIC-39 API`). 3902-3904, 3906, 3907 stay parked.
 
 | ID | Title | Pts | Pri | Phase | Acceptance criteria | Deps | Lane | Sprint |
 |---|---|---|---|---|---|---|---|---|
-| DOCBOT-3901 | Public API v1 contract: OpenAPI, versioning, deprecation, per-key rate limits | 5 | P1 | 2 | /v1 prefix; spec published; 429 on limit | 1530, 2907 | senior-dev | parked |
+| DOCBOT-3901 | Public API v1 contract: v1_routes module, filtered OpenAPI, error envelope, versioning, per-key rate limits | 5 | P1 | 1 | /v1 handlers in `api/routes/v1_routes.py` with `api/v1_models.py` + Zod mirror; `GET /v1/openapi.json` snapshot-tested; error envelope + `X-Request-Id`; 429 + `Retry-After` on the shared counter store; `GET /v1/me`; keys in query string rejected | 1530, 2591, 2596 | senior-dev | S1 |
 | DOCBOT-3902 | Tie-out run as async API job with polling | 5 | P1 | 2 | Job result equals UI result; scoped to key | 3901, 3305 | senior-dev | parked |
 | DOCBOT-3903 | Signed webhooks: run.completed, discrepancy.found, workpaper.approved | 3 | P2 | 2 | HMAC signed; retries with backoff | 3902 | senior-dev | parked |
 | DOCBOT-3904 | MCP server: read-only tools, OAuth, workspace scoping, audited | 8 | P1 | 2 | 4 tools work from an MCP client; every call audited | 3901, 3902 | ai-engineer | parked |
-| DOCBOT-3905 | Developer docs site and quickstart | 3 | P2 | 2 | Quickstart runs a tie-out in < 10 min | 3901 | PM | parked |
+| DOCBOT-3905 | Developer portal /apis with Scalar, test key and sandbox quickstart | 5 | P1 | 1 | `/apis` renders Scalar from `/v1/openapi.json`; signed-in user gets a test key held in memory only; Try it works same-origin; quickstart gives a first hybrid answer in < 10 min; nonce CSP; WCAG 2.1 AA basics | 3901, 2597, 2598 | frontend | S1 |
 | DOCBOT-3906 | Python SDK | 3 | P3 | 3 | Published package; examples | 3901 | senior-dev | parked |
 | DOCBOT-3907 | TypeScript SDK | 3 | P3 | 3 | Published package; Zod types | 3901 | frontend | parked |
 
@@ -472,6 +473,19 @@ Builds on 1530 and 2907.
 | DOCBOT-2591 | BUG: /v1/connectors list/register/sync ignore the API key's org (cross-tenant) | 2 | P0 | Todo (found 2026-11-23) | 0 | - | senior-dev | EPIC-26 Pre-seed |
 | DOCBOT-2592 | BUG: /v1/hybrid/chat returns pre-correction answer; intent/has_sql/has_docs null | 2 | P1 | Todo (found 2026-11-23) | 0 | - | senior-dev | EPIC-26 Pre-seed |
 | DOCBOT-2593 | BUG: admin panel /admin/* calls not rewritten by Next.js (verify on prod) | 1 | P1 | Todo (found 2026-11-23) | 0 | - | senior-dev | EPIC-26 Pre-seed |
+| DOCBOT-2595 | NEW: Number and file the public API playground backlog (EPIC-39) | 1 | P2 | In progress (2026-11-23) | 0 | - | PM | EPIC-26 Pre-seed |
+| DOCBOT-2596 | NEW: Close default FastAPI /docs, /redoc, /openapi.json in prod | 1 | P1 | New (2026-11-23) | 1 | S1 | senior-dev | EPIC-39 API |
+| DOCBOT-2597 | NEW: Sandbox sessions for test API keys (demo data, daily test allowance) | 5 | P1 | New (2026-11-23) | 1 | S1 | senior-dev | EPIC-39 API |
+| DOCBOT-2598 | NEW: Self-serve personal test API key for signed-in users | 2 | P1 | New (2026-11-23) | 1 | S1 | senior-dev | EPIC-39 API |
+| DOCBOT-2599 | NEW: /v1 session read/delete + catalog endpoints | 3 | P2 | New (2026-11-23) | 1 | S2 | senior-dev | EPIC-39 API |
+| DOCBOT-2611 | NEW: /v1/chat and /v1/db/query | 3 | P2 | New (2026-11-23) | 1 | S2 | senior-dev | EPIC-39 API |
+| DOCBOT-2612 | NEW: /v1/documents PDF upload (live keys) | 3 | P2 | New (2026-11-23) | 1 | S2 | senior-dev | EPIC-39 API |
+| DOCBOT-2613 | NEW: Per-key API usage metering + GET /v1/usage | 3 | P2 | New (2026-11-23) | 1 | S2 | senior-dev | EPIC-39 API |
+| DOCBOT-2614 | NEW: Idempotency-Key on cost-bearing /v1 POSTs | 2 | P2 | New (2026-11-23) | 1 | S2 | senior-dev | EPIC-39 API |
+| DOCBOT-2615 | NEW: Opt-in SSE streaming on /v1 | 3 | P2 | New (2026-11-23) | 1 | S2 | senior-dev | EPIC-39 API |
+| DOCBOT-2616 | NEW: /v1 tie-out workpaper download | 1 | P3 | New (2026-11-23) | 1 | S2 | senior-dev | EPIC-39 API |
+| DOCBOT-2617 | NEW: Re-expose connectors in /v1 with /api parity | 3 | P3 | New (2026-11-23; later, not scheduled) | 1 | - | senior-dev | EPIC-39 API |
+| DOCBOT-2618 | NEW: /v1/audit-log export (audit:read scope) | 2 | P3 | New (2026-11-23; later, not scheduled) | 1 | - | senior-dev | EPIC-39 API |
 | DOCBOT-2509 | Secrets rotation | 5 | P1 | Open (Wave B) | 1 | S2 | devops | EPIC-25 AWS |
 | DOCBOT-2510 | Prod restore drill | 3 | P1 | Open (Wave B) | 1 | S2 | devops | EPIC-25 AWS |
 | DOCBOT-2514 | Cutover runbook + go/no-go | 3 | P1 | Write-freeze code merged (PR #111); runbook open | 1 | S2 | devops | EPIC-25 AWS |

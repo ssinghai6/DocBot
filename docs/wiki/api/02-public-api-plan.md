@@ -64,7 +64,7 @@ Mode enforcement: `require_api_key` resolves the key record, sets `request.state
 | `autopilot:run` | `/v1/autopilot/run` (exists) | analyst | yes |
 | `lineage:read` | Lineage JSON and tie-out workpaper download (exists, extended) | viewer | yes |
 | `usage:read` | `/v1/usage` for this key, `/v1/me` always allowed | viewer | yes |
-| `connectors:manage` | Commerce connectors (exists). **Hidden from the spec and portal until NEW-01 fixes org scoping** | analyst | no |
+| `connectors:manage` | Commerce connectors (exists). **Hidden from the spec and portal until DOCBOT-2591 fixes org scoping** | analyst | no |
 
 The existing rule "exact set membership, no hierarchy inference" (`api/api_key_service.py:52-55`) stays. The portal presets a test key with every "yes" scope.
 
@@ -164,7 +164,7 @@ Every `/v1` response includes `X-RateLimit-Limit`, `X-RateLimit-Remaining`, `X-R
 
 ## 12. OpenAPI generation
 
-- Disable the public defaults in production: `FastAPI(docs_url=None, redoc_url=None, openapi_url=None)` unless `ENV=dev` (NEW-02). Today they are open on the backend host (`api/index.py:50`).
+- Disable the public defaults in production: `FastAPI(docs_url=None, redoc_url=None, openapi_url=None)` unless `ENV=dev` (DOCBOT-2596). Today they are open on the backend host (`api/index.py:50`).
 - Serve `GET /v1/openapi.json`, built with `fastapi.openapi.utils.get_openapi(routes=[r for r in app.routes if r.path.startswith("/v1/") and "v1" in r.tags])`, with `securitySchemes: {bearerAuth: {type: http, scheme: bearer}}`, servers `https://docbot.space`. Public is fine: it only describes the public surface.
 - Response models are Pydantic in `api/v1_models.py` so the spec is typed (the current `/v1` handlers return bare dicts, so their spec responses are empty today, inferred from missing `response_model`).
 - CI: `tests/unit/test_v1_openapi_snapshot.py` diffs the generated spec against `api/openapi/v1.json`; a breaking diff (removed field, new required field) fails unless the version bumps.
@@ -192,21 +192,21 @@ Recommendation: Scalar. It gives docs and a working "Try it" in one component, m
 | Key never in URL | 400 `key_in_url` if `api_key`, `key`, `token` or a `dk_` value appears in the query string; access logs strip query strings on `/v1` (inferred need). |
 | Storage | SHA-256 of a 256-bit random key (exists) is adequate; no slow hash needed for high-entropy keys. Add `expires_at`, `created_by`, `mode`. |
 | CORS | Unchanged. `/v1` is for server-to-server use and same-origin playground. Do not add `Authorization` to `allow_headers`. |
-| Tenant isolation | Every `/v1` handler resolves resources through `resource_scope_service` with the key's org (exists for hybrid/autopilot/lineage). Fix `/v1/connectors*` first (NEW-01). Add a cross-org test per route. |
+| Tenant isolation | Every `/v1` handler resolves resources through `resource_scope_service` with the key's org (exists for hybrid/autopilot/lineage). Fix `/v1/connectors*` first (DOCBOT-2591). Add a cross-org test per route. |
 | SSRF | No DB connect over `/v1` in v1. When added later, it must call the same validator and DNS pinning as `POST /api/db/connect` (DOCBOT-1608), never a copy. |
 | PII masking | Responses go through the same pipelines that mask today (hybrid token masker, sandbox stdout masker `api/index.py:2240-2242`, autopilot references masking). Add a `/v1` contract test that a seeded email/SSN in sandbox data comes back masked. |
 | Audit | `api_key_use` event per call exists (`api/api_key_service.py:406-419`). Add key mint/revoke/expire events and `key_mode` in metadata. |
-| Docs exposure | Close default `/docs`, `/redoc`, `/openapi.json` in prod (NEW-02). |
+| Docs exposure | Close default `/docs`, `/redoc`, `/openapi.json` in prod (DOCBOT-2596). |
 | Leaked key response | Revoke in one click from `/apis` and the admin panel (exists); add GitHub secret-scanning partner registration for the `dk_live_` pattern later. |
 
 ## 15. Rollout phases
 
 | Phase | Ships | Exit check |
 |---|---|---|
-| 0. Fix what exists (1 sprint) | NEW-01 org-scope `/v1/connectors*`, NEW-02 close default docs, NEW-12 fix buffered hybrid answer | Cross-org test green; `/docs` 404 on prod backend |
+| 0. Fix what exists (1 sprint) | DOCBOT-2591 org-scope `/v1/connectors*`, DOCBOT-2596 close default docs, DOCBOT-2592 fix buffered hybrid answer | Cross-org test green; `/docs` 404 on prod backend |
 | 1. Contract (1 sprint) | DOCBOT-3901: move `/v1` to `api/routes/v1_routes.py`, `api/v1_models.py` + Zod, error envelope, per-key 429 limiter, `/v1/openapi.json`, `/v1/me` | Spec snapshot test; 429 test; envelope test |
-| 2. Play (1 sprint) | DOCBOT-2907 test keys + expiry, NEW-03 sandbox sessions, NEW-04 self-serve test key, DOCBOT-3905 `/apis` page with Scalar | A new signed-up user gets a first hybrid answer from `/apis` in under 10 minutes |
-| 3. Build for real (1-2 sprints) | NEW-05 sessions endpoints, NEW-06 chat + db query, NEW-07 document upload, NEW-08 usage, NEW-09 idempotency, NEW-10 streaming, NEW-11 tie-out download | Live key integration test against a real org in staging |
+| 2. Play (1 sprint) | DOCBOT-2907 test keys + expiry, DOCBOT-2597 sandbox sessions, DOCBOT-2598 self-serve test key, DOCBOT-3905 `/apis` page with Scalar | A new signed-up user gets a first hybrid answer from `/apis` in under 10 minutes |
+| 3. Build for real (1-2 sprints) | DOCBOT-2599 sessions endpoints, DOCBOT-2611 chat + db query, DOCBOT-2612 document upload, DOCBOT-2613 usage, DOCBOT-2614 idempotency, DOCBOT-2615 streaming, DOCBOT-2616 tie-out download | Live key integration test against a real org in staging |
 | 4. Ecosystem (later) | DOCBOT-3902 async jobs, 3903 webhooks, 3904 MCP, 3906/3907 SDKs, connectors back in the spec | Per EPIC-39 |
 
 ## 16. Sequence: developer gets a key and tries an endpoint
@@ -307,7 +307,7 @@ Legend: **v1** = exposed in v1 (as the `/v1` path shown), **Later** = after v1, 
 | DELETE | `/admin/api-keys/{key_id}` | Never | | Same (a leaked key must not revoke the admin's other keys). |
 | GET | `/admin/metrics` | Never | | Platform-operator, cross-org. |
 | GET | `/admin/funnel` | Never | | Platform-operator, cross-org. |
-| POST | `/api/connectors/register` | Later | `/v1/connectors` | Exists as `/v1` but unscoped; re-expose after NEW-01. |
+| POST | `/api/connectors/register` | Later | `/v1/connectors` | Exists as `/v1` but unscoped; re-expose after DOCBOT-2591. |
 | GET | `/api/connectors` | Later | `/v1/connectors` | Same. |
 | GET | `/api/connectors/types` | Later | `/v1/connectors/types` | Same. |
 | DELETE | `/api/connectors/{connector_id}` | Later | | Same. |
