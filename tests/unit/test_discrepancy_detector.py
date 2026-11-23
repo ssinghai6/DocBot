@@ -348,6 +348,7 @@ from api.utils.discrepancy_detector import _where_dimension, detect_discrepancie
         ("SELECT period, amount FROM opex WHERE category = 'Sales and marketing' LIMIT 500", "Sales and marketing"),
         ("SELECT amount FROM t WHERE period = 'FY2025' AND line_item LIKE 'Total revenue%'", "Total revenue"),
         ("SELECT net_income_m FROM quarterly WHERE quarter LIKE 'Q4%'", ""),
+        ("SELECT amount FROM tb WHERE account_type = 'opex' AND account LIKE '%Sales and marketing%'", "opex|Sales and marketing"),
         ("SELECT SUM(amount) FROM t WHERE fiscal_year = '2025'", ""),
         ("not sql at all (", ""),
         (None, ""),
@@ -380,3 +381,73 @@ def test_row_dimension_still_wins_over_where_literal():
     }
     report = detect_discrepancies(doc, meta)
     assert report.discrepancies and all("lab services" in d.label.lower() for d in report.discrepancies)
+
+
+# --- DOCBOT-2585: constant tag columns the SQL invents ----------------------
+
+_TAGGED_SQL = (
+    "SELECT period, 'MD&A' AS source, amount FROM opex WHERE category = 'Sales and marketing' "
+    "UNION ALL SELECT period, 'General Ledger' AS source, SUM(debit - credit) AS amount "
+    "FROM trial_balance WHERE account_type = 'opex' AND account LIKE '%Sales and marketing%' "
+    "GROUP BY period LIMIT 500"
+)
+
+
+def test_literal_tag_column_does_not_hide_where_metric():
+    """Bedrock gpt-oss-120b wrote this query on the live tie-out eval; the 'MD&A'
+    tag used to become the row label, so the 0.55% gap went unflagged."""
+    doc = (
+        "Source: Draft-10K.pdf, Page 5\nOPERATING EXPENSES FY2025\nSales and marketing expense: $54.9 million.\n"
+        "Source: Draft-10K.pdf, Page 7\nSTATEMENT OF OPERATIONS FY2025\nSales and marketing: $55.2M"
+    )
+    meta = {
+        "result_preview": [
+            {"period": "FY2025", "source": "MD&A", "amount": 55_200_000.0},
+            {"period": "FY2025", "source": "General Ledger", "amount": 55_200_000.0},
+        ],
+        "sql_query": _TAGGED_SQL,
+        "sources": ["opex", "trial_balance"],
+    }
+    report = detect_discrepancies(doc, meta)
+    assert [(d.doc_value, d.db_value, d.doc_page) for d in report.discrepancies] == [
+        (54_900_000, 55_200_000, 5)
+    ]
+
+
+def test_literal_tag_still_labels_row_when_nothing_else_does():
+    doc = "Source: Draft-10K.pdf, Page 5\nSales and marketing expense: $54.9 million in FY2025."
+    meta = {
+        "result_preview": [{"metric": "Sales and marketing", "amount": 55_200_000}],
+        "sql_query": "SELECT 'Sales and marketing' AS metric, SUM(debit) AS amount FROM trial_balance WHERE account LIKE '6100%'",
+        "sources": ["trial_balance"],
+    }
+    assert detect_discrepancies(doc, meta).discrepancies
+
+
+def test_literal_columns():
+    from api.utils.discrepancy_detector import _literal_columns
+
+    assert _literal_columns(_TAGGED_SQL) == {"source"}
+    assert _literal_columns("SELECT category, amount FROM opex") == frozenset()
+    assert _literal_columns(None) == frozenset()
+    # Live run: 'segment' is data in the first branch, so it stays a dimension.
+    assert _literal_columns(
+        "SELECT period, segment, amount FROM revenue_by_segment UNION ALL "
+        "SELECT period, 'Total' AS segment, amount FROM income_statement WHERE line_item = 'Revenue'"
+    ) == frozenset()
+
+
+def test_union_total_row_keeps_segment_dimension():
+    doc = "Source: Draft-10K.pdf, Page 9\nNOTE 12 FY2025\nLab Services: $104.9M"
+    meta = {
+        "result_preview": [
+            {"period": "FY2025", "segment": "Lab Services", "amount": 102_700_000.0},
+            {"period": "FY2025", "segment": "Total", "amount": 412_600_000.0},
+        ],
+        "sql_query": "SELECT period, segment, amount FROM revenue_by_segment UNION ALL "
+        "SELECT period, 'Total' AS segment, amount FROM income_statement WHERE line_item = 'Revenue'",
+        "sources": ["revenue_by_segment", "income_statement"],
+    }
+    assert [(d.doc_value, d.db_value) for d in detect_discrepancies(doc, meta).discrepancies] == [
+        (104_900_000, 102_700_000)
+    ]
