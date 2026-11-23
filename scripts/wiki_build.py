@@ -93,5 +93,16 @@ for p in man:
                   "parent": None if p["parent_slug"] in (None, "home") else p["parent_slug"], "text": text,
                   "attachments": att})
 
+# Relative slug links break on the start page (/projects/<id>/wiki has no slug), so make them absolute.
+SLUGS = {p["slug"] for p in man}
+LINK = re.compile(r"\]\(([a-z0-9][a-z0-9-]*)(#[^)]*)?\)")
+for pg in pages:
+    pg["text"] = LINK.sub(lambda m: f"](/projects/docbot/wiki/{m.group(1)}{m.group(2) or ''})" if m.group(1) in SLUGS else m.group(0),
+                          pg["text"])
+assert LINK.sub("", "[x](home)") == "[x", "self-check"
+# repo-relative file links in imported repo docs -> GitHub (private repo, founder is logged in)
+FILE = re.compile(r"\]\((?:\./)?([A-Za-z0-9_][\w./-]*\.(?:md|py|txt|json|ya?ml)|LICENSE)\)")
+for pg in pages:
+    pg["text"] = FILE.sub(lambda m: f"](https://github.com/ssinghai6/DocBot/blob/main/{m.group(1)})", pg["text"])
 json.dump(pages, open(out, "w"))
 print(f"{len(pages)} pages, {sum(len(x['text']) for x in pages)//1024} KB")
