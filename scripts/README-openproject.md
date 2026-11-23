@@ -17,7 +17,9 @@ python3 scripts/openproject_sync.py                 # apply (reads origin/main)
 python3 scripts/openproject_sync.py --set-state DOCBOT-2586 "In Progress" --title "Short title"   # creates if missing
 python3 scripts/openproject_sync.py --set-state DOCBOT-2586 Testing --note "PR #140"
 python3 scripts/openproject_sync.py --set-state DOCBOT-2586 Done --note "PR #140 merged"
+python3 scripts/openproject_sync.py --set-state DOCBOT-2600 Todo --title "Upload fails on 0-byte CSV" --type Bug
 ```
+Moving a ticket to In Progress puts it in the active sprint (started, not completed) if it has no sprint.
 Todo/Backlog -> New, In Progress -> In progress, Testing -> In testing, Done -> Closed, Cancelled -> Rejected.
 
 ## What it loads (from git, not the working tree)
@@ -31,7 +33,7 @@ Todo/Backlog -> New, In Progress -> In progress, Testing -> In testing, Done -> 
 ## Re-run rules
 - Matches stories on the `DOCBOT-XXXX ` subject prefix (other ids on the full subject). Updates only changed fields.
 - Status never moves backwards; Rejected / On hold set by hand are kept. `--set-state` can move backwards.
-- A sprint set on the board is kept when the docs give the story no sprint.
+- A sprint set on the board is kept when the docs give the story no sprint. A ticket filed as Bug stays a Bug.
 - Missing sprint on the server: the story is left unscheduled with a warning.
 
 ## Server (AWS Lightsail, us-east-1, 2 GB / $12 month, paid by AWS credits)
