@@ -1135,7 +1135,9 @@ def chat_completion_stream(
 
 
 def llm_configured() -> bool:
-    """DOCBOT-2307: True when ANY provider key is set (Groq or Gemini)."""
+    """DOCBOT-2307: True when ANY provider key is set (Bedrock primary, Groq or Gemini)."""
+    if _bedrock_enabled() and os.getenv("BEDROCK_API_KEY"):
+        return True
     return bool(os.getenv("groq_api_key") or os.getenv("GEMINI_API_KEY"))
 
 

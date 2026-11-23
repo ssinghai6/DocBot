@@ -145,3 +145,25 @@ def test_bedrock_extraction_survives_long_filings(monkeypatch):
     _, _, kwargs = de._extraction_target("")
     assert kwargs["model"]._client.max_retries == de._BEDROCK_EXTRACT_RETRIES > 2
     assert kwargs["max_char_buffer"] == de._BEDROCK_CHUNK_CHARS > 1000
+
+
+def test_llm_configured_with_bedrock_key_only(monkeypatch):
+    # Autopilot planner/synthesizer and sandbox code gen gate on this; no Groq key needed on Bedrock
+    _bedrock_env(monkeypatch)
+    monkeypatch.delenv("groq_api_key", raising=False)
+    monkeypatch.delenv("GEMINI_API_KEY", raising=False)
+    assert lp.llm_configured() is True
+    monkeypatch.setenv("LLM_PRIMARY", "groq")
+    assert lp.llm_configured() is False
+
+
+def test_autopilot_planner_not_degraded_without_groq_key(monkeypatch):
+    from api import autopilot_service as ap
+
+    _bedrock_env(monkeypatch)
+    monkeypatch.delenv("groq_api_key", raising=False)
+    state = {"question": "Compare revenue to the books", "has_db": True, "has_docs": True}
+    with patch("api.utils.llm_provider.chat_completion", return_value='["sql_query: revenue by year"]'):
+        out = ap._planner_node(state)
+        out = asyncio.run(out) if asyncio.iscoroutine(out) else out
+    assert ap._DEGR_PLANNER_FALLBACK not in (out.get("degradation_reasons") or [])
