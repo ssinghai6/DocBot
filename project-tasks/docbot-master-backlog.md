@@ -474,9 +474,9 @@ Builds on 1530 and 2907. Pulled on 2026-11-23 (founder ask: token-gated docbot.s
 | DOCBOT-2592 | BUG: /v1/hybrid/chat returns pre-correction answer; intent/has_sql/has_docs null | 2 | P1 | Todo (found 2026-11-23) | 0 | - | senior-dev | EPIC-26 Pre-seed |
 | DOCBOT-2593 | BUG: admin panel /admin/* calls not rewritten by Next.js (verify on prod) | 1 | P1 | Todo (found 2026-11-23) | 0 | - | senior-dev | EPIC-26 Pre-seed |
 | DOCBOT-2595 | NEW: Number and file the public API playground backlog (EPIC-39) | 1 | P2 | In progress (2026-11-23) | 0 | - | PM | EPIC-26 Pre-seed |
-| DOCBOT-2596 | NEW: Close default FastAPI /docs, /redoc, /openapi.json in prod | 1 | P1 | New (2026-11-23) | 1 | S1 | senior-dev | EPIC-39 API |
-| DOCBOT-2597 | NEW: Sandbox sessions for test API keys (demo data, daily test allowance) | 5 | P1 | New (2026-11-23) | 1 | S1 | senior-dev | EPIC-39 API |
-| DOCBOT-2598 | NEW: Self-serve personal test API key for signed-in users | 2 | P1 | New (2026-11-23) | 1 | S1 | senior-dev | EPIC-39 API |
+| DOCBOT-2596 | NEW: Close default FastAPI /docs, /redoc, /openapi.json in prod | 1 | P1 | Done (PR #156, 2026-11-23) | 1 | S1 | senior-dev | EPIC-39 API |
+| DOCBOT-2597 | NEW: Sandbox sessions for test API keys (demo data, daily test allowance) | 5 | P1 | Done (PR #154, 2026-11-23) | 1 | S1 | senior-dev | EPIC-39 API |
+| DOCBOT-2598 | NEW: Self-serve personal test API key for signed-in users | 2 | P1 | Done (PR #154, 2026-11-23) | 1 | S1 | senior-dev | EPIC-39 API |
 | DOCBOT-2599 | NEW: /v1 session read/delete + catalog endpoints | 3 | P2 | New (2026-11-23) | 1 | S2 | senior-dev | EPIC-39 API |
 | DOCBOT-2611 | NEW: /v1/chat and /v1/db/query | 3 | P2 | New (2026-11-23) | 1 | S2 | senior-dev | EPIC-39 API |
 | DOCBOT-2612 | NEW: /v1/documents PDF upload (live keys) | 3 | P2 | New (2026-11-23) | 1 | S2 | senior-dev | EPIC-39 API |
@@ -486,6 +486,12 @@ Builds on 1530 and 2907. Pulled on 2026-11-23 (founder ask: token-gated docbot.s
 | DOCBOT-2616 | NEW: /v1 tie-out workpaper download | 1 | P3 | New (2026-11-23) | 1 | S2 | senior-dev | EPIC-39 API |
 | DOCBOT-2617 | NEW: Re-expose connectors in /v1 with /api parity | 3 | P3 | New (2026-11-23; later, not scheduled) | 1 | - | senior-dev | EPIC-39 API |
 | DOCBOT-2618 | NEW: /v1/audit-log export (audit:read scope) | 2 | P3 | New (2026-11-23; later, not scheduled) | 1 | - | senior-dev | EPIC-39 API |
+| DOCBOT-2619 | BUG: test key mint race can exceed the 2-active-key limit | 1 | P2 | Todo (found 2026-11-23) | 1 | S2 | senior-dev | EPIC-39 API |
+| DOCBOT-2620 | BUG: daily test allowance can overshoot by up to one run's cost | 1 | P3 | Todo (found 2026-11-23) | 1 | - | senior-dev | EPIC-39 API |
+| DOCBOT-2621 | BUG: sandbox create limit (5/hour) also throttles live keys | 1 | P2 | Todo (found 2026-11-23) | 1 | S2 | senior-dev | EPIC-39 API |
+| DOCBOT-2622 | BUG: 24h sandbox purge leaves sandbox chat messages | 1 | P2 | Todo (found 2026-11-23) | 1 | S2 | senior-dev | EPIC-39 API |
+| DOCBOT-2623 | NEW: /apis OAuth/SSO sign-in returns to /chat instead of /apis | 2 | P2 | Todo (found 2026-11-23) | 1 | S2 | senior-dev | EPIC-39 API |
+| DOCBOT-2624 | NEW: GET /v1/me + v1 versioning and deprecation policy doc (3901 leftovers) | 2 | P2 | Todo (found 2026-11-23) | 1 | S2 | senior-dev | EPIC-39 API |
 | DOCBOT-2509 | Secrets rotation | 5 | P1 | Open (Wave B) | 1 | S2 | devops | EPIC-25 AWS |
 | DOCBOT-2510 | Prod restore drill | 3 | P1 | Open (Wave B) | 1 | S2 | devops | EPIC-25 AWS |
 | DOCBOT-2514 | Cutover runbook + go/no-go | 3 | P1 | Write-freeze code merged (PR #111); runbook open | 1 | S2 | devops | EPIC-25 AWS |
