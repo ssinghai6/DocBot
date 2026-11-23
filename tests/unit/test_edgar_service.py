@@ -50,7 +50,7 @@ class TestIngestEdgarFiling:
             "company_name": "Apple Inc.",
             "ticker": "AAPL",
             "session_id": "existing-session-123",
-            "text_hash": "abc",
+            "text_hash": "v2:abc",
         }
         owner_a = {"user_id": None, "org_id": None, "anon_owner": "digest-a"}
         owner_b = {"user_id": "u-b", "org_id": "org-b", "anon_owner": None}
@@ -115,7 +115,7 @@ class TestIngestEdgarFiling:
 
     def test_cache_hit_with_missing_vectors_reingests_and_repoints_cache(self):
         """Cached source store was deleted/reaped: download again, update the cache row."""
-        cached = {"accession_number": "acc-1", "session_id": "gone-session"}
+        cached = {"accession_number": "acc-1", "session_id": "gone-session", "text_hash": "v2:x"}
         mock_text = "UNITED STATES SECURITIES AND EXCHANGE COMMISSION\n" * 50
 
         with (
@@ -125,8 +125,7 @@ class TestIngestEdgarFiling:
             patch("api.utils.vector_store.clone_store", return_value=None),
             patch("api.connectors.edgar_connector.EdgarConnector.fetch_filing_text",
                   new_callable=AsyncMock, return_value=mock_text),
-            patch("api.utils.chunker.chunk_document", return_value=[MagicMock(metadata={})]),
-            patch("api.utils.chunker.detect_doc_type", return_value="financial"),
+            patch("api.utils.chunker.chunk_filing", return_value=[MagicMock(metadata={})]),
             patch("api.utils.vector_store.create_store", return_value=MagicMock()),
             patch("api.document_extractor.is_extractable_document", return_value=False),
             patch("api.edgar_service.insert", MagicMock()),
@@ -148,7 +147,9 @@ class TestIngestEdgarFiling:
 
         assert result["cached"] is False
         assert result["session_id"] != "gone-session"
-        repoint.assert_awaited_once_with("acc-1", result["session_id"])
+        repoint.assert_awaited_once()
+        assert repoint.await_args.args == ("acc-1", result["session_id"])
+        assert repoint.await_args.kwargs["text_hash"].startswith("v2:")
         save.assert_not_called()
 
     def test_creates_session_and_vectors(self):
@@ -164,8 +165,7 @@ class TestIngestEdgarFiling:
             patch("api.connector_store.get_cached_filing", new_callable=AsyncMock, return_value=None),
             patch("api.connector_store.save_filing_cache", new_callable=AsyncMock) as mock_cache_save,
             patch("api.connectors.edgar_connector.EdgarConnector.fetch_filing_text", new_callable=AsyncMock, return_value=mock_text),
-            patch("api.utils.chunker.chunk_document", return_value=mock_chunks),
-            patch("api.utils.chunker.detect_doc_type", return_value="financial"),
+            patch("api.utils.chunker.chunk_filing", return_value=mock_chunks),
             patch("api.utils.vector_store.create_store") as mock_create_store,
             patch("api.document_extractor.is_extractable_document", return_value=False),
             patch("api.edgar_service.insert", mock_insert),

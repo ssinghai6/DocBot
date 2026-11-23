@@ -16,6 +16,7 @@ from __future__ import annotations
 
 import logging
 import os
+import re
 import time
 
 from langchain_core.documents import Document
@@ -137,3 +138,120 @@ def chunk_document(
         doc_type,
     )
     return chunks
+
+
+# ---------------------------------------------------------------------------
+# DOCBOT-2634: SEC filing chunker (EDGAR path only; PDFs use chunk_document)
+# ---------------------------------------------------------------------------
+
+# Part / Item headings of a 10-K or 10-Q, used as the chunk's section locator.
+_SECTION_RE = re.compile(r"^(?:PART\s+[IVX]+\.?$|ITEM\s+\d+[A-Z]?\.)", re.IGNORECASE)
+_YEAR_RE = re.compile(r"^(?:19|20)\d\d$")
+FILING_TABLE_MAX_CHARS = 1000
+_CAPTION_LINE_MAX = 120
+
+
+def _section_heading(line: str) -> str | None:
+    line = line.strip()
+    # table rows are excluded so the table of contents does not set sections
+    if len(line) <= _CAPTION_LINE_MAX and " | " not in line and _SECTION_RE.match(line):
+        return line
+    return None
+
+
+def _is_table_block(block: str) -> bool:
+    return any(" | " in line for line in block.splitlines())
+
+
+def _caption(prose: str) -> str:
+    """Up to 3 short lines right before a table (company, title, units line)."""
+    out: list[str] = []
+    for line in reversed(prose.strip().splitlines()):
+        line = line.strip()
+        if not line or len(line) > _CAPTION_LINE_MAX or len(out) == 3:
+            break
+        if line.isdigit() or line.lower() == "table of contents":
+            break  # page footer, not a caption
+        out.append(line)
+    return "\n".join(reversed(out))
+
+
+def _header_rows(rows: list[str]) -> list[str]:
+    """Leading rows before the first one holding a non-year number."""
+    header: list[str] = []
+    for row in rows[:4]:
+        cells = [c.strip() for c in row.split(" | ")]
+        if any(re.search(r"\d", c) and not _YEAR_RE.match(c) for c in cells):
+            break
+        header.append(row)
+    return header if len(header) < len(rows) else []
+
+
+def _split_table(block: str, caption: str, max_chars: int) -> list[str]:
+    """The whole table as one piece when it fits, else row-boundary pieces
+    that each repeat the caption and header rows."""
+    whole = f"{caption}\n{block}" if caption else block
+    if len(whole) <= max_chars:
+        return [whole]
+    rows = block.splitlines()
+    header = _header_rows(rows)
+    prefix = [p for p in (caption, *header) if p]
+    pieces: list[str] = []
+    cur: list[str] = []
+    budget = max_chars - sum(len(p) + 1 for p in prefix)
+    for row in rows[len(header):]:
+        if cur and sum(len(r) + 1 for r in cur) + len(row) > budget:
+            pieces.append("\n".join(prefix + cur))
+            cur = []
+        cur.append(row)
+    if cur:
+        pieces.append("\n".join(prefix + cur))
+    return pieces
+
+
+def chunk_filing(text: str, table_max_chars: int = FILING_TABLE_MAX_CHARS) -> list[Document]:
+    """Chunk an SEC filing rendered by ``edgar_connector.html_to_text``.
+
+    Prose goes through the same recursive splitter long documents already use.
+    Tables (blank-line-separated blocks of ``a | b | c`` rows) are never split
+    mid-row and carry their caption. Every chunk gets a locator: ``page`` is
+    the 1-based chunk ordinal (filing HTML has no reliable page numbers, and a
+    unique value keeps citations and lineage from merging distinct chunks) and
+    ``section`` is the enclosing Part / Item heading.
+    """
+    splitter = _fallback_splitter()
+    pieces: list[str] = []
+    prose: list[str] = []
+
+    def flush_prose() -> None:
+        if prose:
+            pieces.extend(splitter.split_text("\n\n".join(prose)))
+            prose.clear()
+
+    for block in text.split("\n\n"):
+        if not block.strip():
+            continue
+        if _is_table_block(block):
+            caption = _caption(prose[-1]) if prose else ""
+            flush_prose()
+            pieces.extend(_split_table(block.strip(), caption, table_max_chars))
+        else:
+            prose.append(block)
+    flush_prose()
+
+    docs: list[Document] = []
+    section = ""
+    for i, piece in enumerate(pieces):
+        headings = [h for h in map(_section_heading, piece.splitlines()) if h]
+        starts_with_heading = bool(headings) and piece.lstrip().startswith(headings[0])
+        docs.append(Document(
+            page_content=piece,
+            metadata={
+                "page": i + 1,
+                "chunk_index": i,
+                "section": headings[0] if starts_with_heading else section,
+            },
+        ))
+        if headings:
+            section = headings[-1]
+    return docs

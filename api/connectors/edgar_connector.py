@@ -13,10 +13,11 @@ from __future__ import annotations
 
 import logging
 import re
+import warnings
 from typing import Any
 
 import httpx
-from bs4 import BeautifulSoup
+from bs4 import BeautifulSoup, XMLParsedAsHTMLWarning
 
 from api.connectors.base_document import BaseDocumentConnector
 from api.connectors.rate_limiter import RateLimiter
@@ -41,6 +42,68 @@ def _pad_cik(cik: str) -> str:
 def _accession_to_path(accession_number: str) -> str:
     """Convert accession number '0000320193-23-000106' to path-safe '000032019323000106'."""
     return accession_number.replace("-", "")
+
+
+# DOCBOT-2634: SEC HTML puts every table cell in its own element, so plain
+# get_text() wrote one cell per line and split captions from their numbers.
+_TABLE_MARK = "\x00EDGAR_TABLE_{}\x00"
+_PREFIX_ONLY = {"$", "(", "($"}
+_SUFFIX_ONLY = re.compile(r"^[)%]+$")
+
+
+def _row_cells(tr: Any) -> list[str]:
+    """Non-empty cell texts of one <tr>, with "$" / ")" / "%" fragments merged in."""
+    cells: list[str] = []
+    pending = ""
+    for td in tr.find_all(["td", "th"], recursive=False):
+        txt = " ".join(td.get_text(" ", strip=True).split())
+        # inline-XBRL wraps numbers in spans: "( 18,509 )" -> "(18,509)"
+        txt = re.sub(r"\s+([)%,])", r"\1", re.sub(r"([($])\s+", r"\1", txt))
+        if not txt:
+            continue  # colspan / padding spacer cells
+        if txt in _PREFIX_ONLY:
+            pending += txt
+            continue
+        if _SUFFIX_ONLY.match(txt) and cells:
+            cells[-1] += txt
+            continue
+        cells.append(pending + txt)
+        pending = ""
+    if pending:
+        cells.append(pending)
+    return cells
+
+
+def render_table(table: Any) -> str:
+    """Render a <table> as one line per row, cells joined by " | "."""
+    lines = [" | ".join(c) for c in (_row_cells(tr) for tr in table.find_all("tr")) if c]
+    return "\n".join(lines)
+
+
+def html_to_text(html: str) -> str:
+    """Filing HTML to text: prose one element per line, tables one row per line.
+
+    Each table becomes its own blank-line-separated block (the only blank lines
+    in the output), which ``chunk_filing`` uses to keep tables whole.
+    """
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore", XMLParsedAsHTMLWarning)
+        soup = BeautifulSoup(html, "lxml")
+    for tag in soup(["script", "style", "meta", "link"]):
+        tag.decompose()
+    rendered: list[str] = []
+    for table in soup.find_all("table"):
+        if table.find_parent("table") is not None:
+            continue  # nested tables are rendered with their outer table
+        rendered.append(render_table(table))
+        table.replace_with(soup.new_string(_TABLE_MARK.format(len(rendered) - 1)))
+    text = soup.get_text(separator="\n", strip=True)
+    text = re.sub(
+        r"\x00EDGAR_TABLE_(\d+)\x00",
+        lambda m: f"\n\n{rendered[int(m.group(1))]}\n\n" if rendered[int(m.group(1))] else "",
+        text,
+    )
+    return re.sub(r"\n{3,}", "\n\n", text).strip()
 
 
 @register("edgar")
@@ -167,7 +230,7 @@ class EdgarConnector(BaseDocumentConnector):
     ) -> str:
         """Download a filing and extract clean text from HTML.
 
-        Uses BeautifulSoup to strip HTML tags and return readable text.
+        HTML is converted with ``html_to_text`` (tables kept as rows).
         """
         padded = _pad_cik(cik)
         accession_path = _accession_to_path(accession_number)
@@ -181,17 +244,10 @@ class EdgarConnector(BaseDocumentConnector):
         content_type = resp.headers.get("content-type", "")
 
         if "html" in content_type or primary_document.endswith((".htm", ".html")):
-            soup = BeautifulSoup(resp.text, "lxml")
-            # Remove script and style elements
-            for tag in soup(["script", "style", "meta", "link"]):
-                tag.decompose()
-            text = soup.get_text(separator="\n", strip=True)
+            text = html_to_text(resp.text)
         else:
             # Plain text filing
-            text = resp.text
-
-        # Collapse excessive blank lines (3+ → 2)
-        text = re.sub(r"\n{3,}", "\n\n", text)
+            text = re.sub(r"\n{3,}", "\n\n", resp.text)
         logger.info(
             "edgar: fetched filing %s (%d chars)",
             accession_number,
