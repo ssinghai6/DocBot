@@ -271,3 +271,132 @@ class TestV1RouteGating:
         resp = getattr(v1_test_app, method)(path, headers={"Authorization": f"Bearer {raw_key}"})
         assert resp.status_code == 200
         assert resp.json()["ok"] is True
+
+
+# ---------------------------------------------------------------------------
+# DOCBOT-2907: key modes, expiry, owner, scope alias, migration backfill
+# ---------------------------------------------------------------------------
+
+
+def _fake_request(path: str = "/v1/hybrid/chat"):
+    from unittest.mock import MagicMock
+    request = MagicMock()
+    request.method = "POST"
+    request.url.path = path
+    request.headers = {}
+    request.client = None
+    request.state = MagicMock()
+    return request
+
+
+@pytest.mark.integration
+class TestKeyModes2907:
+    async def test_test_mode_key_has_dk_test_prefix(self, wired_store):
+        record, raw_key = await create_api_key(
+            org_id="org-1", scopes=["query:run"], name="t", mode="test", created_by="user-1"
+        )
+        assert raw_key.startswith("dk_test_")
+        assert record.key_prefix.startswith("dk_test_")
+        assert record.mode == "test" and record.created_by == "user-1"
+        validated = await validate_api_key(raw_key)
+        assert validated.mode == "test"
+
+    async def test_unknown_mode_rejected(self, wired_store):
+        with pytest.raises(ValueError):
+            await create_api_key(org_id="org-1", scopes=["query:run"], name="t", mode="prod")
+
+    async def test_expired_key_is_401_expired_key(self, wired_store):
+        from datetime import datetime, timedelta, timezone
+        from fastapi import HTTPException
+        _, raw_key = await create_api_key(
+            org_id="org-1", scopes=["hybrid:read"], name="t",
+            expires_at=datetime.now(timezone.utc) - timedelta(seconds=1),
+        )
+        with pytest.raises(HTTPException) as exc_info:
+            await require_api_key("hybrid:read")(request=_fake_request(), authorization=f"Bearer {raw_key}")
+        assert exc_info.value.status_code == 401
+        assert exc_info.value.detail["code"] == "expired_key"
+
+    async def test_unexpired_key_works_and_sets_key_mode(self, wired_store):
+        from datetime import datetime, timedelta, timezone
+        _, raw_key = await create_api_key(
+            org_id="org-1", scopes=["query:run"], name="t", mode="test",
+            expires_at=datetime.now(timezone.utc) + timedelta(days=30), created_by="u1",
+        )
+        request = _fake_request()
+        record = await require_api_key("query:run")(request=request, authorization=f"Bearer {raw_key}")
+        assert record.mode == "test"
+        assert request.state.key_mode == "test"
+
+    async def test_hybrid_read_route_accepts_query_run_alias(self, wired_store):
+        _, raw_key = await create_api_key(org_id="org-1", scopes=["query:run"], name="t")
+        record = await require_api_key("hybrid:read")(request=_fake_request(), authorization=f"Bearer {raw_key}")
+        assert record.org_id == "org-1"
+
+    async def test_hybrid_read_key_still_allowed_on_hybrid_route(self, wired_store):
+        _, raw_key = await create_api_key(org_id="org-1", scopes=["hybrid:read"], name="legacy")
+        record = await require_api_key("hybrid:read")(request=_fake_request(), authorization=f"Bearer {raw_key}")
+        assert record.mode == "live"
+
+    async def test_service_account_key_survives_member_removal(self, wired_store):
+        # A key never depends on its creator's membership: no user row exists at all here.
+        _, raw_key = await create_api_key(org_id="org-1", scopes=["query:run"], name="svc", created_by="gone-user")
+        assert (await validate_api_key(raw_key)) is not None
+        _, svc_key = await create_api_key(org_id="org-1", scopes=["query:run"], name="svc2", created_by=None)
+        assert (await validate_api_key(svc_key)).created_by is None
+
+    async def test_audit_events_for_mint_revoke_expire(self, wired_store, monkeypatch):
+        from datetime import datetime, timedelta, timezone
+        from fastapi import HTTPException
+        import api.api_key_service as svc
+        events: list[str] = []
+        monkeypatch.setattr(svc, "_audit", lambda event, record, detail: events.append(event))
+        record, _ = await create_api_key(org_id="org-1", scopes=["query:run"], name="a")
+        await revoke_api_key(record.id)
+        await revoke_api_key(record.id)  # idempotent: no second revoke event
+        _, expired = await create_api_key(
+            org_id="org-1", scopes=["query:run"], name="b",
+            expires_at=datetime.now(timezone.utc) - timedelta(minutes=1),
+        )
+        with pytest.raises(HTTPException):
+            await require_api_key("query:run")(request=_fake_request(), authorization=f"Bearer {expired}")
+        assert events == ["api_key_create", "api_key_revoke", "api_key_create", "api_key_expired"]
+
+
+@pytest.mark.integration
+async def test_migration_backfills_existing_keys_as_live():
+    """Keys issued before DOCBOT-2907 (no mode/expires_at/created_by columns) become live and keep working."""
+    import hashlib
+    from datetime import datetime, timezone
+    from sqlalchemy import Column, DateTime, String, Table, Text, text
+    from api.api_key_service import API_KEY_COLUMN_MIGRATIONS
+
+    engine = create_async_engine("sqlite+aiosqlite:///:memory:")
+    legacy_md = MetaData()
+    Table(
+        "api_keys", legacy_md,
+        Column("id", String, primary_key=True), Column("org_id", String, nullable=False),
+        Column("key_hash", String, nullable=False), Column("key_prefix", String, nullable=False),
+        Column("name", String, nullable=False), Column("scopes", Text, nullable=False),
+        Column("created_at", DateTime(timezone=True), nullable=False),
+        Column("last_used_at", DateTime(timezone=True)), Column("revoked_at", DateTime(timezone=True)),
+    )
+    raw_key = "dk_live_legacykey"
+    async with engine.begin() as conn:
+        await conn.run_sync(legacy_md.create_all)
+        await conn.execute(text(
+            "INSERT INTO api_keys (id, org_id, key_hash, key_prefix, name, scopes, created_at) "
+            "VALUES ('k1', 'org-1', :h, 'dk_live_legacyke', 'old', '[\"hybrid:read\"]', :now)"
+        ), {"h": hashlib.sha256(raw_key.encode()).hexdigest(), "now": datetime.now(timezone.utc)})
+        for ddl in API_KEY_COLUMN_MIGRATIONS:
+            # SQLite has no ADD COLUMN IF NOT EXISTS; Postgres runs the DDL verbatim.
+            await conn.execute(text(ddl.replace("ADD COLUMN IF NOT EXISTS", "ADD COLUMN")))
+
+    metadata = MetaData()
+    table = register_api_keys_table(metadata)
+    wire_api_key_store(table, async_sessionmaker(engine, expire_on_commit=False))
+    record = await validate_api_key(raw_key)
+    assert record is not None and record.mode == "live" and record.expires_at is None
+    record = await require_api_key("hybrid:read")(request=_fake_request(), authorization=f"Bearer {raw_key}")
+    assert record.id == "k1"
+    await engine.dispose()

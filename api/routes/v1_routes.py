@@ -32,6 +32,12 @@ from fastapi.responses import JSONResponse
 from api import credit_service
 from api.api_key_service import require_api_key
 from api.routes.connector_routes import ConnectorDateRangeRequest
+from api.sandbox_session_service import (
+    begin_test_key_billing,
+    enforce_test_key_run_scope,
+    enforce_test_key_scope,
+    is_test_key,
+)
 from api.utils.caller_scope import CallerScope
 from api.utils.lineage import Lineage
 from api.utils.spend_guard import check_platform_capacity
@@ -82,6 +88,7 @@ def wire_v1_routes(**deps: Any) -> None:
 async def _require_v1_resources(key: Any, session_id: str, connection_id: Optional[str]) -> None:
     """DOCBOT-1603: body-supplied session/connection ids must be in the key's org → else 404."""
     from api.resource_scope_service import v1_resources_in_org
+    await enforce_test_key_scope(key, session_id, connection_id)  # DOCBOT-2597: test key -> sandbox only
     ok = await v1_resources_in_org(
         getattr(key, "org_id", None),
         session_id,
@@ -101,6 +108,8 @@ async def _begin_v1_billing(
 
     Call outside any try that rewrites errors, so a 402 propagates unchanged.
     """
+    if is_test_key(key):  # DOCBOT-2597: daily test allowance, never the org balance
+        return await begin_test_key_billing(route, key)
     return await credit_service.begin_billing(
         raw_request, route, session_id=session_id, connection_id=connection_id,
         session_exists=session_id in _d["vector_stores"],
@@ -365,6 +374,7 @@ async def v1_get_lineage(run_id: str, _key=_v1_lineage_read):
     key_scope = CallerScope(user_id=None, org_id=getattr(_key, "org_id", None), anon_token=None)
     if not key_scope.org_id or not await _d["run_row_accessible"](_d["answer_lineage_table"], run_id, key_scope):
         raise HTTPException(status_code=404, detail="Lineage not found.")
+    await enforce_test_key_run_scope(_key, _d["answer_lineage_table"], run_id)  # DOCBOT-2597
     lineage = await get_lineage(run_id)
     if lineage is None:
         raise HTTPException(status_code=404, detail="Lineage not found.")

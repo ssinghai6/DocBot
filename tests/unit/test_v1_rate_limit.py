@@ -27,7 +27,7 @@ from api.utils import request_guard  # noqa: E402
 
 def _record(prefix: str) -> APIKeyRecord:
     return APIKeyRecord(id=f"key-{prefix}", org_id="org-1", key_prefix=prefix, name="k",
-                        scopes=["connectors:manage"])
+                        scopes=["connectors:manage"], mode="test" if prefix.startswith("dk_test_") else "live")
 
 
 @pytest.fixture

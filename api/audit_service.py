@@ -55,6 +55,9 @@ class AuditEventType(str, Enum):
     login = "login"
     logout = "logout"
     api_key_use = "api_key_use"  # DOCBOT-1530: developer API key used to call a /v1/* route
+    api_key_create = "api_key_create"  # DOCBOT-2907: key minted
+    api_key_revoke = "api_key_revoke"  # DOCBOT-2907: key revoked
+    api_key_expired = "api_key_expired"  # DOCBOT-2907: expired key presented
 
 
 async def _write_event(

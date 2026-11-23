@@ -288,6 +288,23 @@ async def _charge(bucket: str, key: str, window_sec: int, limit: int, amount: in
     return (await charge_window(bucket, key, window_sec, limit, amount))[0]
 
 
+
+async def window_add(bucket: str, key: str, window_sec: int, amount: int) -> Optional[int]:
+    """Add ``amount`` (0 = read) to a fixed-window counter without a limit check.
+
+    Returns the new total, or None when the store is unavailable (callers fail open).
+    """
+    now = time.time()
+    window_start = int(now // window_sec) * window_sec
+    try:
+        return await asyncio.wait_for(
+            _store.incr(bucket, key, window_start, window_start + window_sec, amount), _STORE_TIMEOUT_SEC
+        )
+    except _STORE_ERRORS as exc:
+        logger.warning("rate-limit store unavailable (%s) for %s", type(exc).__name__, bucket)
+        return None
+
+
 _xff_shape_logged = False
 
 
