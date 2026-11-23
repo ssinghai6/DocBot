@@ -32,6 +32,7 @@ EPICS = {  # feature (Plane module) name prefix -> epic subject
     "EPIC-25": "EPIC-25 $5K MRR + 6 paying logos by 2027-02-28",
     "EPIC-24": "EPIC-24 Stage A isolation",
     "EPIC-18": "EPIC-18 Billing",
+    "EPIC-39": "EPIC-39 API, SDK and MCP Server",
 }
 SAFETY_EPIC = "Phase 1 safety & robustness (EPIC-16 rest, EPIC-23 bugs, scheduled parking lot)"
 HISTORICAL_EPIC = "Historical work"

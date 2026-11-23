@@ -46,6 +46,7 @@ MODULES = {  # backlog "Track" column -> Plane module name
     "EPIC-18 billing (referenced)": "EPIC-18 Billing",
     "EPIC-16 remainder": SAFETY,
     "EPIC-23 open bugs (referenced)": SAFETY,
+    "EPIC-39 API": "EPIC-39 API playground",
 }
 HISTORICAL_MODULE = "Historical work"
 LABEL_COLORS = {"phase": "#667eea", "P": "#ef4444", "lane": "#10b981", "pts": "#94a3b8",
