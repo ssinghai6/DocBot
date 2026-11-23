@@ -3906,11 +3906,11 @@ class V1ConnectorRegisterRequest(BaseModel):
     "/v1/connectors",
     tags=["v1-developer-api"],
     summary="List marketplace connectors",
-    description="List all active marketplace connectors (metadata only, no credentials). Requires `connectors:manage`.",
+    description="List the API key's organization's active marketplace connectors (metadata only, no credentials). Requires `connectors:manage`.",
 )
 async def v1_list_connectors(_key=_v1_connectors_manage):
     from api.connector_store import list_active_connectors
-    connectors = await list_active_connectors()
+    connectors = await list_active_connectors(org_id=_key.org_id)
     return {"connectors": connectors}
 
 
@@ -3920,9 +3920,7 @@ async def v1_list_connectors(_key=_v1_connectors_manage):
     summary="Register a marketplace connector",
     description=(
         "Registers and tests a commerce connector (Amazon SP-API, Shopify, ...). "
-        "Requires `connectors:manage`. NOTE: the underlying connector store does not "
-        "yet filter by organization (a pre-existing gap from DOCBOT-1524, not introduced "
-        "here) — see DOCBOT-1530's final report for the follow-up this implies."
+        "The connector is owned by the API key's organization. Requires `connectors:manage`."
     ),
 )
 async def v1_register_connector(body: V1ConnectorRegisterRequest, _key=_v1_connectors_manage):
@@ -3951,7 +3949,7 @@ async def v1_register_connector(body: V1ConnectorRegisterRequest, _key=_v1_conne
     app.state.connectors[connector_id] = connector
 
     from api.connector_store import save_connector
-    await save_connector(connector_id, body.connector_type, body.credentials)
+    await save_connector(connector_id, body.connector_type, body.credentials, org_id=_key.org_id)
 
     from api.connectors.sync_jobs import register_sync_schedules
     register_sync_schedules(connector_id)
@@ -3968,8 +3966,11 @@ async def v1_register_connector(body: V1ConnectorRegisterRequest, _key=_v1_conne
 )
 async def v1_sync_connector(connector_id: str, body: ConnectorDateRangeRequest, _key=_v1_connectors_manage):
     from api.commerce_service import sync_connector_data
-    from api.connector_store import update_last_sync
+    from api.connector_store import connector_in_org, update_last_sync
 
+    # DOCBOT-2591: 404 (not 403) for other-org / org-less connectors — don't leak existence.
+    if not await connector_in_org(connector_id, _key.org_id):
+        raise HTTPException(status_code=404, detail="Connector not found.")
     connector = _get_connector(connector_id)
     try:
         summary = await sync_connector_data(connector_id, connector, body.start_date, body.end_date)
