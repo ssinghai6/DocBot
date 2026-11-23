@@ -11,7 +11,7 @@ pages.each do |d|
   pg.text = d["text"]
   pg.save! if pg.new_record?
   (d["attachments"] || []).each do |name|
-    a = Attachment.where(container: pg, filename: name).order(:id).last || begin
+    a = pg.attachments.reload.select { |x| x.filename == name }.max_by(&:id) || begin  # filename column is blank; name comes from the file
       mime = name.end_with?(".png") ? "image/png" : "text/html"
       at = Attachment.new(container: pg, author: User.current, description: "")
       at.file = Rack::Multipart::UploadedFile.new("/tmp/wikiatt/#{name}", mime)
