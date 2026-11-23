@@ -79,3 +79,38 @@ def test_stream_logs_estimated_tokens(monkeypatch):
     kw = log.call_args.kwargs
     assert (kw["input_tokens"], kw["output_tokens"]) == (100, 2)
     assert lp._estimate_cost_usd(kw["model"], kw["input_tokens"], kw["output_tokens"]) > 0
+
+
+class _Sent(Exception):
+    pass
+
+
+async def _request_kwargs(llm) -> dict:
+    """Run ainvoke against a fake client and return the kwargs ChatGroq would send."""
+    seen = {}
+
+    async def create(**kw):
+        seen.update(kw)
+        raise _Sent
+
+    llm.async_client = SimpleNamespace(create=create)
+    with pytest.raises(_Sent):
+        await llm.ainvoke("hi")
+    return seen
+
+
+@pytest.mark.asyncio
+async def test_bedrock_langchain_client_omits_service_tier(monkeypatch):
+    # DOCBOT-2604: Bedrock 400s on service_tier, so call_llm/get_llm callers failed silently
+    _bedrock_env(monkeypatch)
+    monkeypatch.setenv("BEDROCK_FALLBACK_MODEL", "openai.gpt-oss-20b-1:0")
+    for llm in (lp._get_groq_llm(), lp._get_fallback_llm()):
+        sent = await _request_kwargs(llm)
+        assert "service_tier" not in sent and sent["model"].startswith("openai.gpt-oss")
+
+
+@pytest.mark.asyncio
+async def test_groq_langchain_client_keeps_service_tier(monkeypatch):
+    monkeypatch.delenv("LLM_PRIMARY", raising=False)
+    monkeypatch.setenv("groq_api_key", "g")
+    assert (await _request_kwargs(lp._get_groq_llm()))["service_tier"] == "on_demand"

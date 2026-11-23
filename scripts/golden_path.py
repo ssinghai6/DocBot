@@ -1,9 +1,9 @@
 #!/usr/bin/env python3
 """DOCBOT-2604 golden-path check: demo init -> tie-out chat -> XLSX export -> autopilot.
 
-Usage: python3 scripts/golden_path.py --base-url https://docbot.space [--runs N]
-Exits nonzero if any step of any run fails. Each run costs real LLM spend
-(anonymous demo cap is $10/day), so keep --runs small on prod.
+Usage: python3 scripts/golden_path.py --base-url https://docbot-production-c4c0.up.railway.app [--runs N]
+Exits nonzero if any step of any run fails; prints per-step p50/p95 at the end.
+Each run costs real LLM spend (anonymous demo cap is $10/day), so keep --runs small on prod.
 """
 
 from __future__ import annotations
@@ -11,6 +11,8 @@ from __future__ import annotations
 import argparse
 import io
 import json
+import re
+import statistics
 import sys
 import time
 from typing import Any, Callable, Iterable
@@ -20,6 +22,18 @@ PLANTED = [(330.0, 325.0), (890.0, 885.0)]
 TIEOUT_Q = "Are there any discrepancies between the filing and the database? Compare Q4 net income and segment revenue."
 AUTOPILOT_Q = "Analyze quarterly revenue and net income trends and assess which segment drives growth."
 STEPS = ["demo_init", "tieout_chat", "xlsx_export", "autopilot"]
+LEAK = re.compile(r"<(reasoning|think)>", re.I)  # PR #135 strips these; one in an answer is a regression
+
+
+def leaked(events: list[dict[str, Any]]) -> bool:
+    """True when streamed answer text (token/answer events) contains a reasoning tag."""
+    return any(LEAK.search(str(e.get("content") or "")) for e in events if e.get("type") in ("token", "answer"))
+
+
+def percentiles(secs: list[float]) -> tuple[float, float]:
+    """(p50, nearest-rank p95)."""
+    s = sorted(secs)
+    return statistics.median(s), s[-(-95 * len(s) // 100) - 1]
 
 
 def parse_sse(lines: Iterable[str]) -> list[dict[str, Any]]:
@@ -73,6 +87,8 @@ def check_xlsx(body: bytes) -> tuple[bool, str]:
 
 def check_autopilot(events: list[dict[str, Any]]) -> tuple[bool, str]:
     errs = [e for e in events if e.get("type") == "error"]
+    if leaked(events):
+        return False, "reasoning tag leaked into answer"
     if errs:
         return False, f"error event: {str(errs[0].get('content'))[:120]}"
     answer = next((e for e in events if e.get("type") == "answer" and e.get("content")), None)
@@ -116,6 +132,8 @@ def run_once(base: str, dataset: str) -> list[tuple[str, bool, float, str]]:
             "has_docs": True, "persona": "Finance Expert"})
         ctx["run_id"] = run_id_of(ev)
         ok, note = planted_discrepancy(ev)
+        if leaked(ev):
+            return False, "reasoning tag leaked into answer"
         return ok and bool(ctx["run_id"]), note
 
     def xlsx() -> tuple[bool, str]:
@@ -142,14 +160,21 @@ def main() -> int:
     a = ap.parse_args()
     base = a.base_url.rstrip("/")
     failed = 0
+    times: dict[str, list[float]] = {n: [] for n in STEPS}
     for i in range(1, a.runs + 1):
         print(f"\nrun {i}/{a.runs} @ {base}")
         res = run_once(base, a.dataset)
         for name, ok, secs, note in res:
+            if ok:
+                times[name].append(secs)
             print(f"  {name:<12} {'PASS' if ok else 'FAIL'}  {secs:7.2f}s  {note}")
         if len(res) < len(STEPS) or not all(r[1] for r in res):
             failed += 1
     print(f"\n{a.runs - failed}/{a.runs} runs passed")
+    for name, secs in times.items():
+        if secs:
+            p50, p95 = percentiles(secs)
+            print(f"  {name:<12} p50 {p50:6.2f}s  p95 {p95:6.2f}s  (n={len(secs)} passing)")
     return 1 if failed else 0
 
 

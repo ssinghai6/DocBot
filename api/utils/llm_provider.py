@@ -444,16 +444,32 @@ def _get_groq_llm(
     streaming: bool = False,
 ) -> BaseChatModel:
     """Create a Groq ChatModel instance (pointed at Bedrock when LLM_PRIMARY=bedrock)."""
+    provider, key, base_url, model_id = _primary_target(GROQ_MODEL, api_key)
+    return _groq_client(provider, model_id, key, base_url, temperature, streaming)
+
+
+def _groq_client(
+    provider: str, model_id: str, key: str, base_url: Optional[str], temperature: float, streaming: bool,
+) -> BaseChatModel:
+    """ChatGroq for Groq; for Bedrock, a ChatGroq that omits `service_tier`.
+
+    DOCBOT-2604: ChatGroq always sends service_tier="on_demand", which Bedrock's
+    OpenAI-compatible endpoint rejects with a 400, so every call_llm/get_llm caller
+    (autopilot tool router, verifier) failed on Bedrock and fell back silently.
+    """
     from langchain_groq import ChatGroq
 
-    _, key, base_url, model_id = _primary_target(GROQ_MODEL, api_key)
-    return ChatGroq(
-        model=model_id,
-        api_key=key,
-        base_url=base_url,
-        temperature=temperature,
-        streaming=streaming,
-    )
+    cls = ChatGroq
+    if provider == "bedrock":
+        class _BedrockChat(ChatGroq):
+            @property
+            def _default_params(self) -> dict:
+                params = dict(super()._default_params)
+                params.pop("service_tier", None)
+                return params
+
+        cls = _BedrockChat
+    return cls(model=model_id, api_key=key, base_url=base_url, temperature=temperature, streaming=streaming)
 
 
 def _get_gemini_llm(
@@ -777,9 +793,8 @@ def _get_fallback_llm(api_key: Optional[str] = None, temperature: float = 0, str
     fb = _bedrock_fallback()
     if not fb:
         return _get_gemini_llm(api_key, temperature, streaming)
-    from langchain_groq import ChatGroq
     key, base_url, model_id = fb
-    return ChatGroq(model=model_id, api_key=key, base_url=base_url, temperature=temperature, streaming=streaming)
+    return _groq_client("bedrock", model_id, key, base_url, temperature, streaming)
 
 
 # Bedrock open-weight models put chain of thought inline: gpt-oss as

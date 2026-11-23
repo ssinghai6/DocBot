@@ -52,3 +52,15 @@ def test_check_autopilot():
     assert gp.check_autopilot(ok)[0]
     assert not gp.check_autopilot(ok + [{"type": "error", "content": "boom"}])[0]
     assert not gp.check_autopilot([{"type": "done"}])[0]
+
+
+def test_leaked_checks_answer_text_only():
+    assert gp.leaked([{"type": "token", "content": "a <think>x"}])
+    assert gp.leaked([{"type": "answer", "content": "<REASONING>"}])
+    assert not gp.leaked([{"type": "step", "content": "<think>"}, {"type": "token", "content": "fine"}])
+    assert not gp.check_autopilot([{"type": "answer", "content": "<think>x"}, {"type": "done"}])[0]
+
+
+def test_percentiles():
+    assert gp.percentiles([float(i) for i in range(1, 11)]) == (5.5, 10.0)
+    assert gp.percentiles([3.0]) == (3.0, 3.0)

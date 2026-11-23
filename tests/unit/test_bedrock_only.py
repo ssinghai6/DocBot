@@ -81,11 +81,11 @@ def test_call_llm_falls_back_to_second_bedrock_model(monkeypatch):
         return SimpleNamespace(content="<think>x</think>done", usage_metadata=None, response_metadata={})
 
     fallback.ainvoke.side_effect = _ok
-    with patch("langchain_groq.ChatGroq", side_effect=[primary, fallback]) as chat_groq, \
+    with patch.object(lp, "_groq_client", side_effect=[primary, fallback]) as client, \
             patch.object(lp, "_get_gemini_llm") as gemini, patch.object(lp, "_log_llm_call"):
         assert asyncio.run(lp.call_llm("q")) == "done"
     gemini.assert_not_called()
-    assert chat_groq.call_args.kwargs["model"] == "nvidia.nemotron-super-3-120b"
+    assert client.call_args.args[:2] == ("bedrock", "nvidia.nemotron-super-3-120b")
 
 
 @pytest.mark.parametrize("chunks", [
