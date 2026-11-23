@@ -817,6 +817,7 @@ export default function LandingPage() {
           </div>
 
           <div className="flex items-center gap-4">
+            <Link href="/apis" className="hover:text-[var(--color-text-primary)] transition-colors duration-150 outline-none focus-visible:underline">API</Link>
             <LegalLinks />
             <span className="text-[var(--color-text-quaternary)]">|</span>
             <span>&copy; 2026 DocBot</span>
