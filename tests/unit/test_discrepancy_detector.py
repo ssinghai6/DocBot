@@ -430,3 +430,24 @@ def test_literal_columns():
     assert _literal_columns(_TAGGED_SQL) == {"source"}
     assert _literal_columns("SELECT category, amount FROM opex") == frozenset()
     assert _literal_columns(None) == frozenset()
+    # Live run: 'segment' is data in the first branch, so it stays a dimension.
+    assert _literal_columns(
+        "SELECT period, segment, amount FROM revenue_by_segment UNION ALL "
+        "SELECT period, 'Total' AS segment, amount FROM income_statement WHERE line_item = 'Revenue'"
+    ) == frozenset()
+
+
+def test_union_total_row_keeps_segment_dimension():
+    doc = "Source: Draft-10K.pdf, Page 9\nNOTE 12 FY2025\nLab Services: $104.9M"
+    meta = {
+        "result_preview": [
+            {"period": "FY2025", "segment": "Lab Services", "amount": 102_700_000.0},
+            {"period": "FY2025", "segment": "Total", "amount": 412_600_000.0},
+        ],
+        "sql_query": "SELECT period, segment, amount FROM revenue_by_segment UNION ALL "
+        "SELECT period, 'Total' AS segment, amount FROM income_statement WHERE line_item = 'Revenue'",
+        "sources": ["revenue_by_segment", "income_statement"],
+    }
+    assert [(d.doc_value, d.db_value) for d in detect_discrepancies(doc, meta).discrepancies] == [
+        (104_900_000, 102_700_000)
+    ]

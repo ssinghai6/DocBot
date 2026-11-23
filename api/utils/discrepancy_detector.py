@@ -601,12 +601,14 @@ def _literal_columns(sql: Any) -> frozenset[str]:
         return frozenset()
     if tree is None:
         return frozenset()
-    return frozenset(
-        proj.alias.lower()
-        for select in tree.find_all(exp.Select)
-        for proj in select.expressions
-        if isinstance(proj, exp.Alias) and isinstance(proj.this, exp.Literal) and proj.this.is_string
-    )
+    literal: set[str] = set()
+    data: set[str] = set()
+    for select in tree.find_all(exp.Select):
+        for proj in select.expressions:
+            is_tag = isinstance(proj, exp.Alias) and isinstance(proj.this, exp.Literal) and proj.this.is_string
+            (literal if is_tag else data).add(proj.alias_or_name.lower())
+    # "SELECT segment ... UNION ALL SELECT 'Total' AS segment": real data in one branch, not a tag.
+    return frozenset(literal - data)
 
 
 def _extract_from_rows(
