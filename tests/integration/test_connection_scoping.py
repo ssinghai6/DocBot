@@ -40,8 +40,8 @@ USERS = {
 
 CONN_A, CONN_B, CONN_ANON = "conn-alice", "conn-bob", "conn-anon"
 SESS_A, SESS_B = "sess-a", "sess-b"
-SCHEMA_A = [{"name": "alice_secret_table", "columns": [{"name": "x", "type": "INT"}]}]
-SCHEMA_B = [{"name": "bob_secret_table", "columns": [{"name": "y", "type": "INT"}]}]
+SCHEMA_A = [{"name": "alice_secret_table", "columns": [{"name": "x", "type": "INT"}], "schema_fmt": 2}]
+SCHEMA_B = [{"name": "bob_secret_table", "columns": [{"name": "y", "type": "INT"}], "schema_fmt": 2}]
 
 
 @pytest.fixture

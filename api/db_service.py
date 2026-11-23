@@ -133,7 +133,7 @@ async def _decrypt_conn_credentials_lazy(
 
 PROMPT_VERSION_SQL_REPHRASE = "v1"          # _rephrase_with_history
 PROMPT_VERSION_SQL_TABLE_SELECTOR = "v1"    # _select_relevant_tables (incl. retry)
-PROMPT_VERSION_SQL_GEN = "v3"               # _generate_sql
+PROMPT_VERSION_SQL_GEN = "v4"               # _generate_sql
 PROMPT_VERSION_SQL_ANSWER_GEN = "v1"        # _stream_answer
 
 
@@ -1055,8 +1055,10 @@ async def get_schema(
             # Make timezone-aware if naive
             if expires.tzinfo is None:
                 expires = expires.replace(tzinfo=timezone.utc)
-            if expires > now:
-                return json.loads(cache_row.schema_json)
+            cached = json.loads(cache_row.schema_json)
+            # DOCBOT-2633: rows cached before _SCHEMA_FMT lack full value lists
+            if expires > now and all(t.get("schema_fmt") == _SCHEMA_FMT for t in cached):
+                return cached
 
         conn_result = await session.execute(
             select(db_connections_table).where(
@@ -1076,7 +1078,11 @@ async def get_schema(
     if creds.get("dialect") == "csv":
         columns = creds.get("columns", [])
         table_name = creds.get("table_name", "data")
-        schema = [{"name": table_name, "columns": [{"name": col, "type": "TEXT"} for col in columns]}]
+        schema = [{
+            "name": table_name,
+            "columns": [{"name": col, "type": "TEXT"} for col in columns],
+            "schema_fmt": _SCHEMA_FMT,
+        }]
         schema_json = json.dumps(schema)
         expires_at = datetime.now(timezone.utc) + timedelta(hours=24)
         async with async_session_factory() as session:
@@ -1152,10 +1158,16 @@ def _get_columns_via_information_schema(engine, table_name: str) -> List[Dict[st
 # DOCBOT-2321: sample values for low-cardinality text columns, so the SQL
 # generator writes `quarter LIKE 'Q4%'` instead of `quarter = 'Q4'` when the
 # data holds 'Q4 2025'. Computed once at introspection, cached with the schema.
+# DOCBOT-2633: a column with <=50 distinct values gets its COMPLETE list (the
+# generator never saw 'Marketing' when only 5 alphabetical values were shown);
+# above that, the 5 most frequent values. Bump _SCHEMA_FMT when the cached
+# shape changes so older cache rows are re-introspected.
+_SCHEMA_FMT = 2
 _SAMPLE_MAX_VALUES = 5
-_SAMPLE_MAX_LEN = 40
-_SAMPLE_MAX_DISTINCT = 20
-_SAMPLE_SCAN_ROWS = 1000
+_SAMPLE_MAX_LEN = 60
+_SAMPLE_MAX_DISTINCT = 50
+_SAMPLE_LIST_MAX_CHARS = 1500
+_SAMPLE_SCAN_ROWS = 5000
 _SAMPLE_MAX_COLUMNS = 60
 _TEXT_TYPE_MARKERS = ("CHAR", "TEXT", "STRING", "CLOB")
 _SENSITIVE_COLUMN_MARKERS = (
@@ -1164,14 +1176,18 @@ _SENSITIVE_COLUMN_MARKERS = (
 
 
 def _attach_sample_values(engine, table_name: str, columns: List[Dict[str, Any]], budget: List[int]) -> None:
-    """Add ``sample_values`` (<=5 values, <=40 chars) to TEXT columns with
-    <=20 distinct values. Skips PII-looking columns (by name, or any value the
-    PII masker would mask). ``budget`` caps sampled columns per introspection.
+    """Add ``sample_values`` to TEXT columns. <=50 distinct values: all of them
+    (``values_complete`` when the whole table was scanned); more: the 5 most
+    frequent repeated values. Values >60 chars are dropped; a list over 1500
+    chars falls back to the frequent sample. Skips PII-looking columns (by
+    name, or any value the PII masker would mask). ``budget`` caps sampled
+    columns per introspection.
     """
-    from sqlalchemy import column as sa_column, table as sa_table
+    from sqlalchemy import column as sa_column, func, literal, table as sa_table
     from sqlalchemy.exc import SQLAlchemyError
     from api.utils.pii_masking import mask_pii
 
+    whole_table: Optional[bool] = None
     for col in columns:
         if budget[0] <= 0:
             return
@@ -1183,24 +1199,37 @@ def _attach_sample_values(engine, table_name: str, columns: List[Dict[str, Any]]
         if any(m in name.lower() for m in _SENSITIVE_COLUMN_MARKERS):
             continue
         budget[0] -= 1
-        # shortcut: cardinality judged on the first 1000 rows (bounded scan on
-        # big tables), so values are labelled "e.g." in the prompt.
+        # Bounded scan (first 5000 rows) keeps introspection cheap on big tables;
+        # a list is only called complete when the whole table fits in the scan.
         inner = select(sa_column(name)).select_from(sa_table(table_name)).limit(_SAMPLE_SCAN_ROWS).subquery()
-        query = select(inner.c[name]).distinct().limit(_SAMPLE_MAX_DISTINCT + 1)
+        c = inner.c[name]
         try:
             with engine.connect() as conn:
-                values = [r[0] for r in conn.execute(query)]
+                if whole_table is None:
+                    probe = select(literal(1)).select_from(sa_table(table_name)).limit(_SAMPLE_SCAN_ROWS + 1).subquery()
+                    whole_table = conn.execute(select(func.count()).select_from(probe)).scalar() <= _SAMPLE_SCAN_ROWS
+                values = [r[0] for r in conn.execute(select(c).distinct().limit(_SAMPLE_MAX_DISTINCT + 1))]
+                complete = len(values) <= _SAMPLE_MAX_DISTINCT
+                values = sorted(v for v in values if isinstance(v, str) and len(v) <= _SAMPLE_MAX_LEN)
+                if not complete or sum(len(v) + 4 for v in values) > _SAMPLE_LIST_MAX_CHARS:
+                    complete = False
+                    # most frequent repeated values (count > 1 skips ids / free text)
+                    freq = (
+                        select(c).where(c.is_not(None)).group_by(c)
+                        .having(func.count() > 1).order_by(func.count().desc(), c)
+                        .limit(_SAMPLE_MAX_VALUES * 2)
+                    )
+                    values = [
+                        v for (v,) in conn.execute(freq) if isinstance(v, str) and len(v) <= _SAMPLE_MAX_LEN
+                    ][:_SAMPLE_MAX_VALUES]
         except SQLAlchemyError as exc:
             logger.debug("sample values skipped for %s.%s: %s", table_name, name, type(exc).__name__)
             continue
-        values = [v for v in values if isinstance(v, str)]
-        if not values or len(values) > _SAMPLE_MAX_DISTINCT:
+        if not values or any(mask_pii(v) != v for v in values):
             continue
-        if any(mask_pii(v) != v for v in values):
-            continue
-        short = sorted(v for v in values if len(v) <= _SAMPLE_MAX_LEN)[:_SAMPLE_MAX_VALUES]
-        if short:
-            col["sample_values"] = short
+        col["sample_values"] = values
+        if complete and whole_table:
+            col["values_complete"] = True
 
 
 async def _introspect_schema_from_url(
@@ -1251,7 +1280,7 @@ async def _introspect_schema_from_url(
             except Exception:
                 col_list = _get_columns_via_information_schema(engine, tname)
             _attach_sample_values(engine, tname, col_list, sample_budget)
-            schema.append({"name": tname, "columns": col_list})
+            schema.append({"name": tname, "columns": col_list, "schema_fmt": _SCHEMA_FMT})
 
         # Append views (tagged with is_view for downstream awareness)
         views_cap = 200 - len(schema)
@@ -1266,7 +1295,7 @@ async def _introspect_schema_from_url(
                 col_list = _get_columns_via_information_schema(engine, vname)
             if dialect == "sqlite":  # views can be expensive on server DBs
                 _attach_sample_values(engine, vname, col_list, sample_budget)
-            schema.append({"name": vname, "columns": col_list, "is_view": True})
+            schema.append({"name": vname, "columns": col_list, "is_view": True, "schema_fmt": _SCHEMA_FMT})
 
         return schema
 
@@ -1922,6 +1951,9 @@ async def _retrieve_few_shot(
 # ---------------------------------------------------------------------------
 
 
+_PROMPT_VALUES_MAX_CHARS = 6000
+
+
 async def _generate_sql(
     question: str,
     schema_subset: List[Dict[str, Any]],
@@ -1934,12 +1966,20 @@ async def _generate_sql(
     can be logged as the model wrote it). ``feedback`` (DOCBOT-2320) turns
     this into the corrective retry: appended to the prompt, cache bypassed.
     """
+    value_chars = [0]
+
     def _fmt_col(c: Dict[str, Any]) -> str:
         samples = c.get("sample_values")
         if not samples:
             return f"{c['name']} ({c['type']})"
+        # DOCBOT-2633: full lists until the prompt-wide budget is spent, then
+        # 5 examples per column so wide schemas can't blow up the prompt.
+        complete = bool(c.get("values_complete")) and value_chars[0] < _PROMPT_VALUES_MAX_CHARS
+        if not complete:
+            samples = samples[:_SAMPLE_MAX_VALUES]
         vals = ", ".join("'" + str(v).replace("'", "''") + "'" for v in samples)
-        return f"{c['name']} ({c['type']}, e.g. {vals})"
+        value_chars[0] += len(vals)
+        return f"{c['name']} ({c['type']}, {'values' if complete else 'e.g.'} {vals})"
 
     def _fmt_table(t: Dict[str, Any]) -> str:
         cols = ", ".join(_fmt_col(c) for c in t["columns"])
@@ -1966,7 +2006,11 @@ async def _generate_sql(
         "return the database side only: the relevant figures, e.g. one row per metric "
         "via UNION ALL or a grouped query. Never answer in prose.\n"
         "6. Filter text columns using the stored format shown in their e.g. values "
-        "(e.g. quarter values like 'Q4 2025' need quarter LIKE 'Q4%', not quarter = 'Q4').\n\n"
+        "(e.g. quarter values like 'Q4 2025' need quarter LIKE 'Q4%', not quarter = 'Q4').\n"
+        "7. A column shown with 'values' lists EVERY value it holds. Filter it only with "
+        "those exact strings, copied verbatim, and include every listed value the question "
+        "needs (e.g. all expense lines when asked about operating expenses). Never invent "
+        "names that are not in the list.\n\n"
         f"Schema:\n{schema_text}"
         f"{few_shot_text}\n\n"
         f"Question: {question}\n\n"
