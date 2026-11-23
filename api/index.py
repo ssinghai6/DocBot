@@ -3726,9 +3726,15 @@ async def v1_hybrid_chat(
                     continue
                 etype = evt.get("type")
                 if etype == "metadata":
-                    metadata_evt = evt
+                    # DOCBOT-2592: a later SQL-summary metadata event has no intent
+                    # keys; merge so it can't null out intent/has_sql/has_docs.
+                    metadata_evt.update(evt)
                 elif etype == "token":
                     answer_parts.append(evt.get("content", ""))
+                elif etype == "replace":
+                    # DOCBOT-2592: discrepancy correction is a full rewrite; tokens
+                    # after it (tie-out marker tail) still append.
+                    answer_parts[:] = [evt.get("content", "")]
                 elif etype == "done":
                     citations = evt.get("citations", [])
                     run_id = evt.get("run_id")
