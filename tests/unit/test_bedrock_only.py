@@ -134,3 +134,14 @@ def test_extraction_gemini_when_bedrock_off(monkeypatch):
     monkeypatch.setenv("LLM_PRIMARY", "groq")
     assert de._extraction_target("") is None
     assert de._extraction_target("gk")[:2] == ("gemini", "gemini-2.5-flash")
+
+
+def test_bedrock_extraction_survives_long_filings(monkeypatch):
+    """A 10-K is 100+ chunk calls: one throttled call must not sink the whole extraction."""
+    pytest.importorskip("langextract")
+    from api import document_extractor as de
+
+    _bedrock_env(monkeypatch)
+    _, _, kwargs = de._extraction_target("")
+    assert kwargs["model"]._client.max_retries == de._BEDROCK_EXTRACT_RETRIES > 2
+    assert kwargs["max_char_buffer"] == de._BEDROCK_CHUNK_CHARS > 1000

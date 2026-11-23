@@ -324,6 +324,10 @@ def _first_json_object(text: str) -> str:
     return text
 
 
+_BEDROCK_EXTRACT_RETRIES = 8  # openai SDK backoff caps at 8s/try, ~45s total, and honours retry-after
+_BEDROCK_CHUNK_CHARS = 4000  # LangExtract default 1000 = ~450 calls per 10-K; 4000 = ~115
+
+
 def _bedrock_language_model():
     """LangExtract's OpenAI provider, minus the inline reasoning Bedrock models put before the JSON.
 
@@ -338,6 +342,12 @@ def _bedrock_language_model():
     from api.utils.llm_provider import _strip_reasoning
 
     class BedrockLanguageModel(OpenAILanguageModel):
+        def __init__(self, *args, **kwargs):
+            super().__init__(*args, **kwargs)
+            # A 10-K is ~100+ calls and Bedrock throttles mid-document; one chunk's 429 after the
+            # SDK default 2 retries aborts the whole lx.extract (seen live on Etsy's 10-K).
+            self._client = self._client.with_options(max_retries=_BEDROCK_EXTRACT_RETRIES)
+
         @staticmethod
         def _response_to_scored_output(response):
             out = OpenAILanguageModel._response_to_scored_output(response)
@@ -362,7 +372,10 @@ def _extraction_target(gemini_api_key: str) -> Optional[tuple[str, str, dict]]:
         model_id = os.getenv("BEDROCK_EXTRACT_MODEL", "").strip() or "openai.gpt-oss-120b-1:0"
         model = _bedrock_language_model()(model_id=model_id, api_key=key, base_url=f"{base_url}/openai/v1")
         # bare JSON (cleaned above), no Gemini schema constraints
-        return "bedrock", model_id, {"model": model, "fence_output": False, "use_schema_constraints": False}
+        return "bedrock", model_id, {
+            "model": model, "fence_output": False, "use_schema_constraints": False,
+            "max_char_buffer": _BEDROCK_CHUNK_CHARS,
+        }
     if not gemini_api_key:
         return None
     return "gemini", "gemini-2.5-flash", {"model_id": "gemini-2.5-flash", "api_key": gemini_api_key}
