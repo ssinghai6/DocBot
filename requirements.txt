@@ -10,29 +10,29 @@
 # `pytest tests/ -m "not external and not postgres"`. Majors are ignored by
 # Dependabot (DOCBOT-1630) and must be upgraded deliberately.
 # DOCBOT-2340: numpy 2.x (pandas>=3.1 requires numpy>=2.0.2). Was pinned to 1.x.
-numpy==2.5.4
-fastapi==0.162.5
+numpy==2.5.5
+fastapi==0.165.0
 uvicorn==0.54.0
 apscheduler==3.11.3
 groq==0.37.1
-pydantic==2.14.3
-langchain==1.5.0
-langchain-core==1.8.0
+pydantic==2.14.4
+langchain==1.5.2
+langchain-core==1.8.4
 langchain-community==0.4.2
 langchain-text-splitters==1.1.3
-langchain-groq==1.1.3
+langchain-groq==1.2.1
 python-dotenv==1.2.4
 pymupdf==2.1
-python-multipart==0.0.33
+python-multipart==0.0.34
 langchain-huggingface==1.2.3
 asyncpg==0.32.0
-sqlalchemy[asyncio]==2.1.8
+sqlalchemy[asyncio]==2.1.9
 psycopg2-binary==2.9.13
-e2b-code-interpreter==2.11.9
+e2b-code-interpreter==2.11.10
 # DOCBOT-201: credential encryption
 cryptography==50.0.2
 # DOCBOT-203: AST-based SQL validation
-sqlglot==30.31.0
+sqlglot==30.33.0
 # DOCBOT-205: MySQL connector (not mysqlclient — build issues on Railway)
 pymysql==1.2.4
 # DOCBOT-207: CSV parsing and type inference
@@ -50,7 +50,7 @@ openai==1.109.1
 pyodbc==5.5.0
 azure-identity==1.27.0
 # DOCBOT-405: Analytical Autopilot — LangGraph state machine
-langgraph==1.2.21
+langgraph==1.2.24
 # DOCBOT-601: SAML 2.0 SSO (Okta, Azure AD)
 python3-saml==1.16.0
 # DOCBOT-701: Consumer OAuth (GitHub, Google) + email/password auth
@@ -71,4 +71,4 @@ lxml==6.1.3
 # DOCBOT-1401: thin observability — Sentry error tracking (no APM/tracing)
 sentry-sdk[fastapi]==2.75.0
 # DOCBOT-1509: LangSmith tracing (metadata only; OFF unless both vars are set)
-langsmith==0.14.17
+langsmith==0.15.1
