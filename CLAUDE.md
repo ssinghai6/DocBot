@@ -24,7 +24,7 @@ DocBot is an AI-powered document + database analyst, fully deployed on Railway (
 |------|---------|
 | `api/index.py` | FastAPI backend (~1700 lines). App setup, EXPERT_PERSONAS, init_db(), all route handlers |
 | `api/db_service.py` | All DB connectivity, schema introspection (tables+views), 7-step SQL pipeline, LRU engine pool, error taxonomy, schema drift detection |
-| `api/sandbox_service.py` | E2B sandbox execution, Python/pandas code generation (GPT-OSS via Groq), CSV→E2B pipeline, error retry with feedback, conversational rephrase |
+| `api/sandbox_service.py` | E2B sandbox execution, Python/pandas code generation (gpt-oss-120b, Bedrock in prod), CSV→E2B pipeline, error retry with feedback, conversational rephrase |
 | `api/hybrid_service.py` | Intent classification, parallel RAG+SQL retrieval, discrepancy detection |
 | `api/autopilot_service.py` | Analytical Autopilot — LangGraph multi-step investigation state machine. Auto-triggers on analytical keywords. Uses `deep_retrieve()` for doc_search steps. |
 | `api/deep_research_service.py` | Deep Research retrieval pipeline + `deep_retrieve()` reusable function (sub-question decomposition, parallel retrieval, gap-fill loop). Legacy standalone route kept for backwards compat. |
@@ -34,10 +34,10 @@ DocBot is an AI-powered document + database analyst, fully deployed on Railway (
 | `api/audit_service.py` | Append-only audit log, PostgreSQL immutability trigger, CSV export |
 | `api/artifact_service.py` | Session artifact store — persists charts, code, SQL results |
 | `api/demo_service.py` | Sandbox demo mode — hardcoded TechCorp 10-K chunks + SQLite financial DB, one-click hybrid analysis |
-| `api/document_extractor.py` | LangExtract financial extraction (Gemini 2.5 Flash, full-doc coverage) |
+| `api/document_extractor.py` | LangExtract financial extraction, full-doc coverage (Bedrock `BEDROCK_EXTRACT_MODEL` when `LLM_PRIMARY=bedrock`, else Gemini 2.5 Flash) |
 | `api/file_upload_service.py` | CSV/SQLite file uploads — CSV goes to E2B pandas, SQLite to SQL pipeline |
 | `api/utils/csv_preprocessor.py` | Multi-section CSV detection, section splitting, header detection, E2B preamble generation, `DataProfile` (dtypes, sample rows, datetime detection, frequency inference) |
-| `api/utils/llm_provider.py` | LLM fallback provider — Groq primary, Gemini 2.5 Flash fallback. Wired to all prod callsites. |
+| `api/utils/llm_provider.py` | LLM provider — Bedrock gpt-oss primary + Bedrock fallback model in prod (`LLM_PRIMARY=bedrock`); Groq primary + Gemini 2.5 Flash fallback when `LLM_PRIMARY=groq`. Wired to all prod callsites. |
 | `api/utils/_gemini_wrapper.py` | Minimal LangChain-compatible Gemini wrapper for fallback provider |
 | `api/utils/` | Shared helpers: encryption, SSRF validator, SQL validator, embeddings, PII masking, table selector, context compressor, CSV preprocessor, reranker, chunker, vector store |
 | `api/connectors/base.py` | Marketplace connector ABC, ConnectorCredentials, normalized dataclasses |
@@ -67,7 +67,7 @@ DocBot is an AI-powered document + database analyst, fully deployed on Railway (
 ## Current Architecture (v2 — live on Railway)
 
 ```
-Next.js 16 (Vercel) → FastAPI (Railway container) → Groq / Gemini
+Next.js 16 (Vercel) → FastAPI (Railway container) → Amazon Bedrock (Groq / Gemini = rollback)
                                 ↓
          LangChain RAG  +  SQLAlchemy DB  +  E2B Python Sandbox
                  ↓                ↓                   ↓
@@ -78,8 +78,8 @@ Next.js 16 (Vercel) → FastAPI (Railway container) → Groq / Gemini
 ## Tech Stack
 
 - **Frontend**: Next.js 16, React 19, TailwindCSS 4, TypeScript, lucide-react, react-markdown
-- **Backend**: FastAPI, Python 3.12, Groq (Llama 3.3-70b), LangChain, PyMuPDF
-- **AI/ML**: Groq openai/gpt-oss-120b (code gen), Gemini 2.5 Flash via LangExtract (financial docs), LangGraph (agentic flows)
+- **Backend**: FastAPI, Python 3.12, Amazon Bedrock (gpt-oss, via the OpenAI-compatible endpoint), LangChain, PyMuPDF
+- **AI/ML**: gpt-oss-120b on Bedrock (chat, SQL, code gen, LangExtract extraction), gpt-oss-20b on Bedrock (fallback), LangGraph (agentic flows). Groq + Gemini 2.5 Flash only on rollback
 - **Embeddings**: sentence-transformers/all-MiniLM-L6-v2, run locally via ONNX (chromadb's bundled copy, free, no API key; DOCBOT-1511). HuggingFace API only if `EMBEDDINGS_PROVIDER=hf`. Reranker: local ONNX `ms-marco-MiniLM-L-6-v2` via fastembed (`RERANKER_PROVIDER`)
 - **Storage**: PostgreSQL on Railway (sessions, connections, audit log, schema cache)
 - **Sandbox**: E2B code-interpreter (Python/pandas execution, matplotlib charts)
@@ -104,10 +104,10 @@ Next.js proxies `/api/*` to `localhost:8000` in development.
 
 | Variable | Required | Notes |
 |----------|----------|-------|
-| `groq_api_key` | Yes | Groq API key |
+| `groq_api_key` | Yes | Groq API key. Primary only when `LLM_PRIMARY=groq`, but still required on Bedrock: sandbox code gen and the Autopilot planner/synthesizer skip when it is unset |
 | `LLM_PRIMARY` | No | `groq` (default) or `bedrock` (DOCBOT-2584): same gpt-oss models on Amazon Bedrock, paid from AWS credits. Set back to `groq` to roll back |
 | `BEDROCK_API_KEY` | Bedrock | Bedrock long-term API key (IAM user limited to `bedrock:InvokeModel*` on the gpt-oss models). Founder sets it in Railway only |
-| `BEDROCK_REGION` | No | Bedrock region, default `us-west-2` |
+| `BEDROCK_REGION` | No | Bedrock region, default `us-west-2` (prod sets `us-east-1`) |
 | `BEDROCK_MODEL` / `BEDROCK_CODE_MODEL` | No | Bedrock model id for the default and code slots (DOCBOT-2585). Defaults `openai.gpt-oss-20b-1:0` / `openai.gpt-oss-120b-1:0`. Unpriced ids log a warning and are invisible to the spend caps |
 | `BEDROCK_FALLBACK_MODEL` | No | With `LLM_PRIMARY=bedrock`, failed calls retry on this Bedrock model instead of Gemini |
 | `BEDROCK_EXTRACT_MODEL` | No | With `LLM_PRIMARY=bedrock`, LangExtract runs on this Bedrock model (default gpt-oss-120b) instead of Gemini |
@@ -117,7 +117,7 @@ Next.js proxies `/api/*` to `localhost:8000` in development.
 | `DATABASE_URL` | Yes | Railway PostgreSQL connection string |
 | `DB_ENCRYPTION_KEY` | Yes | Fernet key for credential encryption — never hardcode |
 | `E2B_API_KEY` | Yes | E2B sandbox API key (CSV queries + Python analysis) |
-| `GEMINI_API_KEY` | Yes | Gemini 2.5 Flash for LangExtract financial extraction |
+| `GEMINI_API_KEY` | Rollback | Gemini 2.5 Flash fallback + LangExtract when `LLM_PRIMARY=groq`. Unused on Bedrock when `BEDROCK_FALLBACK_MODEL` is set (without it, the fallback is still Gemini) |
 | `ALLOWED_ORIGINS` | No | Comma-separated CORS origins, defaults to localhost:3000 |
 | `SESSION_TTL_HOURS` | No | Session cookie TTL in hours, default 8 |
 | `APP_AUTH_MODE` | No | `open` (default) or `required`. `required` needs login for own data (uploads, DB connect, CSV, EDGAR ingest, sessions); anonymous visitors keep the one-click demo. Unknown values fail closed (required) |
@@ -275,7 +275,7 @@ NL Question
   → [4] SQL Generator        (LLM call #1)
   → [5] SQL Validator        (sqlglot AST — DETERMINISTIC, no LLM)
   → [6] Executor             (pooled engine, 15s timeout, 500 row cap, drift retry)
-  → [7] Answer Generator     (LLM call #2, Groq streaming)
+  → [7] Answer Generator     (LLM call #2, streaming)
 ```
 
 **Schema drift retry**: If Step 6 fails with table/column-not-found, the pipeline invalidates cache, re-introspects, regenerates SQL, and retries once — no user intervention needed.
@@ -284,9 +284,11 @@ Max 2–3 LLM calls. No loops. CSV dialect short-circuits before Step 1.
 
 ## LLM Routing
 
-- **Groq Llama 3.3-70b**: SQL generation, hybrid synthesis, intent classification, answer generation
-- **Groq openai/gpt-oss-120b**: Python/pandas code generation for E2B sandboxes (CSV queries + chart analysis)
-- **Gemini 2.5 Flash via LangExtract**: Financial document extraction (full-document chunked extraction with char_interval source grounding)
+Prod runs `LLM_PRIMARY=bedrock` (region `us-east-1`, all Bedrock model vars set in Railway):
+- **gpt-oss-120b on Bedrock** (`BEDROCK_MODEL` / `BEDROCK_CODE_MODEL` / `BEDROCK_EXTRACT_MODEL`): chat, SQL generation, hybrid synthesis, intent classification, answer generation, Python/pandas code gen for E2B, LangExtract financial extraction (char_interval source grounding)
+- **gpt-oss-20b on Bedrock** (`BEDROCK_FALLBACK_MODEL`): retry target when a primary call fails
+- **Rollback** (`LLM_PRIMARY=groq`): Groq gpt-oss-20b / gpt-oss-120b primary, Gemini 2.5 Flash fallback + LangExtract
+- Model choice (DOCBOT-2585 live tie-out eval, 12 questions x3): gpt-oss-120b 34/36, gpt-oss-20b 33/36, Nemotron Super 120B 26/36, Nemotron Nano 30B 26/36, GLM 4.7 Flash 24/36
 
 ## Code Style
 

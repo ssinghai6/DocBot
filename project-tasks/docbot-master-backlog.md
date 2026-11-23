@@ -462,9 +462,9 @@ Builds on 1530 and 2907. Pulled on 2026-11-23 (founder ask: token-gated docbot.s
 | DOCBOT-2580 | NEW: Plane auto-sync rule and per-ticket state command | 1 | P2 | In progress (2026-11-17) | 0 | - | PM | EPIC-26 Pre-seed |
 | DOCBOT-2581 | NEW: Waitlist instead of payments | 3 | P1 | In progress (2026-11-17) | 0 | - | senior-dev | EPIC-26 Pre-seed |
 | DOCBOT-2582 | NEW: Remove "enterprise" claims from landing page | 1 | P1 | In progress (2026-11-17) | 0 | - | frontend | EPIC-26 Pre-seed |
-| DOCBOT-2583 | NEW: Demo chat hangs when Groq rate-limits | 3 | P0 | In progress (2026-11-20) | 0 | - | senior-dev | EPIC-26 Pre-seed |
+| DOCBOT-2583 | NEW: Demo chat hangs when Groq rate-limits | 3 | P0 | Done (2026-11-22, PR #132) | 0 | - | senior-dev | EPIC-26 Pre-seed |
 | DOCBOT-2584 | NEW: Run gpt-oss on Amazon Bedrock (AWS credits) behind LLM_PRIMARY | 3 | P1 | Done (2026-11-22, PR #134) | 0 | - | senior-dev | EPIC-26 Pre-seed |
-| DOCBOT-2585 | NEW: All LLM calls on Bedrock (fallback + LangExtract) and swappable open-weight models | 3 | P1 | In progress (2026-11-22) | 0 | - | senior-dev | EPIC-26 Pre-seed |
+| DOCBOT-2585 | NEW: All LLM calls on Bedrock (fallback + LangExtract) and swappable open-weight models | 3 | P1 | Done (2026-11-22, PR #135) | 0 | - | senior-dev | EPIC-26 Pre-seed |
 | DOCBOT-2586 | NEW: Move ticket tracking from Plane to self-hosted OpenProject (pm.docbot.space) | 2 | P2 | Done (PR #136, #137, 2026-11-22) | 0 | - | PM | EPIC-26 Pre-seed |
 | DOCBOT-2587 | NEW: OpenProject sync keeps sprints set on the board | 1 | P2 | Done (PR #142, 2026-11-23) | 0 | - | PM | EPIC-26 Pre-seed |
 | DOCBOT-2588 | NEW: OpenProject lifecycle: planned, picked into sprint, closed; bug type | 1 | P2 | Done (PR #143, 2026-11-23) | 0 | - | PM | EPIC-26 Pre-seed |
