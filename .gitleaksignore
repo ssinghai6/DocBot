@@ -1,0 +1,4 @@
+# Old Jira (Atlassian) API token hard-coded in scripts removed by 0ccf673. Revoked 2026-11-23; Jira is retired.
+a84cbd4e48e4e82028dad10b6943c74f3e63d8a5:scripts/jira_create_docbot901_904.py:atlassian-api-token:12
+a959790c3994668c9f61cfdeb045a394416d3929:scripts/jira_done_docbot801_805.py:atlassian-api-token:6
+a08912fad7d1cb000e8223ae1695c01fc1fb9667:scripts/jira_create_docbot801_805.py:atlassian-api-token:12
