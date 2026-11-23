@@ -63,11 +63,11 @@ import logging
 import secrets
 import uuid
 from dataclasses import dataclass, field
-from datetime import datetime, timezone
-from typing import Any, Optional
+from datetime import datetime, timedelta, timezone
+from typing import Any, Literal, Optional
 
 from fastapi import Depends, Header, HTTPException, Request
-from sqlalchemy import Column, DateTime, String, Table, Text, select
+from sqlalchemy import Column, DateTime, String, Table, Text, func, or_, select
 from sqlalchemy import insert as sa_insert
 from sqlalchemy import update as sa_update
 
@@ -85,7 +85,37 @@ API_KEY_SCOPES: dict[str, UserRole] = {
     "lineage:read": UserRole.viewer,
     "autopilot:run": UserRole.analyst,
     "connectors:manage": UserRole.analyst,
+    # DOCBOT-2907: public-API scopes (docs/wiki/api/02-public-api-plan.md section 4).
+    "sessions:read": UserRole.viewer,
+    "sessions:write": UserRole.analyst,
+    "query:run": UserRole.viewer,
+    "usage:read": UserRole.viewer,
 }
+
+# A route that requires the key (scope) also accepts any scope in the value.
+# `hybrid:read` stays valid for issued keys; `query:run` is its successor.
+SCOPE_ALIASES: dict[str, frozenset[str]] = {
+    "hybrid:read": frozenset({"query:run"}),
+}
+
+KeyMode = Literal["test", "live"]
+KEY_MODES: tuple[str, ...] = ("test", "live")
+
+# DOCBOT-2598: what a self-serve test key gets (every "Test keys get: yes" scope).
+TEST_KEY_SCOPES: list[str] = [
+    "sessions:read", "sessions:write", "query:run", "autopilot:run", "lineage:read", "usage:read",
+]
+TEST_KEY_TTL = timedelta(days=30)
+MAX_ACTIVE_TEST_KEYS_PER_USER = 2
+
+# DOCBOT-2907: additive, idempotent. `mode` defaults to 'live' so every key
+# issued before this change is backfilled live and keeps working.
+API_KEY_COLUMN_MIGRATIONS: list[str] = [
+    "ALTER TABLE api_keys ADD COLUMN IF NOT EXISTS mode TEXT NOT NULL DEFAULT 'live'",
+    "ALTER TABLE api_keys ADD COLUMN IF NOT EXISTS expires_at TIMESTAMPTZ",
+    "ALTER TABLE api_keys ADD COLUMN IF NOT EXISTS created_by TEXT",
+    "CREATE INDEX IF NOT EXISTS ix_api_keys_created_by ON api_keys (created_by)",
+]
 
 KEY_PREFIX_LEN = 16  # chars of the raw key shown in the management UI, e.g. "dk_live_a1b2c3d4"
 _RAW_KEY_BYTES = 32  # secrets.token_urlsafe(32) -> 43 url-safe chars of entropy
@@ -114,6 +144,12 @@ def register_api_keys_table(metadata: Any) -> Table:
         Column("created_at", DateTime(timezone=True), nullable=False),
         Column("last_used_at", DateTime(timezone=True), nullable=True),
         Column("revoked_at", DateTime(timezone=True), nullable=True),
+        # DOCBOT-2907: mode, expiry, owner. created_by is NULL for a service
+        # account (org-owned) key. No key is tied to its creator's membership,
+        # so removing that member never disables the key.
+        Column("mode", String, nullable=False, server_default="live"),
+        Column("expires_at", DateTime(timezone=True), nullable=True),
+        Column("created_by", String, nullable=True, index=True),
     )
 
 
@@ -156,10 +192,25 @@ class APIKeyRecord:
     created_at: Optional[datetime] = None
     last_used_at: Optional[datetime] = None
     revoked_at: Optional[datetime] = None
+    mode: str = "live"
+    expires_at: Optional[datetime] = None
+    created_by: Optional[str] = None
 
     @property
     def is_revoked(self) -> bool:
         return self.revoked_at is not None
+
+    @property
+    def is_test(self) -> bool:
+        return self.mode == "test"
+
+    def is_expired(self, now: Optional[datetime] = None) -> bool:
+        if self.expires_at is None:
+            return False
+        expires = self.expires_at
+        if expires.tzinfo is None:  # SQLite drops tzinfo
+            expires = expires.replace(tzinfo=timezone.utc)
+        return expires <= (now or datetime.now(timezone.utc))
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -171,7 +222,18 @@ class APIKeyRecord:
             "created_at": self.created_at.isoformat() if self.created_at else None,
             "last_used_at": self.last_used_at.isoformat() if self.last_used_at else None,
             "revoked_at": self.revoked_at.isoformat() if self.revoked_at else None,
+            "mode": self.mode,
+            "expires_at": self.expires_at.isoformat() if self.expires_at else None,
+            "created_by": self.created_by,
         }
+
+
+class ExpiredAPIKey(Exception):
+    """Raised by validate_api_key for a known, unrevoked key past its expires_at."""
+
+    def __init__(self, record: "APIKeyRecord") -> None:
+        super().__init__(record.id)
+        self.record = record
 
 
 def _hash_key(raw_key: str) -> str:
@@ -192,6 +254,9 @@ def _row_to_record(row: Any) -> APIKeyRecord:
         created_at=row.created_at,
         last_used_at=row.last_used_at,
         revoked_at=row.revoked_at,
+        mode=getattr(row, "mode", None) or "live",
+        expires_at=getattr(row, "expires_at", None),
+        created_by=getattr(row, "created_by", None),
     )
 
 
@@ -207,10 +272,29 @@ def _require_wired() -> None:
         )
 
 
+def _audit(event: str, record: "APIKeyRecord", detail: str) -> None:
+    """DOCBOT-2907: mint / revoke / expire audit events. No-op until audit is wired."""
+    if _audit_log_table is None:
+        return
+    from api.audit_service import AuditEventType, log_event
+    log_event(
+        AuditEventType(event),
+        _audit_log_table,
+        _async_session_factory,
+        user_id=record.created_by,
+        detail=detail,
+        metadata={"api_key_id": record.id, "key_prefix": record.key_prefix, "mode": record.mode},
+        org_id=record.org_id,
+    )
+
+
 async def create_api_key(
     org_id: str,
     scopes: list[str],
     name: str,
+    mode: KeyMode = "live",
+    expires_at: Optional[datetime] = None,
+    created_by: Optional[str] = None,
 ) -> tuple[APIKeyRecord, str]:
     """Issue a new API key for ``org_id``.
 
@@ -227,8 +311,10 @@ async def create_api_key(
     invalid = [s for s in scopes if s not in API_KEY_SCOPES]
     if invalid:
         raise ValueError(f"Unknown scope(s): {invalid}. Valid scopes: {sorted(API_KEY_SCOPES)}")
+    if mode not in KEY_MODES:
+        raise ValueError(f"Unknown key mode: {mode!r}. Valid modes: {list(KEY_MODES)}")
 
-    raw_key = f"dk_live_{secrets.token_urlsafe(_RAW_KEY_BYTES)}"
+    raw_key = f"dk_{mode}_{secrets.token_urlsafe(_RAW_KEY_BYTES)}"
     key_hash = _hash_key(raw_key)
     key_prefix = raw_key[:KEY_PREFIX_LEN]
     key_id = str(uuid.uuid4())
@@ -247,10 +333,15 @@ async def create_api_key(
                     created_at=now,
                     last_used_at=None,
                     revoked_at=None,
+                    mode=mode,
+                    expires_at=expires_at,
+                    created_by=created_by,
                 )
             )
 
-    logger.info("api_key_service: issued key %s (prefix=%s, org=%s)", key_id, key_prefix, org_id)
+    logger.info(
+        "api_key_service: issued %s key %s (prefix=%s, org=%s)", mode, key_id, key_prefix, org_id
+    )
 
     record = APIKeyRecord(
         id=key_id,
@@ -261,16 +352,25 @@ async def create_api_key(
         created_at=now,
         last_used_at=None,
         revoked_at=None,
+        mode=mode,
+        expires_at=expires_at,
+        created_by=created_by,
     )
+    _audit("api_key_create", record, f"issued {mode} key {key_prefix}")
     return record, raw_key
 
 
-async def revoke_api_key(key_id: str, org_id: Optional[str] = None) -> bool:
+async def revoke_api_key(
+    key_id: str, org_id: Optional[str] = None, created_by: Optional[str] = None
+) -> bool:
     """Revoke a key by id. Idempotent — revoking an already-revoked key is a no-op.
 
     If ``org_id`` is given, the revoke is scoped to that org (a caller may
     only revoke keys belonging to their own org) and a key belonging to a
     different org is treated as not found.
+
+    ``created_by`` likewise scopes the revoke to keys that user minted
+    (DOCBOT-2598 self-serve test keys).
 
     Returns True if a key was found (and newly revoked, or already revoked),
     False if no matching key exists.
@@ -279,29 +379,33 @@ async def revoke_api_key(key_id: str, org_id: Optional[str] = None) -> bool:
     conditions = [_api_keys_table.c.id == key_id]
     if org_id is not None:
         conditions.append(_api_keys_table.c.org_id == org_id)
+    if created_by is not None:
+        conditions.append(_api_keys_table.c.created_by == created_by)
 
     async with _async_session_factory() as session:
         async with session.begin():
-            result = await session.execute(
-                select(_api_keys_table.c.id, _api_keys_table.c.revoked_at).where(*conditions)
-            )
+            result = await session.execute(select(_api_keys_table).where(*conditions))
             row = result.first()
             if row is None:
                 return False
-            if row.revoked_at is None:
+            newly_revoked = row.revoked_at is None
+            if newly_revoked:
                 await session.execute(
                     sa_update(_api_keys_table)
                     .where(_api_keys_table.c.id == key_id)
                     .values(revoked_at=datetime.now(timezone.utc))
                 )
     logger.info("api_key_service: revoked key %s", key_id)
+    if newly_revoked:
+        _audit("api_key_revoke", _row_to_record(row), f"revoked key {row.key_prefix}")
     return True
 
 
 async def validate_api_key(raw_key: str) -> Optional[APIKeyRecord]:
     """Hash ``raw_key``, look it up, and return its record if valid.
 
-    Returns ``None`` if the key is unknown or revoked. On success, updates
+    Returns ``None`` if the key is unknown or revoked. Raises
+    ``ExpiredAPIKey`` for a known key past ``expires_at``. On success, updates
     ``last_used_at`` (fire-and-forget is unnecessary here — this is already
     on the hot auth path, and the update is a single indexed-PK write).
     """
@@ -318,6 +422,9 @@ async def validate_api_key(raw_key: str) -> Optional[APIKeyRecord]:
                 return None
             if row.revoked_at is not None:
                 return None
+            record = _row_to_record(row)
+            if record.is_expired():
+                raise ExpiredAPIKey(record)
 
             await session.execute(
                 sa_update(_api_keys_table)
@@ -325,7 +432,39 @@ async def validate_api_key(raw_key: str) -> Optional[APIKeyRecord]:
                 .values(last_used_at=datetime.now(timezone.utc))
             )
 
-    return _row_to_record(row)
+    return record
+
+
+def _active_test_keys_clause(user_id: str, now: datetime) -> list[Any]:
+    t = _api_keys_table
+    return [
+        t.c.created_by == user_id,
+        t.c.mode == "test",
+        t.c.revoked_at.is_(None),
+        or_(t.c.expires_at.is_(None), t.c.expires_at > now),
+    ]
+
+
+async def list_test_keys(user_id: str) -> list[APIKeyRecord]:
+    """DOCBOT-2598: the user's own active test keys, newest first."""
+    _require_wired()
+    async with _async_session_factory() as session:
+        result = await session.execute(
+            select(_api_keys_table)
+            .where(*_active_test_keys_clause(user_id, datetime.now(timezone.utc)))
+            .order_by(_api_keys_table.c.created_at.desc())
+        )
+        return [_row_to_record(r) for r in result.all()]
+
+
+async def count_active_test_keys(user_id: str) -> int:
+    _require_wired()
+    async with _async_session_factory() as session:
+        result = await session.execute(
+            select(func.count()).select_from(_api_keys_table)
+            .where(*_active_test_keys_clause(user_id, datetime.now(timezone.utc)))
+        )
+        return int(result.scalar_one())
 
 
 async def list_api_keys(org_id: str) -> list[APIKeyRecord]:
@@ -373,11 +512,19 @@ def require_api_key(min_scope: str):
         if not raw_key:
             raise HTTPException(status_code=401, detail="Empty API key.")
 
-        record = await validate_api_key(raw_key)
+        try:
+            record = await validate_api_key(raw_key)
+        except ExpiredAPIKey as exc:
+            _audit("api_key_expired", exc.record, f"expired key used: {request.url.path}")
+            raise HTTPException(
+                status_code=401,
+                detail={"code": "expired_key", "message": "This API key has expired."},
+            ) from None
         if record is None:
             raise HTTPException(status_code=401, detail="Invalid or revoked API key.")
 
-        if min_scope not in record.scopes:
+        accepted = {min_scope} | SCOPE_ALIASES.get(min_scope, frozenset())
+        if accepted.isdisjoint(record.scopes):
             raise HTTPException(
                 status_code=403,
                 detail=f"API key missing required scope: {min_scope}.",
@@ -385,10 +532,11 @@ def require_api_key(min_scope: str):
 
         # DOCBOT-3901: shared-store per-key limit — 429 + Retry-After, never sleeps.
         from api.utils.request_guard import check_api_key_rate_limit
-        await check_api_key_rate_limit(request, record.id, record.key_prefix.startswith("dk_test_"))
+        await check_api_key_rate_limit(request, record.id, record.is_test)
 
         request.state.org_id = record.org_id
         request.state.api_key_id = record.id
+        request.state.key_mode = record.mode
 
         from api.audit_service import log_event, AuditEventType, get_client_ip
         log_event(

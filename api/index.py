@@ -194,6 +194,8 @@ sessions_table = Table(
     Column("org_id", String, index=True),
     # ── DOCBOT-1601: SHA-256 of the anonymous owner cookie (docbot_anon) ──────
     Column("anon_owner", String, index=True),
+    # ── DOCBOT-2597: created by POST /v1/sandbox/sessions (24h purge, test keys) ──
+    Column("is_sandbox", Boolean, server_default="false", nullable=False),
 )
 
 messages_table = Table(
@@ -564,6 +566,12 @@ async def init_db() -> None:
         await conn.execute(text(
             "ALTER TABLE sessions ADD COLUMN IF NOT EXISTS source TEXT DEFAULT 'upload'"
         ))
+        # DOCBOT-2907: api_keys mode/expires_at/created_by (existing keys -> live).
+        # DOCBOT-2597: sessions.is_sandbox.
+        from api.api_key_service import API_KEY_COLUMN_MIGRATIONS
+        from api.sandbox_session_service import SANDBOX_COLUMN_MIGRATIONS
+        for col_ddl in API_KEY_COLUMN_MIGRATIONS + SANDBOX_COLUMN_MIGRATIONS:
+            await conn.execute(text(col_ddl))
         # DOCBOT-1524: org_id columns on pre-existing tables (no-op on a fresh
         # DB, where the Table definitions above already declare org_id).
         for col_ddl in ORG_ID_COLUMN_MIGRATIONS:
@@ -670,6 +678,12 @@ async def lifespan(app: FastAPI):
     # the require_api_key() dependency's audit-log side effect)
     from api.api_key_service import wire_api_key_store
     wire_api_key_store(api_keys_table, async_session_factory, audit_log_table)
+    # DOCBOT-2597: sandbox sessions for test keys
+    from api.sandbox_session_service import wire_sandbox_store
+    wire_sandbox_store(
+        sessions_table, db_connections_table, schema_cache_table,
+        async_session_factory, VECTOR_STORES, get_embeddings,
+    )
     # Clean up any expired file uploads from previous runs
     try:
         from api.file_upload_service import cleanup_expired_uploads
@@ -720,6 +734,9 @@ async def lifespan(app: FastAPI):
     register_retention_cleanup_job(scheduler)
     # DOCBOT-1802: periodic stale-reservation reaper on the same scheduler.
     credit_service.register_reaper_job(scheduler)
+    # DOCBOT-2597: hourly purge of sandbox sessions older than 24h.
+    from api.sandbox_session_service import register_sandbox_purge_job
+    register_sandbox_purge_job(scheduler)
     scheduler.start()
     if registered:
         logger.info("Startup: background sync scheduled for %d connector(s).", registered)
@@ -3442,6 +3459,13 @@ from api.routes.onboarding_routes import (  # noqa: E402
 
 app.include_router(onboarding_router)
 wire_onboarding(users_table, organizations_table, async_session_factory)
+
+# ── DOCBOT-2598: self-serve test keys; DOCBOT-2597: /v1 sandbox sessions ──────
+from api.routes.developer_routes import router as developer_router  # noqa: E402
+from api.routes.v1_sandbox_routes import router as v1_sandbox_router  # noqa: E402
+
+app.include_router(developer_router)
+app.include_router(v1_sandbox_router)
 
 
 # ── SEC EDGAR Routes ─────────────────────────────────────────────────────────
