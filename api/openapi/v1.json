@@ -1,0 +1,1381 @@
+{
+  "components": {
+    "schemas": {
+      "ConnectorDateRangeRequest": {
+        "description": "Date range for fetching orders or financials.",
+        "properties": {
+          "end_date": {
+            "maxLength": 40,
+            "title": "End Date",
+            "type": "string"
+          },
+          "start_date": {
+            "maxLength": 40,
+            "title": "Start Date",
+            "type": "string"
+          }
+        },
+        "required": [
+          "start_date",
+          "end_date"
+        ],
+        "title": "ConnectorDateRangeRequest",
+        "type": "object"
+      },
+      "DiscrepancyDbCitation": {
+        "properties": {
+          "query": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Query"
+          },
+          "table": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Table"
+          }
+        },
+        "title": "DiscrepancyDbCitation",
+        "type": "object"
+      },
+      "DiscrepancyDocCitation": {
+        "properties": {
+          "file": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "File"
+          },
+          "page": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Page"
+          }
+        },
+        "title": "DiscrepancyDocCitation",
+        "type": "object"
+      },
+      "Lineage": {
+        "properties": {
+          "cache_hit": {
+            "default": false,
+            "title": "Cache Hit",
+            "type": "boolean"
+          },
+          "discrepancies": {
+            "items": {
+              "$ref": "#/components/schemas/LineageDiscrepancy"
+            },
+            "title": "Discrepancies",
+            "type": "array"
+          },
+          "expanded_queries": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Expanded Queries",
+            "type": "array"
+          },
+          "intent": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Intent"
+          },
+          "mode": {
+            "enum": [
+              "docs",
+              "db",
+              "csv",
+              "hybrid",
+              "autopilot"
+            ],
+            "title": "Mode",
+            "type": "string"
+          },
+          "model_calls": {
+            "items": {
+              "$ref": "#/components/schemas/LineageModelCall"
+            },
+            "title": "Model Calls",
+            "type": "array"
+          },
+          "persona": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Persona"
+          },
+          "pii": {
+            "$ref": "#/components/schemas/LineagePii"
+          },
+          "question": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Question"
+          },
+          "run_id": {
+            "title": "Run Id",
+            "type": "string"
+          },
+          "sources": {
+            "items": {
+              "$ref": "#/components/schemas/LineageSource"
+            },
+            "title": "Sources",
+            "type": "array"
+          },
+          "sql": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/LineageSql"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "standalone_query": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Standalone Query"
+          },
+          "steps": {
+            "items": {
+              "$ref": "#/components/schemas/LineageStep"
+            },
+            "title": "Steps",
+            "type": "array"
+          },
+          "sub_questions": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Sub Questions",
+            "type": "array"
+          },
+          "total_latency_ms": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Total Latency Ms"
+          }
+        },
+        "required": [
+          "run_id",
+          "mode"
+        ],
+        "title": "Lineage",
+        "type": "object"
+      },
+      "LineageDiscrepancy": {
+        "description": "DOCBOT-2002: structured report-vs-books tie-out (one TieOutCard).\n\n``report_value`` is the figure in the document (filing / report);\n``books_value`` the one in the connected database. ``delta`` =\nbooks - report, ``delta_pct`` is relative to the report figure.\nMirrored by ``src/lib/schemas/tieout.ts``.",
+        "properties": {
+          "books_value": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Books Value"
+          },
+          "db_citation": {
+            "$ref": "#/components/schemas/DiscrepancyDbCitation"
+          },
+          "delta": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Delta"
+          },
+          "delta_pct": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Delta Pct"
+          },
+          "doc_citation": {
+            "$ref": "#/components/schemas/DiscrepancyDocCitation"
+          },
+          "id": {
+            "title": "Id",
+            "type": "string"
+          },
+          "metric": {
+            "title": "Metric",
+            "type": "string"
+          },
+          "period": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Period"
+          },
+          "report_value": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Report Value"
+          },
+          "severity": {
+            "default": "medium",
+            "enum": [
+              "low",
+              "medium",
+              "high"
+            ],
+            "title": "Severity",
+            "type": "string"
+          },
+          "unit": {
+            "default": "number",
+            "enum": [
+              "currency",
+              "percent",
+              "number"
+            ],
+            "title": "Unit",
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "metric"
+        ],
+        "title": "LineageDiscrepancy",
+        "type": "object"
+      },
+      "LineageModelCall": {
+        "properties": {
+          "caller": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Caller"
+          },
+          "estimated_cost_usd": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Estimated Cost Usd"
+          },
+          "fallback_triggered": {
+            "default": false,
+            "title": "Fallback Triggered",
+            "type": "boolean"
+          },
+          "input_tokens": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Input Tokens"
+          },
+          "latency_ms": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Latency Ms"
+          },
+          "model": {
+            "title": "Model",
+            "type": "string"
+          },
+          "output_tokens": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Output Tokens"
+          },
+          "provider": {
+            "title": "Provider",
+            "type": "string"
+          },
+          "success": {
+            "default": true,
+            "title": "Success",
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "provider",
+          "model"
+        ],
+        "title": "LineageModelCall",
+        "type": "object"
+      },
+      "LineagePii": {
+        "properties": {
+          "counts": {
+            "additionalProperties": {
+              "type": "integer"
+            },
+            "title": "Counts",
+            "type": "object"
+          },
+          "masked": {
+            "default": false,
+            "title": "Masked",
+            "type": "boolean"
+          }
+        },
+        "title": "LineagePii",
+        "type": "object"
+      },
+      "LineageSource": {
+        "properties": {
+          "cited": {
+            "default": true,
+            "title": "Cited",
+            "type": "boolean"
+          },
+          "id": {
+            "title": "Id",
+            "type": "string"
+          },
+          "kind": {
+            "default": "other",
+            "enum": [
+              "pdf",
+              "sql_table",
+              "csv",
+              "edgar",
+              "other"
+            ],
+            "title": "Kind",
+            "type": "string"
+          },
+          "label": {
+            "title": "Label",
+            "type": "string"
+          },
+          "page": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Page"
+          },
+          "rerank_score": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Rerank Score"
+          },
+          "score": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Score"
+          },
+          "snippet": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Snippet"
+          },
+          "step_num": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Step Num"
+          },
+          "sub_question": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Sub Question"
+          }
+        },
+        "required": [
+          "id",
+          "label"
+        ],
+        "title": "LineageSource",
+        "type": "object"
+      },
+      "LineageSql": {
+        "properties": {
+          "drift_retry": {
+            "default": false,
+            "title": "Drift Retry",
+            "type": "boolean"
+          },
+          "execution_time_ms": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Execution Time Ms"
+          },
+          "result_preview": {
+            "items": {
+              "additionalProperties": true,
+              "type": "object"
+            },
+            "title": "Result Preview",
+            "type": "array"
+          },
+          "row_count": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Row Count"
+          },
+          "sql": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Sql"
+          },
+          "tables_considered": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Tables Considered",
+            "type": "array"
+          },
+          "tables_selected": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Tables Selected",
+            "type": "array"
+          }
+        },
+        "title": "LineageSql",
+        "type": "object"
+      },
+      "LineageStep": {
+        "properties": {
+          "detail": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Detail"
+          },
+          "lane": {
+            "anyOf": [
+              {
+                "enum": [
+                  "docs",
+                  "db"
+                ],
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Lane"
+          },
+          "latency_ms": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Latency Ms"
+          },
+          "name": {
+            "title": "Name",
+            "type": "string"
+          },
+          "status": {
+            "default": "ok",
+            "enum": [
+              "ok",
+              "error",
+              "skipped",
+              "retried"
+            ],
+            "title": "Status",
+            "type": "string"
+          },
+          "tool": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Tool"
+          }
+        },
+        "required": [
+          "name"
+        ],
+        "title": "LineageStep",
+        "type": "object"
+      },
+      "V1AutopilotRequest": {
+        "properties": {
+          "connection_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Connection Id"
+          },
+          "has_csv": {
+            "default": false,
+            "title": "Has Csv",
+            "type": "boolean"
+          },
+          "has_db": {
+            "default": false,
+            "title": "Has Db",
+            "type": "boolean"
+          },
+          "has_docs": {
+            "default": false,
+            "title": "Has Docs",
+            "type": "boolean"
+          },
+          "history": {
+            "default": [],
+            "items": {
+              "$ref": "#/components/schemas/V1ChatMessage"
+            },
+            "title": "History",
+            "type": "array"
+          },
+          "persona": {
+            "default": "Generalist",
+            "title": "Persona",
+            "type": "string"
+          },
+          "question": {
+            "title": "Question",
+            "type": "string"
+          },
+          "session_id": {
+            "title": "Session Id",
+            "type": "string"
+          }
+        },
+        "required": [
+          "session_id",
+          "question"
+        ],
+        "title": "V1AutopilotRequest",
+        "type": "object"
+      },
+      "V1AutopilotResponse": {
+        "properties": {
+          "answer": {
+            "default": "",
+            "title": "Answer",
+            "type": "string"
+          },
+          "citations": {
+            "anyOf": [
+              {
+                "items": {
+                  "additionalProperties": true,
+                  "type": "object"
+                },
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": [],
+            "title": "Citations"
+          },
+          "plan": {
+            "default": [],
+            "items": {
+              "additionalProperties": true,
+              "type": "object"
+            },
+            "title": "Plan",
+            "type": "array"
+          },
+          "steps": {
+            "default": [],
+            "items": {
+              "additionalProperties": true,
+              "type": "object"
+            },
+            "title": "Steps",
+            "type": "array"
+          },
+          "warnings": {
+            "default": [],
+            "items": {
+              "type": "string"
+            },
+            "title": "Warnings",
+            "type": "array"
+          }
+        },
+        "title": "V1AutopilotResponse",
+        "type": "object"
+      },
+      "V1ChatMessage": {
+        "properties": {
+          "content": {
+            "title": "Content",
+            "type": "string"
+          },
+          "role": {
+            "title": "Role",
+            "type": "string"
+          }
+        },
+        "required": [
+          "role",
+          "content"
+        ],
+        "title": "V1ChatMessage",
+        "type": "object"
+      },
+      "V1ConnectorListResponse": {
+        "properties": {
+          "connectors": {
+            "items": {
+              "additionalProperties": true,
+              "type": "object"
+            },
+            "title": "Connectors",
+            "type": "array"
+          }
+        },
+        "required": [
+          "connectors"
+        ],
+        "title": "V1ConnectorListResponse",
+        "type": "object"
+      },
+      "V1ConnectorRegisterRequest": {
+        "properties": {
+          "connector_type": {
+            "title": "Connector Type",
+            "type": "string"
+          },
+          "credentials": {
+            "additionalProperties": {
+              "type": "string"
+            },
+            "title": "Credentials",
+            "type": "object"
+          }
+        },
+        "required": [
+          "connector_type",
+          "credentials"
+        ],
+        "title": "V1ConnectorRegisterRequest",
+        "type": "object"
+      },
+      "V1ConnectorRegisterResponse": {
+        "properties": {
+          "connector_id": {
+            "title": "Connector Id",
+            "type": "string"
+          },
+          "connector_type": {
+            "title": "Connector Type",
+            "type": "string"
+          },
+          "status": {
+            "title": "Status",
+            "type": "string"
+          }
+        },
+        "required": [
+          "connector_id",
+          "connector_type",
+          "status"
+        ],
+        "title": "V1ConnectorRegisterResponse",
+        "type": "object"
+      },
+      "V1ConnectorSyncResponse": {
+        "additionalProperties": true,
+        "description": "``commerce_service.sync_connector_data`` summary (counts); keys pass through.",
+        "properties": {},
+        "title": "V1ConnectorSyncResponse",
+        "type": "object"
+      },
+      "V1Error": {
+        "properties": {
+          "code": {
+            "title": "Code",
+            "type": "string"
+          },
+          "message": {
+            "title": "Message",
+            "type": "string"
+          },
+          "request_id": {
+            "title": "Request Id",
+            "type": "string"
+          },
+          "type": {
+            "enum": [
+              "invalid_request",
+              "authentication",
+              "permission",
+              "not_found",
+              "rate_limit",
+              "server"
+            ],
+            "title": "Type",
+            "type": "string"
+          }
+        },
+        "required": [
+          "type",
+          "code",
+          "message",
+          "request_id"
+        ],
+        "title": "V1Error",
+        "type": "object"
+      },
+      "V1ErrorResponse": {
+        "description": "Every ``/v1`` error body (``api/utils/v1_contract.py``).",
+        "properties": {
+          "error": {
+            "$ref": "#/components/schemas/V1Error"
+          }
+        },
+        "required": [
+          "error"
+        ],
+        "title": "V1ErrorResponse",
+        "type": "object"
+      },
+      "V1HybridChatRequest": {
+        "properties": {
+          "chart_type": {
+            "default": "auto",
+            "title": "Chart Type",
+            "type": "string"
+          },
+          "connection_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Connection Id"
+          },
+          "has_docs": {
+            "default": true,
+            "title": "Has Docs",
+            "type": "boolean"
+          },
+          "history": {
+            "default": [],
+            "items": {
+              "$ref": "#/components/schemas/V1ChatMessage"
+            },
+            "title": "History",
+            "type": "array"
+          },
+          "persona": {
+            "default": "Data Analyst",
+            "title": "Persona",
+            "type": "string"
+          },
+          "question": {
+            "title": "Question",
+            "type": "string"
+          },
+          "session_id": {
+            "title": "Session Id",
+            "type": "string"
+          }
+        },
+        "required": [
+          "question",
+          "session_id"
+        ],
+        "title": "V1HybridChatRequest",
+        "type": "object"
+      },
+      "V1HybridChatResponse": {
+        "properties": {
+          "answer": {
+            "title": "Answer",
+            "type": "string"
+          },
+          "citations": {
+            "anyOf": [
+              {
+                "items": {
+                  "additionalProperties": true,
+                  "type": "object"
+                },
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": [],
+            "title": "Citations"
+          },
+          "has_docs": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Has Docs"
+          },
+          "has_sql": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Has Sql"
+          },
+          "intent": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Intent"
+          },
+          "run_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Run Id"
+          },
+          "trace_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Trace Id"
+          }
+        },
+        "required": [
+          "answer"
+        ],
+        "title": "V1HybridChatResponse",
+        "type": "object"
+      }
+    },
+    "securitySchemes": {
+      "bearerAuth": {
+        "description": "Send `Authorization: Bearer <key>`. Test keys start with `dk_test_` (sandbox data, free daily allowance); live keys start with `dk_live_` (your org's data, billed in credits). Never put a key in the URL.",
+        "scheme": "bearer",
+        "type": "http"
+      }
+    }
+  },
+  "info": {
+    "description": "DocBot public developer API (v1). Errors use the `{\"error\": {...}}` envelope.",
+    "title": "DocBot API",
+    "version": "1.0.0"
+  },
+  "openapi": "3.1.0",
+  "paths": {
+    "/v1/autopilot/run": {
+      "post": {
+        "description": "Runs the same plan \u2192 execute (\u22645 steps) \u2192 synthesize Autopilot pipeline as /api/autopilot/run, buffered into a single JSON response instead of SSE. Requires an API key with the `autopilot:run` scope.",
+        "operationId": "v1_autopilot_run_v1_autopilot_run_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/V1AutopilotRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/V1AutopilotResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "4XX": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/V1ErrorResponse"
+                }
+              }
+            },
+            "description": "Client Error"
+          },
+          "5XX": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/V1ErrorResponse"
+                }
+              }
+            },
+            "description": "Server Error"
+          }
+        },
+        "summary": "Analytical Autopilot run (buffered)",
+        "tags": [
+          "v1-developer-api"
+        ]
+      }
+    },
+    "/v1/connectors": {
+      "get": {
+        "description": "List the API key's organization's active marketplace connectors (metadata only, no credentials). Requires `connectors:manage`.",
+        "operationId": "v1_list_connectors_v1_connectors_get",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/V1ConnectorListResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "4XX": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/V1ErrorResponse"
+                }
+              }
+            },
+            "description": "Client Error"
+          },
+          "5XX": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/V1ErrorResponse"
+                }
+              }
+            },
+            "description": "Server Error"
+          }
+        },
+        "summary": "List marketplace connectors",
+        "tags": [
+          "v1-developer-api"
+        ]
+      },
+      "post": {
+        "description": "Registers and tests a commerce connector (Amazon SP-API, Shopify, ...). The connector is owned by the API key's organization. Requires `connectors:manage`.",
+        "operationId": "v1_register_connector_v1_connectors_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/V1ConnectorRegisterRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/V1ConnectorRegisterResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "4XX": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/V1ErrorResponse"
+                }
+              }
+            },
+            "description": "Client Error"
+          },
+          "5XX": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/V1ErrorResponse"
+                }
+              }
+            },
+            "description": "Server Error"
+          }
+        },
+        "summary": "Register a marketplace connector",
+        "tags": [
+          "v1-developer-api"
+        ]
+      }
+    },
+    "/v1/connectors/{connector_id}/sync": {
+      "post": {
+        "description": "Fetches orders + financials and persists them to the commerce tables. Requires `connectors:manage`.",
+        "operationId": "v1_sync_connector_v1_connectors__connector_id__sync_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "connector_id",
+            "required": true,
+            "schema": {
+              "title": "Connector Id",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ConnectorDateRangeRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/V1ConnectorSyncResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "4XX": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/V1ErrorResponse"
+                }
+              }
+            },
+            "description": "Client Error"
+          },
+          "5XX": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/V1ErrorResponse"
+                }
+              }
+            },
+            "description": "Server Error"
+          }
+        },
+        "summary": "Sync a marketplace connector",
+        "tags": [
+          "v1-developer-api"
+        ]
+      }
+    },
+    "/v1/hybrid/chat": {
+      "post": {
+        "description": "Runs the same intent-classification \u2192 SQL + RAG \u2192 synthesis pipeline as /api/hybrid/chat, buffered into a single JSON response instead of SSE. Requires an API key with the `hybrid:read` scope.",
+        "operationId": "v1_hybrid_chat_v1_hybrid_chat_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/V1HybridChatRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/V1HybridChatResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "4XX": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/V1ErrorResponse"
+                }
+              }
+            },
+            "description": "Client Error"
+          },
+          "5XX": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/V1ErrorResponse"
+                }
+              }
+            },
+            "description": "Server Error"
+          }
+        },
+        "summary": "Hybrid Docs+DB chat (buffered)",
+        "tags": [
+          "v1-developer-api"
+        ]
+      }
+    },
+    "/v1/lineage/{run_id}": {
+      "get": {
+        "description": "Returns the persisted lineage for one answer, joined with its LLM calls. Requires `lineage:read`.",
+        "operationId": "v1_get_lineage_v1_lineage__run_id__get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "run_id",
+            "required": true,
+            "schema": {
+              "title": "Run Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Lineage"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "4XX": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/V1ErrorResponse"
+                }
+              }
+            },
+            "description": "Client Error"
+          },
+          "5XX": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/V1ErrorResponse"
+                }
+              }
+            },
+            "description": "Server Error"
+          }
+        },
+        "summary": "Read answer lineage",
+        "tags": [
+          "v1-developer-api"
+        ]
+      }
+    }
+  },
+  "security": [
+    {
+      "bearerAuth": []
+    }
+  ],
+  "servers": [
+    {
+      "url": "https://docbot.space"
+    }
+  ]
+}

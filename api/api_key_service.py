@@ -71,7 +71,6 @@ from sqlalchemy import Column, DateTime, String, Table, Text, select
 from sqlalchemy import insert as sa_insert
 from sqlalchemy import update as sa_update
 
-from api.connectors.rate_limiter import RateLimiter
 from api.rbac_service import UserRole
 
 logger = logging.getLogger(__name__)
@@ -125,11 +124,6 @@ def register_api_keys_table(metadata: Any) -> Table:
 _api_keys_table: Optional[Table] = None
 _async_session_factory: Any = None
 _audit_log_table: Any = None
-
-# Per-key-id rate limiters for /v1/* routes (DOCBOT-1530 reuses the existing
-# connector token-bucket primitive rather than building a new limiter).
-_rate_limiters: dict[str, RateLimiter] = {}
-V1_RATE_LIMIT_CALLS_PER_SECOND = 5.0
 
 
 def wire_api_key_store(table: Table, async_session_factory: Any, audit_log_table: Any = None) -> None:
@@ -352,20 +346,12 @@ async def list_api_keys(org_id: str) -> list[APIKeyRecord]:
 # ---------------------------------------------------------------------------
 
 
-def _get_rate_limiter(key_id: str) -> RateLimiter:
-    limiter = _rate_limiters.get(key_id)
-    if limiter is None:
-        limiter = RateLimiter(calls_per_second=V1_RATE_LIMIT_CALLS_PER_SECOND)
-        _rate_limiters[key_id] = limiter
-    return limiter
-
-
 def require_api_key(min_scope: str):
     """FastAPI dependency factory for the `/v1/*` developer API.
 
     Validates ``Authorization: Bearer <key>``, checks the key carries
-    ``min_scope``, applies a per-key token-bucket rate limit (reusing
-    ``api/connectors/rate_limiter.py``'s primitive), and attaches
+    ``min_scope``, applies a per-key fixed-window rate limit (429, shared
+    counter store), and attaches
     ``org_id``/``api_key_id`` to ``request.state`` for downstream handlers.
 
     Inject as: ``key = Depends(require_api_key("autopilot:run"))``
@@ -397,8 +383,9 @@ def require_api_key(min_scope: str):
                 detail=f"API key missing required scope: {min_scope}.",
             )
 
-        async with _get_rate_limiter(record.id):
-            pass
+        # DOCBOT-3901: shared-store per-key limit — 429 + Retry-After, never sleeps.
+        from api.utils.request_guard import check_api_key_rate_limit
+        await check_api_key_rate_limit(request, record.id, record.key_prefix.startswith("dk_test_"))
 
         request.state.org_id = record.org_id
         request.state.api_key_id = record.id

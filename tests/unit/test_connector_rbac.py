@@ -416,9 +416,10 @@ def _range() -> connector_routes.ConnectorDateRangeRequest:
 @pytest.fixture
 def v1(env, monkeypatch: pytest.MonkeyPatch) -> Any:
     import api.index as index
+    import api.routes.v1_routes as v1_routes
 
     monkeypatch.setattr(index.app.state, "connectors", env["app"].state.connectors, raising=False)
-    return index
+    return v1_routes
 
 
 async def test_v1_list_scoped_to_key_org(v1) -> None:
@@ -476,4 +477,4 @@ async def test_v1_register_stamps_key_org(v1, env, monkeypatch) -> None:
     assert org == ORG_Y
     ids_x = {c["connector_id"] for c in (await v1.v1_list_connectors(_key=_v1_key(ORG_X)))["connectors"]}
     assert new_id not in ids_x
-    v1.app.state.connectors.pop(new_id, None)
+    v1._d["app"].state.connectors.pop(new_id, None)

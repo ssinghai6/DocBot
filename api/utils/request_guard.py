@@ -251,11 +251,15 @@ async def _maybe_cleanup(now: int) -> None:
         logger.warning("rate-limit counter cleanup failed: %s", type(exc).__name__)
 
 
-async def _charge(bucket: str, key: str, window_sec: int, limit: int, amount: int = 1) -> Optional[int]:
-    """Charge ``amount`` against a fixed window. Returns None if allowed, else Retry-After seconds.
+async def charge_window(
+    bucket: str, key: str, window_sec: int, limit: int, amount: int = 1,
+) -> Tuple[Optional[int], int, int]:
+    """Charge ``amount`` against a fixed window.
 
-    A rejected charge is refunded so it does not consume quota. Fails OPEN
-    (returns None) when the store errors or times out.
+    Returns ``(retry_after, remaining, reset_epoch)``: ``retry_after`` is None if
+    allowed, else seconds until the window resets. A rejected charge is refunded
+    so it does not consume quota. Fails OPEN (allowed, full remaining) when the
+    store errors or times out.
     """
     now = time.time()
     window_start = int(now // window_sec) * window_sec
@@ -266,7 +270,7 @@ async def _charge(bucket: str, key: str, window_sec: int, limit: int, amount: in
         )
     except _STORE_ERRORS as exc:
         logger.warning("rate-limit store unavailable (%s) — failing open for %s", type(exc).__name__, bucket)
-        return None
+        return None, limit, expires_at
     if count > limit:
         try:
             await asyncio.wait_for(
@@ -274,9 +278,14 @@ async def _charge(bucket: str, key: str, window_sec: int, limit: int, amount: in
             )
         except _STORE_ERRORS as exc:
             logger.warning("rate-limit refund failed: %s", type(exc).__name__)
-        return max(math.ceil(expires_at - now), 1)
+        return max(math.ceil(expires_at - now), 1), 0, expires_at
     await _maybe_cleanup(int(now))
-    return None
+    return None, max(limit - count, 0), expires_at
+
+
+async def _charge(bucket: str, key: str, window_sec: int, limit: int, amount: int = 1) -> Optional[int]:
+    """Charge ``amount`` against a fixed window. Returns None if allowed, else Retry-After seconds."""
+    return (await charge_window(bucket, key, window_sec, limit, amount))[0]
 
 
 _xff_shape_logged = False
@@ -392,6 +401,36 @@ async def check_ip_rate_limit(request: Request) -> None:
             status_code=429,
             detail=f"Rate limit exceeded ({RATE_LIMIT_PER_MIN}/min). Retry in {retry_after}s.",
             headers={"Retry-After": str(retry_after)},
+        )
+
+
+# DOCBOT-3901: per-API-key limit for /v1 — rejects with 429, never sleeps.
+V1_RATE_LIMIT_PER_MIN: int = _env_int("V1_RATE_LIMIT_PER_MIN", 60)
+V1_TEST_RATE_LIMIT_PER_MIN: int = _env_int("V1_TEST_RATE_LIMIT_PER_MIN", 10)
+
+
+async def check_api_key_rate_limit(request: Request, key_id: str, test_key: bool = False) -> None:
+    """Fixed-window per-key limit on the shared counter store.
+
+    Stores ``X-RateLimit-*`` on ``request.state.rate_limit_headers`` (the /v1
+    contract middleware adds them to every response); raises 429 with
+    ``Retry-After`` when the key is over its limit. No-op when the limit is <= 0.
+    """
+    limit = V1_TEST_RATE_LIMIT_PER_MIN if test_key else V1_RATE_LIMIT_PER_MIN
+    if limit <= 0:
+        return
+    retry_after, remaining, reset = await charge_window("v1_key", key_id, RATE_LIMIT_WINDOW_SEC, limit)
+    headers = {
+        "X-RateLimit-Limit": str(limit),
+        "X-RateLimit-Remaining": str(remaining),
+        "X-RateLimit-Reset": str(reset),
+    }
+    request.state.rate_limit_headers = headers
+    if retry_after is not None:
+        raise HTTPException(
+            status_code=429,
+            detail={"code": "rate_limited", "message": f"API key rate limit exceeded ({limit}/min). Retry in {retry_after}s."},
+            headers={**headers, "Retry-After": str(retry_after)},
         )
 
 

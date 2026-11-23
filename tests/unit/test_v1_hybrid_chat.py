@@ -16,6 +16,7 @@ from fastapi import Request
 from fastapi.testclient import TestClient
 
 import api.index as idx
+import api.routes.v1_routes as v1_routes
 
 HEADERS = {"Authorization": "Bearer dk_test"}
 BODY = {"question": "q", "session_id": "s-1"}
@@ -35,11 +36,11 @@ def _client(monkeypatch, events: list[dict]):
         for e in events:
             yield _sse(e)
 
-    overrides = {idx._v1_hybrid_read.dependency: _fake_key}
+    overrides = {v1_routes._v1_hybrid_read.dependency: _fake_key}
     idx.app.dependency_overrides.update(overrides)
-    monkeypatch.setattr(idx, "_require_v1_resources", AsyncMock())
-    monkeypatch.setattr(idx, "charge_budget", AsyncMock())
-    monkeypatch.setattr(idx, "_begin_v1_billing", AsyncMock(return_value=nullcontext()))
+    monkeypatch.setattr(v1_routes, "_require_v1_resources", AsyncMock())
+    monkeypatch.setitem(v1_routes._d, "charge_budget", AsyncMock())
+    monkeypatch.setattr(v1_routes, "_begin_v1_billing", AsyncMock(return_value=nullcontext()))
     with patch("api.audit_service.log_event", MagicMock()), \
          patch("api.hybrid_service.hybrid_chat", fake_hybrid):
         resp = TestClient(idx.app, raise_server_exceptions=False).post(
