@@ -398,3 +398,82 @@ def test_webhook_bad_domain_header_401(env, monkeypatch) -> None:
     assert resp.status_code == 401
     assert "evil" not in resp.text
 
+
+
+# ---------------------------------------------------------------------------
+# DOCBOT-2591: /v1/connectors developer-API routes scoped to the API key's org
+# ---------------------------------------------------------------------------
+
+
+def _v1_key(org_id: str) -> SimpleNamespace:
+    return SimpleNamespace(id=f"key-{org_id}", org_id=org_id)
+
+
+def _range() -> connector_routes.ConnectorDateRangeRequest:
+    return connector_routes.ConnectorDateRangeRequest(start_date="2024-01-01", end_date="2024-01-31")
+
+
+@pytest.fixture
+def v1(env, monkeypatch: pytest.MonkeyPatch) -> Any:
+    import api.index as index
+
+    monkeypatch.setattr(index.app.state, "connectors", env["app"].state.connectors, raising=False)
+    return index
+
+
+async def test_v1_list_scoped_to_key_org(v1) -> None:
+    ids_x = {c["connector_id"] for c in (await v1.v1_list_connectors(_key=_v1_key(ORG_X)))["connectors"]}
+    ids_y = {c["connector_id"] for c in (await v1.v1_list_connectors(_key=_v1_key(ORG_Y)))["connectors"]}
+    assert ids_x == {CONN_X}
+    assert ids_y == {CONN_Y}
+
+
+@pytest.mark.parametrize("cid", [CONN_Y, "conn-legacy", "does-not-exist"])
+async def test_v1_sync_other_org_or_orgless_is_404(v1, env, cid: str) -> None:
+    from fastapi import HTTPException
+
+    with pytest.raises(HTTPException) as exc:
+        await v1.v1_sync_connector(cid, _range(), _key=_v1_key(ORG_X))
+    assert exc.value.status_code == 404
+    assert all(c.calls == 0 for c in env["app"].state.connectors.values())
+
+
+async def test_v1_sync_own_connector_ok(v1, monkeypatch) -> None:
+    import api.commerce_service as commerce_service
+
+    async def fake_sync(connector_id: str, connector: Any, start: str, end: str) -> dict[str, str]:
+        return {"connector_id": connector_id}
+
+    async def noop(_cid: str) -> None:
+        return None
+
+    monkeypatch.setattr(commerce_service, "sync_connector_data", fake_sync)
+    monkeypatch.setattr(connector_store, "update_last_sync", noop)
+    assert await v1.v1_sync_connector(CONN_X, _range(), _key=_v1_key(ORG_X)) == {"connector_id": CONN_X}
+
+
+async def test_v1_register_stamps_key_org(v1, env, monkeypatch) -> None:
+    import api.connectors.registry as registry
+    import api.connectors.sync_jobs as sync_jobs
+
+    class OkConnector:
+        def __init__(self, creds: ConnectorCredentials) -> None:
+            self.creds = creds
+
+        async def test_connection(self) -> bool:
+            return True
+
+    monkeypatch.setattr(registry, "get_connector_class", lambda _t: OkConnector)
+    monkeypatch.setattr(sync_jobs, "register_sync_schedules", lambda _cid: None)
+
+    resp = await v1.v1_register_connector(
+        v1.V1ConnectorRegisterRequest(connector_type="amazon", credentials={"k": "v"}),
+        _key=_v1_key(ORG_Y),
+    )
+    new_id = resp["connector_id"]
+    with env["sync_engine"].connect() as c:
+        org = c.execute(select(env["table"].c.org_id).where(env["table"].c.id == new_id)).scalar_one()
+    assert org == ORG_Y
+    ids_x = {c["connector_id"] for c in (await v1.v1_list_connectors(_key=_v1_key(ORG_X)))["connectors"]}
+    assert new_id not in ids_x
+    v1.app.state.connectors.pop(new_id, None)
