@@ -58,3 +58,14 @@ sudo docker exec -w /app openproject-openproject-1 bundle exec rails runner /tmp
 - Boards: `Status board` (all user stories by status) and `DocBot: S0` (sprint task board).
 - Start a sprint from Backlogs > Start sprint (or `Backlogs::Sprints::StartService`), not by setting `status` directly; the service builds the sprint task board.
 - Progress is status-based (`work_package_done_ratio = status`), epics roll up as a simple average of their children.
+
+## Wiki (docs from repo + founder plans folder)
+Pages and order come from `docs/wiki/_manifest.json`; repo files are the source of truth, re-import after edits.
+```bash
+python3 scripts/wiki_build.py . /tmp/wiki.json      # 59 pages; .html plans converted to Markdown
+A=docs/wiki/architecture
+scp -i ~/.ssh/docbot-pm.pem /tmp/wiki.json scripts/wiki_import.rb $A/docbot-architecture.html $A/docbot-architecture.light.png ubuntu@13.217.175.83:/tmp/
+# on the server: copy attachments into the container's /tmp/wikiatt/, wiki.json + wiki_import.rb into /tmp/, then
+sudo docker exec -w /app openproject-openproject-1 bundle exec rails runner /tmp/wiki_import.rb
+```
+Upsert by slug; home page slug `home` is the wiki start page. Diagram spec: `docs/wiki/architecture/docbot-architecture.json` (Archify).
