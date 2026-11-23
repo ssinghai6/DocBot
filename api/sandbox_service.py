@@ -644,9 +644,9 @@ async def generate_analysis_code(
     if chart_type not in VALID_CHART_TYPES:
         chart_type = "auto"
 
-    api_key = os.getenv("groq_api_key")
-    if not api_key:
-        logger.warning("generate_analysis_code: groq_api_key not set, skipping")
+    from api.utils.llm_provider import llm_configured
+    if not llm_configured():
+        logger.warning("generate_analysis_code: no LLM key set, skipping")
         return None
 
     chart_instructions = _chart_type_instructions(chart_type)
@@ -1019,9 +1019,9 @@ async def generate_csv_analysis_code(
     chat_history : optional list of {role, content} dicts for conversational memory
     error_context : optional error message from a failed previous attempt (retry)
     """
-    api_key = os.getenv("groq_api_key")
-    if not api_key:
-        logger.warning("generate_csv_analysis_code: groq_api_key not set, using fallback")
+    from api.utils.llm_provider import llm_configured
+    if not llm_configured():
+        logger.warning("generate_csv_analysis_code: no LLM key set, using fallback")
         return None
 
     # Detect complex queries for adaptive limits

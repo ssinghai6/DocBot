@@ -210,9 +210,9 @@ async def _planner_node(state: AutopilotState) -> dict:
       degraded (P1c) — the run can never *silently* collapse to a one-step
       (or doc-only) investigation.
     """
-    api_key = os.getenv("groq_api_key")
-    if not api_key:
-        logger.warning("planner_node: groq_api_key not set — single-step fallback (degraded)")
+    from api.utils.llm_provider import llm_configured
+    if not llm_configured():
+        logger.warning("planner_node: no LLM key set — single-step fallback (degraded)")
         return {
             "plan": [state["question"]],
             "iteration": 0,
@@ -1785,8 +1785,8 @@ async def _synthesizer_node(state: AutopilotState) -> dict:
 
     degradation_reasons = [str(r) for r in (state.get("degradation_reasons") or [])]
 
-    api_key = os.getenv("groq_api_key")
-    if not api_key:
+    from api.utils.llm_provider import llm_configured
+    if not llm_configured():
         base = f"Investigation complete.\n\n{steps_text}"
         if data_summary_text:
             base = (
