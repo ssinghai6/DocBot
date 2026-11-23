@@ -132,14 +132,13 @@ async def test_low_cardinality_column_gets_complete_list(tmp_path):
 
 @pytest.mark.integration
 @pytest.mark.asyncio
-async def test_high_cardinality_column_sampled_by_frequency(tmp_path):
-    # 60 distinct values (> 50); 'z_common' x5 and 'a_mid' x3 repeat, the rest are unique.
+async def test_high_cardinality_column_sends_no_values(tmp_path):
+    # 60 distinct values (> 50), some repeated: nothing goes to the prompt (no real values leak)
     rows = "".join(f"INSERT INTO t VALUES ('v{i:02d}');" for i in range(58))
     rows += "INSERT INTO t VALUES ('z_common');" * 5 + "INSERT INTO t VALUES ('a_mid');" * 3
     url = _db(tmp_path, "hc.sqlite", "CREATE TABLE t (cat TEXT);", rows)
     col = _cols(await db_service._introspect_schema_from_url(url, "sqlite"), "t")["cat"]
-    assert col["sample_values"] == ["z_common", "a_mid"]  # by frequency, not alphabetical
-    assert "values_complete" not in col
+    assert "sample_values" not in col and "values_complete" not in col
 
 
 @pytest.mark.integration
@@ -148,7 +147,7 @@ async def test_char_budget_falls_back_to_sample(tmp_path, monkeypatch):
     monkeypatch.setattr(db_service, "_SAMPLE_LIST_MAX_CHARS", 40)
     schema = await db_service._introspect_schema_from_url(_gl_db(tmp_path), "sqlite")
     col = _cols(schema, "gl")["acct_desc"]
-    assert len(col["sample_values"]) == 5 and "values_complete" not in col
+    assert col["sample_values"] == sorted(_ACCOUNTS)[:5] and "values_complete" not in col
 
 
 @pytest.mark.integration

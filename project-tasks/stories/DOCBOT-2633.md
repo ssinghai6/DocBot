@@ -12,7 +12,7 @@ Measured 2026-11-24 on Etsy's FY2025 10-K against a 14-account books table: the 
 ## Scope
 In:
 - Text columns with at most 50 distinct values: the full sorted list is cached with the schema and shown to the SQL generator as `values`.
-- Above 50 distinct values: the 5 most frequent repeated values, shown as `e.g.`.
+- Above 50 distinct values: no values are sent (unchanged from before), so real values such as customer names never reach the prompt.
 - Per-column (1500 chars) and prompt-wide (6000 chars) budgets so wide schemas cannot blow up the prompt.
 - Prompt rule: a `values` list is complete; filter with those exact strings and never invent names.
 - Schema cache format marker so cache rows written before this change are re-introspected.
@@ -23,16 +23,16 @@ Out:
 
 ## Acceptance criteria
 - [ ] Given a text column with <= 50 distinct values in a table of <= 5000 rows, when the schema is introspected, then every value is cached and the column is marked complete.
-- [ ] Given a text column with > 50 distinct values, when the schema is introspected, then the 5 most frequent repeated values are cached, not the first 5 alphabetically.
+- [ ] Given a text column with > 50 distinct values, when the schema is introspected, then no values are cached for it.
 - [ ] Given the full list exceeds the character budget, when the schema is introspected or the prompt is built, then the column falls back to 5 examples.
 - [ ] Given a schema cached before this change, when it is read, then it is re-introspected.
 - [ ] Given the Etsy books table and "Do the FY2025 operating expense lines in the 10-K agree with the books?", when the SQL step runs 3 times on Bedrock, then the Marketing row is returned each time.
 
 ## Deliverable and approach
-`api/db_service.py`: `_attach_sample_values` (bounded scan, full list or frequency sample), `_SCHEMA_FMT` cache marker checked in `get_schema`, `_generate_sql` renders `values` vs `e.g.` and adds rule 7. Tests in `tests/integration/test_schema_sample_values.py`.
+`api/db_service.py`: `_attach_sample_values` (bounded scan, full list for <= 50 distinct values), `_SCHEMA_FMT` cache marker checked in `get_schema`, `_generate_sql` renders `values` vs `e.g.` and adds rule 7. Tests in `tests/integration/test_schema_sample_values.py`.
 
 ## Test / verification
-Unit/integration tests for full list, frequency sample, char budget, scan bound, prompt rendering and cache upgrade. Offline tie-out eval, live tie-out eval (3 runs, Bedrock) before/after, Etsy SQL step 3x.
+Unit/integration tests for full list, nothing above 50, char budget, scan bound, prompt rendering and cache upgrade. Offline tie-out eval, live tie-out eval (3 runs, Bedrock) before/after, Etsy SQL step 3x.
 
 ## Dependencies
 Blocked by: none.

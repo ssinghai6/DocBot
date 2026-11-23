@@ -1160,7 +1160,7 @@ def _get_columns_via_information_schema(engine, table_name: str) -> List[Dict[st
 # data holds 'Q4 2025'. Computed once at introspection, cached with the schema.
 # DOCBOT-2633: a column with <=50 distinct values gets its COMPLETE list (the
 # generator never saw 'Marketing' when only 5 alphabetical values were shown);
-# above that, the 5 most frequent values. Bump _SCHEMA_FMT when the cached
+# above that, no values (as before). Bump _SCHEMA_FMT when the cached
 # shape changes so older cache rows are re-introspected.
 _SCHEMA_FMT = 2
 _SAMPLE_MAX_VALUES = 5
@@ -1176,10 +1176,10 @@ _SENSITIVE_COLUMN_MARKERS = (
 
 
 def _attach_sample_values(engine, table_name: str, columns: List[Dict[str, Any]], budget: List[int]) -> None:
-    """Add ``sample_values`` to TEXT columns. <=50 distinct values: all of them
-    (``values_complete`` when the whole table was scanned); more: the 5 most
-    frequent repeated values. Values >60 chars are dropped; a list over 1500
-    chars falls back to the frequent sample. Skips PII-looking columns (by
+    """Add ``sample_values`` to TEXT columns with <=50 distinct values: all of
+    them (``values_complete`` when the whole table was scanned). Columns with
+    more get nothing. Values >60 chars are dropped; a list over 1500 chars
+    falls back to its first 5 values. Skips PII-looking columns (by
     name, or any value the PII masker would mask). ``budget`` caps sampled
     columns per introspection.
     """
@@ -1211,22 +1211,14 @@ def _attach_sample_values(engine, table_name: str, columns: List[Dict[str, Any]]
                 values = [r[0] for r in conn.execute(select(c).distinct().limit(_SAMPLE_MAX_DISTINCT + 1))]
                 complete = len(values) <= _SAMPLE_MAX_DISTINCT
                 values = sorted(v for v in values if isinstance(v, str) and len(v) <= _SAMPLE_MAX_LEN)
-                if not complete or sum(len(v) + 4 for v in values) > _SAMPLE_LIST_MAX_CHARS:
-                    complete = False
-                    # most frequent repeated values (count > 1 skips ids / free text)
-                    freq = (
-                        select(c).where(c.is_not(None)).group_by(c)
-                        .having(func.count() > 1).order_by(func.count().desc(), c)
-                        .limit(_SAMPLE_MAX_VALUES * 2)
-                    )
-                    values = [
-                        v for (v,) in conn.execute(freq) if isinstance(v, str) and len(v) <= _SAMPLE_MAX_LEN
-                    ][:_SAMPLE_MAX_VALUES]
         except SQLAlchemyError as exc:
             logger.debug("sample values skipped for %s.%s: %s", table_name, name, type(exc).__name__)
             continue
-        if not values or any(mask_pii(v) != v for v in values):
+        # >50 distinct (ids, names, free text): send nothing, as before 2633
+        if not complete or not values or any(mask_pii(v) != v for v in values):
             continue
+        if sum(len(v) + 4 for v in values) > _SAMPLE_LIST_MAX_CHARS:
+            complete, values = False, values[:_SAMPLE_MAX_VALUES]
         col["sample_values"] = values
         if complete and whole_table:
             col["values_complete"] = True
