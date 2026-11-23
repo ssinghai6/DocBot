@@ -31,6 +31,7 @@ Todo/Backlog -> New, In Progress -> In progress, Testing -> In testing, Done -> 
 ## Re-run rules
 - Matches stories on the `DOCBOT-XXXX ` subject prefix (other ids on the full subject). Updates only changed fields.
 - Status never moves backwards; Rejected / On hold set by hand are kept. `--set-state` can move backwards.
+- A sprint set on the board is kept when the docs give the story no sprint.
 - Missing sprint on the server: the story is left unscheduled with a warning.
 
 ## Server (AWS Lightsail, us-east-1, 2 GB / $12 month, paid by AWS credits)
@@ -39,7 +40,7 @@ Todo/Backlog -> New, In Progress -> In progress, Testing -> In testing, Done -> 
 - `/opt/openproject/docker-compose.yml`: `openproject/openproject:17` all-in-one (bundled Postgres) on 127.0.0.1:8080 + `caddy:2` for HTTPS. `.env` holds `SECRET_KEY_BASE` (root only, never print it). 3 GB swapfile.
 - Restart: `cd /opt/openproject && sudo docker compose up -d`. Logs: `sudo docker compose logs -f openproject`.
 - Upgrade: bump the image tag, `sudo docker compose pull && sudo docker compose up -d` (take a snapshot first).
-- Backups: Lightsail automatic snapshots (enable in the console, Snapshots tab).
+- Backups: Lightsail automatic snapshots, daily 1:00 AM EST, last 7 kept (instance > Snapshots tab).
 - Memory is close to 2 GB. If pages take over 5 s or the container restarts, snapshot and resize to the 4 GB plan.
 
 ### One-time setup done with `rails runner`
@@ -49,3 +50,9 @@ sudo docker exec -w /app openproject-openproject-1 bundle exec rails runner /tmp
 ```
 - Enable types: `p.project_types.find_or_create_by!(type_id: Type.find_by!(name: "Epic").id)` (also Feature, User story).
 - Sprints: `Sprint.create!(project: p, name: "S1", start_date: ..., finish_date: ..., status: "in_planning")` for S0..S7 (dates from backlog section 5). Mark a sprint `active` / `completed` on the Backlogs page to get burndown and velocity.
+
+### Views and boards (made with `rails runner` on 2026-11-22)
+- Public views in Work packages sidebar: `1. Epics: progress`, `2. Roadmap: epic > stories`, `3. Done`, `4. Remaining`, `5. Current sprint`. The default list hides Closed / Rejected; use these.
+- Boards: `Status board` (all user stories by status) and `DocBot: S0` (sprint task board).
+- Start a sprint from Backlogs > Start sprint (or `Backlogs::Sprints::StartService`), not by setting `status` directly; the service builds the sprint task board.
+- Progress is status-based (`work_package_done_ratio = status`), epics roll up as a simple average of their children.

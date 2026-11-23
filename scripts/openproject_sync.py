@@ -409,6 +409,8 @@ def full_sync(api: Op, args: argparse.Namespace) -> int:
             now = api.current(cur)
             if ahead(now["status"], spec["status"]):
                 spec = {**spec, "status": now["status"]}
+            if not spec["sprint"] and now["sprint"]:  # sprint set on the board, docs name none: keep it
+                spec = {**spec, "sprint": now["sprint"]}
             diff = {k: v for k, v in spec.items()
                     if (norm(now[k]) != norm(v) if k == "description" else now[k] != v)}
             parent = feat["id"] if link_id(cur, "parent") is None else None
