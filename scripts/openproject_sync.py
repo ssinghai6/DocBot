@@ -280,7 +280,10 @@ class Op:
         self.types = self.names(f"/projects/{PROJECT}/types")
         self.statuses = self.names("/statuses")
         self.priorities = self.names("/priorities")
-        self.sprints = self.names(f"/projects/{PROJECT}/sprints?pageSize=100")
+        sprints = self.req("GET", f"/projects/{PROJECT}/sprints?pageSize=100")["_embedded"]["elements"]
+        self.sprints = {e["name"]: e["id"] for e in sprints}
+        # the started, not completed sprint (Backlogs > Start sprint); picked tickets go here
+        self.active_sprint = next((e["name"] for e in sprints if e.get("startedAt") and not e.get("completedAt")), None)
         missing = {"Epic", "Feature", "User story"} - set(self.types)
         assert not missing, f"enable types {missing} on project {PROJECT} (see README-openproject.md)"
 
@@ -329,13 +332,16 @@ class Op:
                 "description": (item.get("description") or {}).get("raw", "")}
 
 
+TICKET_TYPES = ("User story", "Bug")
+
+
 def index(items: list[dict]) -> tuple[dict[str, dict], dict[tuple[str, str], dict]]:
-    """(DOCBOT-XXXX -> user story, (type, subject) -> any item)."""
+    """(DOCBOT-XXXX -> user story or bug, (type, subject) -> any item)."""
     stories, named = {}, {}
     for it in items:
         t, kind = it["subject"], it["_links"]["type"]["title"]
         m = re.match(r"(DOCBOT-\d{3,5}) ", t)
-        if m and kind == "User story":
+        if m and kind in TICKET_TYPES:
             stories[m.group(1)] = it
         named[(kind, t)] = it
     return stories, named
@@ -343,7 +349,8 @@ def index(items: list[dict]) -> tuple[dict[str, dict], dict[tuple[str, str], dic
 
 # ---------------------------------------------------------------- commands
 
-def set_state(api: Op, ticket: str, state: str, title: str | None, note: str | None) -> int:
+def set_state(api: Op, ticket: str, state: str, title: str | None, note: str | None,
+              kind: str = "User story") -> int:
     m = re.fullmatch(r"(?:DOCBOT-)?(\d{3,5})", ticket)
     want = op_status(state)
     if not m or want not in STATUS_ORDER + ["Rejected"]:
@@ -357,13 +364,21 @@ def set_state(api: Op, ticket: str, state: str, title: str | None, note: str | N
         if not title:
             print(f"{ext} not on the board; pass --title to create it", file=sys.stderr)
             return 2
-        cur = api.create({"subject": f"{ext} {title}", "type": "User story", "status": want}, None)
-        print(f"created {ext} in {want}")
-    elif cur["_links"]["status"]["title"] != want:  # explicit moves may go backwards (reopened)
-        api.update(cur, {"status": want})
-        print(f"{ext} -> {want}")
+        spec = {"subject": f"{ext} {title}", "type": kind, "status": want}
+        if want == "In progress" and api.active_sprint:
+            spec["sprint"] = api.active_sprint
+        cur = api.create(spec, None)
+        print(f"created {kind} {ext} in {want} {spec.get('sprint') or ''}")
     else:
-        print(f"{ext} already {want}")
+        now = api.current(cur)
+        diff = {"status": want} if now["status"] != want else {}  # explicit moves may go backwards (reopened)
+        if want == "In progress" and not now["sprint"] and api.active_sprint:  # picked up: into the current sprint
+            diff["sprint"] = api.active_sprint
+        if diff:
+            api.update(cur, diff)
+            print(f"{ext} -> {diff}")
+        else:
+            print(f"{ext} already {want}")
     if note:
         api.comment(cur["id"], note)
         print("  comment added")
@@ -409,6 +424,8 @@ def full_sync(api: Op, args: argparse.Namespace) -> int:
             now = api.current(cur)
             if ahead(now["status"], spec["status"]):
                 spec = {**spec, "status": now["status"]}
+            if now["type"] == "Bug":  # filed as a bug on the board: keep the type
+                spec = {**spec, "type": "Bug"}
             if not spec["sprint"] and now["sprint"]:  # sprint set on the board, docs name none: keep it
                 spec = {**spec, "sprint": now["sprint"]}
             diff = {k: v for k, v in spec.items()
@@ -440,6 +457,8 @@ def main() -> int:
     ap.add_argument("--set-state", nargs=2, metavar=("TICKET", "STATE"),
                     help='move one story, e.g. --set-state DOCBOT-2586 "In Progress" (Todo/In Progress/Testing/Done/Cancelled)')
     ap.add_argument("--title", help="with --set-state: create the story with this title if missing")
+    ap.add_argument("--type", default="User story", choices=TICKET_TYPES,
+                    help="with --set-state --title: create as this type (default User story)")
     ap.add_argument("--note", help="with --set-state: add this comment (PR link, test result)")
     args = ap.parse_args()
     if args.self_test:
@@ -452,7 +471,7 @@ def main() -> int:
         return 2
     api = Op(key, args.dry_run)
     if args.set_state:
-        return set_state(api, *args.set_state, args.title, args.note)
+        return set_state(api, *args.set_state, args.title, args.note, args.type)
     return full_sync(api, args)
 
 

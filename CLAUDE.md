@@ -385,18 +385,23 @@ Never use Co-Authored-By Claude
 
 **OpenProject is the live ticket board. Keep it current without being asked.** Board: https://pm.docbot.space/projects/docbot/work_packages (backlog + sprints: `/projects/docbot/backlogs`). Self-hosted on AWS Lightsail; ops notes in `scripts/README-openproject.md`.
 
-Update the ticket at each of these moments, in the same session:
+Lifecycle: **planned -> board (New) -> picked (In progress, into the current sprint) -> PR (In testing) -> merged (Closed)**. Update the ticket at each of these moments, in the same session:
 
 | Moment | State | Command |
 |---|---|---|
-| Asked to build something with no DOCBOT ticket | create it | add a story file + backlog row (below), then `--set-state DOCBOT-XXXX "In Progress" --title "<title>"` |
-| Work starts (branch created) | `In Progress` | `python3 scripts/openproject_sync.py --set-state DOCBOT-XXXX "In Progress"` |
+| Anything planned (new story, bug, epic or plan doc adds tickets) | `New` on the board | add backlog rows + story files (below), merge, then full sync. A planned ticket must be on the board before the session ends, even if nobody builds it yet |
+| Bug found | `New`, type Bug | `--set-state DOCBOT-XXXX Todo --title "<title>" --type Bug` (plus a backlog row) |
+| Asked to build something with no DOCBOT ticket | create it | add a story file + backlog row (below), then `--set-state DOCBOT-XXXX "In Progress" --title "<title>"` (add `--type Bug` for a bug) |
+| Founder asks to pick a story or bug / work starts (branch created) | `In Progress` | `python3 scripts/openproject_sync.py --set-state DOCBOT-XXXX "In Progress"`. Puts it in the active sprint if it has none |
 | PR opened, CI running, or waiting on founder test/review | `Testing` | `... --set-state DOCBOT-XXXX Testing --note "PR #N"` |
 | PR merged into `main` (or the founder confirms a founder-only task is done) | `Done` | `... --set-state DOCBOT-XXXX Done --note "PR #N merged"` |
 | Dropped / superseded | `Cancelled` | `... --set-state DOCBOT-XXXX Cancelled --note "<why>"` |
 
 States map to OpenProject statuses: Todo/Backlog -> New, In Progress -> In progress, Testing -> In testing, Done -> Closed, Cancelled -> Rejected.
 
+- Close only the ticket that shipped. A PR that ships part of a story leaves it `Testing`/`In Progress`; an epic closes by hand when all its stories are Closed (its % done rolls up on its own).
+- Sprints: 2 weeks, S0..S7. Start one from Backlogs -> Start sprint (builds the sprint board), finish it there, then start the next. A sprint set on the board is kept by the sync.
+- Views: Work packages sidebar `1. Epics: progress`, `2. Roadmap`, `3. Done`, `4. Remaining`, `5. Current sprint`; Boards `Status board` and `DocBot: S<n>`. The default list hides Closed/Rejected.
 - Merged into `dev` only (AWS work) is `Testing`, not `Done`. Done = live on `main`/prod or verified by the founder.
 - New ticket = next free DOCBOT id in `project-tasks/docbot-master-backlog.md` + `project-tasks/stories/DOCBOT-XXXX.md` from the story template (`python3 scripts/validate_stories.py --only XXXX` must pass). Then run the full sync so the description, epic, sprint and points are filled: `git fetch origin && python3 scripts/openproject_sync.py` (reads `origin/main`; dry-run first with `--dry-run`).
 - The full sync loads every ticket in the repo docs: current backlog (Epic -> Feature -> User story, sprints S0..S7), old epics EPIC-01..23 from `docbot-v2-project-tracking.md` / `yc-10-day-plan.md`, and the EPIC-27..40 parking lot. It is idempotent and never moves a state backwards. Re-run it after any merge that changes those files.
