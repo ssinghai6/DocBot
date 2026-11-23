@@ -208,8 +208,9 @@ def detect_discrepancies(
         db_values = _extract_from_text(csv_answer, source="db")
     else:
         rows = sql_metadata.get("result_preview", [])
+        sql = sql_metadata.get("sql_query")
         db_values = _extract_from_rows(
-            rows, fallback_dimension=_where_dimension(sql_metadata.get("sql_query"))
+            rows, fallback_dimension=_where_dimension(sql), tag_columns=_literal_columns(sql)
         )
 
     sources = [str(x) for x in (sql_metadata.get("sources") or []) if x]
@@ -232,7 +233,11 @@ def detect_discrepancies(
             # DOCBOT-2542: a row's entity alone names the figure ("Lab Services:
             # $104.9M" vs {segment: "Lab Services", segment_revenue: ...}); the
             # column name only adds tokens that dilute Jaccard below threshold.
-            sim = max(label_sim, _label_similarity(dv.label, sv.dimension)) if sv.dimension else label_sim
+            # DOCBOT-2585: "|" separates WHERE literals ("Sales and marketing|opex");
+            # each may name the figure on its own, or all of them together.
+            sim = max(
+                [label_sim] + [_label_similarity(dv.label, d) for d in (sv.dimension, *sv.dimension.split("|"))]
+            ) if sv.dimension else label_sim
             if sim < match_threshold:
                 continue
             period_match = bool(dv.period and sv.period == dv.period)
@@ -547,7 +552,8 @@ def _where_dimension(sql: Any) -> str:
     lives solely in the WHERE clause, so the row alone labels the value
     "amount" and nothing ties out. Read equality / LIKE string literals on
     non-period columns from the sqlglot AST (never regex) and use them as the
-    row dimension. Returns "" when nothing applies or the SQL does not parse.
+    row dimension, up to two joined by "|". Returns "" when nothing applies or
+    the SQL does not parse.
     """
     if not sql:
         return ""
@@ -573,15 +579,46 @@ def _where_dimension(sql: Any) -> str:
             continue
         if re.search(r"[A-Za-z]", text) and len(text) <= 60 and text not in values:
             values.append(text)
-    return " ".join(values[:2])
+    return "|".join(values[:2])
 
 
-def _extract_from_rows(rows: list[dict], fallback_dimension: str = "") -> list[NumericValue]:
+def _literal_columns(sql: Any) -> frozenset[str]:
+    """Lower-cased output columns the SQL fills with a string constant.
+
+    DOCBOT-2585: the generator sometimes tags rows itself, e.g.
+    ``SELECT period, 'MD&A' AS source, amount ... WHERE category = 'Sales and
+    marketing' UNION ALL ...``. Such a tag is not a data entity, so it must not
+    hide the WHERE-clause metric name from the row label.
+    """
+    if not sql:
+        return frozenset()
+    import sqlglot
+    import sqlglot.expressions as exp
+
+    try:
+        tree = sqlglot.parse_one(str(sql))
+    except sqlglot.errors.SqlglotError:
+        return frozenset()
+    if tree is None:
+        return frozenset()
+    return frozenset(
+        proj.alias.lower()
+        for select in tree.find_all(exp.Select)
+        for proj in select.expressions
+        if isinstance(proj, exp.Alias) and isinstance(proj.this, exp.Literal) and proj.this.is_string
+    )
+
+
+def _extract_from_rows(
+    rows: list[dict], fallback_dimension: str = "", tag_columns: frozenset[str] = frozenset()
+) -> list[NumericValue]:
     """
     Extract numeric values from SQL result_preview rows.
     Each key becomes the label; each numeric value is extracted. Text
     dimension columns (segment / product names) are prefixed to the label and
     period columns (quarter / year) become the value's period.
+    ``tag_columns`` (constant-literal columns, see ``_literal_columns``) only
+    name the row when neither data columns nor the WHERE clause do.
     """
     results: list[NumericValue] = []
     seen: set[tuple[str, float, Optional[str]]] = set()
@@ -590,10 +627,18 @@ def _extract_from_rows(rows: list[dict], fallback_dimension: str = "") -> list[N
         if not isinstance(row, dict):
             continue
         period, dimension = _row_period_and_dimension(row)
+        if tag_columns:
+            data_dimension = _row_period_and_dimension(
+                {k: v for k, v in row.items() if str(k).lower() not in tag_columns}
+            )[1]
+            dimension = data_dimension or fallback_dimension or dimension
         dimension = dimension or fallback_dimension
         dim_label = _normalize_label(dimension) if dimension else ""
         # Ledger account codes ("4100 Revenue - Lab Services") never appear in prose.
-        entity = " ".join(t for t in dim_label.split() if not t.isdigit())
+        entity = "|".join(
+            " ".join(t for t in _normalize_label(part).split() if not t.isdigit())
+            for part in dimension.split("|")
+        ) if dimension else ""
         for col, val in row.items():
             if str(col).lower() in _PERIOD_COLS:
                 continue
@@ -615,7 +660,7 @@ def _extract_from_rows(rows: list[dict], fallback_dimension: str = "") -> list[N
             seen.add(key)
 
             col_tokens = set(col_label.split())
-            prefix = f"{dimension} · " if dimension else ""
+            prefix = f"{dimension.replace('|', ', ')} · " if dimension else ""
             results.append(NumericValue(
                 label=label,
                 value=num,
