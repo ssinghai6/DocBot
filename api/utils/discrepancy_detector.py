@@ -371,7 +371,7 @@ _LABEL_VALUE_RE = re.compile(
     r"(?P<sign>[-–]?)\s*"
     r"[\$£€¥]?\s*"
     r"(?P<number>[0-9][0-9,]*(?:\.[0-9]+)?)"                  # number
-    r"\s*(?P<suffix>[KkMmBbTt](?:illion|n|)?)?",             # optional K/M/B suffix
+    r"\s*(?P<suffix>[KkMmBbTt](?:illion|n|)?\b)?",             # optional K/M/B suffix
     re.IGNORECASE,
 )
 
@@ -382,7 +382,7 @@ _INLINE_VALUE_RE = re.compile(
     r"(?P<sign>[-–]?)\s*"
     r"[\$£€¥]?\s*"
     r"(?P<number>[0-9][0-9,]*(?:\.[0-9]+)?)"
-    r"\s*(?P<suffix>[KkMmBbTt](?:illion|n|)?)?",
+    r"\s*(?P<suffix>[KkMmBbTt](?:illion|n|)?\b)?",
     re.IGNORECASE,
 )
 
@@ -394,8 +394,19 @@ _LABEL_CURRENCY_RE = re.compile(
     r"(?P<sign>[-–]?)\s*"
     r"[\$£€¥]\s*"                                             # currency REQUIRED
     r"(?P<number>[0-9][0-9,]*(?:\.[0-9]+)?)"
-    r"\s*(?P<suffix>[KkMmBbTt](?:illion|n|)?)?",
+    r"\s*(?P<suffix>[KkMmBbTt](?:illion|n|)?\b)?",
     re.IGNORECASE,
+)
+
+# Table rows from filings rendered as "Label | 914,830 | 856,565" (DOCBOT-2634).
+# The first numeric cell is the row's value: statements list the latest period first.
+_TABLE_ROW_RE = re.compile(
+    r"^(?P<label>[A-Za-z][^|\n]{1,80}?)\s*\|\s*"
+    r"(?P<sign>[-–(]?)\s*"
+    r"[\$£€¥]?\s*"
+    r"(?P<number>[0-9][0-9,]*(?:\.[0-9]+)?)\)?"
+    r"(?P<suffix>)\s*(?=\||$)",
+    re.MULTILINE,
 )
 
 _SUFFIX_MULTIPLIERS = {
@@ -429,7 +440,7 @@ def _parse_number(number_str: str, sign: str, suffix: str | None) -> float:
     if suffix:
         multiplier = _SUFFIX_MULTIPLIERS.get(suffix[0].upper(), 1)
         value *= multiplier
-    if sign in ("-", "–"):
+    if sign in ("-", "–", "("):
         value = -value
     return value
 
@@ -469,7 +480,7 @@ def _extract_from_text(text: str, source: str) -> list[NumericValue]:
     results: list[NumericValue] = []
     seen: set[tuple[str, float, Optional[str]]] = set()
 
-    for pattern in (_LABEL_VALUE_RE, _INLINE_VALUE_RE, _LABEL_CURRENCY_RE):
+    for pattern in (_TABLE_ROW_RE, _LABEL_VALUE_RE, _INLINE_VALUE_RE, _LABEL_CURRENCY_RE):
         for m in pattern.finditer(text):
             try:
                 value = _parse_number(m.group("number"), m.group("sign"), m.group("suffix"))
