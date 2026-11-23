@@ -795,9 +795,26 @@ async def hybrid_chat(
         # below) so the active discrepancy gate after streaming can check
         # `report.has_discrepancies` regardless of which branch set it.
         discrepancy_report = None
+
+        # DOCBOT-2911: org-scoped cross-source column mappings. Non-fatal —
+        # returns ("", {}) on any failure or when the org has < 2 sources.
+        from api.cross_source_service import canonicalize_sql_metadata, cross_source_context
+
+        xsource_section = ""
+        xsource_terms: dict[str, str] = {}
+        if has_db:
+            from api.utils.billing_context import get_principal
+
+            _xs_principal = get_principal()
+            xsource_section, xsource_terms = await cross_source_context(
+                _xs_principal.org_id if _xs_principal else None, question, connection_id
+            )
+
         if intent == "hybrid" and doc_context and sql_metadata:
             from api.utils.discrepancy_detector import detect_discrepancies
-            report = detect_discrepancies(doc_context, sql_metadata)
+            report = detect_discrepancies(
+                doc_context, canonicalize_sql_metadata(sql_metadata, xsource_terms)
+            )
             discrepancy_report = report
             for item in report.discrepancies:
                 lineage.add_discrepancy(item)
@@ -854,7 +871,7 @@ async def hybrid_chat(
             f"Question: {question}"
             f"{extracted_section}"
             f"\n\n[DOCUMENT CONTEXT]\n{doc_section}"
-            f"\n\n[DATABASE RESULTS]\n{sql_section}\n\n"
+            f"\n\n[DATABASE RESULTS]\n{sql_section}{xsource_section}\n\n"
             "Answer:"
         )
 

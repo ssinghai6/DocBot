@@ -259,6 +259,17 @@ async def _planner_node(state: AutopilotState) -> dict:
                 + "\n".join(_lines) + "\n"
             )
 
+    # DOCBOT-2911: cross-source column mappings for the org (non-fatal; ""
+    # unless the org has >= 2 connected sources).
+    from api.cross_source_service import cross_source_context
+    from api.utils.billing_context import get_principal
+
+    _xs_principal = get_principal()
+    _xsource_block, _ = await cross_source_context(
+        _xs_principal.org_id if _xs_principal else None, state["question"], state.get("connection_id")
+    )
+    ontology_hint += _xsource_block
+
     # Build data-fetch guidance based on available sources
     if state.get("has_db"):
         fetch_guidance = (
