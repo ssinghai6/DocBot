@@ -12,7 +12,7 @@ import type {
   PickedTool,
 } from "@/components/types"
 import { useUIStore } from "@/store/uiStore"
-import { EMPTY_ANSWER_MESSAGE, StreamErrorEvent, fillEmptyAssistant, buildRecentHistory } from "@/lib/chatStream"
+import { EMPTY_ANSWER_MESSAGE, StreamErrorEvent, fillEmptyAssistant, buildRecentHistory, keepPartialAnswer, streamDroppedNote } from "@/lib/chatStream"
 import { AutopilotStepEventSchema } from "@/lib/schemas/autopilotStep"
 import type { Paywall } from "@/components/OutOfCreditsModal"
 import {
@@ -696,7 +696,8 @@ export function useChatSubmit(params: UseChatSubmitParams) {
               }
             } catch (e) {
               if (e instanceof StreamErrorEvent) throw e;
-              /* skip malformed SSE lines */
+              // One bad event is skipped, never fatal to the answer.
+              console.warn("Skipped hybrid SSE event:", e, jsonStr.slice(0, 200));
             }
           }
         }
@@ -707,12 +708,11 @@ export function useChatSubmit(params: UseChatSubmitParams) {
           return;
         }
         const msg = error instanceof Error ? error.message : "Unknown error";
+        // DOCBOT-2635: log the real cause and keep whatever already streamed in.
+        console.error("Hybrid chat failed:", error);
         if (!(error instanceof HttpGateError)) showToast("error", `Error: ${msg}`);
-        setMessages(prev => prev.map((m, i) =>
-          i === prev.length - 1 && m.role === "assistant" && m.content === ""
-            ? { ...m, content: error instanceof StreamErrorEvent || error instanceof HttpGateError ? msg : "I encountered an error with the hybrid query. Please try again." }
-            : m
-        ));
+        const note = error instanceof StreamErrorEvent || error instanceof HttpGateError ? msg : streamDroppedNote(error);
+        setMessages(prev => keepPartialAnswer(prev, note));
       } finally {
         setIsLoading(false);
       }
