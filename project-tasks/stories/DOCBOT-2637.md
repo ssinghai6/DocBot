@@ -23,14 +23,14 @@ Out:
 - Charts and the SQL-lane answer are built from the first query's rows.
 
 ## Acceptance criteria
-- [ ] Given the Etsy opex query that skips "Asset impairment charges", when hybrid runs, then the books row is queried and no answer calls the line missing from the books.
-- [ ] Given a revenue / operating income / net income question, then no lines are added (far-apart picks are left alone).
-- [ ] Given the Etsy 10-K, then the income statement chunk is cited as page 67; a filing without page footers shows no page number.
-- [ ] Given a prod DB whose marketplace_connections lacks the sync columns, after deploy `GET /api/connectors` returns 200.
-- [ ] Given Clear session, then the Inspector shows no lineage from the cleared answers.
-- [ ] Real-data rerun (12 runs, Bedrock): planted gap caught 3/3, 0 false flags, no "not in the books" claim.
-- [ ] Given a filing table with years, then every year-over-year statement in the answer matches the computed change (scored on the Etsy runs).
-- [ ] Given "How did each FY2025 operating expense line change compared with FY2024, and do the FY2025 figures agree with the books?", then the planted Marketing break is flagged.
+- [x] Given the Etsy opex query that skips "Asset impairment charges", when hybrid runs, then the books row is queried and no answer calls the line missing from the books.
+- [x] Given a revenue / operating income / net income question, then no lines are added (far-apart picks are left alone).
+- [x] Given the Etsy 10-K, then the income statement chunk is cited as page 67; a filing without page footers shows no page number.
+- [x] Given a prod DB whose marketplace_connections lacks the sync columns, after deploy `GET /api/connectors` returns 200.
+- [x] Given Clear session, then the Inspector shows no lineage from the cleared answers.
+- [x] Real-data rerun (12 runs, Bedrock): planted gap caught 3/3, 0 false flags, no "not in the books" claim.
+- [x] Given a filing table with years, then every year-over-year statement in the answer matches the computed change (scored on the Etsy runs).
+- [x] Given "How did each FY2025 operating expense line change compared with FY2024, and do the FY2025 figures agree with the books?", then the planted Marketing break is flagged.
 
 ## Deliverable and approach
 See Scope. Tests: `tests/unit/test_real_filing_fixes_2637.py`, `tests/integration/test_tieout_line_completion.py` (real SQLite books), updated `test_edgar_tables_2634.py`, `test_edgar_service.py`.
@@ -43,11 +43,11 @@ Blocked by: none.
 Blocks: investor demo 2026-12-01.
 
 ## Definition of done
-- [ ] AC met
-- [ ] tests/CI or evidence
-- [ ] OpenProject ticket updated
-- [ ] tracker row updated
-- [ ] no secrets / no banned claims
+- [x] AC met
+- [x] tests/CI or evidence
+- [x] OpenProject ticket updated
+- [x] tracker row updated
+- [x] no secrets / no banned claims
 
 ## Open questions
 - None.
