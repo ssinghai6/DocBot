@@ -14,6 +14,7 @@ intact and aligns with the "HuggingFace API only" claim in CLAUDE.md.
 
 from __future__ import annotations
 
+import bisect
 import logging
 import os
 import re
@@ -209,15 +210,62 @@ def _split_table(block: str, caption: str, max_chars: int) -> list[str]:
     return pieces
 
 
+# A page footer is a line holding only the page number. Kept only when the
+# numbers run 1, 2, 3... so a stray number line is never read as a page.
+_PAGE_FOOTER_RE = re.compile(r"^[ \t]*(\d{1,3})[ \t]*$", re.MULTILINE)
+_MIN_PAGE_FOOTERS = 3
+
+
+def _printed_pages(text: str):
+    """Return ``page_at(offset)``: the printed page at a text offset, or None.
+
+    Text after footer ``n`` is on page ``n + 1``; text before the first footer
+    is on that footer's page. Filings without a footer sequence get None.
+    """
+    footers: list[tuple[int, int]] = []
+    for m in _PAGE_FOOTER_RE.finditer(text):
+        n = int(m.group(1))
+        # a skipped footer (lost in HTML stripping) still continues the run
+        if footers and 0 < n - footers[-1][1] <= 3 or not footers and n <= 3:
+            footers.append((m.end(), n))
+    if len(footers) < _MIN_PAGE_FOOTERS:
+        return lambda offset: None
+    ends = [end for end, _ in footers]
+
+    def page_at(offset: int) -> int:
+        i = bisect.bisect_right(ends, offset)
+        return footers[0][1] if i == 0 else footers[i - 1][1] + 1
+
+    return page_at
+
+
+def _piece_start(text: str, piece: str, cursor: int) -> int:
+    """Offset of a chunk in the filing text, searching forward from cursor.
+
+    Table pieces repeat a caption/header, so the first row that is not
+    repeated anchors the search; a miss keeps the previous offset.
+    """
+    for line in reversed(piece.splitlines()):
+        line = line.strip()
+        if len(line) >= 8:
+            found = text.find(line, cursor)
+            if found >= 0:
+                # back up to the piece's own first line when it is nearby
+                first = piece.strip().splitlines()[0].strip()
+                head = text.rfind(first, cursor, found + 1) if first else -1
+                return head if head >= 0 else found
+    return cursor
+
+
 def chunk_filing(text: str, table_max_chars: int = FILING_TABLE_MAX_CHARS) -> list[Document]:
     """Chunk an SEC filing rendered by ``edgar_connector.html_to_text``.
 
     Prose goes through the same recursive splitter long documents already use.
     Tables (blank-line-separated blocks of ``a | b | c`` rows) are never split
     mid-row and carry their caption. Every chunk gets a locator: ``page`` is
-    the 1-based chunk ordinal (filing HTML has no reliable page numbers, and a
-    unique value keeps citations and lineage from merging distinct chunks) and
-    ``section`` is the enclosing Part / Item heading.
+    the printed page the chunk starts on (DOCBOT-2637, from the filing's page
+    footers; None when the filing has none) and ``section`` is the enclosing
+    Part / Item heading.
     """
     splitter = _fallback_splitter()
     pieces: list[str] = []
@@ -239,15 +287,18 @@ def chunk_filing(text: str, table_max_chars: int = FILING_TABLE_MAX_CHARS) -> li
             prose.append(block)
     flush_prose()
 
+    page_at = _printed_pages(text)
     docs: list[Document] = []
     section = ""
+    cursor = 0
     for i, piece in enumerate(pieces):
+        cursor = _piece_start(text, piece, cursor)
         headings = [h for h in map(_section_heading, piece.splitlines()) if h]
         starts_with_heading = bool(headings) and piece.lstrip().startswith(headings[0])
         docs.append(Document(
             page_content=piece,
             metadata={
-                "page": i + 1,
+                "page": page_at(cursor),
                 "chunk_index": i,
                 "section": headings[0] if starts_with_heading else section,
             },

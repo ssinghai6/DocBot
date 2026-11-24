@@ -22,7 +22,8 @@ logger = logging.getLogger(__name__)
 
 # DOCBOT-2634: bump when the text/chunk format changes. Cache rows are stamped
 # with it via text_hash; rows from an older format are re-ingested, not cloned.
-FILING_FORMAT_VERSION = "v2"
+# v3 (DOCBOT-2637): chunk ``page`` is the printed page, not the chunk ordinal.
+FILING_FORMAT_VERSION = "v3"
 
 
 async def _insert_session_row(

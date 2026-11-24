@@ -35,6 +35,7 @@ SSE event types yielded:
 
 from __future__ import annotations
 
+from api.utils.doc_refs import chunk_header, chunk_key, chunk_label, chunk_page  # DOCBOT-2637
 import asyncio
 import json
 import logging
@@ -967,7 +968,7 @@ def make_executor_node(
 
                         scan_chunks(
                             [
-                                (f"{doc.metadata.get('source', 'Unknown')} p{doc.metadata.get('page', 0)}", doc.page_content)
+                                (chunk_label(doc.metadata), doc.page_content)
                                 for doc in docs
                             ],
                             session_id=session_id,
@@ -975,8 +976,7 @@ def make_executor_node(
                         )
 
                         context = "\n\n".join(
-                            f"Source: {doc.metadata.get('source', 'Unknown')}, "
-                            f"Page {doc.metadata.get('page', 0)}\n{doc.page_content}"
+                            f"{chunk_header(doc.metadata)}\n{doc.page_content}"
                             for doc in docs
                         )
                         result_entry["result"] = wrap_untrusted(context[:800])
@@ -998,12 +998,12 @@ def make_executor_node(
                         from api.utils.lineage import safe_snippet
                         seen_keys: set[str] = set()
                         for doc in docs:
-                            key = f"{doc.metadata.get('source', 'Unknown')}_{doc.metadata.get('page', 0)}"
+                            key = chunk_key(doc.metadata)
                             if key not in seen_keys:
                                 seen_keys.add(key)
                                 new_citations.append({
                                     "source": doc.metadata.get("source", "Unknown"),
-                                    "page": doc.metadata.get("page", 0),
+                                    "page": chunk_page(doc.metadata),
                                     # PII-masked excerpt + owning step for lineage
                                     "text": safe_snippet(doc.page_content),
                                     "step_label": step,

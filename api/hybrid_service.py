@@ -11,6 +11,7 @@ result is logged to query_history for observability.
 
 from __future__ import annotations
 
+from api.utils.doc_refs import chunk_header, chunk_key, chunk_label, chunk_page  # DOCBOT-2637
 import asyncio
 import hashlib
 import json
@@ -53,7 +54,7 @@ PROMPT_VERSION_INTENT_CLASSIFICATION = "v1"
 # DOCBOT-1507: hybrid_chat's synthesis prompt is built dynamically (persona +
 # doc/sql context), so there's no single string constant to tag — this
 # version applies to the prompt-assembly logic in hybrid_chat() below.
-PROMPT_VERSION_HYBRID_SYNTHESIS = "v1"
+PROMPT_VERSION_HYBRID_SYNTHESIS = "v2"  # DOCBOT-2637: query-scope rule
 
 # DOCBOT-2542: a question that asks whether the document and the books agree
 # needs both lanes, or the discrepancy detector never runs. The LLM router
@@ -374,7 +375,8 @@ async def rag_retrieve(
                 lineage.add_source(
                     kind="pdf",
                     label=str(doc.metadata.get("source", "Unknown")),
-                    page=doc.metadata.get("page", 0),
+                    page=chunk_page(doc.metadata),
+                    chunk=doc.metadata.get("chunk_index"),
                     snippet=doc.page_content,
                     rerank_score=rerank_scores.get(id(doc)),
                 )
@@ -386,15 +388,14 @@ async def rag_retrieve(
 
         scan_chunks(
             [
-                (f"{doc.metadata.get('source', 'Unknown')} p{doc.metadata.get('page', 0)}", doc.page_content)
+                (chunk_label(doc.metadata), doc.page_content)
                 for doc in docs
             ],
             session_id=session_id,
         )
 
         context = "\n\n".join(
-            f"Source: {doc.metadata.get('source', 'Unknown')}, "
-            f"Page {doc.metadata.get('page', 0)}\n{doc.page_content}"
+            f"{chunk_header(doc.metadata)}\n{doc.page_content}"
             for doc in docs
         )
 
@@ -402,12 +403,12 @@ async def rag_retrieve(
         seen: set[str] = set()
         citations: list[dict] = []
         for doc in docs:
-            key = f"{doc.metadata.get('source', 'Unknown')}_{doc.metadata.get('page', 0)}"
+            key = chunk_key(doc.metadata)
             if key not in seen:
                 seen.add(key)
                 citations.append({
                     "source": doc.metadata.get("source", "Unknown"),
-                    "page": doc.metadata.get("page", 0),
+                    "page": chunk_page(doc.metadata),
                     "text": safe_snippet(doc.page_content),
                 })
 
@@ -493,6 +494,49 @@ async def _collect_sql_result(
     except Exception as exc:
         logger.warning("_collect_sql_result failed: %s", exc)
         return None
+
+
+async def _complete_tieout_lines(
+    sql_metadata: dict | None,
+    doc_context: str,
+    connection_id: str | None,
+    db_connections_table,
+    schema_cache_table,
+    async_session_factory,
+    lineage,
+) -> None:
+    """DOCBOT-2637: re-run the books query with filing lines it skipped.
+
+    Without this, a line the SQL step left out (Etsy's "Asset impairment
+    charges") reached synthesis as "not in the books" although the books hold
+    it. Updates ``sql_metadata`` in place; on any failure the first query's
+    result stands.
+    """
+    if not sql_metadata or not doc_context or not connection_id:
+        return
+    if not sql_metadata.get("sql_query") or sql_metadata.get("csv_answer"):
+        return
+    from api.db_service import complete_tieout_lines
+
+    started = time.perf_counter()
+    try:
+        done = await complete_tieout_lines(
+            connection_id, sql_metadata["sql_query"], doc_context,
+            list(sql_metadata.get("sources") or []),
+            db_connections_table, schema_cache_table, async_session_factory,
+        )
+    except Exception as exc:  # noqa: BLE001 -- best effort; the original rows stand
+        logger.warning("hybrid_chat: skipped-line completion failed: %s", exc)
+        return
+    if done is None:
+        return
+    sql, rows, added = done
+    sql_metadata.update(sql_query=sql, result_preview=rows[:20], row_count=len(rows))
+    lineage.add_step(
+        "complete_tieout_lines", tool="sqlglot_ast", lane="db",
+        latency_ms=(time.perf_counter() - started) * 1000,
+        detail=f"added skipped lines: {', '.join(added)}",
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -699,6 +743,11 @@ async def hybrid_chat(
             if sql_task is not None:
                 sql_metadata = await sql_task
 
+            await _complete_tieout_lines(
+                sql_metadata, doc_context, connection_id, db_connections_table,
+                schema_cache_table, async_session_factory, lineage,
+            )
+
         if has_db and intent != "doc" and sql_metadata is None:
             lineage.mark_step(
                 "run_sql_pipeline", "error",
@@ -870,7 +919,12 @@ async def hybrid_chat(
             "look for any of: Job Title, Position, Role, Designation, SOC Occupation Title, "
             "Occupation Title.\n"
             "- Only say information is absent when you have examined all chunks and confirmed "
-            "it does not appear anywhere.\n\n"
+            "it does not appear anywhere.\n"
+            # DOCBOT-2637: the database results are one query's rows, not the whole books.
+            "- The database results hold only the rows this query returned. If a document "
+            "line has no matching database row, say it was not part of the query result; "
+            "never say it is missing from the books or the database, and never mark it as "
+            "a mismatch.\n\n"
             f"Question: {question}"
             f"{extracted_section}"
             f"\n\n[DOCUMENT CONTEXT]\n{doc_section}"

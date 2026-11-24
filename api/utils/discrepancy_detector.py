@@ -319,7 +319,10 @@ _PERIOD_Q_RE = re.compile(r"\bQ([1-4])\s*(?:FY\s*)?'?(\d{4}|\d{2})\b", re.IGNORE
 _PERIOD_Q_REV_RE = re.compile(r"\b((?:19|20)\d{2})\s*[-/ ]?\s*Q([1-4])\b", re.IGNORECASE)
 _PERIOD_FY_RE = re.compile(r"\b(?:FY|fiscal\s+year)\s*'?(\d{4}|\d{2})\b", re.IGNORECASE)
 _BARE_QUARTER_RE = re.compile(r"^\s*Q([1-4])\s*$", re.IGNORECASE)
-_SOURCE_HEADER_RE = re.compile(r"^Source:\s*(?P<file>.+?),\s*Page\s+(?P<page>\d+)\s*$", re.MULTILINE)
+# DOCBOT-2637: filing chunks without a printed page use ", Section S" (doc_refs.chunk_header)
+_SOURCE_HEADER_RE = re.compile(
+    r"^Source:\s*(?P<file>.+?)(?:,\s*Page\s+(?P<page>\d+)|,\s*Section\s+.*)?\s*$", re.MULTILINE
+)
 
 _YEAR_COLS = frozenset({"year", "fiscal_year", "fy", "yr", "calendar_year"})
 _PERIOD_COLS = _YEAR_COLS | frozenset({
@@ -459,7 +462,7 @@ def _doc_context_for(text: str, start: int, number_start: int) -> tuple[Optional
         header = h
     chunk_start = header.end() if header else 0
     file = header.group("file").strip()[:200] if header else None
-    page = int(header.group("page")) if header else None
+    page = int(header.group("page")) if header and header.group("page") else None
 
     line_start = text.rfind("\n", 0, start) + 1
     period = extract_period(text[max(line_start, chunk_start):number_start])

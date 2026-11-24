@@ -7,6 +7,7 @@ from dotenv import load_dotenv
 load_dotenv()
 from api.utils.langsmith_pin import pin_langsmith_env
 pin_langsmith_env()
+from api.utils.doc_refs import chunk_header, chunk_key, chunk_label, chunk_page  # DOCBOT-2637
 
 from contextlib import asynccontextmanager
 from fastapi import FastAPI, File, UploadFile, Form, HTTPException, Depends, Query, Request
@@ -593,7 +594,8 @@ async def init_db() -> None:
         # DOCBOT-2597: sessions.is_sandbox.
         from api.api_key_service import API_KEY_COLUMN_MIGRATIONS
         from api.sandbox_session_service import SANDBOX_COLUMN_MIGRATIONS
-        for col_ddl in API_KEY_COLUMN_MIGRATIONS + SANDBOX_COLUMN_MIGRATIONS:
+        from api.connector_store import CONNECTOR_COLUMN_MIGRATIONS  # DOCBOT-2637
+        for col_ddl in API_KEY_COLUMN_MIGRATIONS + SANDBOX_COLUMN_MIGRATIONS + CONNECTOR_COLUMN_MIGRATIONS:
             await conn.execute(text(col_ddl))
         # DOCBOT-1524: org_id columns on pre-existing tables (no-op on a fresh
         # DB, where the Table definitions above already declare org_id).
@@ -1423,7 +1425,7 @@ async def chat(
 
             scan_chunks(
                 [
-                    (f"{doc.metadata.get('source', 'Unknown')} p{doc.metadata.get('page', 0)}", doc.page_content)
+                    (chunk_label(doc.metadata), doc.page_content)
                     for doc in retrieved_docs
                 ],
                 session_id=request.session_id,
@@ -1431,8 +1433,7 @@ async def chat(
 
             def format_docs(docs):
                 joined = "\n\n".join(
-                    f"Source: {doc.metadata.get('source', 'Unknown')}, "
-                    f"Page {doc.metadata.get('page', 0)}\n{doc.page_content}"
+                    f"{chunk_header(doc.metadata)}\n{doc.page_content}"
                     for doc in docs
                 )
                 return wrap_untrusted(joined)
@@ -1519,12 +1520,12 @@ async def chat(
             citations = []
             seen_sources: set = set()
             for doc in retrieved_docs:
-                source_key = f"{doc.metadata.get('source', 'Unknown')}_{doc.metadata.get('page', 0)}"
+                source_key = chunk_key(doc.metadata)
                 if source_key not in seen_sources:
                     seen_sources.add(source_key)
                     citations.append({
                         "source": doc.metadata.get("source", "Unknown"),
-                        "page": doc.metadata.get("page", 0),
+                        "page": chunk_page(doc.metadata),
                         "text": safe_snippet(doc.page_content),
                     })
 
@@ -1550,7 +1551,8 @@ async def chat(
                 lineage.add_source(
                     kind="pdf",
                     label=src,
-                    page=doc.metadata.get("page", 0),
+                    page=chunk_page(doc.metadata),
+                    chunk=doc.metadata.get("chunk_index"),
                     snippet=doc.page_content,
                     cited=src.lower() in answer_lower,
                 )
