@@ -197,15 +197,21 @@ _ALIASES = {
     "income from operations": ("operating income",),
     "provision for income taxes": ("tax provision", "income tax expense"),
 }
-_UP_WORDS = r"(?:rose|rises?|risen|increased|increases|grew|grows|higher|up|jumped|climbed)"
-_DOWN_WORDS = r"(?:fell|falls?|decreased|decreases|declined|declines|decline|dropped|drops?|lower|down|shrank)"
+# no bare "up"/"down": "identical down to the dollar", "drill-down"
+_UP_WORDS = r"(?:rose|rises?|risen|increased|increases|grew|grows|higher|jumped|climbed)"
+_DOWN_WORDS = r"(?:fell|falls?|decreased|decreases|declined|declines|decline|dropped|drops?|lower|shrank)"
 _STEADY_WORDS = r"(?:steady|unchanged|flat|no change)"
 # allocation tables ("Stock-based compensation expense included in ...") reuse
 # line names for a slice of each line, so their rows are not the line itself
 _ALLOCATION_TABLE = re.compile(r"\bincluded in\b|\ballocated\b|\bby (function|line item)\b", re.I)
 # ratios, shares and hypotheticals are not statements about the line itself
-_SKIP_CLAUSE = re.compile(r"margin|ratio|÷|share of|% of|\bper\b|\bif\b|\bcould\b|\bmay\b|\bmight\b|\bwould\b|\bshould\b")
-_CLAUSE_RE = re.compile(r"[.;:\n|(]|\bwhile\b|\bbut\b|\byet\b|\bwhereas\b|\bdespite\b|\bthough\b|\band\b")
+# ratios, shares, hypotheticals and filing-vs-books comparisons ("$5M lower in
+# the filing than in the books") are not year-over-year statements
+_SKIP_CLAUSE = re.compile(
+    r"margin|ratio|÷|share of|% of|\bper\b|\bif\b|\bcould\b|\bmay\b|\bmight\b|\bwould\b|\bshould\b"
+    r"|\bbooks?\b|\bledger\b|\bdatabase\b|\broll.?up\b|\bthan\b"
+)
+_CLAUSE_RE = re.compile(r"[.;:,\n|(]|\bwhile\b|\bbut\b|\byet\b|\bwhereas\b|\bdespite\b|\bthough\b|\band\b")
 
 
 def _names(label: str) -> tuple[str, ...]:

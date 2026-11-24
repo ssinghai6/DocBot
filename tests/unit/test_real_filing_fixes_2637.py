@@ -473,3 +473,16 @@ def test_hybrid_checks_answers_against_computed_changes():
 
     src = inspect.getsource(hybrid_service.hybrid_chat)
     assert "yoy_contradictions(" in src and "verify_yoy_claims" in src
+
+
+@pytest.mark.parametrize("answer", [
+    "Marketing, G&A and total operating expenses are identical down to the dollar.",
+    "Do a drill-down of marketing to locate the gap.",
+    "All figures match except marketing, which is $5M lower in the filing than in the books.",
+])
+def test_non_trend_wording_is_left_alone(answer):
+    assert _wrong(answer) == []
+
+
+def test_comma_separates_a_claim_from_a_hypothetical():
+    assert len(_wrong("Net income fell 46%, largely from a higher tax provision, which could affect guidance.")) == 1
