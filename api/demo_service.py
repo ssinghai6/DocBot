@@ -12,9 +12,11 @@ detection, and Autopilot without uploading their own data.
 
 from __future__ import annotations
 
+import asyncio
 import json
 import logging
 import os
+import shutil
 import sqlite3
 import tempfile
 import uuid
@@ -23,10 +25,10 @@ from pathlib import Path
 from typing import Any, Dict, Optional
 
 from langchain_core.documents import Document
-from sqlalchemy import Table, insert
+from sqlalchemy import Table, and_, insert, select
 
 from api.utils.encryption import encrypt_credentials
-from api.utils.vector_store import create_store
+from api.utils.vector_store import create_store, get_or_load_store
 
 logger = logging.getLogger(__name__)
 
@@ -709,3 +711,109 @@ async def init_demo_session(
         },
         "suggested_questions": cfg["suggested_questions"],
     }
+
+
+# ---------------------------------------------------------------------------
+# DOCBOT-2632: rehydrate a demo session after a restart
+# ---------------------------------------------------------------------------
+
+# Rehydrate is rare (first request after a restart); one lock keeps two
+# concurrent requests from rebuilding the same store or file at once.
+_REHYDRATE_LOCK = asyncio.Lock()
+
+
+def _dataset_for_files_info(files_info: Optional[str]) -> Optional[str]:
+    """Map a demo session's stored doc filename back to its dataset key."""
+    try:
+        files = json.loads(files_info or "[]")
+    except ValueError:
+        return None
+    names = {f.get("filename") for f in files if isinstance(f, dict)}
+    for key, cfg in _DATASETS.items():
+        if cfg["doc_filename"] in names:
+            return key
+    return None
+
+
+async def ensure_demo_session(
+    session_id: Optional[str],
+    connection_id: Optional[str],
+    *,
+    vector_stores: Dict[str, Any],
+    get_embeddings_fn,
+    sessions_table: Table,
+    db_connections_table: Table,
+    async_session_factory,
+) -> bool:
+    """Rebuild a server-issued demo session's vector store / SQLite file if lost.
+
+    A restart wipes /tmp (the demo SQLite) and could drop the Chroma store,
+    while the ``sessions`` / ``db_connections`` rows survive in Postgres. Demo
+    data is deterministic, so both are rebuilt in place under the SAME ids and
+    path; the request then continues as if nothing happened.
+
+    Only acts on a ``demo-`` id whose ``sessions`` row exists with
+    ``source='demo'`` (written by :func:`init_demo_session`). It never creates
+    a sessions or connection row, so a caller cannot mint a session by
+    choosing an id. Callers run their ownership checks first.
+
+    Returns True when something was rebuilt.
+    """
+    sid = session_id if session_id and session_id.startswith("demo-") else None
+    cid = connection_id if connection_id and connection_id.startswith("demo-") else None
+    if not sid and not cid:
+        return False
+
+    async with async_session_factory() as db:
+        if sid is None:
+            row = (await db.execute(
+                select(db_connections_table.c.session_id).where(db_connections_table.c.id == cid)
+            )).fetchone()
+            sid = row.session_id if row else None
+        if not sid:
+            return False
+        srow = (await db.execute(
+            select(sessions_table.c.files_info).where(
+                and_(sessions_table.c.session_id == sid, sessions_table.c.source == "demo")
+            )
+        )).fetchone()
+        if srow is None:
+            return False
+        conns = (await db.execute(
+            select(db_connections_table.c.id, db_connections_table.c.dbname).where(
+                and_(
+                    db_connections_table.c.session_id == sid,
+                    db_connections_table.c.host == "__local_file__",
+                    db_connections_table.c.id.startswith("demo-"),
+                )
+            )
+        )).fetchall()
+
+    dataset = _dataset_for_files_info(srow.files_info)
+    if dataset is None:
+        logger.warning("demo rehydrate: unknown dataset for session %s", sid)
+        return False
+    cfg = _DATASETS[dataset]
+    rebuilt = False
+
+    async with _REHYDRATE_LOCK:
+        store = await asyncio.to_thread(get_or_load_store, sid, vector_stores, get_embeddings_fn)
+        if store is None:
+            store = await asyncio.to_thread(create_store, sid, cfg["chunks"], get_embeddings_fn())
+            vector_stores[sid] = store
+            rebuilt = True
+            logger.info("demo rehydrate[%s]: rebuilt vector store for session %s", dataset, sid)
+
+        for conn in conns:
+            target = Path(conn.dbname)
+            if target.exists():
+                continue
+            # Same path as the stored row + creds blob, so nothing else changes
+            # and the cached schema stays valid (the data is deterministic).
+            built = await asyncio.to_thread(cfg["sqlite_builder"])
+            target.parent.mkdir(parents=True, exist_ok=True)
+            shutil.move(str(built), str(target))
+            rebuilt = True
+            logger.info("demo rehydrate[%s]: rebuilt SQLite for connection %s", dataset, conn.id)
+
+    return rebuilt

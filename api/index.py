@@ -514,6 +514,26 @@ async def _require_session(session_id: str, scope: CallerScope, *, allow_unbound
         )
     if not ok:
         raise HTTPException(status_code=404, detail=_SESSION_NOT_FOUND)
+    await _ensure_demo(session_id, None)
+
+
+async def _ensure_demo(session_id: Optional[str], connection_id: Optional[str]) -> None:
+    """DOCBOT-2632: rebuild a demo session's store / SQLite lost to a restart.
+
+    Runs only after the ownership check; a no-op for non-demo ids.
+    """
+    if not ((session_id or "").startswith("demo-") or (connection_id or "").startswith("demo-")):
+        return
+    from api.demo_service import ensure_demo_session
+
+    await ensure_demo_session(
+        session_id, connection_id,
+        vector_stores=VECTOR_STORES,
+        get_embeddings_fn=get_embeddings,
+        sessions_table=sessions_table,
+        db_connections_table=db_connections_table,
+        async_session_factory=async_session_factory,
+    )
 
 
 async def init_db() -> None:
@@ -1809,6 +1829,7 @@ async def _require_connection(connection_id: Optional[str], scope: CallerScope) 
         )
     except ConnectionNotFoundError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
+    await _ensure_demo(None, connection_id)
 
 
 class DisconnectRequest(BaseModel):

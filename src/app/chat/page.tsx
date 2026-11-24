@@ -23,6 +23,7 @@ import { resolveChatMode, createAnonymousSessionId, type ChatMode } from "@/lib/
 import { VerifyRequestSchema, VerifyResponseSchema } from "@/lib/schemas/emailVerify"
 import { OwnerUnlockResponseSchema } from "@/lib/schemas/ownerUnlock"
 import { gateResponse, onHttpGate } from "@/lib/httpGate"
+import { z } from "zod"
 import type { Paywall } from "@/components/OutOfCreditsModal"
 
 import {
@@ -74,6 +75,8 @@ function ToastContainer({ toasts, onDismiss }: { toasts: Toast[]; onDismiss: (id
 }
 
 type DemoDataset = "quickbite" | "fuel" | "tieout";
+const DEMO_DATASETS: DemoDataset[] = ["quickbite", "fuel", "tieout"];
+const DemoInitSchema = z.object({ session_id: z.string(), connection_id: z.string() });
 
 const DEMO_UI: Record<DemoDataset, { db: string; doc: string; persona: string; toast: string }> = {
   quickbite: {
@@ -391,6 +394,48 @@ export default function Home() {
     showToast,
   });
 
+  // Demo mode handler — dataset: "quickbite" (discrepancy), "fuel" (forecasting),
+  // or "tieout" (draft 10-K vs trial balance, DOCBOT-2212). DOCBOT-2632:
+  // `keepMessages` restarts an expired demo without wiping the chat.
+  const handleTryDemo = useCallback(async (
+    dataset: DemoDataset = "quickbite",
+    opts?: { keepMessages?: boolean },
+  ): Promise<{ sessionId: string; connectionId: string } | null> => {
+    setDemoLoading(true);
+    try {
+      const res = await fetch(`/api/demo/init?dataset=${dataset}`, { method: "POST" });
+      // DOCBOT-1711 / 2305: sign-in, rate, credits or capacity gate → shown by the gate listener.
+      if (await gateResponse(res)) return null;
+      if (!res.ok) throw new Error("Demo initialization failed");
+      const data = DemoInitSchema.parse(await res.json());
+      const demo = DEMO_UI[dataset];
+      setSessionId(data.session_id);
+      setConnectionId(data.connection_id);
+      setIsDbConnected(true);
+      setDbFileName(demo.db);
+      setChatMode("hybrid");
+      setSelectedPersona(demo.persona);
+      setIsAutoMode(false);
+      setUploadedFiles([new File([], demo.doc)]);
+      if (!opts?.keepMessages) {
+        setMessages([]);
+        showToast("success", demo.toast);
+      }
+      return { sessionId: data.session_id, connectionId: data.connection_id };
+    } catch {
+      showToast("error", "Failed to load demo. Please try again.");
+      return null;
+    } finally {
+      setDemoLoading(false);
+    }
+  }, [showToast]);
+
+  // DOCBOT-2632: an expired demo restarts on the dataset it was showing.
+  const restartDemo = () => handleTryDemo(
+    DEMO_DATASETS.find(d => DEMO_UI[d].db === dbFileName) ?? "quickbite",
+    { keepMessages: true },
+  );
+
   const { handleSendMessage, paywall, dismissPaywall } = useChatSubmit({
     input,
     sessionId,
@@ -416,6 +461,7 @@ export default function Home() {
 
     showToast,
     loadQueryHistory: handlers.loadQueryHistory,
+    restartDemo,
   });
 
   const shownPaywall = paywall ?? gatePaywall;
@@ -595,34 +641,6 @@ export default function Home() {
     window.addEventListener('keydown', handleKeyDown);
     return () => window.removeEventListener('keydown', handleKeyDown);
   }, [input, sessionId, isDbConnected, isLoading, inspectorOpen]); // eslint-disable-line react-hooks/exhaustive-deps
-
-  // Demo mode handler — dataset: "quickbite" (discrepancy), "fuel" (forecasting),
-  // or "tieout" (draft 10-K vs trial balance, DOCBOT-2212)
-  const handleTryDemo = useCallback(async (dataset: DemoDataset = "quickbite") => {
-    setDemoLoading(true);
-    try {
-      const res = await fetch(`/api/demo/init?dataset=${dataset}`, { method: "POST" });
-      // DOCBOT-1711 / 2305: sign-in, rate, credits or capacity gate → shown by the gate listener.
-      if (await gateResponse(res)) return;
-      if (!res.ok) throw new Error("Demo initialization failed");
-      const data = await res.json();
-      const demo = DEMO_UI[dataset];
-      setSessionId(data.session_id);
-      setConnectionId(data.connection_id);
-      setIsDbConnected(true);
-      setDbFileName(demo.db);
-      setChatMode("hybrid");
-      setSelectedPersona(demo.persona);
-      setIsAutoMode(false);
-      setUploadedFiles([new File([], demo.doc)]);
-      setMessages([]);
-      showToast("success", demo.toast);
-    } catch {
-      showToast("error", "Failed to load demo. Please try again.");
-    } finally {
-      setDemoLoading(false);
-    }
-  }, [showToast]);
 
   // ── Render ─────────────────────────────────────────────────────────────────
 
