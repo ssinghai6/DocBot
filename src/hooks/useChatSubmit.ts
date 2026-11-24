@@ -12,7 +12,9 @@ import type {
   PickedTool,
 } from "@/components/types"
 import { useUIStore } from "@/store/uiStore"
-import { EMPTY_ANSWER_MESSAGE, StreamErrorEvent, fillEmptyAssistant, buildRecentHistory, keepPartialAnswer, streamDroppedNote } from "@/lib/chatStream"
+import { EMPTY_ANSWER_MESSAGE, RECOVERING_MESSAGE, StreamErrorEvent, fillEmptyAssistant, buildRecentHistory, keepPartialAnswer, streamDroppedNote, pollRecoveredAnswer, applyRecoveredAnswer } from "@/lib/chatStream"
+import type { RecoveryPoll } from "@/lib/chatStream"
+import { RecoveredAnswerSchema } from "@/lib/schemas/answer"
 import { AutopilotStepEventSchema } from "@/lib/schemas/autopilotStep"
 import type { Paywall } from "@/components/OutOfCreditsModal"
 import {
@@ -56,6 +58,31 @@ function applyDocumentsExpiredEvent(
   useUIStore.getState().setExpiredSessionId(parsed.data.session_id)
   showToast("error", "Your documents expired. Please re-upload them.")
   return true
+}
+
+/** DOCBOT-2636: one read of `GET /api/hybrid/answer/{run_id}` (Zod-validated). */
+function recoveryPoll(runId: string, sessionId: string, connectionId: string): RecoveryPoll {
+  return async () => {
+    try {
+      // session/connection ids let an anonymous demo caller pass the auth gate; ownership is checked server-side.
+      const query = new URLSearchParams({ session_id: sessionId, connection_id: connectionId })
+      const response = await fetch(`/api/hybrid/answer/${encodeURIComponent(runId)}?${query}`)
+      if (response.status === 429 || response.status >= 500) return "pending"
+      if (!response.ok) return null
+      const parsed = RecoveredAnswerSchema.safeParse(await response.json())
+      if (!parsed.success) {
+        console.error("Recovered answer failed validation:", parsed.error)
+        return null
+      }
+      const data = parsed.data
+      if (data.status === "pending") return "pending"
+      if (!data.answer) return null
+      return { answer: data.answer, citations: data.citations, lineage: data.lineage ?? null, traceId: data.trace_id ?? null }
+    } catch (e) {
+      console.warn("Answer recovery poll failed, retrying:", e)  // still offline
+      return "pending"
+    }
+  }
 }
 
 interface UseChatSubmitParams {
@@ -600,6 +627,9 @@ export function useChatSubmit(params: UseChatSubmitParams) {
 
     // ── Hybrid chat path: SSE streaming via /api/hybrid/chat ─────────────
     if (effectiveChatMode === "hybrid" && connectionId && sessionId) {
+      // DOCBOT-2636: run id from the first metadata event; lets a dropped stream be recovered.
+      let runId: string | null = null;
+      let finished = false;
       try {
         const assistantMsg: Message = { role: "assistant", content: "", timestamp: new Date(), charts: [], agentPersona: personaToSend };
         setMessages(prev => [...prev, assistantMsg]);
@@ -654,6 +684,7 @@ export function useChatSubmit(params: UseChatSubmitParams) {
               } else if (chunk.type === "lineage") {
                 applyLineageEvent(chunk, setMessages);
               } else if (chunk.type === "metadata") {
+                if (typeof chunk.run_id === "string") runId = chunk.run_id;
                 // The first metadata event carries only intent flags; the SQL
                 // summary arrives in a later one. Never overwrite with undefined.
                 if (chunk.sql_query) {
@@ -662,6 +693,7 @@ export function useChatSubmit(params: UseChatSubmitParams) {
                   ));
                 }
               } else if (chunk.type === "done") {
+                finished = true;
                 const doneCitations: Citation[] = Array.isArray(chunk.citations) ? chunk.citations : [];
                 const doneTraceId: string | undefined = typeof chunk.trace_id === "string" ? chunk.trace_id : undefined;
                 if (doneCitations.length > 0 || doneTraceId) {
@@ -710,6 +742,17 @@ export function useChatSubmit(params: UseChatSubmitParams) {
         const msg = error instanceof Error ? error.message : "Unknown error";
         // DOCBOT-2635: log the real cause and keep whatever already streamed in.
         console.error("Hybrid chat failed:", error);
+        const dropped = !(error instanceof StreamErrorEvent || error instanceof HttpGateError);
+        if (dropped && runId && !finished) {
+          // DOCBOT-2636: the backend keeps running after a drop; read the finished answer back.
+          showToast("info", RECOVERING_MESSAGE);
+          const recovered = await pollRecoveredAnswer(recoveryPoll(runId, sessionId, connectionId));
+          if (recovered) {
+            setMessages(prev => applyRecoveredAnswer(prev, recovered));
+            if (recovered.lineage) useUIStore.getState().selectLineage(recovered.lineage);
+            return;
+          }
+        }
         if (!(error instanceof HttpGateError)) showToast("error", `Error: ${msg}`);
         const note = error instanceof StreamErrorEvent || error instanceof HttpGateError ? msg : streamDroppedNote(error);
         setMessages(prev => keepPartialAnswer(prev, note));

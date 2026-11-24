@@ -2457,7 +2457,9 @@ async def hybrid_chat_route(
         raw_request, "hybrid", session_id=request.session_id, connection_id=request.connection_id,
         session_exists=request.session_id in VECTOR_STORES, scope=scope,
     )
-    return StreamingResponse(billing.stream(event_stream()), media_type="text/event-stream")
+    # DOCBOT-2636: detached, so a client drop can't cancel the turn before its answer is persisted.
+    from api.answer_recovery_service import detach
+    return StreamingResponse(detach(billing.stream(event_stream())), media_type="text/event-stream")
 
 
 # ---------------------------------------------------------------------------
@@ -3471,6 +3473,12 @@ from api.routes.tieout_routes import router as tieout_router, wire_tieout_routes
 
 app.include_router(tieout_router)
 wire_tieout_routes(answer_lineage_table, sessions_table, db_connections_table, async_session_factory)
+
+# ── DOCBOT-2636: recover a hybrid answer whose stream dropped ────────────────
+from api.routes.answer_routes import router as answer_router, wire_answer_routes  # noqa: E402
+
+app.include_router(answer_router)
+wire_answer_routes(agent_traces_table, sessions_table, db_connections_table, async_session_factory)
 
 # ── DOCBOT-1712: post-signup onboarding (workspace name + use case) ───────────
 from api.routes.onboarding_routes import (  # noqa: E402

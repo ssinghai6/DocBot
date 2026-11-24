@@ -103,3 +103,31 @@ async def run_row_accessible(
             )
         )
         return result.first() is not None
+
+
+async def ids_accessible(
+    session_id: Optional[str],
+    connection_id: Optional[str],
+    scope: CallerScope,
+    sessions_table: Table,
+    db_connections_table: Table,
+    async_session_factory,
+) -> bool:
+    """DOCBOT-2636: the caller may access ``session_id`` or ``connection_id``.
+
+    Same predicate as :func:`run_row_accessible`, for a run with no row yet.
+    """
+    checks = [
+        (sessions_table, sessions_table.c.session_id, session_id),
+        (db_connections_table, db_connections_table.c.id, connection_id),
+    ]
+    async with async_session_factory() as session:
+        for table, id_col, value in checks:
+            if not value:
+                continue
+            result = await session.execute(
+                select(id_col).where(id_col == value, connection_access_clause(table, scope))
+            )
+            if result.first() is not None:
+                return True
+    return False

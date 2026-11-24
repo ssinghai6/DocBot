@@ -1,7 +1,7 @@
 # DOCBOT-2635 BUG: Hybrid answer replaced by a generic error when the stream breaks off
 | Epic | Phase | Sprint | Priority | Points | Lane | Due | Status |
 |---|---|---|---|---|---|---|---|
-| EPIC-26 Pre-seed | 0 | S0 | P0 | 1 | senior-dev | 2026-11-25 | Testing (2026-11-24) |
+| EPIC-26 Pre-seed | 0 | S0 | P0 | 1 | senior-dev | 2026-11-25 | Done (2026-11-24, PR #163) |
 
 ## User story
 As a fractional CFO running a hybrid tie-out, I want a broken answer stream to keep what already arrived and say why it stopped, so that I never see an unexplained "Please try again" over results that were delivered.
