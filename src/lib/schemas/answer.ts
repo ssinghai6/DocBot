@@ -8,7 +8,7 @@ import { LineageSchema } from "@/components/types"
 
 export const AnswerCitationSchema = z.object({
   source: z.string().default(""),
-  page: z.number().nullish().transform(p => p ?? 0),
+  page: z.number().nullish(),
   text: z.string().default(""),
 })
 

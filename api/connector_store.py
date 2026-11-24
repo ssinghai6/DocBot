@@ -73,6 +73,17 @@ def register_edgar_cache_table(metadata):
     return edgar_filings_cache
 
 
+# DOCBOT-2637: create_all never adds columns to an existing table, so a
+# marketplace_connections table created before DOCBOT-704 lacks the sync
+# columns and every read of it fails. Additive and idempotent; run on startup.
+CONNECTOR_COLUMN_MIGRATIONS: list[str] = [
+    "ALTER TABLE marketplace_connections ADD COLUMN IF NOT EXISTS sync_status TEXT DEFAULT 'idle'",
+    "ALTER TABLE marketplace_connections ADD COLUMN IF NOT EXISTS sync_cursor TEXT",
+    "ALTER TABLE marketplace_connections ADD COLUMN IF NOT EXISTS last_sync_at TIMESTAMPTZ",
+    "ALTER TABLE marketplace_connections ADD COLUMN IF NOT EXISTS updated_at TIMESTAMPTZ NOT NULL DEFAULT now()",
+]
+
+
 def register_connector_tables(metadata):
     """Define the marketplace_connections table on shared metadata.
 

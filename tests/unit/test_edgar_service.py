@@ -6,6 +6,7 @@ import asyncio
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
+from api.edgar_service import FILING_FORMAT_VERSION
 
 
 # ── Helpers ──────────────────────────────────────────────────────────────────
@@ -50,7 +51,7 @@ class TestIngestEdgarFiling:
             "company_name": "Apple Inc.",
             "ticker": "AAPL",
             "session_id": "existing-session-123",
-            "text_hash": "v2:abc",
+            "text_hash": f"{FILING_FORMAT_VERSION}:abc",
         }
         owner_a = {"user_id": None, "org_id": None, "anon_owner": "digest-a"}
         owner_b = {"user_id": "u-b", "org_id": "org-b", "anon_owner": None}
@@ -115,7 +116,7 @@ class TestIngestEdgarFiling:
 
     def test_cache_hit_with_missing_vectors_reingests_and_repoints_cache(self):
         """Cached source store was deleted/reaped: download again, update the cache row."""
-        cached = {"accession_number": "acc-1", "session_id": "gone-session", "text_hash": "v2:x"}
+        cached = {"accession_number": "acc-1", "session_id": "gone-session", "text_hash": f"{FILING_FORMAT_VERSION}:x"}
         mock_text = "UNITED STATES SECURITIES AND EXCHANGE COMMISSION\n" * 50
 
         with (
@@ -149,7 +150,7 @@ class TestIngestEdgarFiling:
         assert result["session_id"] != "gone-session"
         repoint.assert_awaited_once()
         assert repoint.await_args.args == ("acc-1", result["session_id"])
-        assert repoint.await_args.kwargs["text_hash"].startswith("v2:")
+        assert repoint.await_args.kwargs["text_hash"].startswith(f"{FILING_FORMAT_VERSION}:")
         save.assert_not_called()
 
     def test_creates_session_and_vectors(self):

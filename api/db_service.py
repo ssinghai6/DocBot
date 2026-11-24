@@ -134,6 +134,9 @@ async def _decrypt_conn_credentials_lazy(
 PROMPT_VERSION_SQL_REPHRASE = "v1"          # _rephrase_with_history
 PROMPT_VERSION_SQL_TABLE_SELECTOR = "v1"    # _select_relevant_tables (incl. retry)
 PROMPT_VERSION_SQL_GEN = "v4"               # _generate_sql
+# DOCBOT-2637: reasoning models (gpt-oss on Bedrock) spend output tokens
+# thinking first; at 1200 a pivot query was cut off mid-SQL ("Column not found").
+SQL_GEN_MAX_TOKENS = 3000
 PROMPT_VERSION_SQL_ANSWER_GEN = "v1"        # _stream_answer
 
 
@@ -2020,7 +2023,7 @@ async def _generate_sql(
         return await achat_completion(
             [{"role": "user", "content": prompt}],
             temperature=0,
-            max_tokens=1200,
+            max_tokens=SQL_GEN_MAX_TOKENS,
             caller="sql_gen_retry",
             prompt_version=PROMPT_VERSION_SQL_GEN,
         )
@@ -2030,7 +2033,7 @@ async def _generate_sql(
         sql = await achat_completion(
             [{"role": "user", "content": prompt}],
             temperature=0,
-            max_tokens=1200,
+            max_tokens=SQL_GEN_MAX_TOKENS,
             caller="sql_gen",
             prompt_version=PROMPT_VERSION_SQL_GEN,
         )
@@ -2087,6 +2090,53 @@ async def _generate_validated_sql(
 # ---------------------------------------------------------------------------
 # Step 6 helper — query executor (DOCBOT-205: MySQL read-only enforcement)
 # ---------------------------------------------------------------------------
+
+
+async def complete_tieout_lines(
+    connection_id: str,
+    sql: str,
+    doc_context: str,
+    tables: List[str],
+    db_connections_table: Table,
+    schema_cache_table: Table,
+    async_session_factory,
+) -> Optional[tuple[str, List[Dict[str, Any]], List[str]]]:
+    """DOCBOT-2637: re-run a books query with the filing lines it skipped.
+
+    ``tieout_lines.add_skipped_lines`` decides which lines (only values the
+    books hold, only short gaps between lines already selected). The rewritten
+    query passes the same guards as pipeline steps 5-6.1: sqlglot validation,
+    read-only executor, PII masking. Callers must have checked access to the
+    connection. Returns (validated_sql, rows, added) or None when nothing was
+    skipped.
+    """
+    from api.utils.tieout_lines import add_skipped_lines
+
+    async with async_session_factory() as session:
+        conn_row = (await session.execute(
+            select(db_connections_table).where(db_connections_table.c.id == connection_id)
+        )).fetchone()
+    if not conn_row:
+        raise ConnectionNotFoundError(f"Connection '{connection_id}' not found.")
+    schema = await get_schema(connection_id, db_connections_table, schema_cache_table, async_session_factory)
+    subset = [t for t in schema if t["name"] in set(tables)]
+    new_sql, added = add_skipped_lines(sql, subset, doc_context, conn_row.dialect)
+    if not added:
+        return None
+    validated = validate_and_sanitize_sql(new_sql, dialect=conn_row.dialect)
+    creds = await _decrypt_conn_credentials_lazy(
+        conn_row, connection_id, db_connections_table, async_session_factory
+    )
+    import asyncio as _asyncio
+    sync_url, entra_connect_args = await _asyncio.get_running_loop().run_in_executor(
+        None, _resolve_connection, creds
+    )
+    rows, column_names = await _execute_query(validated, sync_url, conn_row.dialect, entra_connect_args)
+    result = [dict(zip(column_names, row)) for row in rows]
+    if conn_row.pii_masking_enabled:
+        from api.utils.pii_masking import mask_rows
+        result = mask_rows(result)
+    return validated, result, added
 
 
 async def _execute_query(

@@ -721,8 +721,17 @@ export function useChatHandlers(params: UseChatHandlersParams) {
     }
   };
 
+  // DOCBOT-2637: the Inspector shows the selected answer's lineage/artifact;
+  // drop it with the answers so it never describes a run that is gone.
+  const clearInspector = () => {
+    const ui = useUIStore.getState();
+    ui.selectLineage(null);
+    ui.selectArtifact(null);
+  };
+
   const clearChat = () => {
     setMessages([]);
+    clearInspector();
     showToast("info", "Chat cleared");
   };
 
@@ -730,6 +739,7 @@ export function useChatHandlers(params: UseChatHandlersParams) {
     setSessionId(null);
     setUploadedFiles([]);
     setMessages([]);
+    clearInspector();
     showToast("info", "Session cleared");
   };
 

@@ -7,6 +7,7 @@ import asyncio
 from unittest.mock import AsyncMock, MagicMock, patch
 
 from api.connectors.edgar_connector import html_to_text
+from api.edgar_service import FILING_FORMAT_VERSION
 from api.utils.chunker import chunk_filing
 from api.utils.lineage import LineageCollector
 
@@ -54,8 +55,9 @@ def test_chunk_filing_keeps_table_whole_with_caption_and_locators():
     assert "Consolidated Statements of Operations\n(In thousands)\nYear Ended December 31," in content
     assert "Marketing | 914,830 | 856,565" in content
     assert table[0].metadata["section"] == "Item 8. Financial Statements and Supplementary Data."
-    pages = [d.metadata["page"] for d in docs]
-    assert pages == list(range(1, len(docs) + 1))
+    # DOCBOT-2637: no page footers in this snippet, so no page; chunks stay distinct by index
+    assert [d.metadata["page"] for d in docs] == [None] * len(docs)
+    assert [d.metadata["chunk_index"] for d in docs] == list(range(len(docs)))
     assert docs[-1].metadata["section"].startswith("Item 9.")
 
 
@@ -87,7 +89,8 @@ def test_lineage_keeps_distinct_edgar_chunks():
     assert len(docs) > 2
     lin = LineageCollector("r", "docs", "q")
     for d in docs:
-        lin.add_source(kind="pdf", label="ETSY-10-K", page=d.metadata["page"], snippet=d.page_content)
+        lin.add_source(kind="pdf", label="ETSY-10-K", page=d.metadata["page"],
+                       chunk=d.metadata["chunk_index"], snippet=d.page_content)
     assert len(lin.build().sources) == len(docs)
 
 
@@ -129,7 +132,7 @@ def test_old_format_cache_entry_is_reingested_not_cloned():
     clone.assert_not_called()
     save.assert_not_called()
     assert result["cached"] is False
-    assert repoint.await_args.kwargs["text_hash"].startswith("v2:")
+    assert repoint.await_args.kwargs["text_hash"].startswith(f"{FILING_FORMAT_VERSION}:")
     chunks = create.call_args.args[1]
-    assert all(c.metadata["page"] >= 1 and c.metadata["source"] == "CO-10-K-2024-01-01" for c in chunks)
+    assert all(c.metadata["source"] == "CO-10-K-2024-01-01" for c in chunks)
     assert any(c.page_content.endswith("Revenue | $1 | $2") for c in chunks)
