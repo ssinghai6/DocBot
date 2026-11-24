@@ -334,14 +334,11 @@ def list_stored_sessions() -> list[str]:
         for col in client.list_collections():
             name = col.name
             if name.startswith("session_"):
-                # Reverse the underscore substitution: session_<uuid_underscores>
-                # UUIDs are 32 hex chars + 4 hyphens = 36 chars
-                # After replacement: 32 hex + 4 underscores = 36 chars
-                raw = name[len("session_"):]
-                # Re-insert hyphens at positions 8, 12, 16, 20
-                parts = [raw[:8], raw[9:13], raw[14:18], raw[19:23], raw[24:]]
-                sid = "-".join(parts)
-                sessions.append(sid)
+                # Reverse _collection_name(). Session ids never contain "_", so
+                # this is exact for "<uuid>" and "demo-<uuid>" alike. DOCBOT-2632:
+                # the old fixed-offset UUID parse mangled demo ids, so startup
+                # cleanup saw every demo store as orphaned and deleted it.
+                sessions.append(name[len("session_"):].replace("_", "-"))
         return sessions
     except Exception as exc:
         logger.warning("vector_store: could not list stored sessions: %s", exc)

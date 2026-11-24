@@ -18,9 +18,11 @@ import type { Paywall } from "@/components/OutOfCreditsModal"
 import {
   HttpGateError,
   PlatformCapacityError,
+  SessionGoneError,
   SignInGatedError,
   classifyResponse,
   reportGate,
+  throwIfSessionGone,
 } from "@/lib/httpGate"
 
 /**
@@ -82,14 +84,26 @@ interface UseChatSubmitParams {
 
   showToast: (type: Toast['type'], message: string) => void
   loadQueryHistory: (connId: string) => void
+  /** DOCBOT-2632: start a fresh demo (same dataset, chat kept); null when it fails. */
+  restartDemo?: () => Promise<{ sessionId: string; connectionId: string } | null>
 }
+
+/** DOCBOT-2632: re-send an already-shown question once against fresh demo ids. */
+interface RetryTurn {
+  question: string
+  sessionId: string
+  connectionId: string
+}
+
+export const SESSION_EXPIRED_MESSAGE = "This session expired. Re-upload your file or reconnect your database."
+export const DEMO_EXPIRED_MESSAGE = "Your demo session expired. Starting a fresh demo…"
 
 export function useChatSubmit(params: UseChatSubmitParams) {
   const {
-    input,
-    sessionId,
+    input: inputText,
+    sessionId: currentSessionId,
     isDbConnected,
-    connectionId,
+    connectionId: currentConnectionId,
     selectedPersona,
     isAutoMode,
     chatMode,
@@ -110,6 +124,7 @@ export function useChatSubmit(params: UseChatSubmitParams) {
 
     showToast,
     loadQueryHistory,
+    restartDemo,
   } = params;
 
   // DOCBOT-1805: 402 (credits) / 429 (rate, demo cap) -> OutOfCreditsModal.
@@ -147,15 +162,40 @@ export function useChatSubmit(params: UseChatSubmitParams) {
     throw new SignInGatedError(gate.message);
   };
 
-  const handleSendMessage = async (e?: React.FormEvent) => {
+  const handleSendMessage = async (e?: React.FormEvent, retry?: RetryTurn): Promise<void> => {
     if (e) e.preventDefault();
+    const input = retry?.question ?? inputText;
+    const sessionId = retry?.sessionId ?? currentSessionId;
+    const connectionId = retry?.connectionId ?? currentConnectionId;
     if (!input.trim()) return;
     if (!sessionId && !isDbConnected) return;
 
     const userMsg: Message = { role: "user", content: input, timestamp: new Date() };
-    setMessages(prev => [...prev, userMsg]);
-    setInput("");
+    if (!retry) {
+      setMessages(prev => [...prev, userMsg]);
+      setInput("");
+    }
     setIsLoading(true);
+
+    // DOCBOT-2632: the backend lost this session (404). A demo restarts on the
+    // same dataset and the question is re-sent once; anything else explains why.
+    const onSessionGone = async (): Promise<void> => {
+      setMessages(prev => {
+        const last = prev[prev.length - 1];
+        return last && last.role === "assistant" && !last.content ? prev.slice(0, -1) : prev;
+      });
+      const isDemo = [sessionId, connectionId].some(id => id?.startsWith("demo-"));
+      if (isDemo && restartDemo && !retry) {
+        showToast("info", DEMO_EXPIRED_MESSAGE);
+        const ids = await restartDemo();
+        if (ids) {
+          await handleSendMessage(undefined, { question: input, ...ids });
+          return;
+        }
+      }
+      const content = isDemo ? "Your demo session expired. Click Try Demo to start a fresh one." : SESSION_EXPIRED_MESSAGE;
+      setMessages(prev => [...prev, { role: "assistant", content, timestamp: new Date() }]);
+    };
 
     // Build recent conversation history (last 6 messages = 3 turns) for
     // follow-up context in DB, CSV, hybrid, and autopilot pipelines.
@@ -286,6 +326,7 @@ export function useChatSubmit(params: UseChatSubmitParams) {
               });
               if (r.ok && r.body) return r;
               await throwIfSignInGated(r);
+              await throwIfSessionGone(r);
               if (r.status === 402 || r.status === 429) return r;
               // Retry transient gateway errors (backend waking up); fail fast otherwise.
               if (attempt === 0 && [502, 503, 504].includes(r.status)) {
@@ -294,7 +335,7 @@ export function useChatSubmit(params: UseChatSubmitParams) {
               }
               throw new Error(`Autopilot HTTP ${r.status}`);
             } catch (e) {
-              if (e instanceof HttpGateError) throw e;
+              if (e instanceof HttpGateError || e instanceof SessionGoneError) throw e;
               lastErr = e;
               if (attempt === 0) {
                 await new Promise(res => setTimeout(res, 1500));
@@ -428,6 +469,10 @@ export function useChatSubmit(params: UseChatSubmitParams) {
           }
         }
       } catch (err) {
+        if (err instanceof SessionGoneError) {
+          await onSessionGone();
+          return;
+        }
         setMessages(prev => [
           ...prev,
           { role: "assistant", content: `Autopilot error: ${err instanceof Error ? err.message : String(err)}`, timestamp: new Date() },
@@ -465,6 +510,7 @@ export function useChatSubmit(params: UseChatSubmitParams) {
         });
 
         await throwIfSignInGated(response);
+        await throwIfSessionGone(response);
         if (await blockedByPaywall(response, userMsg.content)) return;
         if (!response.ok || !response.body) {
           throw new Error(`HTTP ${response.status}`);
@@ -529,6 +575,10 @@ export function useChatSubmit(params: UseChatSubmitParams) {
         }
         setMessages(prev => fillEmptyAssistant(prev, EMPTY_ANSWER_MESSAGE));
       } catch (error: unknown) {
+        if (error instanceof SessionGoneError) {
+          await onSessionGone();
+          return;
+        }
         const msg = error instanceof Error ? error.message : "Unknown error";
         console.error("DB chat error:", error);
         const isFileGone = msg.includes("re-upload") || msg.includes("temporary files");
@@ -568,6 +618,7 @@ export function useChatSubmit(params: UseChatSubmitParams) {
         });
 
         await throwIfSignInGated(response);
+        await throwIfSessionGone(response);
         if (await blockedByPaywall(response, userMsg.content)) return;
         if (!response.ok || !response.body) throw new Error(`HTTP ${response.status}`);
 
@@ -651,6 +702,10 @@ export function useChatSubmit(params: UseChatSubmitParams) {
         }
         if (!expired) setMessages(prev => fillEmptyAssistant(prev, EMPTY_ANSWER_MESSAGE));
       } catch (error: unknown) {
+        if (error instanceof SessionGoneError) {
+          await onSessionGone();
+          return;
+        }
         const msg = error instanceof Error ? error.message : "Unknown error";
         if (!(error instanceof HttpGateError)) showToast("error", `Error: ${msg}`);
         setMessages(prev => prev.map((m, i) =>
@@ -692,6 +747,7 @@ export function useChatSubmit(params: UseChatSubmitParams) {
       });
 
       await throwIfSignInGated(response);
+      await throwIfSessionGone(response);
       if (await blockedByPaywall(response, userMsg.content)) return;
       if (!response.ok || !response.body) throw new Error(`HTTP ${response.status}`);
 
@@ -741,6 +797,10 @@ export function useChatSubmit(params: UseChatSubmitParams) {
       }
       if (!expired) setMessages(prev => fillEmptyAssistant(prev, EMPTY_ANSWER_MESSAGE));
     } catch (error: unknown) {
+      if (error instanceof SessionGoneError) {
+        await onSessionGone();
+        return;
+      }
       const msg = error instanceof Error ? error.message : "Unknown error";
       console.error("Chat error:", error);
       if (!(error instanceof HttpGateError)) showToast("error", `Error: ${msg}`);

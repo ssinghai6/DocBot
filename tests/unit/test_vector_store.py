@@ -135,6 +135,14 @@ class TestListStoredSessions:
             assert s1 in stored
             assert s2 in stored
 
+    def test_demo_prefixed_ids_round_trip(self, tmp_path):
+        # DOCBOT-2632: "demo-<uuid>" was mangled, so startup cleanup deleted it as orphaned.
+        with patch("api.utils.vector_store._PERSIST_DIR", tmp_path):
+            from api.utils.vector_store import create_store, list_stored_sessions
+            sid = f"demo-{uuid.uuid4()}"
+            create_store(sid, _make_docs(), EMBEDDINGS)
+            assert list_stored_sessions() == [sid]
+
     def test_empty_when_no_persist_dir(self, tmp_path):
         non_existent = tmp_path / "no_such_dir"
         with patch("api.utils.vector_store._PERSIST_DIR", non_existent):
