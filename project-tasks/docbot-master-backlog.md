@@ -474,6 +474,7 @@ Builds on 1530 and 2907. Pulled on 2026-11-23 (founder ask: token-gated docbot.s
 | DOCBOT-2592 | BUG: /v1/hybrid/chat returns pre-correction answer; intent/has_sql/has_docs null | 2 | P1 | Todo (found 2026-11-23) | 0 | - | senior-dev | EPIC-26 Pre-seed |
 | DOCBOT-2593 | BUG: admin panel /admin/* calls not rewritten by Next.js (verify on prod) | 1 | P1 | Todo (found 2026-11-23) | 0 | - | senior-dev | EPIC-26 Pre-seed |
 | DOCBOT-2595 | NEW: Number and file the public API playground backlog (EPIC-39) | 1 | P2 | In progress (2026-11-23) | 0 | - | PM | EPIC-26 Pre-seed |
+| DOCBOT-2633 | BUG: SQL generator sees only 5 values per category column, misses 'Marketing' | 2 | P0 | Testing (2026-11-24) | 0 | S0 | senior-dev | EPIC-26 Pre-seed |
 | DOCBOT-2596 | NEW: Close default FastAPI /docs, /redoc, /openapi.json in prod | 1 | P1 | Done (PR #156, 2026-11-23) | 1 | S1 | senior-dev | EPIC-39 API |
 | DOCBOT-2597 | NEW: Sandbox sessions for test API keys (demo data, daily test allowance) | 5 | P1 | Done (PR #154, 2026-11-23) | 1 | S1 | senior-dev | EPIC-39 API |
 | DOCBOT-2598 | NEW: Self-serve personal test API key for signed-in users | 2 | P1 | Done (PR #154, 2026-11-23) | 1 | S1 | senior-dev | EPIC-39 API |
