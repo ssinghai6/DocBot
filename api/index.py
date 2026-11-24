@@ -382,6 +382,9 @@ usage_events_table = register_usage_events_table(metadata)
 # ── DOCBOT-1802: credit balances, reservations + append-only ledger ───────────
 from api import credit_service
 credit_tables = credit_service.register_credit_tables(metadata)
+# DOCBOT-1810: Pro subscription state (webhook-driven)
+from api import subscription_service
+org_subscriptions_table = subscription_service.register_subscription_table(metadata)
 
 # ── DOCBOT-1510: per-answer lineage (Inspector lineage trace) ────────────────
 from api.lineage_service import register_lineage_table
@@ -675,6 +678,7 @@ async def lifespan(app: FastAPI):
     # DOCBOT-1802: credit reserve/settle store; release reservations orphaned
     # by a previous process before serving traffic.
     credit_service.wire_credit_store(credit_tables, async_session_factory, engine.dialect.name)
+    subscription_service.wire_subscription_store(org_subscriptions_table, async_session_factory)
     await credit_service.run_reaper_job()
     from api.lineage_service import wire_lineage_store
     wire_lineage_store(answer_lineage_table, async_session_factory)

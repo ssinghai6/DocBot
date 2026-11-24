@@ -259,6 +259,31 @@ class CheckoutSessionResponse(_Contract):
     expires_at: Optional[AwareDatetime] = None
 
 
+class SubscriptionCheckoutRequest(_Contract):
+    """``POST /api/billing/subscribe`` (admin) — Pro checkout (DOCBOT-1810). ``org_id`` from the session only."""
+
+    return_path: Optional[str] = Field(default=None, max_length=512)
+
+    @field_validator("return_path")
+    @classmethod
+    def _relative_only(cls, v: Optional[str]) -> Optional[str]:
+        if v is not None and not _SAFE_RETURN_PATH.match(v):
+            raise ValueError("return_path must be a same-origin relative path")
+        return v
+
+
+class SubscriptionStatus(_Contract):
+    """``GET /api/billing/subscription`` — the org's plan (DOCBOT-1810).
+
+    ``past_due`` keeps ``plan == "pro"`` while Stripe retries the card;
+    ``canceled`` (or no subscription) is the free plan.
+    """
+
+    plan: Literal["free", "pro"]
+    status: Optional[Literal["active", "past_due", "canceled"]] = None
+    current_period_end: Optional[AwareDatetime] = None
+
+
 class AdminCreditGrantRequest(_Contract):
     """``POST /admin/credits/grant`` (platform admin) — manual top-up for the
     Payment Link flow. ``reference`` is the idempotency key (e.g. the Stripe

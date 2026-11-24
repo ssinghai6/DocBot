@@ -124,6 +124,10 @@ async def _create_checkout_session(
     }
     if email:
         form["customer_email"] = email
+    return await _post_checkout(form)
+
+
+async def _post_checkout(form: dict[str, str]) -> CheckoutSessionResponse:
     try:
         async with httpx.AsyncClient(timeout=15.0) as client:
             resp = await client.post(
@@ -166,6 +170,37 @@ async def checkout_url(
             params["prefilled_email"] = email
         return CheckoutSessionResponse(url=_with_query(pack.payment_link_url, params), mode="payment_link")
     raise PaymentsDisabled(pack_id)
+
+
+async def subscription_checkout_url(
+    org_id: str, email: Optional[str], return_path: Optional[str] = None, user_id: Optional[str] = None
+) -> CheckoutSessionResponse:
+    """DOCBOT-1810: Checkout Session (mode=subscription) for Pro. ``org_id`` must come from the session.
+
+    ``subscription_data.metadata`` puts org/user on the Subscription so every
+    later ``customer.subscription.*`` / ``invoice.*`` webhook can be mapped
+    back to the org (``api/subscription_service.py``).
+    """
+    from api.subscription_service import pro_price_id
+
+    price = pro_price_id()
+    if not price or not _secret_key():
+        raise PaymentsDisabled("pro")
+    path = return_path or DEFAULT_RETURN_PATH
+    form: dict[str, str] = {
+        "mode": "subscription",
+        "line_items[0][price]": price,
+        "line_items[0][quantity]": "1",
+        "client_reference_id": org_id,
+        "metadata[org_id]": org_id,
+        "subscription_data[metadata][org_id]": org_id,
+        "subscription_data[metadata][user_id]": user_id or "",
+        "success_url": _frontend_url(_with_query(path, {"checkout": "success"})),
+        "cancel_url": _frontend_url(_with_query(path, {"checkout": "cancel"})),
+    }
+    if email:
+        form["customer_email"] = email
+    return await _post_checkout(form)
 
 
 # ---------------------------------------------------------------------------
@@ -240,6 +275,8 @@ def checkout_grant(event: dict) -> Optional[CheckoutGrant]:
     if event.get("type") not in CREDIT_EVENTS:
         return None
     obj = (event.get("data") or {}).get("object") or {}
+    if obj.get("mode") == "subscription":
+        return None  # DOCBOT-1810: credited per invoice.paid, not per checkout
     if obj.get("payment_status") != "paid":
         return None
     meta = obj.get("metadata") or {}
@@ -268,6 +305,7 @@ __all__ = [
     "PaymentsDisabled",
     "catalog",
     "checkout_url",
+    "subscription_checkout_url",
     "is_purchasable",
     "load_pack_configs",
 ]

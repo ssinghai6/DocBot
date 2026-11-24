@@ -42,6 +42,8 @@ ADMIN_ROUTES = [
     ("GET", "/admin/metrics", "/admin/metrics", None),
     ("POST", "/admin/credits/grant", "/admin/credits/grant", {"org_id": "o1", "credits": 1, "reference": "r1"}),
     ("POST", "/api/billing/checkout", "/api/billing/checkout", {"pack_id": "starter"}),
+    ("POST", "/api/billing/subscribe", "/api/billing/subscribe", {}),
+    ("GET", "/api/billing/subscription", "/api/billing/subscription", None),
     ("GET", "/admin/funnel", "/admin/funnel", None),
     ("GET", "/api/admin/waitlist", "/api/admin/waitlist", None),
 ]
