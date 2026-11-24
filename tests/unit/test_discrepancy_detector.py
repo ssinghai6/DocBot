@@ -451,3 +451,47 @@ def test_union_total_row_keeps_segment_dimension():
     assert [(d.doc_value, d.db_value) for d in detect_discrepancies(doc, meta).discrepancies] == [
         (104_900_000, 102_700_000)
     ]
+
+
+# DOCBOT-2634: filing tables rendered as "Label | value | value" rows
+
+_ETSY_STATEMENT = (
+    "Source: ETSY-10-K-2026-02-19, Page 495\n"
+    "Consolidated Statements of Operations\n"
+    "(In thousands, except per share amounts)\n"
+    "2025 | 2024 | 2023\n"
+    "Revenue | $2,883,501 | $2,808,332 | $2,748,377\n"
+    "Marketing | 914,830 | 856,565 | 759,196\n"
+    "Product development | 450,192 | 443,056 | 469,332\n"
+    "Other income (expense), net | (18,509) | 5,210 | 1,120\n"
+)
+
+
+def test_table_row_values_are_extracted():
+    from api.utils.discrepancy_detector import _extract_from_text
+
+    got = {v.label: v.value for v in _extract_from_text(_ETSY_STATEMENT, "doc")}
+    assert got["marketing"] == 914830.0
+    assert got["revenue"] == 2883501.0
+    assert got["other income expense net"] == -18509.0
+
+
+def test_table_row_gap_flagged_against_books_in_dollars():
+    rows = [{"acct_desc": "Marketing", "amount_usd": 919_830_000},
+            {"acct_desc": "Product development", "amount_usd": 450_192_000}]
+    rep = detect_discrepancies(_ETSY_STATEMENT, {"result_preview": rows, "sql_query": None})
+    assert [(d.label, d.doc_value, d.db_value) for d in rep.discrepancies] == [
+        ("Marketing", 914_830_000.0, 919_830_000.0)]
+
+
+def test_table_rows_that_tie_are_not_flagged():
+    rows = [{"acct_desc": "Marketing", "amount_usd": 914_830_000}]
+    rep = detect_discrepancies(_ETSY_STATEMENT, {"result_preview": rows, "sql_query": None})
+    assert rep.discrepancies == []
+
+
+def test_suffix_letter_needs_word_boundary():
+    from api.utils.discrepancy_detector import _extract_from_text
+
+    vals = [v.value for v in _extract_from_text("There were 2,375 total employees.", "doc")]
+    assert 2375.0 in vals and not any(v > 1e9 for v in vals)

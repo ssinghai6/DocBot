@@ -20,6 +20,10 @@ from sqlalchemy import insert
 
 logger = logging.getLogger(__name__)
 
+# DOCBOT-2634: bump when the text/chunk format changes. Cache rows are stamped
+# with it via text_hash; rows from an older format are re-ingested, not cloned.
+FILING_FORMAT_VERSION = "v2"
+
 
 async def _insert_session_row(
     *,
@@ -127,7 +131,7 @@ async def ingest_edgar_filing(
         extract_document_fields,
         is_extractable_document,
     )
-    from api.utils.chunker import chunk_document, detect_doc_type
+    from api.utils.chunker import chunk_filing
     from api.utils.vector_store import create_store
 
     source_label = f"{ticker}-{filing_type}-{filing_date}"
@@ -139,7 +143,11 @@ async def ingest_edgar_filing(
     # fresh session owned by THIS caller instead.
     cached = await get_cached_filing(accession_number)
     refresh_cache = False
-    if cached and cached.get("session_id"):
+    if cached and not str(cached.get("text_hash") or "").startswith(f"{FILING_FORMAT_VERSION}:"):
+        logger.info("edgar: cache entry for %s predates format %s; re-ingesting",
+                    accession_number, FILING_FORMAT_VERSION)
+        refresh_cache = True
+    elif cached and cached.get("session_id"):
         hit = await _session_from_cache(
             cached_session_id=cached["session_id"],
             source_label=source_label,
@@ -169,11 +177,11 @@ async def ingest_edgar_filing(
     if not text or len(text.strip()) < 100:
         raise ValueError(f"Filing {accession_number} yielded no usable text")
 
-    text_hash = hashlib.sha256(text.encode()).hexdigest()
+    text_hash = f"{FILING_FORMAT_VERSION}:{hashlib.sha256(text.encode()).hexdigest()}"
 
     # ── 3. Chunk the document ────────────────────────────────────────────
-    doc_type = detect_doc_type(text)
-    chunks = chunk_document(text, doc_type=doc_type)
+    # Tables stay whole rows; each chunk carries page (ordinal) + section.
+    chunks = chunk_filing(text)
 
     # Tag every chunk with filing metadata
     for chunk in chunks:
@@ -204,7 +212,7 @@ async def ingest_edgar_filing(
 
     # ── 6. Cache the filing ──────────────────────────────────────────────
     if refresh_cache:
-        await update_filing_cache_session(accession_number, session_id)
+        await update_filing_cache_session(accession_number, session_id, text_hash=text_hash)
     else:
         await save_filing_cache(
             filing_id=str(uuid.uuid4()),
