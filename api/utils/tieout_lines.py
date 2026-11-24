@@ -10,7 +10,10 @@ deterministically and adds them to the query's ``IN`` list:
   so a value is added only if the books really hold it;
 * only filing table rows in a short gap (at most MAX_GAP rows) between two rows
   the query already selected, in the same chunk, so a skipped line inside a
-  block comes back but an opex question never pulls in revenue or net income.
+  block comes back but an opex question never pulls in revenue or net income;
+* DOCBOT-2638: or, once the query picked two or more rows of a block, the rows
+  between its last pick and the block's "Total ..." row (a ledger has no total
+  line to bound the block, so the last line before the total was dropped).
 
 Pure functions, no I/O: hybrid_service re-executes the rewritten query.
 """
@@ -90,6 +93,11 @@ def add_skipped_lines(
         new: list[str] = []
         for labels in seqs:
             hits = [i for i, lab in enumerate(labels) if _match(lab, present)]
+            if len(hits) >= 2:
+                total = next((i for i in range(hits[-1] + 1, len(labels))
+                              if labels[i].lower().startswith("total")), None)
+                if total is not None:
+                    hits.append(total)
             for a, b in zip(hits, hits[1:]):
                 if b - a - 1 > MAX_GAP:
                     continue  # far-apart picks (revenue ... net income) are a choice, not a skip

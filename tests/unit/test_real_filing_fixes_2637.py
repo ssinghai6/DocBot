@@ -362,7 +362,7 @@ async def test_book_guided_retrieval_adds_the_missing_statement():
         ctx, cits = await hybrid_service._book_guided_retrieval(
             sbc_only, [{"source": "ETSY", "page": 102, "text": "x"}],
             {"result_preview": PIVOT_ROWS, "sql_query": "SELECT 1"}, "s1", {}, lineage)
-    assert rag.await_args.args[0] == "Marketing Product development"
+    assert rag.await_args.args[0] == "Consolidated statements of operations Marketing Product development"
     assert "Marketing | 914,830" in ctx and ctx.startswith(sbc_only)
     assert [c["page"] for c in cits] == [102, 67]
     assert "book_guided_retrieval" == lineage.add_step.call_args.args[0]
@@ -486,3 +486,37 @@ def test_non_trend_wording_is_left_alone(answer):
 
 def test_comma_separates_a_claim_from_a_hypothetical():
     assert len(_wrong("Net income fell 46%, largely from a higher tax provision, which could affect guidance.")) == 1
+
+
+# ── DOCBOT-2638: journal-entry ledger (no total lines in the books) ──────────
+
+LEDGER_SQL = (
+    "SELECT a.fs_line, SUM(jl.debit - jl.credit) FROM journal_lines AS jl JOIN accounts AS a "
+    "ON jl.account_id = a.account_id WHERE a.fs_line IN ('Marketing', 'Product development', "
+    "'General and administrative') GROUP BY a.fs_line LIMIT 500"
+)
+LEDGER_SCHEMA = [{"name": "accounts", "columns": [
+    {"name": "fs_line", "type": "TEXT", "values_complete": True, "sample_values": [
+        "Revenue", "Cost of revenue", "Marketing", "Product development",
+        "General and administrative", "Asset impairment charges"]},
+]}]
+
+
+def test_line_before_the_block_total_is_added():
+    sql, added = add_skipped_lines(LEDGER_SQL, LEDGER_SCHEMA, STATEMENT, "postgres")
+    assert added == ["Asset impairment charges"]
+    assert "'Asset impairment charges'" in sql
+
+
+def test_single_pick_is_not_extended_to_the_total():
+    sql = LEDGER_SQL.replace("'Marketing', 'Product development', ", "")
+    assert add_skipped_lines(sql, LEDGER_SCHEMA, STATEMENT, "postgres")[1] == []
+
+
+def test_sql_prompt_forbids_agreement_flags():
+    from api import db_service
+
+    src = inspect.getsource(db_service._generate_sql)
+    assert "never add agree / match / variance flag columns" in src
+    assert "group by that line, not" in src
+
