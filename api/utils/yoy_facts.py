@@ -34,11 +34,14 @@ class YoYFact:
     percent_kind: bool
     source: str
     units: str
+    table: str = ""
 
     def line(self) -> str:
         where = ", ".join(p for p in (self.source, f"in {self.units}" if self.units else "") if p)
         cur, pri = _fmt(self.value, self.percent_kind), _fmt(self.prior, self.percent_kind)
-        head = f"- {self.label} ({where}): FY{self.year} {cur} vs FY{self.prior_year} {pri}"
+        # the table matters: "Marketing" is also a row of the stock-comp table
+        name = f"{self.label} [{self.table}]" if self.table else self.label
+        head = f"- {name} ({where}): FY{self.year} {cur} vs FY{self.prior_year} {pri}"
         diff = self.value - self.prior
         if self.percent_kind:
             return f"{head} -> {_direction(diff)} {abs(diff):,.1f} percentage points" if diff else f"{head} -> unchanged"
@@ -97,6 +100,16 @@ def _header_years(cells: list[str]) -> Optional[list[Optional[str]]]:
     return years
 
 
+_NOT_CAPTION = re.compile(r"^(\(|(year|years|fiscal year|three months|six months|nine months)s? ended|as of|december|table of contents|\d)", re.I)
+
+
+def _is_caption(line: str) -> bool:
+    """A table title line ("Consolidated Statements of Operations"), not a
+    units / period / footer line."""
+    text = line.strip()
+    return len(text) >= 10 and not _NOT_CAPTION.match(text) and re.search(r"[A-Za-z]{4}", text) is not None
+
+
 def _chunks(doc_context: str) -> list[tuple[str, str]]:
     """(source label, chunk text) per ``Source: ...`` header."""
     heads = list(_SOURCE_HEADER_RE.finditer(doc_context))
@@ -118,16 +131,19 @@ def yoy_facts(doc_context: str) -> list[YoYFact]:
         units_match = _UNITS_RE.search(chunk)
         units = units_match.group(1).lower() if units_match else ""
         years: Optional[list[Optional[str]]] = None
+        caption = table = ""
         for line in chunk.splitlines():
             if not line.strip():
                 years = None  # a blank line ends the table
                 continue
             if " | " not in line:
+                if years is None and _is_caption(line):
+                    caption = re.split(r"\s+(?:is|are) as follows|\s*\(|:", line.strip())[0][:90]
                 continue  # sub-headings inside a table ("Operating expenses:")
             cells = [c.strip() for c in line.split(" | ")]
             header = _header_years(cells)
             if header is not None:
-                years = header
+                years, table = header, caption
                 continue
             if years is None or not re.match(r"[A-Za-z]", cells[0]):
                 continue
@@ -148,7 +164,7 @@ def yoy_facts(doc_context: str) -> list[YoYFact]:
             if key in seen:
                 continue
             seen.add(key)
-            facts.append(YoYFact(cells[0], year, prior_year, value, prior, pct or prior_pct, source, units))
+            facts.append(YoYFact(cells[0], year, prior_year, value, prior, pct or prior_pct, source, units, table))
             if len(facts) >= MAX_FACTS:
                 return facts
     return facts
@@ -172,3 +188,84 @@ YOY_RULE = (
     "compute your own growth rates or year-over-year differences, and do not describe the "
     "trend of a line that is not listed there. In filing tables a dash (—) means nil (zero).\n"
 )
+
+
+# ── answer check (DOCBOT-2637) ────────────────────────────────────────────────
+# Line names as answers write them, beyond the filing caption itself.
+_ALIASES = {
+    "general and administrative": ("g&a", "general & administrative"),
+    "income from operations": ("operating income",),
+    "provision for income taxes": ("tax provision", "income tax expense"),
+}
+_UP_WORDS = r"(?:rose|rises?|risen|increased|increases|grew|grows|higher|up|jumped|climbed)"
+_DOWN_WORDS = r"(?:fell|falls?|decreased|decreases|declined|declines|decline|dropped|drops?|lower|down|shrank)"
+_STEADY_WORDS = r"(?:steady|unchanged|flat|no change)"
+# allocation tables ("Stock-based compensation expense included in ...") reuse
+# line names for a slice of each line, so their rows are not the line itself
+_ALLOCATION_TABLE = re.compile(r"\bincluded in\b|\ballocated\b|\bby (function|line item)\b", re.I)
+# ratios, shares and hypotheticals are not statements about the line itself
+_SKIP_CLAUSE = re.compile(r"margin|ratio|÷|share of|% of|\bper\b|\bif\b|\bcould\b|\bmay\b|\bmight\b|\bwould\b|\bshould\b")
+_CLAUSE_RE = re.compile(r"[.;:\n|(]|\bwhile\b|\bbut\b|\byet\b|\bwhereas\b|\bdespite\b|\bthough\b|\band\b")
+
+
+def _names(label: str) -> tuple[str, ...]:
+    key = re.sub(r"\s*\(\d+\)$", "", label.lower()).strip()
+    return (key, *_ALIASES.get(key, ()))
+
+
+def yoy_contradictions(answer: str, facts: list[YoYFact]) -> list[str]:
+    """Statements like "Marketing fell" / "higher tax provision" that contradict
+    a computed change.
+
+    Conservative on purpose, since a hit triggers a rewrite: the direction word
+    must sit right next to the line name ("<line> rose", "a decline in <line>",
+    "higher <line>"), the clause must name only that line, and a line name
+    that appears in two tables with different directions is never checked.
+    """
+    all_facts = facts
+    # "Marketing" in a stock-comp allocation table is not marketing expense
+    facts = [f for f in facts if not _ALLOCATION_TABLE.search(f.table)]
+    direction: dict[str, set[int]] = {}
+    by_name: dict[str, YoYFact] = {}
+    for fact in facts:
+        if fact.percent_kind:
+            continue
+        diff = fact.value - fact.prior
+        if fact.value < 0 and fact.prior < 0:
+            diff = abs(fact.value) - abs(fact.prior)  # parenthesised lines: size
+        sign = (diff > 0) - (diff < 0)
+        for name in _names(fact.label):
+            direction.setdefault(name, set()).add(sign)
+            by_name.setdefault(name, fact)
+    names = [n for n, signs in direction.items() if len(signs) == 1]
+    # every line name any table uses, longest first: "cost of revenue" is masked
+    # as one token before "revenue" is looked for
+    every = sorted({n for f in all_facts for n in _names(f.label)}, key=len, reverse=True)
+    out: list[str] = []
+    for clause in _CLAUSE_RE.split(answer.lower()):
+        if _SKIP_CLAUSE.search(clause):
+            continue
+        tokens: dict[str, str] = {}
+        for i, n in enumerate(every):
+            token = f"line{i}x"
+            masked = re.sub(rf"(?<![a-z]){re.escape(n)}(?![a-z])", token, clause)
+            if masked != clause:
+                clause, tokens[n] = masked, token
+        present = [n for n in names if n in tokens]
+        if len(present) != 1 or len(tokens) != 1:
+            continue
+        name = tokens[present[0]]
+        said = None
+        if re.search(rf"{name}\W+(?:\w+\W+){{0,4}}?{_UP_WORDS}\b|\b(?:higher|increase in|rise in|growth in)\s+(?:\w+\s+)?{name}", clause):
+            said = 1
+        if re.search(rf"{name}\W+(?:\w+\W+){{0,4}}?{_DOWN_WORDS}\b|\b(?:lower|decline in|decrease in|drop in|reduction in)\s+(?:\w+\s+)?{name}", clause):
+            said = None if said == 1 else -1
+        if said is None and re.search(rf"{name}\W+(?:\w+\W+){{0,4}}?{_STEADY_WORDS}\b", clause):
+            said = 0
+        if said is None:
+            continue
+        actual = next(iter(direction[present[0]]))
+        if said != actual:
+            text = clause.replace(name, present[0]).strip()
+            out.append(f'"{text[:160]}" contradicts: {by_name[present[0]].line()[2:]}')
+    return out

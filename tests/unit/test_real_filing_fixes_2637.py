@@ -406,3 +406,70 @@ def test_only_where_filters_are_widened():
     assert added == ["Asset impairment charges"]
     assert new.count("'Asset impairment charges'") == 1
     assert new.index("'Asset impairment charges'") > new.upper().index("WHERE")
+
+
+# ── 8. answers are checked against the computed changes ───────────────────────
+
+STATEMENT_WITH_SBC = (
+    "Source: ETSY, Page 67\nConsolidated Statements of Operations\n(In thousands)\n2025 | 2024\n"
+    "Revenue | 2,883,501 | 2,808,332\nCost of revenue | 817,800 | 774,554\nMarketing | 914,830 | 856,565\n"
+    "General and administrative | 332,766 | 353,949\nProvision for income taxes | 83,683 | 107,494\n\n"
+    "Source: ETSY, Page 102\nStock-based compensation expense included in the Consolidated Statements "
+    "of Operations is as follows (in thousands):\n2025 | 2024\nCost of revenue | 28,004 | 32,575\n"
+    "Marketing | 14,572 | 23,508\n"
+)
+
+
+def _wrong(answer: str) -> list[str]:
+    from api.utils.yoy_facts import yoy_contradictions, yoy_facts
+
+    return yoy_contradictions(answer, yoy_facts(STATEMENT_WITH_SBC))
+
+
+@pytest.mark.parametrize("answer", [
+    "Net income fell, driven by the impairment and a higher tax provision.",
+    "- **Cost of revenue** fell 14% YoY.",
+    "G&A rose to $332.8M.",
+])
+def test_contradicting_statements_are_caught(answer):
+    assert len(_wrong(answer)) == 1
+
+
+@pytest.mark.parametrize("answer", [
+    "Marketing rose 6.8% while G&A fell 6.0%.",           # both right, split clauses
+    "Cost of revenue increased 5.6% year over year.",     # "revenue" inside "cost of revenue"
+    "Marketing rose despite lower ad spend.",             # two directions: left alone
+    "Operating margin fell as revenue grew.",              # ratios are not the line
+    "If revenue growth remains flat, margins could fall.",  # hypothetical
+    "Marketing, G&A and revenue all match the books.",    # no direction word
+])
+def test_correct_or_unclear_statements_are_left_alone(answer):
+    assert _wrong(answer) == []
+
+
+def test_allocation_table_rows_are_not_the_line():
+    from api.utils.yoy_facts import yoy_facts
+
+    sbc = next(f for f in yoy_facts(STATEMENT_WITH_SBC) if f.source.endswith("p102") and f.label == "Marketing")
+    assert sbc.table.startswith("Stock-based compensation expense included in")
+    assert "[Stock-based compensation" in sbc.line()
+    # "marketing fell" is checked against marketing expense (rose), not stock comp (fell)
+    assert len(_wrong("Marketing spend fell this year.")) == 1
+
+
+async def test_yoy_rewrite_prompt_lists_the_statements():
+    from api import hybrid_service
+
+    with patch("api.utils.llm_provider.achat_completion", AsyncMock(return_value="fixed")) as llm:
+        out = await hybrid_service._correct_yoy_claims(
+            "old answer", ['"higher tax provision" contradicts: ...'], "persona", "fmt", "\nFACTS\n", "q", "r1")
+    prompt = llm.await_args.args[0][0]["content"]
+    assert out == "fixed" and "higher tax provision" in prompt and "FACTS" in prompt
+    assert "[[discrepancy:...]] marker" in prompt
+
+
+def test_hybrid_checks_answers_against_computed_changes():
+    from api import hybrid_service
+
+    src = inspect.getsource(hybrid_service.hybrid_chat)
+    assert "yoy_contradictions(" in src and "verify_yoy_claims" in src

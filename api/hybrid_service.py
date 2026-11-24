@@ -12,7 +12,7 @@ result is logged to query_history for observability.
 from __future__ import annotations
 
 from api.utils.doc_refs import chunk_header, chunk_key, chunk_label, chunk_page  # DOCBOT-2637
-from api.utils.yoy_facts import YOY_RULE, yoy_prompt_block  # DOCBOT-2637
+from api.utils.yoy_facts import YOY_RULE, yoy_contradictions, yoy_facts, yoy_prompt_block  # DOCBOT-2637
 import asyncio
 import hashlib
 import json
@@ -595,6 +595,40 @@ async def _complete_tieout_lines(
     )
 
 
+async def _correct_yoy_claims(
+    answer: str, wrong: list[str], persona_def: str, format_block: str,
+    yoy_section: str, question: str, run_id: str,
+) -> str | None:
+    """DOCBOT-2637: one rewrite fixing statements that contradict computed changes."""
+    from api.utils.llm_provider import achat_completion
+
+    prompt = (
+        f"{persona_def}\n\n"
+        "Some statements in your previous answer contradict the year-over-year changes "
+        "computed from the filing. Rewrite the FULL answer, keeping everything else "
+        "exactly, and correct each listed statement so it matches the computed change. "
+        "Keep every [[discrepancy:...]] marker exactly as written.\n"
+        f"{format_block}\n"
+        "STATEMENTS TO CORRECT:\n" + "\n".join(f"- {w}" for w in wrong) + "\n"
+        f"{yoy_section}\n"
+        f"Question: {question}\n\n"
+        f"Previous answer:\n{answer}\n\n"
+        "Rewrite the full answer:"
+    )
+    try:
+        return await achat_completion(
+            [{"role": "user", "content": prompt}],
+            temperature=0.2,
+            max_tokens=2500,
+            caller="hybrid_yoy_correction",
+            run_id=run_id,
+            prompt_version=PROMPT_VERSION_HYBRID_SYNTHESIS,
+        )
+    except Exception as exc:  # noqa: BLE001 -- the original answer stands
+        logger.warning("hybrid_chat: year-over-year correction failed: %s", exc)
+        return None
+
+
 # ---------------------------------------------------------------------------
 # DOCBOT-1518: active discrepancy gate helper
 # ---------------------------------------------------------------------------
@@ -1103,6 +1137,34 @@ async def hybrid_chat(
                     )
             else:
                 lineage.add_step("verify_discrepancy_addressed", tool="none", detail="already addressed")
+
+        # DOCBOT-2637: year-over-year wording must match the computed changes.
+        # Deterministic check, no LLM call unless a statement contradicts a
+        # computed change ("higher tax provision" when it fell 22%); then one
+        # rewrite, kept only if it fixes something and keeps the markers.
+        if yoy_section:
+            _yoy_facts = yoy_facts(doc_context)
+            _yoy_answer = "".join(_answer_parts)
+            _yoy_wrong = yoy_contradictions(_yoy_answer, _yoy_facts)
+            if _yoy_wrong:
+                rewritten = await _correct_yoy_claims(
+                    _yoy_answer, _yoy_wrong, persona_def, format_block, yoy_section, question, run_id,
+                )
+                keeps_markers = not (
+                    discrepancy_report is not None and discrepancy_report.has_discrepancies
+                    and not _answer_addresses_discrepancies(rewritten or "")
+                )
+                if rewritten and keeps_markers and len(yoy_contradictions(rewritten, _yoy_facts)) < len(_yoy_wrong):
+                    masked_rewrite = normalize_markdown(mask_pii(rewritten))
+                    _answer_parts[:] = [masked_rewrite]
+                    yield f"data: {json.dumps({'type': 'replace', 'content': masked_rewrite})}\n\n"
+                    lineage.add_step("verify_yoy_claims", tool="llm", status="retried",
+                                     detail=f"rewrote {len(_yoy_wrong)} year-over-year statement(s)")
+                else:
+                    lineage.add_step("verify_yoy_claims", tool="llm", status="error",
+                                     detail="rewrite did not fix the statements; original kept")
+            else:
+                lineage.add_step("verify_yoy_claims", tool="none", detail="matches computed changes")
 
         # DOCBOT-2002: marker hygiene before the lineage/trace persist. The
         # model was told to place ``[[discrepancy:<id>]]`` markers and never
