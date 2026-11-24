@@ -52,7 +52,7 @@ logger = logging.getLogger(__name__)
 # Keep persisted question/answer text bounded — these are observability rows,
 # not a second copy of the full conversation.
 _MAX_QUESTION_LEN = 2000
-_MAX_ANSWER_LEN = 4000
+_MAX_ANSWER_LEN = 20000  # DOCBOT-2636: whole hybrid answer, so a dropped stream can be recovered
 
 VALID_FEEDBACK_VALUES = {"up", "down"}
 
@@ -105,6 +105,16 @@ _agent_traces_table: Optional[Table] = None
 _async_session_factory: Any = None
 # Strong refs so fire-and-forget writes are not garbage collected mid-flight.
 _pending_writes: set[asyncio.Task] = set()
+
+
+async def wait_pending_writes(timeout: float = 5.0) -> None:
+    """Let in-flight trace inserts land before a read (DOCBOT-2636).
+
+    shortcut: single-process only, like ``lineage_service.wait_pending_writes``.
+    """
+    pending = list(_pending_writes)
+    if pending:
+        await asyncio.wait(pending, timeout=timeout)
 
 
 def wire_trace_store(table: Table, async_session_factory: Any) -> None:

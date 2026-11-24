@@ -578,6 +578,9 @@ async def hybrid_chat(
     run_id = current_run_id() or new_run_id()
     _trace_cm = run_trace(run_id)
     _trace_cm.__enter__()
+    # DOCBOT-2636: lets GET /api/hybrid/answer/{run_id} answer "pending" until done.
+    from api.answer_recovery_service import mark_done, mark_running
+    mark_running(run_id, session_id, connection_id)
 
     # DOCBOT-1510: per-answer lineage collector
     from api.utils.lineage import LineageCollector
@@ -634,7 +637,7 @@ async def hybrid_chat(
             detail="fallback to default route" if classification.fallback_applied else intent,
         )
 
-        yield f"data: {json.dumps({'type': 'metadata', 'intent': intent, 'has_sql': has_db, 'has_docs': has_docs})}\n\n"
+        yield f"data: {json.dumps({'type': 'metadata', 'intent': intent, 'has_sql': has_db, 'has_docs': has_docs, 'run_id': run_id})}\n\n"
 
         # ── Step 2: gather context based on intent ────────────────────────────
         doc_context = ""
@@ -1050,4 +1053,5 @@ async def hybrid_chat(
 
         yield f"data: {json.dumps({'type': 'done', 'citations': doc_citations, 'run_id': run_id, 'trace_id': trace_id})}\n\n"
     finally:
+        mark_done(run_id)
         _trace_cm.__exit__(None, None, None)
