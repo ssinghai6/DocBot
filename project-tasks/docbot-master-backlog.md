@@ -494,6 +494,7 @@ Builds on 1530 and 2907. Pulled on 2026-11-23 (founder ask: token-gated docbot.s
 | DOCBOT-2623 | NEW: /apis OAuth/SSO sign-in returns to /chat instead of /apis | 2 | P2 | Todo (found 2026-11-23) | 1 | S2 | senior-dev | EPIC-39 API |
 | DOCBOT-2624 | NEW: GET /v1/me + v1 versioning and deprecation policy doc (3901 leftovers) | 2 | P2 | Todo (found 2026-11-23) | 1 | S2 | senior-dev | EPIC-39 API |
 | DOCBOT-2634 | BUG: EDGAR filing tables are not retrievable and citations say Page 0 | 3 | P0 | Testing (2026-11-24) | 0 | S0 | senior-dev | EPIC-26 Pre-seed |
+| DOCBOT-2635 | BUG: Hybrid answer replaced by a generic error when the stream breaks off | 1 | P0 | Testing (2026-11-24) | 0 | S0 | senior-dev | EPIC-26 Pre-seed |
 | DOCBOT-2632 | BUG: Demo session breaks after a backend restart | 3 | P0 | In progress (found 2026-11-23) | 0 | - | senior-dev | EPIC-26 Pre-seed |
 | DOCBOT-2509 | Secrets rotation | 5 | P1 | Open (Wave B) | 1 | S2 | devops | EPIC-25 AWS |
 | DOCBOT-2510 | Prod restore drill | 3 | P1 | Open (Wave B) | 1 | S2 | devops | EPIC-25 AWS |

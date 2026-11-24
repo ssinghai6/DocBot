@@ -21,6 +21,23 @@ export function fillEmptyAssistant(messages: Message[], content: string): Messag
   return [...messages.slice(0, -1), { ...last, content }]
 }
 
+/** DOCBOT-2635: shown when the answer stream breaks off (network drop, proxy reset). */
+export function streamDroppedNote(error: unknown): string {
+  const cause = error instanceof Error ? `${error.name}: ${error.message}` : String(error)
+  return `The connection dropped before the full answer arrived (${cause}). Partial results shown here were received; send the question again for the full answer.`
+}
+
+/**
+ * DOCBOT-2635: put a failure note on the trailing assistant bubble without
+ * discarding what already streamed in (answer text, SQL, code, charts).
+ */
+export function keepPartialAnswer(messages: Message[], note: string): Message[] {
+  const last = messages[messages.length - 1]
+  if (!last || last.role !== "assistant") return messages
+  const content = last.content.trim() ? `${last.content}\n\n> ${note}` : note
+  return [...messages.slice(0, -1), { ...last, content }]
+}
+
 const HISTORY_TURNS = 6
 const HISTORY_MAX_CHARS = 4000
 const MD_DATA_IMAGE = /!\[[^\]]*\]\(\s*data:image\/[^)]*\)/gi
