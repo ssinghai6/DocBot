@@ -108,6 +108,9 @@ class DiscrepancyReport:
     """Full result returned to the synthesis layer."""
     discrepancies: list[DiscrepancyItem] = field(default_factory=list)
     checked_pairs: int = 0      # how many (doc_label, db_label) pairs were evaluated
+    # DOCBOT-2637: books lines (row entities) no document figure could be
+    # compared with, e.g. the filing table holding them was not retrieved.
+    unpaired_db_lines: list[str] = field(default_factory=list)
 
     @property
     def has_discrepancies(self) -> bool:
@@ -221,6 +224,7 @@ def detect_discrepancies(
     report = DiscrepancyReport()
     pairs_checked = 0
     seen_ids: set[str] = set()
+    compared: set[int] = set()  # db_values indexes with a plausible doc figure
 
     for dv in doc_values:
         candidates: list[tuple[bool, float, float, int, NumericValue]] = []
@@ -260,6 +264,8 @@ def detect_discrepancies(
             delta = db_val - doc_val
             rel_diff = abs(delta / doc_val) if doc_val != 0 else (abs(delta) if delta != 0 else 0)
             evaluated.append((sv, doc_val, db_val, delta, rel_diff))
+            if rel_diff <= max_delta_threshold:
+                compared.add(id(sv))
 
         if any(e[4] < delta_threshold for e in evaluated):
             continue  # a books value agrees with the report figure — ties out
@@ -291,6 +297,11 @@ def detect_discrepancies(
         report.discrepancies.append(item)
 
     report.checked_pairs = pairs_checked
+    covered = {sv.dimension for sv in db_values if id(sv) in compared}
+    report.unpaired_db_lines = list(dict.fromkeys(
+        sv.raw_text.split(" · ")[0] for sv in db_values
+        if sv.dimension and sv.dimension not in covered and " · " in sv.raw_text
+    ))
     return report
 
 
@@ -320,6 +331,9 @@ _PERIOD_Q_REV_RE = re.compile(r"\b((?:19|20)\d{2})\s*[-/ ]?\s*Q([1-4])\b", re.IG
 _PERIOD_FY_RE = re.compile(r"\b(?:FY|fiscal\s+year)\s*'?(\d{4}|\d{2})\b", re.IGNORECASE)
 _BARE_QUARTER_RE = re.compile(r"^\s*Q([1-4])\s*$", re.IGNORECASE)
 # DOCBOT-2637: filing chunks without a printed page use ", Section S" (doc_refs.chunk_header)
+_FLAG_VALUES = frozenset({"yes", "no", "y", "n", "true", "false", "match", "mismatch", "ok", "agree", "disagree"})
+_YEAR_CELL_RE = re.compile(r"(?:19|20)[0-9]{2}")
+_COLUMN_YEAR_RE = re.compile(r"(?<![0-9])((?:19|20)[0-9]{2})(?![0-9])")
 _SOURCE_HEADER_RE = re.compile(
     r"^Source:\s*(?P<file>.+?)(?:,\s*Page\s+(?P<page>\d+)|,\s*Section\s+.*)?\s*$", re.MULTILINE
 )
@@ -448,6 +462,34 @@ def _parse_number(number_str: str, sign: str, suffix: str | None) -> float:
     return value
 
 
+def _table_column_period(text: str, chunk_start: int, line_start: int, number_start: int) -> Optional[str]:
+    """DOCBOT-2637: year of a filing-table cell, from the table's header row.
+
+    Filing tables render as ``2025 | 2024 | 2023`` then ``Marketing | 914,830
+    | 856,565 | ...``; without this every cell had no period, so a 2024
+    column could be compared with 2025 books. Walks up the table (a blank
+    line ends it) to the year header and picks the cell's column.
+    """
+    line_end = text.find("\n", number_start)
+    row = text[line_start: line_end if line_end >= 0 else len(text)]
+    if " | " not in row:
+        return None
+    col = text.count(" | ", line_start, number_start)  # 1 = first value cell
+    row_cells = row.count(" | ") + 1
+    for prev in reversed(text[chunk_start:line_start].splitlines()):
+        if not prev.strip():
+            return None
+        cells = [c.strip() for c in prev.split(" | ")]
+        if len(cells) < 2:
+            continue
+        if all(_YEAR_CELL_RE.fullmatch(c) for c in cells) and len(cells) == row_cells - 1:
+            return f"FY{cells[col - 1]}" if 0 < col <= len(cells) else None
+        if (not re.search(r"\d", cells[0]) and len(cells) == row_cells
+                and all(_YEAR_CELL_RE.fullmatch(c) for c in cells[1:])):
+            return f"FY{cells[col]}" if 0 < col < len(cells) else None
+    return None
+
+
 def _doc_context_for(text: str, start: int, number_start: int) -> tuple[Optional[str], Optional[str], Optional[int]]:
     """(period, file, page) for a value at ``start`` in a doc context string.
 
@@ -466,6 +508,8 @@ def _doc_context_for(text: str, start: int, number_start: int) -> tuple[Optional
 
     line_start = text.rfind("\n", 0, start) + 1
     period = extract_period(text[max(line_start, chunk_start):number_start])
+    if period is None:
+        period = _table_column_period(text, chunk_start, line_start, number_start)
     if period is None and line_start > chunk_start:
         # Only heading-like lines ("REVENUE BY SEGMENT — FY2025": no digits
         # left once the period is removed) set a section period; data lines
@@ -543,6 +587,8 @@ def _row_period_and_dimension(row: dict) -> tuple[Optional[str], str]:
                 continue
             if col_l in _PERIOD_COLS:
                 continue
+            if val.strip().lower() in _FLAG_VALUES:
+                continue  # DOCBOT-2637: an "agree: No" flag column is not the row's entity
             if re.search(r"[A-Za-z]", val) and len(val) <= 60:
                 dims.append(val)
         elif col_l in _YEAR_COLS and _is_numeric_like(val):
@@ -666,11 +712,18 @@ def _extract_from_rows(
                 continue
 
             col_label = _normalize_label(str(col))
+            value_period = period
+            # DOCBOT-2637: a pivoted query puts the year in the column name
+            # (amount_2025, fy2024): that column's values belong to that year.
+            col_year = _COLUMN_YEAR_RE.search(str(col))
+            if col_year and period is None:
+                value_period = f"FY{col_year.group(1)}"
+                col_label = _normalize_label(_COLUMN_YEAR_RE.sub(" ", str(col)))
             if not col_label or len(col_label) < 2:
                 continue
             label = f"{dim_label} {col_label}".strip() if dim_label else col_label
 
-            key = (label, round(num, 2), period)
+            key = (label, round(num, 2), value_period)
             if key in seen:
                 continue
             seen.add(key)
@@ -682,7 +735,7 @@ def _extract_from_rows(
                 value=num,
                 raw_text=f"{prefix}{col}: {val}",
                 source="db",
-                period=period,
+                period=value_period,
                 kind="percent" if col_tokens & _PERCENT_TOKENS else "plain",
                 dimension=entity,
             ))

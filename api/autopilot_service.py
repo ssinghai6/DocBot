@@ -36,6 +36,7 @@ SSE event types yielded:
 from __future__ import annotations
 
 from api.utils.doc_refs import chunk_header, chunk_key, chunk_label, chunk_page  # DOCBOT-2637
+from api.utils.yoy_facts import YOY_RULE, yoy_prompt_block  # DOCBOT-2637
 import asyncio
 import json
 import logging
@@ -1822,6 +1823,10 @@ async def _synthesizer_node(state: AutopilotState) -> dict:
         )
     if discrepancy_instruction:
         system_prompt += f"{discrepancy_instruction}\n\n"
+    # DOCBOT-2637: year-over-year changes computed in code, never by the model
+    yoy_block = yoy_prompt_block(_collect_doc_context(state))
+    if yoy_block:
+        system_prompt += f"{yoy_block.lstrip()}\n{YOY_RULE}\n"
     if degradation_reasons:
         system_prompt += (
             "This investigation is DEGRADED — the following planned steps could "

@@ -210,10 +210,29 @@ def _split_table(block: str, caption: str, max_chars: int) -> list[str]:
     return pieces
 
 
-# A page footer is a line holding only the page number. Kept only when the
+# A page footer is a line holding only the page number, kept only when the
 # numbers run 1, 2, 3... so a stray number line is never read as a page.
+# Most 10-K/10-Q HTML repeats a "Table of Contents" link right after each
+# footer; when the filing does, only those count, so an in-text cross
+# reference ("see page\n11\n.") cannot break the sequence.
 _PAGE_FOOTER_RE = re.compile(r"^[ \t]*(\d{1,3})[ \t]*$", re.MULTILINE)
+_TOC_FOOTER_RE = re.compile(r"^[ \t]*(\d{1,3})[ \t]*\n[ \t]*Table of Contents[ \t]*$", re.MULTILINE | re.IGNORECASE)
+# "Apple Inc. | 2026 Form 10-K | 21": company / form / page footer row.
+_FORM_FOOTER_RE = re.compile(
+    r"^[^\n|]{0,80}\|[ \t]*(?:19|20)\d\d Form 10-[KQ][ \t]*\|[ \t]*(\d{1,3})[ \t]*$", re.MULTILINE
+)
 _MIN_PAGE_FOOTERS = 3
+
+
+def _footer_run(matches) -> list[tuple[int, int]]:
+    """(end offset, page number) of footers forming an increasing run from 1-3."""
+    footers: list[tuple[int, int]] = []
+    for m in matches:
+        n = int(m.group(1))
+        # a skipped footer (lost in HTML stripping) still continues the run
+        if footers and 0 < n - footers[-1][1] <= 3 or not footers and n <= 3:
+            footers.append((m.start() + len(m.group(0).split("\n")[0]), n))
+    return footers
 
 
 def _printed_pages(text: str):
@@ -222,13 +241,11 @@ def _printed_pages(text: str):
     Text after footer ``n`` is on page ``n + 1``; text before the first footer
     is on that footer's page. Filings without a footer sequence get None.
     """
-    footers: list[tuple[int, int]] = []
-    for m in _PAGE_FOOTER_RE.finditer(text):
-        n = int(m.group(1))
-        # a skipped footer (lost in HTML stripping) still continues the run
-        if footers and 0 < n - footers[-1][1] <= 3 or not footers and n <= 3:
-            footers.append((m.end(), n))
-    if len(footers) < _MIN_PAGE_FOOTERS:
+    for pattern in (_TOC_FOOTER_RE, _FORM_FOOTER_RE, _PAGE_FOOTER_RE):
+        footers = _footer_run(pattern.finditer(text))
+        if len(footers) >= _MIN_PAGE_FOOTERS:
+            break
+    else:
         return lambda offset: None
     ends = [end for end, _ in footers]
 
@@ -242,17 +259,24 @@ def _printed_pages(text: str):
 def _piece_start(text: str, piece: str, cursor: int) -> int:
     """Offset of a chunk in the filing text, searching forward from cursor.
 
-    Table pieces repeat a caption/header, so the first row that is not
-    repeated anchors the search; a miss keeps the previous offset.
+    Prose pieces are found verbatim. Table pieces carry a caption stitched on
+    from the prose before them, so their last long line anchors the search,
+    then the offset backs up to the first content line. A leading page footer ("54" / "Table of Contents") belongs to the previous
+    page and is skipped. A miss keeps the previous offset.
     """
-    for line in reversed(piece.splitlines()):
-        line = line.strip()
+    lines = [ln.strip() for ln in piece.splitlines() if ln.strip()]
+    content = [ln for ln in lines if not (ln.isdigit() or ln.lower() == "table of contents")]
+    if not content:
+        return cursor
+    # prose pieces are verbatim slices of the filing: locate them exactly
+    exact = text.find(piece.strip(), cursor)
+    if exact >= 0:
+        return text.find(content[0], exact)
+    for line in reversed(content):
         if len(line) >= 8:
             found = text.find(line, cursor)
             if found >= 0:
-                # back up to the piece's own first line when it is nearby
-                first = piece.strip().splitlines()[0].strip()
-                head = text.rfind(first, cursor, found + 1) if first else -1
+                head = text.rfind(content[0], cursor, found + 1)
                 return head if head >= 0 else found
     return cursor
 

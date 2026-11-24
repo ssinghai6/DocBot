@@ -134,6 +134,9 @@ async def _decrypt_conn_credentials_lazy(
 PROMPT_VERSION_SQL_REPHRASE = "v1"          # _rephrase_with_history
 PROMPT_VERSION_SQL_TABLE_SELECTOR = "v1"    # _select_relevant_tables (incl. retry)
 PROMPT_VERSION_SQL_GEN = "v4"               # _generate_sql
+# DOCBOT-2637: reasoning models (gpt-oss on Bedrock) spend output tokens
+# thinking first; at 1200 a pivot query was cut off mid-SQL ("Column not found").
+SQL_GEN_MAX_TOKENS = 3000
 PROMPT_VERSION_SQL_ANSWER_GEN = "v1"        # _stream_answer
 
 
@@ -2020,7 +2023,7 @@ async def _generate_sql(
         return await achat_completion(
             [{"role": "user", "content": prompt}],
             temperature=0,
-            max_tokens=1200,
+            max_tokens=SQL_GEN_MAX_TOKENS,
             caller="sql_gen_retry",
             prompt_version=PROMPT_VERSION_SQL_GEN,
         )
@@ -2030,7 +2033,7 @@ async def _generate_sql(
         sql = await achat_completion(
             [{"role": "user", "content": prompt}],
             temperature=0,
-            max_tokens=1200,
+            max_tokens=SQL_GEN_MAX_TOKENS,
             caller="sql_gen",
             prompt_version=PROMPT_VERSION_SQL_GEN,
         )

@@ -82,6 +82,9 @@ def add_skipped_lines(
         values = complete.get(col.name.lower()) if isinstance(col, exp.Column) else None
         if not values or node.args.get("query") or isinstance(node.parent, exp.Not):
             continue
+        # only row filters: an IN inside a computed column (CASE ... IN) changes what it computes
+        if node.find_ancestor(exp.Where) is None or node.find_ancestor(exp.Case) is not None:
+            continue
         present = [e.this for e in node.expressions if isinstance(e, exp.Literal) and e.is_string]
         missing = [v for v in values if v not in present]
         new: list[str] = []

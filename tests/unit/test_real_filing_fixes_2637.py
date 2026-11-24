@@ -228,3 +228,181 @@ def test_clear_session_and_chat_clear_inspector():
         assert "clearInspector();" in body
     helper = src[src.index("const clearInspector"):src.index("};", src.index("const clearInspector"))]
     assert "selectLineage(null)" in helper and "selectArtifact(null)" in helper
+
+
+# ── 5. page footers: cross-references and the "Form 10-K | N" style ──────────
+
+def test_cross_reference_number_does_not_break_page_run():
+    from api.utils.chunker import _printed_pages
+
+    pages = [f"Text of page {n}. " * 40 + f"\n{n}\nTable of Contents" for n in range(1, 8)]
+    pages[2] = pages[2].replace("Text of page 3.", "See the table on page\n6\n. Text of page 3.", 1)
+    text = "\n\n".join(pages) + "\n\nLast page text."
+    page_at = _printed_pages(text)
+    assert page_at(text.index("Text of page 4")) == 4
+    assert page_at(text.index("Text of page 6")) == 6
+    assert page_at(text.index("Last page text")) == 8
+
+
+def test_form_10k_footer_rows_give_pages():
+    pages = [f"Words on page {n}. " * 40 + f"\nApple Inc. | 2026 Form 10-K | {n}" for n in range(1, 6)]
+    docs = chunk_filing("\n\n".join(pages))
+    assert next(d for d in docs if "Words on page 3." in d.page_content).metadata["page"] == 3
+
+
+def test_leading_footer_belongs_to_previous_page():
+    text = "\n\n".join(["Page one prose. " * 60 + "\n1\nTable of Contents",
+                        "Page two prose. " * 60 + "\n2\nTable of Contents",
+                        "Page three prose. " * 60 + "\n3\nTable of Contents"])
+    checked = 0
+    for d in chunk_filing(text):
+        first = next((ln for ln in d.page_content.splitlines()
+                      if ln.strip() and not ln.strip().isdigit() and ln.strip() != "Table of Contents"), "")
+        for word, page in (("Page one", 1), ("Page two", 2), ("Page three", 3)):
+            if first.startswith(word):
+                assert d.metadata["page"] == page
+                checked += 1
+    assert checked >= 2
+
+
+# ── 6. year-over-year changes are computed in code ────────────────────────────
+
+def test_yoy_facts_from_statement():
+    from api.utils.yoy_facts import yoy_facts
+
+    facts = {f.label: f for f in yoy_facts(STATEMENT.replace("2025 | 2024\n", "Year Ended December 31,\n2025 | 2024\n"))}
+    assert facts["Total operating expenses"].line().endswith("higher by 145,921 (+8.8%)")
+    assert facts["Income from operations"].line().endswith("lower by 113,998 (-30.0%)")
+    impairment = facts["Asset impairment charges"].line()
+    assert "FY2024 nil" in impairment and "no % change" in impairment
+    interest = facts["Interest expense"].line()
+    assert "larger by 4,703 (+34.1%)" in interest  # (18,509) vs (13,806): the expense grew
+    assert "p67" in facts["Marketing"].line()
+
+
+def test_yoy_units_percent_rows_and_header_with_label_column():
+    from api.utils.yoy_facts import yoy_facts
+
+    doc = ("Source: X, Page 5\n(In millions)\nMetric | 2025 | 2024 | % Change\n"
+           "Take rate | 24.2% | 22.3% | 1.9\nRevenue | 100 | — | n/m\n")
+    facts = {f.label: f.line() for f in yoy_facts(doc)}
+    assert facts["Take rate"].endswith("higher by 1.9 percentage points")
+    assert "in millions" in facts["Revenue"] and "nil in FY2024" in facts["Revenue"]
+
+
+def test_yoy_ignores_tables_without_year_headers_and_prose():
+    from api.utils.yoy_facts import yoy_prompt_block
+
+    doc = "Source: X, Page 1\nSegment | Amount\nAds | 890\n\nRevenue grew 5% in 2025 vs 2024.\n"
+    assert yoy_prompt_block(doc) == ""
+
+
+def test_yoy_block_and_rule_reach_every_synthesis_prompt():
+    import api.index as idx
+    from api import autopilot_service, hybrid_service
+
+    assert "yoy_prompt_block" in inspect.getsource(hybrid_service.hybrid_chat)
+    assert "yoy_prompt_block" in inspect.getsource(autopilot_service._synthesizer_node)
+    assert "yoy_prompt_block" in inspect.getsource(idx)
+
+
+# ── 7. tie-out still works when the question asks for year-over-year ─────────
+
+PIVOT_ROWS = [
+    {"acct_desc": "Marketing", "amount_2025": 919_830_000, "amount_2024": 856_565_000, "change": 63_265_000},
+    {"acct_desc": "Product development", "amount_2025": 450_192_000, "amount_2024": 443_056_000, "change": 7_136_000},
+]
+STATEMENT_DOC = STATEMENT.replace("2025 | 2024\n", "Year Ended December 31,\n2025 | 2024\n")
+
+
+def test_pivoted_year_columns_carry_their_year():
+    from api.utils.discrepancy_detector import _extract_from_rows
+
+    vals = {(v.label, v.period): v.value for v in _extract_from_rows(PIVOT_ROWS)}
+    assert vals[("marketing amount", "FY2025")] == 919_830_000
+    assert vals[("marketing amount", "FY2024")] == 856_565_000
+
+
+def test_pivoted_books_flag_the_planted_break_only():
+    from api.utils.discrepancy_detector import detect_discrepancies
+
+    report = detect_discrepancies(STATEMENT_DOC, {"result_preview": PIVOT_ROWS, "sql_query": "SELECT 1"})
+    assert [(d.label, d.period) for d in report.discrepancies] == [("Marketing", "FY2025")]
+    clean = [dict(r, amount_2025=914_830_000) if r["acct_desc"] == "Marketing" else r for r in PIVOT_ROWS]
+    assert detect_discrepancies(STATEMENT_DOC, {"result_preview": clean, "sql_query": "SELECT 1"}).discrepancies == []
+
+
+def test_filing_table_cells_take_the_header_year():
+    from api.utils.discrepancy_detector import _extract_from_text
+
+    vals = {v.label: v.period for v in _extract_from_text(STATEMENT_DOC, "doc")}
+    assert vals["marketing"] == "FY2025"
+    ascending = "Source: X, Page 3\nMetric | 2024 | 2025\nMarketing | 856,565 | 914,830\n"
+    assert {v.label: v.period for v in _extract_from_text(ascending, "doc")}["marketing"] == "FY2024"
+
+
+def test_unpaired_books_lines_are_reported():
+    from api.utils.discrepancy_detector import detect_discrepancies
+
+    sbc_only = "Source: X, Page 102\n2025 | 2024\nMarketing | 14,572 | 23,508\n"
+    report = detect_discrepancies(sbc_only, {"result_preview": PIVOT_ROWS, "sql_query": "SELECT 1"})
+    assert report.discrepancies == []
+    assert report.unpaired_db_lines == ["Marketing", "Product development"]
+    assert detect_discrepancies(STATEMENT_DOC, {"result_preview": PIVOT_ROWS, "sql_query": "SELECT 1"}).unpaired_db_lines == []
+
+
+async def test_book_guided_retrieval_adds_the_missing_statement():
+    from api import hybrid_service
+
+    sbc_only = "Source: ETSY, Page 102\n2025 | 2024\nMarketing | 14,572 | 23,508\n"
+    lineage = MagicMock()
+    rag = AsyncMock(return_value=(STATEMENT_DOC.replace("ETSY-10-K-2026-02-19", "ETSY"),
+                                  [{"source": "ETSY", "page": 67, "text": "Etsy, Inc."}]))
+    with patch.object(hybrid_service, "rag_retrieve", rag):
+        ctx, cits = await hybrid_service._book_guided_retrieval(
+            sbc_only, [{"source": "ETSY", "page": 102, "text": "x"}],
+            {"result_preview": PIVOT_ROWS, "sql_query": "SELECT 1"}, "s1", {}, lineage)
+    assert rag.await_args.args[0] == "Marketing Product development"
+    assert "Marketing | 914,830" in ctx and ctx.startswith(sbc_only)
+    assert [c["page"] for c in cits] == [102, 67]
+    assert "book_guided_retrieval" == lineage.add_step.call_args.args[0]
+
+
+@pytest.mark.parametrize("doc", [
+    STATEMENT_DOC,  # every books line already has a filing figure
+    "Source: Demo.pdf, Page 4\nMarketing expense was $14.6M in FY2025.\n",  # no filing tables (demo PDFs)
+])
+async def test_book_guided_retrieval_leaves_answered_or_non_filing_context(doc):
+    from api import hybrid_service
+
+    with patch.object(hybrid_service, "rag_retrieve", AsyncMock()) as rag:
+        ctx, _ = await hybrid_service._book_guided_retrieval(
+            doc, [], {"result_preview": PIVOT_ROWS, "sql_query": "SELECT 1"}, "s1", {}, MagicMock())
+    rag.assert_not_awaited()
+    assert ctx == doc
+
+
+def test_sql_generation_has_room_for_reasoning_tokens():
+    from api import db_service
+
+    src = inspect.getsource(db_service._generate_sql)
+    assert src.count("max_tokens=SQL_GEN_MAX_TOKENS") == 2 and db_service.SQL_GEN_MAX_TOKENS >= 3000
+
+
+def test_flag_column_does_not_rename_the_row():
+    from api.utils.discrepancy_detector import detect_discrepancies
+
+    rows = [dict(r, agree="No") for r in PIVOT_ROWS]
+    report = detect_discrepancies(STATEMENT_DOC, {"result_preview": rows, "sql_query": "SELECT 1"})
+    assert [d.label for d in report.discrepancies] == ["Marketing"]
+
+
+def test_only_where_filters_are_widened():
+    sql = ("SELECT acct_desc, (SELECT CASE WHEN SUM(CASE WHEN acct_desc IN ('Marketing', 'Product development', "
+           "'General and administrative', 'Total operating expenses') THEN amount_usd END) > 0 THEN 'Yes' END) AS agree "
+           "FROM gl_fs_rollup WHERE acct_desc IN ('Marketing', 'Product development', 'General and administrative', "
+           "'Total operating expenses')")
+    new, added = add_skipped_lines(sql, SCHEMA, STATEMENT, "sqlite")
+    assert added == ["Asset impairment charges"]
+    assert new.count("'Asset impairment charges'") == 1
+    assert new.index("'Asset impairment charges'") > new.upper().index("WHERE")
