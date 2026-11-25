@@ -528,7 +528,10 @@ async def _book_guided_retrieval(
     if not missing:
         return doc_context, doc_citations
     started = time.perf_counter()
-    extra, extra_citations = await rag_retrieve(" ".join(missing[:8]), session_id, vector_stores)
+    # DOCBOT-2638: the bare line names match MD&A prose; naming the statement
+    # puts the income statement table first.
+    query = "Consolidated statements of operations " + " ".join(missing[:8])
+    extra, extra_citations = await rag_retrieve(query, session_id, vector_stores)
     added = [
         chunk for chunk in re.split(r"\n\n(?=Source: )", extra)
         if chunk.strip() and chunk.split("\n", 1)[-1].strip() not in doc_context

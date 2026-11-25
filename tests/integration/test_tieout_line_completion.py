@@ -67,3 +67,22 @@ async def test_nothing_skipped_returns_none(conn):
     doc = DOC.replace("Asset impairment charges | 101,703\n", "")
     assert await complete_tieout_lines(
         "c1", SQL, doc, ["gl_fs_rollup"], idx.db_connections_table, idx.schema_cache_table, conn) is None
+
+
+async def test_numeric_amounts_come_back_as_numbers(conn, monkeypatch):
+    """DOCBOT-2638: Postgres NUMERIC arrives as Decimal; the detector needs numbers."""
+    from decimal import Decimal
+
+    import api.db_service as dbs
+
+    real = dbs._execute_query
+
+    async def as_numeric(*a, **kw):
+        rows, cols = await real(*a, **kw)
+        return [tuple(Decimal(v) if isinstance(v, int) else v for v in r) for r in rows], cols
+
+    monkeypatch.setattr(dbs, "_execute_query", as_numeric)
+    _sql, rows, _added = await complete_tieout_lines(
+        "c1", SQL, DOC, ["gl_fs_rollup"], idx.db_connections_table, idx.schema_cache_table, conn)
+    amounts = {r["acct_desc"]: r["amount_usd"] for r in rows}
+    assert amounts["Marketing"] == 914_830_000 and isinstance(amounts["Marketing"], float)

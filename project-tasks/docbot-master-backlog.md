@@ -497,6 +497,7 @@ Builds on 1530 and 2907. Pulled on 2026-11-23 (founder ask: token-gated docbot.s
 | DOCBOT-2635 | BUG: Hybrid answer replaced by a generic error when the stream breaks off | 1 | P0 | Done (2026-11-24, PR #163) | 0 | S0 | senior-dev | EPIC-26 Pre-seed |
 | DOCBOT-2636 | NEW: Recover a hybrid answer whose stream dropped in the browser | 3 | P0 | Testing (2026-11-24) | 0 | S0 | senior-dev | EPIC-26 Pre-seed |
 | DOCBOT-2637 | BUG: Real-filing tie-out says a books line is missing, cites a chunk number as the page | 8 | P0 | In progress (2026-11-24) | 0 | S0 | senior-dev | EPIC-26 Pre-seed |
+| DOCBOT-2638 | BUG: Tie-out against a journal-entry ledger in Postgres misses the planted break on YoY questions | 3 | P0 | In progress (2026-11-24) | 0 | S0 | senior-dev | EPIC-26 Pre-seed |
 | DOCBOT-2632 | BUG: Demo session breaks after a backend restart | 3 | P0 | In progress (found 2026-11-23) | 0 | - | senior-dev | EPIC-26 Pre-seed |
 | DOCBOT-2509 | Secrets rotation | 5 | P1 | Open (Wave B) | 1 | S2 | devops | EPIC-25 AWS |
 | DOCBOT-2510 | Prod restore drill | 3 | P1 | Open (Wave B) | 1 | S2 | devops | EPIC-25 AWS |

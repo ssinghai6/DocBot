@@ -133,7 +133,7 @@ async def _decrypt_conn_credentials_lazy(
 
 PROMPT_VERSION_SQL_REPHRASE = "v1"          # _rephrase_with_history
 PROMPT_VERSION_SQL_TABLE_SELECTOR = "v1"    # _select_relevant_tables (incl. retry)
-PROMPT_VERSION_SQL_GEN = "v4"               # _generate_sql
+PROMPT_VERSION_SQL_GEN = "v5"               # _generate_sql
 # DOCBOT-2637: reasoning models (gpt-oss on Bedrock) spend output tokens
 # thinking first; at 1200 a pivot query was cut off mid-SQL ("Column not found").
 SQL_GEN_MAX_TOKENS = 3000
@@ -1999,7 +1999,10 @@ async def _generate_sql(
         "4. Return ONLY the SQL query — no explanation, no markdown fences.\n"
         "5. If the question compares the database with a document (report, 10-K, note), "
         "return the database side only: the relevant figures, e.g. one row per metric "
-        "via UNION ALL or a grouped query. Never answer in prose.\n"
+        "via UNION ALL or a grouped query. Never answer in prose. The database cannot see "
+        "the document: never add agree / match / variance flag columns. When accounts roll "
+        "up to statement lines (e.g. an fs_line or rollup column), group by that line, not "
+        "by individual accounts.\n"
         "6. Filter text columns using the stored format shown in their e.g. values "
         "(e.g. quarter values like 'Q4 2025' need quarter LIKE 'Q4%', not quarter = 'Q4').\n"
         "7. A column shown with 'values' lists EVERY value it holds. Filter it only with "
@@ -2136,7 +2139,9 @@ async def complete_tieout_lines(
     if conn_row.pii_masking_enabled:
         from api.utils.pii_masking import mask_rows
         result = mask_rows(result)
-    return validated, result, added
+    # DOCBOT-2638: same JSON round trip the main pipeline's metadata event does, so
+    # Postgres NUMERIC (Decimal) reaches the detector as a number, not '919830000.00'.
+    return validated, json.loads(_json_dumps(result)), added
 
 
 async def _execute_query(
