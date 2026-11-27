@@ -202,9 +202,12 @@ export default function FileUploadZone({
             <div key={i} className="flex items-center text-xs bg-[var(--color-success-500)]/10 px-3 py-2.5 rounded-xl border border-[var(--color-success-500)]/20">
               <FileText className="w-4 h-4 mr-2 text-[var(--color-success-500)] shrink-0" />
               <span className="truncate flex-1 text-gray-300">{f.name}</span>
-              <span className="text-[10px] text-[var(--color-text-tertiary)] ml-2">
-                {(f.size / 1024).toFixed(1)}KB
-              </span>
+              {/* EDGAR filings and demo docs are 0-byte placeholder Files. */}
+              {f.size > 0 && (
+                <span className="text-[10px] text-[var(--color-text-tertiary)] ml-2">
+                  {(f.size / 1024).toFixed(1)}KB
+                </span>
+              )}
             </div>
           ))}
         </div>
