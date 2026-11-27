@@ -4,7 +4,7 @@ import React, { useState } from "react"
 import { HttpGateError, ensureOk } from "@/lib/httpGate"
 import {
   FileText, Search, ChevronDown, LoaderCircle,
-  CircleAlert, Download, CircleCheck,
+  CircleAlert, Download, CircleCheck, RotateCw,
 } from "lucide-react"
 
 type CompanyResult = {
@@ -137,6 +137,11 @@ export default function EdgarPanel({ onFilingIngested, showToast }: EdgarPanelPr
   const handleIngestSingle = async (filing: Filing) => {
     if (!selectedCompany) return
     setIngesting(filing.accession_number)
+    setIngestResults(prev => {
+      const next = { ...prev }
+      delete next[filing.accession_number]
+      return next
+    })
 
     try {
       // DOCBOT-2706: a first-time ingest can outlive the proxy; the server answers
@@ -406,7 +411,15 @@ export default function EdgarPanel({ onFilingIngested, showToast }: EdgarPanelPr
                           {isIngested ? (
                             <CircleCheck className="w-3.5 h-3.5 text-[var(--color-success-500)] shrink-0" />
                           ) : hasError ? (
-                            <CircleAlert className="w-3.5 h-3.5 text-red-400 shrink-0" />
+                            <button
+                              onClick={() => handleIngestSingle(filing)}
+                              disabled={batchIngesting}
+                              className="text-red-400 hover:text-red-300 disabled:opacity-50 shrink-0"
+                              title="Retry"
+                              aria-label={`Retry ingesting ${filing.filing_type} ${filing.filing_date}`}
+                            >
+                              <RotateCw className="w-3.5 h-3.5" />
+                            </button>
                           ) : (
                             <button
                               onClick={() => handleIngestSingle(filing)}

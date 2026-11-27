@@ -255,6 +255,8 @@ export default function Home() {
 
   // File Upload State
   const [fileUploadState, setFileUploadState] = useState<FileUploadState>("idle");
+  // Block sends while a new PDF uploads: sessionId still points at the old doc until it finishes.
+  const sendBlocked = isLoading || fileUploadState === "uploading";
 
   // Toast State
   const [toasts, setToasts] = useState<Toast[]>([]);
@@ -346,7 +348,6 @@ export default function Home() {
 
     setMessages,
     setInput,
-    setIsLoading,
     setUploadedFiles,
     setSessionId,
     setUploadProgress,
@@ -610,20 +611,27 @@ export default function Home() {
     }
   }, [input]);
 
-  // Promote to hybrid when both sources exist; fall back when the active mode's
-  // required source becomes unavailable. Adjusted during render (guarded, and
-  // resolveChatMode is idempotent) instead of in an effect, so there is no
-  // extra commit with a stale mode.
+  // Fall back when the active mode's required source becomes unavailable.
+  // Adjusted during render (guarded, and resolveChatMode is idempotent).
   const resolvedChatMode = resolveChatMode(chatMode, connectionId, sessionId);
   if (resolvedChatMode !== chatMode) {
     setChatMode(resolvedChatMode);
+  }
+
+  // Promote to hybrid once per new doc+DB pair; a later manual Docs/Database
+  // pick is not overridden (DOCBOT-2703). Adjusted during render, not in an effect.
+  const sourcePairKey = `${connectionId}|${sessionId}`;
+  const [lastSourcePairKey, setLastSourcePairKey] = useState("");
+  if (sourcePairKey !== lastSourcePairKey) {
+    setLastSourcePairKey(sourcePairKey);
+    if (connectionId && sessionId) setChatMode("hybrid");
   }
 
   // Keyboard shortcuts
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
       if ((e.ctrlKey || e.metaKey) && e.key === 'Enter') {
-        if (input.trim() && (sessionId || isDbConnected) && !isLoading) {
+        if (input.trim() && (sessionId || isDbConnected) && !sendBlocked) {
           handleSendMessage();
         }
       }
@@ -640,7 +648,7 @@ export default function Home() {
 
     window.addEventListener('keydown', handleKeyDown);
     return () => window.removeEventListener('keydown', handleKeyDown);
-  }, [input, sessionId, isDbConnected, isLoading, inspectorOpen]); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [input, sessionId, isDbConnected, sendBlocked, inspectorOpen, setInspectorOpen, handleSendMessage]);
 
   // ── Render ─────────────────────────────────────────────────────────────────
 
@@ -716,7 +724,7 @@ export default function Home() {
         onEdgarFilingIngested={(sid: string, label: string) => {
           setSessionId(sid)
           setSelectedPersona("Finance Expert")
-          setMessages([])
+          setUploadedFiles([new File([], label)])
           showToast("success", `Ready to chat with ${label}`)
         }}
       />
@@ -740,7 +748,7 @@ export default function Home() {
         chatMode={chatMode}
         setChatMode={setChatMode}
         messages={messages}
-        isLoading={isLoading}
+        isLoading={sendBlocked}
         input={input}
         setInput={setInput}
         chartType={chartType}

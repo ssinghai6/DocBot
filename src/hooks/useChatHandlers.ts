@@ -57,7 +57,6 @@ interface UseChatHandlersParams {
 
   setMessages: React.Dispatch<React.SetStateAction<import("@/components/types").Message[]>>
   setInput: React.Dispatch<React.SetStateAction<string>>
-  setIsLoading: React.Dispatch<React.SetStateAction<boolean>>
   setUploadedFiles: React.Dispatch<React.SetStateAction<File[]>>
   setSessionId: React.Dispatch<React.SetStateAction<string | null>>
   setUploadProgress: React.Dispatch<React.SetStateAction<number | null>>
@@ -122,7 +121,6 @@ export function useChatHandlers(params: UseChatHandlersParams) {
 
     setMessages,
     setInput,
-    setIsLoading,
     setUploadedFiles,
     setSessionId,
     setUploadProgress,
@@ -632,7 +630,6 @@ export function useChatHandlers(params: UseChatHandlersParams) {
     }
 
     setUploadedFiles(files);
-    setIsLoading(true);
     setUploadProgress(0);
     setFileUploadState("uploading");
 
@@ -683,7 +680,6 @@ export function useChatHandlers(params: UseChatHandlersParams) {
       setUploadedFiles([]);
       setTimeout(() => setFileUploadState("idle"), 3000);
     } finally {
-      setIsLoading(false);
       setUploadProgress(null);
       if (fileInputRef.current) fileInputRef.current.value = "";
     }
