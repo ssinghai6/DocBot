@@ -610,14 +610,18 @@ export default function Home() {
     }
   }, [input]);
 
-  // Promote to hybrid when both sources exist; fall back when the active mode's
-  // required source becomes unavailable. Adjusted during render (guarded, and
-  // resolveChatMode is idempotent) instead of in an effect, so there is no
-  // extra commit with a stale mode.
+  // Fall back when the active mode's required source becomes unavailable.
+  // Adjusted during render (guarded, and resolveChatMode is idempotent).
   const resolvedChatMode = resolveChatMode(chatMode, connectionId, sessionId);
   if (resolvedChatMode !== chatMode) {
     setChatMode(resolvedChatMode);
   }
+
+  // Promote to hybrid once when both sources become present; a later manual
+  // Docs/Database pick is not overridden (DOCBOT-2703).
+  useEffect(() => {
+    if (connectionId && sessionId) setChatMode("hybrid");
+  }, [connectionId, sessionId]);
 
   // Keyboard shortcuts
   useEffect(() => {
