@@ -122,6 +122,21 @@ def test_required_demo_prefix_must_exist_server_side(client: TestClient, monkeyp
     assert client.post("/api/chat", json={"session_id": DEMO_SID, "message": "q"}).status_code == PASSED_GUARD
 
 
+def test_required_demo_id_cannot_be_smuggled_in_query(client: TestClient, monkeypatch: pytest.MonkeyPatch) -> None:
+    """DOCBOT-4014: a demo id in the query string must not vouch for a POST that uses other ids."""
+    monkeypatch.setenv("APP_AUTH_MODE", "required")
+    upload = client.post(
+        f"/api/upload?session_id={DEMO_SID}", files=[("files", ("a.pdf", b"%PDF", "application/pdf"))]
+    )
+    assert upload.status_code == 401, upload.text[:200]
+    own = client.post(f"/api/chat?session_id={DEMO_SID}", json={"session_id": "my-own-session", "message": "q"})
+    assert own.status_code == 401, own.text[:200]
+    assert _hybrid(client, sid="my-own-session", cid=DEMO_CID) == 401
+    legit = client.post(f"/api/chat?session_id={DEMO_SID}", json={"session_id": DEMO_SID, "message": "q"})
+    assert legit.status_code == PASSED_GUARD
+    assert client.post("/api/chat", json={"session_id": DEMO_SID, "message": "q"}).status_code == PASSED_GUARD
+
+
 def test_required_anon_demo_init_ok(client: TestClient, monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("APP_AUTH_MODE", "required")
     monkeypatch.setattr(
