@@ -3567,25 +3567,32 @@ async def edgar_list_filings(body: EdgarFilingsRequest):
     dependencies=[_spend_cap, _caller_scope, Depends(request_guard.edgar_guard("edgar_ingest"))],
 )
 async def edgar_ingest_filing(body: EdgarIngestRequest, scope: CallerScope = _caller_scope):
-    """Download a single SEC filing and ingest into the RAG pipeline."""
-    from api.edgar_service import ingest_edgar_filing
+    """Download a single SEC filing and ingest into the RAG pipeline.
 
-    result = await ingest_edgar_filing(
-        cik=body.cik,
-        accession_number=body.accession_number,
-        primary_document=body.primary_document,
-        filing_type=body.filing_type,
-        filing_date=body.filing_date,
-        company_name=body.company_name,
-        ticker=body.ticker,
-        owner=owner_values(scope),
-        sessions_table=sessions_table,
-        async_session_factory=async_session_factory,
-        vector_stores=VECTOR_STORES,
-        get_embeddings_fn=get_embeddings,
-        extracted_fields_store=EXTRACTED_FIELDS,
+    DOCBOT-2706: returns ``{"status": "pending"}`` if the ingest outlives the
+    proxy-safe wait; the client re-POSTs and joins the same running ingest.
+    """
+    from api.edgar_service import ingest_edgar_filing, ingest_or_pending
+
+    owner = owner_values(scope)
+    return await ingest_or_pending(
+        (tuple(sorted(owner.items())), body.accession_number),
+        lambda: ingest_edgar_filing(
+            cik=body.cik,
+            accession_number=body.accession_number,
+            primary_document=body.primary_document,
+            filing_type=body.filing_type,
+            filing_date=body.filing_date,
+            company_name=body.company_name,
+            ticker=body.ticker,
+            owner=owner,
+            sessions_table=sessions_table,
+            async_session_factory=async_session_factory,
+            vector_stores=VECTOR_STORES,
+            get_embeddings_fn=get_embeddings,
+            extracted_fields_store=EXTRACTED_FIELDS,
+        ),
     )
-    return result
 
 
 @app.post("/api/edgar/ingest-batch", dependencies=[_spend_cap])
