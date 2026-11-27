@@ -9,6 +9,7 @@ manually uploaded PDFs.
 
 from __future__ import annotations
 
+import asyncio
 import hashlib
 import json
 import logging
@@ -18,12 +19,70 @@ from typing import Any
 
 from sqlalchemy import insert
 
+from api.utils.billing_context import copy_ctx_run
+
 logger = logging.getLogger(__name__)
 
 # DOCBOT-2634: bump when the text/chunk format changes. Cache rows are stamped
 # with it via text_hash; rows from an older format are re-ingested, not cloned.
 # v3 (DOCBOT-2637): chunk ``page`` is the printed page, not the chunk ordinal.
 FILING_FORMAT_VERSION = "v3"
+
+# DOCBOT-2706: strong refs so background extraction tasks aren't GC'd mid-run.
+_BACKGROUND_TASKS: set[asyncio.Task] = set()
+
+# shortcut: in-process task map, assumes single Railway replica; move to a jobs table at AWS cutover.
+_INGEST_TASKS: dict[tuple, asyncio.Task] = {}
+INGEST_WAIT_SEC: float = 20.0
+_DONE_TASK_TTL_SEC: float = 600.0
+
+
+def _evict_later(key: tuple, task: asyncio.Task) -> None:
+    """Drop a finished task nobody polled for, unless the key was reused."""
+    if not task.cancelled():
+        task.exception()  # mark retrieved so an unpolled failure doesn't log "never retrieved"
+    def _evict() -> None:
+        if _INGEST_TASKS.get(key) is task:
+            _INGEST_TASKS.pop(key, None)
+    asyncio.get_running_loop().call_later(_DONE_TASK_TTL_SEC, _evict)
+
+
+async def ingest_or_pending(key: tuple, start: Any, timeout: float | None = None) -> dict[str, Any]:
+    """DOCBOT-2706: run ``start()`` once per key; return its result or ``{"status": "pending"}``.
+
+    A slow first ingest outlives the proxy's first-byte timeout, so the caller
+    gets "pending" after ``timeout`` and re-POSTs; the re-POST joins the same
+    task instead of starting a duplicate ingest. A finished task's result (or
+    exception) is handed to the next poll and the entry is removed.
+    """
+    task = _INGEST_TASKS.get(key)
+    if task is None:
+        task = asyncio.create_task(start())
+        _INGEST_TASKS[key] = task
+        task.add_done_callback(lambda t: _evict_later(key, t))
+    try:
+        return await asyncio.wait_for(
+            asyncio.shield(task), INGEST_WAIT_SEC if timeout is None else timeout
+        )
+    except asyncio.TimeoutError:
+        return {"status": "pending"}
+    finally:
+        if task.done() and _INGEST_TASKS.get(key) is task:
+            _INGEST_TASKS.pop(key, None)
+
+
+async def _extract_in_background(text: str, session_id: str, accession_number: str,
+                                 extracted_fields_store: dict) -> None:
+    from api.document_extractor import extract_document_fields
+
+    try:
+        fields = await extract_document_fields(text, session_id, os.getenv("GEMINI_API_KEY") or "")
+    except Exception as exc:  # extractor/Gemini raise assorted error types
+        logger.warning("edgar: field extraction failed for %s: %s", accession_number, exc)
+        return
+    if fields:
+        extracted_fields_store[session_id] = fields
+        logger.info("edgar: extracted %d fields for %s", len(fields), accession_number)
 
 
 async def _insert_session_row(
@@ -128,10 +187,7 @@ async def ingest_edgar_filing(
         update_filing_cache_session,
     )
     from api.connectors.edgar_connector import EdgarConnector
-    from api.document_extractor import (
-        extract_document_fields,
-        is_extractable_document,
-    )
+    from api.document_extractor import is_extractable_document
     from api.utils.chunker import chunk_filing
     from api.utils.vector_store import create_store
 
@@ -182,7 +238,9 @@ async def ingest_edgar_filing(
 
     # ── 3. Chunk the document ────────────────────────────────────────────
     # Tables stay whole rows; each chunk carries page (ordinal) + section.
-    chunks = chunk_filing(text)
+    # DOCBOT-2706: sync CPU work off the event loop; copy_ctx_run keeps principal/meter.
+    loop = asyncio.get_running_loop()
+    chunks = await loop.run_in_executor(None, copy_ctx_run(chunk_filing, text))
 
     # Tag every chunk with filing metadata
     for chunk in chunks:
@@ -197,7 +255,9 @@ async def ingest_edgar_filing(
     # ── 4. Embed into ChromaDB ───────────────────────────────────────────
     session_id = str(uuid.uuid4())
     embeddings = get_embeddings_fn()
-    store = create_store(session_id, chunks, embeddings)
+    store = await loop.run_in_executor(
+        None, copy_ctx_run(create_store, session_id, chunks, embeddings)
+    )
     vector_stores[session_id] = store
 
     # ── 5. Create session row ────────────────────────────────────────────
@@ -227,16 +287,15 @@ async def ingest_edgar_filing(
             text_hash=text_hash,
         )
 
-    # ── 7. Run structured extraction (async, non-blocking) ───────────────
-    gemini_key = os.getenv("GEMINI_API_KEY") or ""
+    # ── 7. Run structured extraction in the background ───────────────────
+    # DOCBOT-2706: Gemini extraction can take a minute; the session is usable
+    # without it, so don't hold the response (same as PDF upload).
     if is_extractable_document(text):  # extractor returns [] when no model is configured
-        try:
-            fields = await extract_document_fields(text, session_id, gemini_key)
-            if fields:
-                extracted_fields_store[session_id] = fields
-                logger.info("edgar: extracted %d fields for %s", len(fields), accession_number)
-        except Exception as exc:
-            logger.warning("edgar: field extraction failed for %s: %s", accession_number, exc)
+        task = asyncio.create_task(
+            _extract_in_background(text, session_id, accession_number, extracted_fields_store)
+        )
+        _BACKGROUND_TASKS.add(task)
+        task.add_done_callback(_BACKGROUND_TASKS.discard)
 
     logger.info(
         "edgar: ingested %s → session %s (%d chunks)",

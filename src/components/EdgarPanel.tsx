@@ -28,6 +28,13 @@ type IngestResult = {
   filing_date?: string
   accession_number?: string
   error?: string
+  status?: "pending"
+}
+
+// Module-level so the React compiler lint doesn't treat the clock read as render-time impurity.
+function deadlineIn(ms: number) {
+  const end = Date.now() + ms
+  return { passed: () => Date.now() >= end }
 }
 
 interface EdgarPanelProps {
@@ -143,21 +150,43 @@ export default function EdgarPanel({ onFilingIngested, showToast }: EdgarPanelPr
     })
 
     try {
-      const res = await fetch("/api/edgar/ingest", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          cik: selectedCompany.cik,
-          accession_number: filing.accession_number,
-          primary_document: filing.primary_document,
-          filing_type: filing.filing_type,
-          filing_date: filing.filing_date,
-          company_name: selectedCompany.name,
-          ticker: selectedCompany.ticker,
-        }),
+      // DOCBOT-2706: a first-time ingest can outlive the proxy; the server answers
+      // "pending" (or the gateway 5xxs / drops) and we re-POST to join the same ingest.
+      const payload = JSON.stringify({
+        cik: selectedCompany.cik,
+        accession_number: filing.accession_number,
+        primary_document: filing.primary_document,
+        filing_type: filing.filing_type,
+        filing_date: filing.filing_date,
+        company_name: selectedCompany.name,
+        ticker: selectedCompany.ticker,
       })
-      await ensureOk(res, "Ingest failed")
-      const result: IngestResult = await res.json()
+      const deadline = deadlineIn(120_000)
+      let result: IngestResult | null = null
+      for (let attempt = 0; result === null; attempt++) {
+        const canRetry = attempt < 40 && !deadline.passed()
+        let res: Response
+        try {
+          res = await fetch("/api/edgar/ingest", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: payload,
+          })
+        } catch (err: unknown) {
+          if (!canRetry) throw err
+          res = new Response(null, { status: 599 })
+        }
+        // Retry only proxy/network drops; a real 500 or capacity 503 is final.
+        const pending = [502, 504, 599].includes(res.status) || (res.ok && (await res.clone().json().catch(() => ({}))).status === "pending")
+        if (pending && canRetry) {
+          if (attempt === 0) showToast("info", "Still processing…")
+          await new Promise(r => setTimeout(r, 3000))
+          continue
+        }
+        await ensureOk(res, "Ingest failed")
+        result = await res.json().catch(() => ({}))
+        if (result?.status === "pending") throw new Error("Ingest is taking longer than expected. Try again shortly.")
+      }
       setIngestResults(prev => ({ ...prev, [filing.accession_number]: result }))
 
       if (result.session_id) {

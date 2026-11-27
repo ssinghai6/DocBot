@@ -302,3 +302,43 @@ class TestBatchIngest:
                 assert "error" in results[1]
 
             asyncio.run(run())
+
+
+# ── DOCBOT-2706: pending instead of proxy timeout ────────────────────────────
+
+class TestIngestOrPending:
+    def test_slow_ingest_returns_pending_then_result_without_duplicate(self):
+        from api import edgar_service
+
+        calls: list[int] = []
+
+        async def _slow_ingest():
+            calls.append(1)
+            await asyncio.sleep(0.2)
+            return {"session_id": "s-1", "cached": False}
+
+        async def _run():
+            key = (("user_id", "u1"),), "acc-1"
+            first = await edgar_service.ingest_or_pending(key, _slow_ingest, timeout=0.05)
+            second = await edgar_service.ingest_or_pending(key, _slow_ingest, timeout=1.0)
+            return first, second, key in edgar_service._INGEST_TASKS
+
+        first, second, still_tracked = asyncio.run(_run())
+        assert first == {"status": "pending"}
+        assert second == {"session_id": "s-1", "cached": False}
+        assert calls == [1]
+        assert not still_tracked
+
+    def test_failed_ingest_raises_to_poller_and_is_cleared(self):
+        from api import edgar_service
+
+        async def _boom():
+            raise ValueError("no usable text")
+
+        async def _run():
+            key = ("k",), "acc-2"
+            with pytest.raises(ValueError):
+                await edgar_service.ingest_or_pending(key, _boom, timeout=1.0)
+            return key in edgar_service._INGEST_TASKS
+
+        assert asyncio.run(_run()) is False
