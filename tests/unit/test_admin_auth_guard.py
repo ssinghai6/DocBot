@@ -27,7 +27,7 @@ from fastapi.testclient import TestClient
 
 import api.index as idx
 from api import rbac_service
-from api.routes import billing_routes
+from api.routes import billing_routes, waitlist_routes
 from api.utils import request_guard
 
 
@@ -42,7 +42,10 @@ ADMIN_ROUTES = [
     ("GET", "/admin/metrics", "/admin/metrics", None),
     ("POST", "/admin/credits/grant", "/admin/credits/grant", {"org_id": "o1", "credits": 1, "reference": "r1"}),
     ("POST", "/api/billing/checkout", "/api/billing/checkout", {"pack_id": "starter"}),
+    ("POST", "/api/billing/subscribe", "/api/billing/subscribe", {}),
+    ("GET", "/api/billing/subscription", "/api/billing/subscription", None),
     ("GET", "/admin/funnel", "/admin/funnel", None),
+    ("GET", "/api/admin/waitlist", "/api/admin/waitlist", None),
 ]
 
 _ADMIN_DEP_CALLS = {
@@ -50,6 +53,7 @@ _ADMIN_DEP_CALLS = {
     idx._rbac_platform_admin.dependency,
     billing_routes._rbac_admin.dependency,
     billing_routes._rbac_platform_admin.dependency,
+    waitlist_routes._rbac_platform_admin.dependency,
 }
 
 

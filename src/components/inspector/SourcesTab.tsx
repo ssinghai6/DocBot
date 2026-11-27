@@ -8,7 +8,7 @@ import { Chip, EmptyTab, ScoreBar, SectionLabel } from "./shared"
 
 interface LegacyCitation {
   source?: string
-  page?: number | string
+  page?: number | string | null
   text?: string
 }
 
@@ -74,7 +74,7 @@ export default function SourcesTab({ lineage }: { lineage: Lineage | null }) {
         {legacy.map((c, i) => (
           <div key={i} className="p-3 rounded-[5px] border border-[var(--color-border-subtle)] bg-[var(--color-bg-inset)]">
             <div className="text-[12px] font-medium text-[var(--color-text-primary)] truncate">{c.source || "Source"}</div>
-            {c.page !== undefined && c.page !== "" && <div className="text-[10px] text-[var(--color-text-tertiary)] mt-0.5">Page {c.page}</div>}
+            {c.page != null && c.page !== "" && <div className="text-[10px] text-[var(--color-text-tertiary)] mt-0.5">Page {c.page}</div>}
             {c.text && <p className="text-[11px] leading-relaxed text-[var(--color-text-secondary)] mt-1.5 line-clamp-6">{c.text}</p>}
           </div>
         ))}

@@ -12,6 +12,8 @@ import {
   CreditPackCatalogSchema,
 } from "@/lib/schemas/billing"
 import type { CreditPack, QuotaErrorPayload } from "@/lib/schemas/billing"
+import WaitlistForm from "@/components/WaitlistForm"
+import { ContactLink } from "@/components/LegalPage"
 
 export type Paywall =
   | { kind: "credits"; payload: QuotaErrorPayload }
@@ -33,9 +35,10 @@ interface Props {
   isSignedIn: boolean
   onSignIn: () => void
   onClose: () => void
+  email?: string
 }
 
-export default function OutOfCreditsModal({ paywall, isSignedIn, onSignIn, onClose }: Props) {
+export default function OutOfCreditsModal({ paywall, isSignedIn, onSignIn, onClose, email }: Props) {
   const [packs, setPacks] = useState<CreditPack[] | null>(null)
   const [buying, setBuying] = useState<string | null>(null)
   const [notice, setNotice] = useState<string | null>(null)
@@ -104,7 +107,7 @@ export default function OutOfCreditsModal({ paywall, isSignedIn, onSignIn, onClo
       <>
         <p className="text-[13px] text-[var(--color-text-secondary)]">{paywall.payload.message}</p>
         <p className="text-[12px] text-[var(--color-text-tertiary)]">
-          Reply to your invite email or contact support and we&apos;ll sort it out.
+          Reply to your invite email or write to <ContactLink /> and we&apos;ll sort it out.
         </p>
         <div className="flex justify-end pt-2">
           <button className={btnGhost} onClick={onClose}>Close</button>
@@ -125,6 +128,14 @@ export default function OutOfCreditsModal({ paywall, isSignedIn, onSignIn, onClo
         )}
         {packs === null ? (
           <p className="text-[12px] text-[var(--color-text-tertiary)]">Loading credit packs…</p>
+        ) : !buyable ? (
+          // DOCBOT-2581: no purchasable pack (payments off) -> waitlist instead of a dead end.
+          <>
+            <p className="text-[13px] text-[var(--color-text-secondary)]">
+              Join the waitlist, we&apos;ll get back to you soon.
+            </p>
+            <WaitlistForm source="out_of_credits" defaultEmail={email} />
+          </>
         ) : (
           <ul className="space-y-2">
             {packs.map(p => (
@@ -151,9 +162,7 @@ export default function OutOfCreditsModal({ paywall, isSignedIn, onSignIn, onClo
             ))}
           </ul>
         )}
-        {(notice || (packs !== null && !buyable)) && (
-          <p role="status" className="text-[12px] text-[var(--color-text-tertiary)]">{notice ?? PAYMENTS_SOON}</p>
-        )}
+        {notice && <p role="status" className="text-[12px] text-[var(--color-text-tertiary)]">{notice}</p>}
         <div className="flex justify-end pt-2">
           <button className={btnGhost} onClick={onClose}>Close</button>
         </div>

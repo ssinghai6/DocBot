@@ -299,11 +299,16 @@ class LineageCollector:
         cited: bool = True,
         step_num: Optional[int] = None,
         sub_question: Optional[str] = None,
+        chunk: Optional[int] = None,
     ) -> None:
         if len(self._data.sources) >= MAX_SOURCES:
             return
         page_num = _to_int(page)
         source_id = f"{kind}:{label}:{page_num if page_num is not None else '-'}"
+        # DOCBOT-2637: filing chunks share a printed page (or have none), so
+        # the chunk index keeps distinct chunks from collapsing into one source.
+        if chunk is not None:
+            source_id += f":c{chunk}"
         if step_num is not None:
             source_id += f":s{step_num}"
         if source_id in self._source_ids:

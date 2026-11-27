@@ -133,7 +133,10 @@ async def _decrypt_conn_credentials_lazy(
 
 PROMPT_VERSION_SQL_REPHRASE = "v1"          # _rephrase_with_history
 PROMPT_VERSION_SQL_TABLE_SELECTOR = "v1"    # _select_relevant_tables (incl. retry)
-PROMPT_VERSION_SQL_GEN = "v3"               # _generate_sql
+PROMPT_VERSION_SQL_GEN = "v6"               # _generate_sql
+# DOCBOT-2637: reasoning models (gpt-oss on Bedrock) spend output tokens
+# thinking first; at 1200 a pivot query was cut off mid-SQL ("Column not found").
+SQL_GEN_MAX_TOKENS = 3000
 PROMPT_VERSION_SQL_ANSWER_GEN = "v1"        # _stream_answer
 
 
@@ -680,7 +683,7 @@ async def _rephrase_with_history(
 ) -> str:
     """Rephrase a follow-up question into a standalone question using chat history.
 
-    Uses a quick LLM call (max_tokens=200, temperature=0) so the downstream
+    Uses a quick LLM call (max_tokens=1000, temperature=0) so the downstream
     SQL pipeline gets full context even when the user says things like
     "now filter that to Q1 only".
     """
@@ -707,7 +710,7 @@ async def _rephrase_with_history(
             lambda: chat_completion(
                 [{"role": "user", "content": prompt}],
                 temperature=0,
-                max_tokens=200,
+                max_tokens=1000,
                 caller="sql_rephrase_question",
                 prompt_version=PROMPT_VERSION_SQL_REPHRASE,
             ),
@@ -1055,8 +1058,10 @@ async def get_schema(
             # Make timezone-aware if naive
             if expires.tzinfo is None:
                 expires = expires.replace(tzinfo=timezone.utc)
-            if expires > now:
-                return json.loads(cache_row.schema_json)
+            cached = json.loads(cache_row.schema_json)
+            # DOCBOT-2633: rows cached before _SCHEMA_FMT lack full value lists
+            if expires > now and all(t.get("schema_fmt") == _SCHEMA_FMT for t in cached):
+                return cached
 
         conn_result = await session.execute(
             select(db_connections_table).where(
@@ -1076,7 +1081,11 @@ async def get_schema(
     if creds.get("dialect") == "csv":
         columns = creds.get("columns", [])
         table_name = creds.get("table_name", "data")
-        schema = [{"name": table_name, "columns": [{"name": col, "type": "TEXT"} for col in columns]}]
+        schema = [{
+            "name": table_name,
+            "columns": [{"name": col, "type": "TEXT"} for col in columns],
+            "schema_fmt": _SCHEMA_FMT,
+        }]
         schema_json = json.dumps(schema)
         expires_at = datetime.now(timezone.utc) + timedelta(hours=24)
         async with async_session_factory() as session:
@@ -1152,10 +1161,16 @@ def _get_columns_via_information_schema(engine, table_name: str) -> List[Dict[st
 # DOCBOT-2321: sample values for low-cardinality text columns, so the SQL
 # generator writes `quarter LIKE 'Q4%'` instead of `quarter = 'Q4'` when the
 # data holds 'Q4 2025'. Computed once at introspection, cached with the schema.
+# DOCBOT-2633: a column with <=50 distinct values gets its COMPLETE list (the
+# generator never saw 'Marketing' when only 5 alphabetical values were shown);
+# above that, no values (as before). Bump _SCHEMA_FMT when the cached
+# shape changes so older cache rows are re-introspected.
+_SCHEMA_FMT = 2
 _SAMPLE_MAX_VALUES = 5
-_SAMPLE_MAX_LEN = 40
-_SAMPLE_MAX_DISTINCT = 20
-_SAMPLE_SCAN_ROWS = 1000
+_SAMPLE_MAX_LEN = 60
+_SAMPLE_MAX_DISTINCT = 50
+_SAMPLE_LIST_MAX_CHARS = 1500
+_SAMPLE_SCAN_ROWS = 5000
 _SAMPLE_MAX_COLUMNS = 60
 _TEXT_TYPE_MARKERS = ("CHAR", "TEXT", "STRING", "CLOB")
 _SENSITIVE_COLUMN_MARKERS = (
@@ -1164,14 +1179,18 @@ _SENSITIVE_COLUMN_MARKERS = (
 
 
 def _attach_sample_values(engine, table_name: str, columns: List[Dict[str, Any]], budget: List[int]) -> None:
-    """Add ``sample_values`` (<=5 values, <=40 chars) to TEXT columns with
-    <=20 distinct values. Skips PII-looking columns (by name, or any value the
-    PII masker would mask). ``budget`` caps sampled columns per introspection.
+    """Add ``sample_values`` to TEXT columns with <=50 distinct values: all of
+    them (``values_complete`` when the whole table was scanned). Columns with
+    more get nothing. Values >60 chars are dropped; a list over 1500 chars
+    falls back to its first 5 values. Skips PII-looking columns (by
+    name, or any value the PII masker would mask). ``budget`` caps sampled
+    columns per introspection.
     """
-    from sqlalchemy import column as sa_column, table as sa_table
+    from sqlalchemy import column as sa_column, func, literal, table as sa_table
     from sqlalchemy.exc import SQLAlchemyError
     from api.utils.pii_masking import mask_pii
 
+    whole_table: Optional[bool] = None
     for col in columns:
         if budget[0] <= 0:
             return
@@ -1183,24 +1202,29 @@ def _attach_sample_values(engine, table_name: str, columns: List[Dict[str, Any]]
         if any(m in name.lower() for m in _SENSITIVE_COLUMN_MARKERS):
             continue
         budget[0] -= 1
-        # shortcut: cardinality judged on the first 1000 rows (bounded scan on
-        # big tables), so values are labelled "e.g." in the prompt.
+        # Bounded scan (first 5000 rows) keeps introspection cheap on big tables;
+        # a list is only called complete when the whole table fits in the scan.
         inner = select(sa_column(name)).select_from(sa_table(table_name)).limit(_SAMPLE_SCAN_ROWS).subquery()
-        query = select(inner.c[name]).distinct().limit(_SAMPLE_MAX_DISTINCT + 1)
+        c = inner.c[name]
         try:
             with engine.connect() as conn:
-                values = [r[0] for r in conn.execute(query)]
+                if whole_table is None:
+                    probe = select(literal(1)).select_from(sa_table(table_name)).limit(_SAMPLE_SCAN_ROWS + 1).subquery()
+                    whole_table = conn.execute(select(func.count()).select_from(probe)).scalar() <= _SAMPLE_SCAN_ROWS
+                values = [r[0] for r in conn.execute(select(c).distinct().limit(_SAMPLE_MAX_DISTINCT + 1))]
+                complete = len(values) <= _SAMPLE_MAX_DISTINCT
+                values = sorted(v for v in values if isinstance(v, str) and len(v) <= _SAMPLE_MAX_LEN)
         except SQLAlchemyError as exc:
             logger.debug("sample values skipped for %s.%s: %s", table_name, name, type(exc).__name__)
             continue
-        values = [v for v in values if isinstance(v, str)]
-        if not values or len(values) > _SAMPLE_MAX_DISTINCT:
+        # >50 distinct (ids, names, free text): send nothing, as before 2633
+        if not complete or not values or any(mask_pii(v) != v for v in values):
             continue
-        if any(mask_pii(v) != v for v in values):
-            continue
-        short = sorted(v for v in values if len(v) <= _SAMPLE_MAX_LEN)[:_SAMPLE_MAX_VALUES]
-        if short:
-            col["sample_values"] = short
+        if sum(len(v) + 4 for v in values) > _SAMPLE_LIST_MAX_CHARS:
+            complete, values = False, values[:_SAMPLE_MAX_VALUES]
+        col["sample_values"] = values
+        if complete and whole_table:
+            col["values_complete"] = True
 
 
 async def _introspect_schema_from_url(
@@ -1251,7 +1275,7 @@ async def _introspect_schema_from_url(
             except Exception:
                 col_list = _get_columns_via_information_schema(engine, tname)
             _attach_sample_values(engine, tname, col_list, sample_budget)
-            schema.append({"name": tname, "columns": col_list})
+            schema.append({"name": tname, "columns": col_list, "schema_fmt": _SCHEMA_FMT})
 
         # Append views (tagged with is_view for downstream awareness)
         views_cap = 200 - len(schema)
@@ -1266,7 +1290,7 @@ async def _introspect_schema_from_url(
                 col_list = _get_columns_via_information_schema(engine, vname)
             if dialect == "sqlite":  # views can be expensive on server DBs
                 _attach_sample_values(engine, vname, col_list, sample_budget)
-            schema.append({"name": vname, "columns": col_list, "is_view": True})
+            schema.append({"name": vname, "columns": col_list, "is_view": True, "schema_fmt": _SCHEMA_FMT})
 
         return schema
 
@@ -1644,7 +1668,7 @@ async def run_sql_pipeline(
         # >= 5 gate killed legitimate small-result visualisations.
         if len(rows) >= 1:
             try:
-                from api.sandbox_service import generate_analysis_code, run_python as run_sandbox
+                from api.sandbox_service import df_preamble, generate_analysis_code, run_python as run_sandbox
 
                 analysis_persona = (
                     expert_personas.get(persona, expert_personas.get("Generalist", {}))
@@ -1658,7 +1682,9 @@ async def run_sql_pipeline(
                 )
                 if analysis_code:
                     yield f"data: {_json_dumps({'type': 'analysis_code', 'code': analysis_code})}\n\n"
-                    sandbox_result = await run_sandbox(analysis_code, allow_pip_egress=True)
+                    sandbox_result = await run_sandbox(
+                        df_preamble(result_dicts[:50]) + analysis_code, allow_pip_egress=True
+                    )
                     for idx, chart_b64 in enumerate(sandbox_result.charts):
                         meta = (
                             sandbox_result.chart_metadata[idx]
@@ -1826,7 +1852,7 @@ async def _select_relevant_tables(question: str, schema: List[Dict[str, Any]]) -
         raw = await achat_completion(
             [{"role": "user", "content": prompt}],
             temperature=0,
-            max_tokens=200,
+            max_tokens=1000,
             caller="sql_table_selector",
             prompt_version=PROMPT_VERSION_SQL_TABLE_SELECTOR,
         )
@@ -1850,7 +1876,7 @@ async def _select_relevant_tables(question: str, schema: List[Dict[str, Any]]) -
                     },
                 ],
                 temperature=0,
-                max_tokens=200,
+                max_tokens=1000,
                 caller="sql_table_selector_retry",
                 prompt_version=PROMPT_VERSION_SQL_TABLE_SELECTOR,
             )
@@ -1920,6 +1946,9 @@ async def _retrieve_few_shot(
 # ---------------------------------------------------------------------------
 
 
+_PROMPT_VALUES_MAX_CHARS = 6000
+
+
 async def _generate_sql(
     question: str,
     schema_subset: List[Dict[str, Any]],
@@ -1932,12 +1961,20 @@ async def _generate_sql(
     can be logged as the model wrote it). ``feedback`` (DOCBOT-2320) turns
     this into the corrective retry: appended to the prompt, cache bypassed.
     """
+    value_chars = [0]
+
     def _fmt_col(c: Dict[str, Any]) -> str:
         samples = c.get("sample_values")
         if not samples:
             return f"{c['name']} ({c['type']})"
+        # DOCBOT-2633: full lists until the prompt-wide budget is spent, then
+        # 5 examples per column so wide schemas can't blow up the prompt.
+        complete = bool(c.get("values_complete")) and value_chars[0] < _PROMPT_VALUES_MAX_CHARS
+        if not complete:
+            samples = samples[:_SAMPLE_MAX_VALUES]
         vals = ", ".join("'" + str(v).replace("'", "''") + "'" for v in samples)
-        return f"{c['name']} ({c['type']}, e.g. {vals})"
+        value_chars[0] += len(vals)
+        return f"{c['name']} ({c['type']}, {'values' if complete else 'e.g.'} {vals})"
 
     def _fmt_table(t: Dict[str, Any]) -> str:
         cols = ", ".join(_fmt_col(c) for c in t["columns"])
@@ -1962,9 +1999,20 @@ async def _generate_sql(
         "4. Return ONLY the SQL query — no explanation, no markdown fences.\n"
         "5. If the question compares the database with a document (report, 10-K, note), "
         "return the database side only: the relevant figures, e.g. one row per metric "
-        "via UNION ALL or a grouped query. Never answer in prose.\n"
+        "via UNION ALL or a grouped query. Never answer in prose. The database cannot see "
+        "the document: never add agree / match / variance flag columns. When accounts roll "
+        "up to statement lines (e.g. an fs_line or rollup column), group by that line, not "
+        "by individual accounts. If a status column marks entries (e.g. posted / void / "
+        "draft), keep only posted ones. If one signed amount column holds debits positive "
+        "and credits negative: an expense line is SUM(amount), a revenue line is "
+        "-SUM(amount), and a profit line (operating income, net income) is -SUM(amount) "
+        "over every account that rolls into it, revenue and expenses together.\n"
         "6. Filter text columns using the stored format shown in their e.g. values "
-        "(e.g. quarter values like 'Q4 2025' need quarter LIKE 'Q4%', not quarter = 'Q4').\n\n"
+        "(e.g. quarter values like 'Q4 2025' need quarter LIKE 'Q4%', not quarter = 'Q4').\n"
+        "7. A column shown with 'values' lists EVERY value it holds. Filter it only with "
+        "those exact strings, copied verbatim, and include every listed value the question "
+        "needs (e.g. all expense lines when asked about operating expenses). Never invent "
+        "names that are not in the list.\n\n"
         f"Schema:\n{schema_text}"
         f"{few_shot_text}\n\n"
         f"Question: {question}\n\n"
@@ -1982,7 +2030,7 @@ async def _generate_sql(
         return await achat_completion(
             [{"role": "user", "content": prompt}],
             temperature=0,
-            max_tokens=1200,
+            max_tokens=SQL_GEN_MAX_TOKENS,
             caller="sql_gen_retry",
             prompt_version=PROMPT_VERSION_SQL_GEN,
         )
@@ -1992,7 +2040,7 @@ async def _generate_sql(
         sql = await achat_completion(
             [{"role": "user", "content": prompt}],
             temperature=0,
-            max_tokens=1200,
+            max_tokens=SQL_GEN_MAX_TOKENS,
             caller="sql_gen",
             prompt_version=PROMPT_VERSION_SQL_GEN,
         )
@@ -2049,6 +2097,55 @@ async def _generate_validated_sql(
 # ---------------------------------------------------------------------------
 # Step 6 helper — query executor (DOCBOT-205: MySQL read-only enforcement)
 # ---------------------------------------------------------------------------
+
+
+async def complete_tieout_lines(
+    connection_id: str,
+    sql: str,
+    doc_context: str,
+    tables: List[str],
+    db_connections_table: Table,
+    schema_cache_table: Table,
+    async_session_factory,
+) -> Optional[tuple[str, List[Dict[str, Any]], List[str]]]:
+    """DOCBOT-2637: re-run a books query with the filing lines it skipped.
+
+    ``tieout_lines.add_skipped_lines`` decides which lines (only values the
+    books hold, only short gaps between lines already selected). The rewritten
+    query passes the same guards as pipeline steps 5-6.1: sqlglot validation,
+    read-only executor, PII masking. Callers must have checked access to the
+    connection. Returns (validated_sql, rows, added) or None when nothing was
+    skipped.
+    """
+    from api.utils.tieout_lines import add_skipped_lines
+
+    async with async_session_factory() as session:
+        conn_row = (await session.execute(
+            select(db_connections_table).where(db_connections_table.c.id == connection_id)
+        )).fetchone()
+    if not conn_row:
+        raise ConnectionNotFoundError(f"Connection '{connection_id}' not found.")
+    schema = await get_schema(connection_id, db_connections_table, schema_cache_table, async_session_factory)
+    subset = [t for t in schema if t["name"] in set(tables)]
+    new_sql, added = add_skipped_lines(sql, subset, doc_context, conn_row.dialect)
+    if not added:
+        return None
+    validated = validate_and_sanitize_sql(new_sql, dialect=conn_row.dialect)
+    creds = await _decrypt_conn_credentials_lazy(
+        conn_row, connection_id, db_connections_table, async_session_factory
+    )
+    import asyncio as _asyncio
+    sync_url, entra_connect_args = await _asyncio.get_running_loop().run_in_executor(
+        None, _resolve_connection, creds
+    )
+    rows, column_names = await _execute_query(validated, sync_url, conn_row.dialect, entra_connect_args)
+    result = [dict(zip(column_names, row)) for row in rows]
+    if conn_row.pii_masking_enabled:
+        from api.utils.pii_masking import mask_rows
+        result = mask_rows(result)
+    # DOCBOT-2638: same JSON round trip the main pipeline's metadata event does, so
+    # Postgres NUMERIC (Decimal) reaches the detector as a number, not '919830000.00'.
+    return validated, json.loads(_json_dumps(result)), added
 
 
 async def _execute_query(

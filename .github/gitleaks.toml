@@ -10,4 +10,7 @@ description = "Known non-secret canary values used by redaction tests"
 regexes = [
   # tests/unit/test_langsmith_tracing.py — canaries asserted to NEVER reach traces.
   '''SECRET-(PROMPT|RESPONSE|ROWDATA)-[0-9a-f]{6}''',
+  # docs/wiki/api/03-public-api-reference.md — made-up example key prefix and idempotency key.
+  '''dk_test_a1b2c3d4''',
+  '''4f0e6b8a-1d2c-4a57-9c7e-2b1f0e9d3a11''',
 ]

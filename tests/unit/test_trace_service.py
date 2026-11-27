@@ -134,7 +134,7 @@ class TestLogTrace:
     @pytest.mark.asyncio
     async def test_truncates_long_final_answer(self, wired_store):
         table, session_factory = wired_store
-        long_answer = "x" * 10_000
+        long_answer = "x" * (trace_service._MAX_ANSWER_LEN + 500)
 
         trace_id = await trace_service.log_trace(
             run_id="r1", session_id="s1", pipeline="autopilot", question="q",

@@ -21,6 +21,7 @@ from sqlalchemy import MetaData, insert, select
 from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 
 import api.index as idx
+import api.routes.v1_routes as v1_routes
 from api import credit_service
 from api.llm_trace_service import register_llm_calls_table
 from api.usage_service import register_usage_events_table
@@ -84,10 +85,10 @@ async def _fake_autopilot(**_kw):
 
 @pytest.fixture
 def client(monkeypatch):
-    overrides = {idx._v1_hybrid_read.dependency: _fake_key, idx._v1_autopilot_run.dependency: _fake_key}
+    overrides = {v1_routes._v1_hybrid_read.dependency: _fake_key, v1_routes._v1_autopilot_run.dependency: _fake_key}
     idx.app.dependency_overrides.update(overrides)
-    monkeypatch.setattr(idx, "_require_v1_resources", AsyncMock())
-    monkeypatch.setattr(idx, "charge_budget", AsyncMock())
+    monkeypatch.setattr(v1_routes, "_require_v1_resources", AsyncMock())
+    monkeypatch.setitem(v1_routes._d, "charge_budget", AsyncMock())
     sources = SimpleNamespace(has_docs=True, has_db=False, has_csv=False)
     with patch("api.audit_service.log_event", MagicMock()), \
          patch("api.hybrid_service.hybrid_chat", _fake_hybrid), \
@@ -123,7 +124,8 @@ async def test_enforced_empty_balance_is_402(store, client, monkeypatch, path):
     monkeypatch.setenv("BILLING_FREE_MONTHLY_CREDITS", "0")
     resp = client.post(path, json=BODY, headers=HEADERS)
     assert resp.status_code == 402, resp.text
-    assert resp.json()["detail"]["error"] == "insufficient_credits"
+    # DOCBOT-3901: /v1 errors use the envelope; the QuotaErrorPayload code survives.
+    assert resp.json()["error"]["code"] == "insufficient_credits"
 
 
 async def test_demo_prefix_without_server_session_is_billed(store, client):
@@ -147,7 +149,7 @@ async def test_over_platform_cap_is_503_for_free_key_org(store, client, monkeypa
     await _over_cap(store, monkeypatch)
     resp = client.post(path, json=BODY, headers=HEADERS)
     assert resp.status_code == 503
-    assert resp.json()["detail"]["error"] == "platform_capacity"
+    assert resp.json()["error"]["code"] == "platform_capacity"
 
 
 async def test_over_platform_cap_paid_key_org_passes(store, client, monkeypatch):

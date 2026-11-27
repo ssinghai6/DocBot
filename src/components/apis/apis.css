@@ -1,0 +1,39 @@
+/* DOCBOT-3905: /apis portal tokens. The rest of the site is dark-only, so this
+   page scopes its own light/dark pair. All text pairs are >= 4.5:1 (WCAG AA). */
+.apis-portal {
+  --ap-bg: #0b0b10;
+  --ap-surface: #14141c;
+  --ap-inset: #08080d;
+  --ap-border: #2c2c3a;
+  --ap-text: #f4f4f5;
+  --ap-muted: #b4b4bd;
+  --ap-accent: #22d3ee;
+  --ap-accent-strong: #0e7490;
+  --ap-on-accent: #ffffff;
+  --ap-danger: #fca5a5;
+  --ap-success: #6ee7b7;
+  color-scheme: dark;
+  background: var(--ap-bg);
+  color: var(--ap-text);
+  min-height: 100vh;
+}
+
+.apis-portal[data-mode="light"] {
+  --ap-bg: #ffffff;
+  --ap-surface: #f6f7f9;
+  --ap-inset: #eef0f3;
+  --ap-border: #d4d7dd;
+  --ap-text: #111827;
+  --ap-muted: #4b5563;
+  --ap-accent: #0e7490;
+  --ap-accent-strong: #0e7490;
+  --ap-on-accent: #ffffff;
+  --ap-danger: #b91c1c;
+  --ap-success: #047857;
+  color-scheme: light;
+}
+
+.apis-portal :focus-visible {
+  outline: 2px solid var(--ap-accent);
+  outline-offset: 2px;
+}

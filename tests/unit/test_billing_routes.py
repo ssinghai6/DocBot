@@ -31,7 +31,7 @@ PACKS = [
 
 @pytest.fixture(autouse=True)
 def _env(monkeypatch):
-    for name in ("STRIPE_SECRET_KEY", "STRIPE_PACKS_JSON", "PLATFORM_ADMIN_USER_IDS", "AUTH_REQUIRED"):
+    for name in ("STRIPE_SECRET_KEY", "STRIPE_PACKS_JSON", "STRIPE_PRO_PRICE_ID", "PLATFORM_ADMIN_USER_IDS", "AUTH_REQUIRED"):
         monkeypatch.delenv(name, raising=False)
     monkeypatch.setenv("FRONTEND_URL", "https://app.example.com")
 
@@ -239,3 +239,62 @@ class TestManualGrant:
         monkeypatch.setenv("PLATFORM_ADMIN_USER_IDS", "u-op")
         with _as(_user(uid="u-op")):
             assert _post(client, "/admin/credits/grant", bad).status_code == 422
+
+
+# ── DOCBOT-1810: Pro subscription checkout + status ──────────────────────────
+
+
+class TestSubscription:
+    def test_anonymous_401(self, client):
+        assert client.post("/api/billing/subscribe", json={}).status_code == 401
+        assert client.get("/api/billing/subscription").status_code == 401
+
+    def test_non_admin_403(self, client):
+        with _as(_user(role="analyst")):
+            assert _post(client, "/api/billing/subscribe", {}).status_code == 403
+
+    def test_disabled_without_price_or_key(self, client, monkeypatch):
+        monkeypatch.setenv("STRIPE_SECRET_KEY", "sk_test_secret")  # price id unset
+        with _as(_user()):
+            assert _post(client, "/api/billing/subscribe", {}).status_code == 503
+
+    def test_client_org_id_rejected(self, client):
+        with _as(_user()):
+            assert _post(client, "/api/billing/subscribe", {"org_id": "victim"}).status_code == 422
+
+    def test_subscription_checkout_built_server_side(self, client, monkeypatch):
+        monkeypatch.setenv("STRIPE_SECRET_KEY", "sk_test_secret")
+        monkeypatch.setenv("STRIPE_PRO_PRICE_ID", "price_Pro79")
+        _FakeStripe.calls = []
+        with _as(_user(org_id="org-42")), patch.object(billing_service.httpx, "AsyncClient", _FakeStripe), \
+                patch("api.subscription_service.get_subscription", new_callable=AsyncMock, return_value=None):
+            resp = _post(client, "/api/billing/subscribe", {"return_path": "/chat"})
+        assert resp.status_code == 200, resp.text
+        d = _FakeStripe.calls[0]["data"]
+        assert d["mode"] == "subscription"
+        assert d["line_items[0][price]"] == "price_Pro79"
+        assert d["client_reference_id"] == "org-42"
+        assert d["subscription_data[metadata][org_id]"] == "org-42"
+        assert d["subscription_data[metadata][user_id]"] == "u-1"
+        assert d["success_url"] == "https://app.example.com/chat?checkout=success"
+
+    @pytest.mark.parametrize("status", ["active", "past_due"])
+    def test_already_pro_409(self, client, monkeypatch, status):
+        monkeypatch.setenv("STRIPE_SECRET_KEY", "sk_test_secret")
+        monkeypatch.setenv("STRIPE_PRO_PRICE_ID", "price_Pro79")
+        row = {"status": status, "current_period_end": None}
+        with _as(_user()), patch("api.subscription_service.get_subscription", new_callable=AsyncMock, return_value=row):
+            assert _post(client, "/api/billing/subscribe", {}).status_code == 409
+
+    @pytest.mark.parametrize("row,plan", [
+        (None, "free"),
+        ({"status": "active", "current_period_end": None}, "pro"),
+        ({"status": "past_due", "current_period_end": None}, "pro"),
+        ({"status": "canceled", "current_period_end": None}, "free"),
+    ])
+    def test_status(self, client, row, plan):
+        client.cookies.set("docbot_session", "tok")
+        with _as(_user()), patch("api.subscription_service.get_subscription", new_callable=AsyncMock, return_value=row):
+            data = client.get("/api/billing/subscription").json()
+        assert data["plan"] == plan
+        assert data["status"] == (row["status"] if row else None)

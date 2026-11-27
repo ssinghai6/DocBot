@@ -12,15 +12,19 @@ import type {
   PickedTool,
 } from "@/components/types"
 import { useUIStore } from "@/store/uiStore"
-import { EMPTY_ANSWER_MESSAGE, StreamErrorEvent, fillEmptyAssistant, buildRecentHistory } from "@/lib/chatStream"
+import { EMPTY_ANSWER_MESSAGE, RECOVERING_MESSAGE, StreamErrorEvent, fillEmptyAssistant, buildRecentHistory, keepPartialAnswer, streamDroppedNote, pollRecoveredAnswer, applyRecoveredAnswer } from "@/lib/chatStream"
+import type { RecoveryPoll } from "@/lib/chatStream"
+import { RecoveredAnswerSchema } from "@/lib/schemas/answer"
 import { AutopilotStepEventSchema } from "@/lib/schemas/autopilotStep"
 import type { Paywall } from "@/components/OutOfCreditsModal"
 import {
   HttpGateError,
   PlatformCapacityError,
+  SessionGoneError,
   SignInGatedError,
   classifyResponse,
   reportGate,
+  throwIfSessionGone,
 } from "@/lib/httpGate"
 
 /**
@@ -56,6 +60,31 @@ function applyDocumentsExpiredEvent(
   return true
 }
 
+/** DOCBOT-2636: one read of `GET /api/hybrid/answer/{run_id}` (Zod-validated). */
+function recoveryPoll(runId: string, sessionId: string, connectionId: string): RecoveryPoll {
+  return async () => {
+    try {
+      // session/connection ids let an anonymous demo caller pass the auth gate; ownership is checked server-side.
+      const query = new URLSearchParams({ session_id: sessionId, connection_id: connectionId })
+      const response = await fetch(`/api/hybrid/answer/${encodeURIComponent(runId)}?${query}`)
+      if (response.status === 429 || response.status >= 500) return "pending"
+      if (!response.ok) return null
+      const parsed = RecoveredAnswerSchema.safeParse(await response.json())
+      if (!parsed.success) {
+        console.error("Recovered answer failed validation:", parsed.error)
+        return null
+      }
+      const data = parsed.data
+      if (data.status === "pending") return "pending"
+      if (!data.answer) return null
+      return { answer: data.answer, citations: data.citations, lineage: data.lineage ?? null, traceId: data.trace_id ?? null }
+    } catch (e) {
+      console.warn("Answer recovery poll failed, retrying:", e)  // still offline
+      return "pending"
+    }
+  }
+}
+
 interface UseChatSubmitParams {
   input: string
   sessionId: string | null
@@ -82,14 +111,26 @@ interface UseChatSubmitParams {
 
   showToast: (type: Toast['type'], message: string) => void
   loadQueryHistory: (connId: string) => void
+  /** DOCBOT-2632: start a fresh demo (same dataset, chat kept); null when it fails. */
+  restartDemo?: () => Promise<{ sessionId: string; connectionId: string } | null>
 }
+
+/** DOCBOT-2632: re-send an already-shown question once against fresh demo ids. */
+interface RetryTurn {
+  question: string
+  sessionId: string
+  connectionId: string
+}
+
+export const SESSION_EXPIRED_MESSAGE = "This session expired. Re-upload your file or reconnect your database."
+export const DEMO_EXPIRED_MESSAGE = "Your demo session expired. Starting a fresh demo…"
 
 export function useChatSubmit(params: UseChatSubmitParams) {
   const {
-    input,
-    sessionId,
+    input: inputText,
+    sessionId: currentSessionId,
     isDbConnected,
-    connectionId,
+    connectionId: currentConnectionId,
     selectedPersona,
     isAutoMode,
     chatMode,
@@ -110,6 +151,7 @@ export function useChatSubmit(params: UseChatSubmitParams) {
 
     showToast,
     loadQueryHistory,
+    restartDemo,
   } = params;
 
   // DOCBOT-1805: 402 (credits) / 429 (rate, demo cap) -> OutOfCreditsModal.
@@ -147,15 +189,40 @@ export function useChatSubmit(params: UseChatSubmitParams) {
     throw new SignInGatedError(gate.message);
   };
 
-  const handleSendMessage = async (e?: React.FormEvent) => {
+  const handleSendMessage = async (e?: React.FormEvent, retry?: RetryTurn): Promise<void> => {
     if (e) e.preventDefault();
+    const input = retry?.question ?? inputText;
+    const sessionId = retry?.sessionId ?? currentSessionId;
+    const connectionId = retry?.connectionId ?? currentConnectionId;
     if (!input.trim()) return;
     if (!sessionId && !isDbConnected) return;
 
     const userMsg: Message = { role: "user", content: input, timestamp: new Date() };
-    setMessages(prev => [...prev, userMsg]);
-    setInput("");
+    if (!retry) {
+      setMessages(prev => [...prev, userMsg]);
+      setInput("");
+    }
     setIsLoading(true);
+
+    // DOCBOT-2632: the backend lost this session (404). A demo restarts on the
+    // same dataset and the question is re-sent once; anything else explains why.
+    const onSessionGone = async (): Promise<void> => {
+      setMessages(prev => {
+        const last = prev[prev.length - 1];
+        return last && last.role === "assistant" && !last.content ? prev.slice(0, -1) : prev;
+      });
+      const isDemo = [sessionId, connectionId].some(id => id?.startsWith("demo-"));
+      if (isDemo && restartDemo && !retry) {
+        showToast("info", DEMO_EXPIRED_MESSAGE);
+        const ids = await restartDemo();
+        if (ids) {
+          await handleSendMessage(undefined, { question: input, ...ids });
+          return;
+        }
+      }
+      const content = isDemo ? "Your demo session expired. Click Try Demo to start a fresh one." : SESSION_EXPIRED_MESSAGE;
+      setMessages(prev => [...prev, { role: "assistant", content, timestamp: new Date() }]);
+    };
 
     // Build recent conversation history (last 6 messages = 3 turns) for
     // follow-up context in DB, CSV, hybrid, and autopilot pipelines.
@@ -178,9 +245,7 @@ export function useChatSubmit(params: UseChatSubmitParams) {
     }
 
     function defaultAutoRoute() {
-      if (sessionId && isDbConnected && chatMode !== "hybrid") {
-        effectiveChatMode = "hybrid";
-      }
+      // Hybrid promotion happens once in chat/page.tsx; a manual Docs/Database pick sticks (DOCBOT-2703).
       if (isAutoMode) {
         const routing = routeQuestion(input, effectiveChatMode, isDbConnected, !!sessionId, EXPERT_PERSONAS);
         if (routing.confidence !== "low") {
@@ -188,21 +253,16 @@ export function useChatSubmit(params: UseChatSubmitParams) {
           const pref = EXPERT_PERSONAS[routing.persona as keyof typeof EXPERT_PERSONAS]?.tool_preference;
           if (pref === "sql_first" && isDbConnected && !sessionId) effectiveChatMode = "database";
           else if (pref === "rag_first" && sessionId && !isDbConnected) effectiveChatMode = "docs";
-        } else {
-          personaToSend = "Generalist";
         }
+        // Low confidence keeps selectedPersona, the persona the header shows (DOCBOT-2702).
       }
     }
 
     function applyPickedToolRouting() {
       const pick = pickedTool!;
       if (pick.category === "persona") {
-        // Force the persona; chat-mode selection still follows the existing
-        // connection-state rule (picking a persona doesn't imply a pipeline).
+        // Force the persona; chat mode stays as selected (picking a persona doesn't imply a pipeline).
         personaToSend = pick.key;
-        if (sessionId && isDbConnected && chatMode !== "hybrid") {
-          effectiveChatMode = "hybrid";
-        }
         useAutopilot = false;
       } else if (pick.key === "autopilot") {
         useAutopilot = true;
@@ -286,6 +346,7 @@ export function useChatSubmit(params: UseChatSubmitParams) {
               });
               if (r.ok && r.body) return r;
               await throwIfSignInGated(r);
+              await throwIfSessionGone(r);
               if (r.status === 402 || r.status === 429) return r;
               // Retry transient gateway errors (backend waking up); fail fast otherwise.
               if (attempt === 0 && [502, 503, 504].includes(r.status)) {
@@ -294,7 +355,7 @@ export function useChatSubmit(params: UseChatSubmitParams) {
               }
               throw new Error(`Autopilot HTTP ${r.status}`);
             } catch (e) {
-              if (e instanceof HttpGateError) throw e;
+              if (e instanceof HttpGateError || e instanceof SessionGoneError) throw e;
               lastErr = e;
               if (attempt === 0) {
                 await new Promise(res => setTimeout(res, 1500));
@@ -428,6 +489,10 @@ export function useChatSubmit(params: UseChatSubmitParams) {
           }
         }
       } catch (err) {
+        if (err instanceof SessionGoneError) {
+          await onSessionGone();
+          return;
+        }
         setMessages(prev => [
           ...prev,
           { role: "assistant", content: `Autopilot error: ${err instanceof Error ? err.message : String(err)}`, timestamp: new Date() },
@@ -465,6 +530,7 @@ export function useChatSubmit(params: UseChatSubmitParams) {
         });
 
         await throwIfSignInGated(response);
+        await throwIfSessionGone(response);
         if (await blockedByPaywall(response, userMsg.content)) return;
         if (!response.ok || !response.body) {
           throw new Error(`HTTP ${response.status}`);
@@ -529,6 +595,10 @@ export function useChatSubmit(params: UseChatSubmitParams) {
         }
         setMessages(prev => fillEmptyAssistant(prev, EMPTY_ANSWER_MESSAGE));
       } catch (error: unknown) {
+        if (error instanceof SessionGoneError) {
+          await onSessionGone();
+          return;
+        }
         const msg = error instanceof Error ? error.message : "Unknown error";
         console.error("DB chat error:", error);
         const isFileGone = msg.includes("re-upload") || msg.includes("temporary files");
@@ -550,6 +620,9 @@ export function useChatSubmit(params: UseChatSubmitParams) {
 
     // ── Hybrid chat path: SSE streaming via /api/hybrid/chat ─────────────
     if (effectiveChatMode === "hybrid" && connectionId && sessionId) {
+      // DOCBOT-2636: run id from the first metadata event; lets a dropped stream be recovered.
+      let runId: string | null = null;
+      let finished = false;
       try {
         const assistantMsg: Message = { role: "assistant", content: "", timestamp: new Date(), charts: [], agentPersona: personaToSend };
         setMessages(prev => [...prev, assistantMsg]);
@@ -568,6 +641,7 @@ export function useChatSubmit(params: UseChatSubmitParams) {
         });
 
         await throwIfSignInGated(response);
+        await throwIfSessionGone(response);
         if (await blockedByPaywall(response, userMsg.content)) return;
         if (!response.ok || !response.body) throw new Error(`HTTP ${response.status}`);
 
@@ -603,6 +677,7 @@ export function useChatSubmit(params: UseChatSubmitParams) {
               } else if (chunk.type === "lineage") {
                 applyLineageEvent(chunk, setMessages);
               } else if (chunk.type === "metadata") {
+                if (typeof chunk.run_id === "string") runId = chunk.run_id;
                 // The first metadata event carries only intent flags; the SQL
                 // summary arrives in a later one. Never overwrite with undefined.
                 if (chunk.sql_query) {
@@ -611,6 +686,7 @@ export function useChatSubmit(params: UseChatSubmitParams) {
                   ));
                 }
               } else if (chunk.type === "done") {
+                finished = true;
                 const doneCitations: Citation[] = Array.isArray(chunk.citations) ? chunk.citations : [];
                 const doneTraceId: string | undefined = typeof chunk.trace_id === "string" ? chunk.trace_id : undefined;
                 if (doneCitations.length > 0 || doneTraceId) {
@@ -645,19 +721,34 @@ export function useChatSubmit(params: UseChatSubmitParams) {
               }
             } catch (e) {
               if (e instanceof StreamErrorEvent) throw e;
-              /* skip malformed SSE lines */
+              // One bad event is skipped, never fatal to the answer.
+              console.warn("Skipped hybrid SSE event:", e, jsonStr.slice(0, 200));
             }
           }
         }
         if (!expired) setMessages(prev => fillEmptyAssistant(prev, EMPTY_ANSWER_MESSAGE));
       } catch (error: unknown) {
+        if (error instanceof SessionGoneError) {
+          await onSessionGone();
+          return;
+        }
         const msg = error instanceof Error ? error.message : "Unknown error";
+        // DOCBOT-2635: log the real cause and keep whatever already streamed in.
+        console.error("Hybrid chat failed:", error);
+        const dropped = !(error instanceof StreamErrorEvent || error instanceof HttpGateError);
+        if (dropped && runId && !finished) {
+          // DOCBOT-2636: the backend keeps running after a drop; read the finished answer back.
+          showToast("info", RECOVERING_MESSAGE);
+          const recovered = await pollRecoveredAnswer(recoveryPoll(runId, sessionId, connectionId));
+          if (recovered) {
+            setMessages(prev => applyRecoveredAnswer(prev, recovered));
+            if (recovered.lineage) useUIStore.getState().selectLineage(recovered.lineage);
+            return;
+          }
+        }
         if (!(error instanceof HttpGateError)) showToast("error", `Error: ${msg}`);
-        setMessages(prev => prev.map((m, i) =>
-          i === prev.length - 1 && m.role === "assistant" && m.content === ""
-            ? { ...m, content: error instanceof StreamErrorEvent || error instanceof HttpGateError ? msg : "I encountered an error with the hybrid query. Please try again." }
-            : m
-        ));
+        const note = error instanceof StreamErrorEvent || error instanceof HttpGateError ? msg : streamDroppedNote(error);
+        setMessages(prev => keepPartialAnswer(prev, note));
       } finally {
         setIsLoading(false);
       }
@@ -692,6 +783,7 @@ export function useChatSubmit(params: UseChatSubmitParams) {
       });
 
       await throwIfSignInGated(response);
+      await throwIfSessionGone(response);
       if (await blockedByPaywall(response, userMsg.content)) return;
       if (!response.ok || !response.body) throw new Error(`HTTP ${response.status}`);
 
@@ -741,6 +833,10 @@ export function useChatSubmit(params: UseChatSubmitParams) {
       }
       if (!expired) setMessages(prev => fillEmptyAssistant(prev, EMPTY_ANSWER_MESSAGE));
     } catch (error: unknown) {
+      if (error instanceof SessionGoneError) {
+        await onSessionGone();
+        return;
+      }
       const msg = error instanceof Error ? error.message : "Unknown error";
       console.error("Chat error:", error);
       if (!(error instanceof HttpGateError)) showToast("error", `Error: ${msg}`);

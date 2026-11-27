@@ -6,6 +6,7 @@ import asyncio
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
+from api.edgar_service import FILING_FORMAT_VERSION
 
 
 # ── Helpers ──────────────────────────────────────────────────────────────────
@@ -50,7 +51,7 @@ class TestIngestEdgarFiling:
             "company_name": "Apple Inc.",
             "ticker": "AAPL",
             "session_id": "existing-session-123",
-            "text_hash": "abc",
+            "text_hash": f"{FILING_FORMAT_VERSION}:abc",
         }
         owner_a = {"user_id": None, "org_id": None, "anon_owner": "digest-a"}
         owner_b = {"user_id": "u-b", "org_id": "org-b", "anon_owner": None}
@@ -115,7 +116,7 @@ class TestIngestEdgarFiling:
 
     def test_cache_hit_with_missing_vectors_reingests_and_repoints_cache(self):
         """Cached source store was deleted/reaped: download again, update the cache row."""
-        cached = {"accession_number": "acc-1", "session_id": "gone-session"}
+        cached = {"accession_number": "acc-1", "session_id": "gone-session", "text_hash": f"{FILING_FORMAT_VERSION}:x"}
         mock_text = "UNITED STATES SECURITIES AND EXCHANGE COMMISSION\n" * 50
 
         with (
@@ -125,8 +126,7 @@ class TestIngestEdgarFiling:
             patch("api.utils.vector_store.clone_store", return_value=None),
             patch("api.connectors.edgar_connector.EdgarConnector.fetch_filing_text",
                   new_callable=AsyncMock, return_value=mock_text),
-            patch("api.utils.chunker.chunk_document", return_value=[MagicMock(metadata={})]),
-            patch("api.utils.chunker.detect_doc_type", return_value="financial"),
+            patch("api.utils.chunker.chunk_filing", return_value=[MagicMock(metadata={})]),
             patch("api.utils.vector_store.create_store", return_value=MagicMock()),
             patch("api.document_extractor.is_extractable_document", return_value=False),
             patch("api.edgar_service.insert", MagicMock()),
@@ -148,7 +148,9 @@ class TestIngestEdgarFiling:
 
         assert result["cached"] is False
         assert result["session_id"] != "gone-session"
-        repoint.assert_awaited_once_with("acc-1", result["session_id"])
+        repoint.assert_awaited_once()
+        assert repoint.await_args.args == ("acc-1", result["session_id"])
+        assert repoint.await_args.kwargs["text_hash"].startswith(f"{FILING_FORMAT_VERSION}:")
         save.assert_not_called()
 
     def test_creates_session_and_vectors(self):
@@ -164,8 +166,7 @@ class TestIngestEdgarFiling:
             patch("api.connector_store.get_cached_filing", new_callable=AsyncMock, return_value=None),
             patch("api.connector_store.save_filing_cache", new_callable=AsyncMock) as mock_cache_save,
             patch("api.connectors.edgar_connector.EdgarConnector.fetch_filing_text", new_callable=AsyncMock, return_value=mock_text),
-            patch("api.utils.chunker.chunk_document", return_value=mock_chunks),
-            patch("api.utils.chunker.detect_doc_type", return_value="financial"),
+            patch("api.utils.chunker.chunk_filing", return_value=mock_chunks),
             patch("api.utils.vector_store.create_store") as mock_create_store,
             patch("api.document_extractor.is_extractable_document", return_value=False),
             patch("api.edgar_service.insert", mock_insert),
@@ -301,3 +302,43 @@ class TestBatchIngest:
                 assert "error" in results[1]
 
             asyncio.run(run())
+
+
+# ── DOCBOT-2706: pending instead of proxy timeout ────────────────────────────
+
+class TestIngestOrPending:
+    def test_slow_ingest_returns_pending_then_result_without_duplicate(self):
+        from api import edgar_service
+
+        calls: list[int] = []
+
+        async def _slow_ingest():
+            calls.append(1)
+            await asyncio.sleep(0.2)
+            return {"session_id": "s-1", "cached": False}
+
+        async def _run():
+            key = (("user_id", "u1"),), "acc-1"
+            first = await edgar_service.ingest_or_pending(key, _slow_ingest, timeout=0.05)
+            second = await edgar_service.ingest_or_pending(key, _slow_ingest, timeout=1.0)
+            return first, second, key in edgar_service._INGEST_TASKS
+
+        first, second, still_tracked = asyncio.run(_run())
+        assert first == {"status": "pending"}
+        assert second == {"session_id": "s-1", "cached": False}
+        assert calls == [1]
+        assert not still_tracked
+
+    def test_failed_ingest_raises_to_poller_and_is_cleared(self):
+        from api import edgar_service
+
+        async def _boom():
+            raise ValueError("no usable text")
+
+        async def _run():
+            key = ("k",), "acc-2"
+            with pytest.raises(ValueError):
+                await edgar_service.ingest_or_pending(key, _boom, timeout=1.0)
+            return key in edgar_service._INGEST_TASKS
+
+        assert asyncio.run(_run()) is False

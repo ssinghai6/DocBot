@@ -24,7 +24,7 @@ DocBot is an AI-powered document + database analyst, fully deployed on Railway (
 |------|---------|
 | `api/index.py` | FastAPI backend (~1700 lines). App setup, EXPERT_PERSONAS, init_db(), all route handlers |
 | `api/db_service.py` | All DB connectivity, schema introspection (tables+views), 7-step SQL pipeline, LRU engine pool, error taxonomy, schema drift detection |
-| `api/sandbox_service.py` | E2B sandbox execution, Python/pandas code generation (GPT-OSS via Groq), CSV→E2B pipeline, error retry with feedback, conversational rephrase |
+| `api/sandbox_service.py` | E2B sandbox execution, Python/pandas code generation (gpt-oss-120b, Bedrock in prod), CSV→E2B pipeline, error retry with feedback, conversational rephrase |
 | `api/hybrid_service.py` | Intent classification, parallel RAG+SQL retrieval, discrepancy detection |
 | `api/autopilot_service.py` | Analytical Autopilot — LangGraph multi-step investigation state machine. Auto-triggers on analytical keywords. Uses `deep_retrieve()` for doc_search steps. |
 | `api/deep_research_service.py` | Deep Research retrieval pipeline + `deep_retrieve()` reusable function (sub-question decomposition, parallel retrieval, gap-fill loop). Legacy standalone route kept for backwards compat. |
@@ -34,10 +34,10 @@ DocBot is an AI-powered document + database analyst, fully deployed on Railway (
 | `api/audit_service.py` | Append-only audit log, PostgreSQL immutability trigger, CSV export |
 | `api/artifact_service.py` | Session artifact store — persists charts, code, SQL results |
 | `api/demo_service.py` | Sandbox demo mode — hardcoded TechCorp 10-K chunks + SQLite financial DB, one-click hybrid analysis |
-| `api/document_extractor.py` | LangExtract financial extraction (Gemini 2.5 Flash, full-doc coverage) |
+| `api/document_extractor.py` | LangExtract financial extraction, full-doc coverage (Bedrock `BEDROCK_EXTRACT_MODEL` when `LLM_PRIMARY=bedrock`, else Gemini 2.5 Flash) |
 | `api/file_upload_service.py` | CSV/SQLite file uploads — CSV goes to E2B pandas, SQLite to SQL pipeline |
 | `api/utils/csv_preprocessor.py` | Multi-section CSV detection, section splitting, header detection, E2B preamble generation, `DataProfile` (dtypes, sample rows, datetime detection, frequency inference) |
-| `api/utils/llm_provider.py` | LLM fallback provider — Groq primary, Gemini 2.5 Flash fallback. Wired to all prod callsites. |
+| `api/utils/llm_provider.py` | LLM provider — Bedrock gpt-oss primary + Bedrock fallback model in prod (`LLM_PRIMARY=bedrock`); Groq primary + Gemini 2.5 Flash fallback when `LLM_PRIMARY=groq`. Wired to all prod callsites. |
 | `api/utils/_gemini_wrapper.py` | Minimal LangChain-compatible Gemini wrapper for fallback provider |
 | `api/utils/` | Shared helpers: encryption, SSRF validator, SQL validator, embeddings, PII masking, table selector, context compressor, CSV preprocessor, reranker, chunker, vector store |
 | `api/connectors/base.py` | Marketplace connector ABC, ConnectorCredentials, normalized dataclasses |
@@ -58,13 +58,16 @@ DocBot is an AI-powered document + database analyst, fully deployed on Railway (
 | `src/hooks/` | Custom hooks: useChatHandlers (DB/auth/file handlers), useChatSubmit (message submission) |
 | `tests/external/test_llm_extraction_baseline.py` | LLM extraction baseline (20 hand-picked contexts, external API keys). Not a RAG benchmark — retrieval is bypassed. |
 | `requirements.txt` | Python dependencies |
-| `project-tasks/docbot-v2-project-tracking.md` | 40+ user stories, 11 epics, sprint plan, Definition of Done — **primary ticket tracker** |
+| `project-tasks/docbot-master-backlog.md` | Phase/sprint backlog — **source of truth for tickets**, synced to OpenProject |
+| `project-tasks/stories/DOCBOT-XXXX.md` | Full user story per ticket (AC, test, DoD); becomes the OpenProject description |
+| `scripts/openproject_sync.py` | OpenProject sync (all tickets) and `--set-state` per-ticket status updates; backlog parser still in `scripts/plane_sync.py` |
+| `project-tasks/docbot-v2-project-tracking.md` | Epic history, sprint plan, Definition of Done |
 | `project-tasks/docbot-db-master-plan.md` | Full architecture, security model, phased build plan |
 
 ## Current Architecture (v2 — live on Railway)
 
 ```
-Next.js 16 (Vercel) → FastAPI (Railway container) → Groq / Gemini
+Next.js 16 (Vercel) → FastAPI (Railway container) → Amazon Bedrock (Groq / Gemini = rollback)
                                 ↓
          LangChain RAG  +  SQLAlchemy DB  +  E2B Python Sandbox
                  ↓                ↓                   ↓
@@ -75,8 +78,8 @@ Next.js 16 (Vercel) → FastAPI (Railway container) → Groq / Gemini
 ## Tech Stack
 
 - **Frontend**: Next.js 16, React 19, TailwindCSS 4, TypeScript, lucide-react, react-markdown
-- **Backend**: FastAPI, Python 3.12, Groq (Llama 3.3-70b), LangChain, PyMuPDF
-- **AI/ML**: Groq openai/gpt-oss-120b (code gen), Gemini 2.5 Flash via LangExtract (financial docs), LangGraph (agentic flows)
+- **Backend**: FastAPI, Python 3.12, Amazon Bedrock (gpt-oss, via the OpenAI-compatible endpoint), LangChain, PyMuPDF
+- **AI/ML**: gpt-oss-120b on Bedrock (chat, SQL, code gen, LangExtract extraction), gpt-oss-20b on Bedrock (fallback), LangGraph (agentic flows). Groq + Gemini 2.5 Flash only on rollback
 - **Embeddings**: sentence-transformers/all-MiniLM-L6-v2, run locally via ONNX (chromadb's bundled copy, free, no API key; DOCBOT-1511). HuggingFace API only if `EMBEDDINGS_PROVIDER=hf`. Reranker: local ONNX `ms-marco-MiniLM-L-6-v2` via fastembed (`RERANKER_PROVIDER`)
 - **Storage**: PostgreSQL on Railway (sessions, connections, audit log, schema cache)
 - **Sandbox**: E2B code-interpreter (Python/pandas execution, matplotlib charts)
@@ -101,19 +104,26 @@ Next.js proxies `/api/*` to `localhost:8000` in development.
 
 | Variable | Required | Notes |
 |----------|----------|-------|
-| `groq_api_key` | Yes | Groq API key |
+| `groq_api_key` | Yes | Groq API key. Primary only when `LLM_PRIMARY=groq`, but still required on Bedrock: sandbox code gen and the Autopilot planner/synthesizer skip when it is unset |
+| `LLM_PRIMARY` | No | `groq` (default) or `bedrock` (DOCBOT-2584): same gpt-oss models on Amazon Bedrock, paid from AWS credits. Set back to `groq` to roll back |
+| `BEDROCK_API_KEY` | Bedrock | Bedrock long-term API key (IAM user limited to `bedrock:InvokeModel*` on the gpt-oss models). Founder sets it in Railway only |
+| `BEDROCK_REGION` | No | Bedrock region, default `us-west-2` (prod sets `us-east-1`) |
+| `BEDROCK_MODEL` / `BEDROCK_CODE_MODEL` | No | Bedrock model id for the default and code slots (DOCBOT-2585). Defaults `openai.gpt-oss-20b-1:0` / `openai.gpt-oss-120b-1:0`. Unpriced ids log a warning and are invisible to the spend caps |
+| `BEDROCK_FALLBACK_MODEL` | No | With `LLM_PRIMARY=bedrock`, failed calls retry on this Bedrock model instead of Gemini |
+| `BEDROCK_EXTRACT_MODEL` | No | With `LLM_PRIMARY=bedrock`, LangExtract runs on this Bedrock model (default gpt-oss-120b) instead of Gemini |
 | `huggingface_api_key` | No | Only used when `EMBEDDINGS_PROVIDER=hf` or `RERANKER_PROVIDER=hf` (embeddings/reranking are local and free by default) |
 | `EMBEDDINGS_PROVIDER` | No | `local` (default, ONNX) or `hf` (HF API, falls back to local on error) |
 | `RERANKER_PROVIDER` | No | `local` (default), `hf`, or `off` |
 | `DATABASE_URL` | Yes | Railway PostgreSQL connection string |
 | `DB_ENCRYPTION_KEY` | Yes | Fernet key for credential encryption — never hardcode |
 | `E2B_API_KEY` | Yes | E2B sandbox API key (CSV queries + Python analysis) |
-| `GEMINI_API_KEY` | Yes | Gemini 2.5 Flash for LangExtract financial extraction |
+| `GEMINI_API_KEY` | Rollback | Gemini 2.5 Flash fallback + LangExtract when `LLM_PRIMARY=groq`. Unused on Bedrock when `BEDROCK_FALLBACK_MODEL` is set (without it, the fallback is still Gemini) |
 | `ALLOWED_ORIGINS` | No | Comma-separated CORS origins, defaults to localhost:3000 |
 | `SESSION_TTL_HOURS` | No | Session cookie TTL in hours, default 8 |
 | `APP_AUTH_MODE` | No | `open` (default) or `required`. `required` needs login for own data (uploads, DB connect, CSV, EDGAR ingest, sessions); anonymous visitors keep the one-click demo. Unknown values fail closed (required) |
 | `AUTH_REQUIRED` | No | Legacy alias: `true` == `APP_AUTH_MODE=required` |
 | `DEMO_DAILY_USD_CAP` | No | Daily (UTC) USD cap on anonymous LLM+E2B spend; over it, demo init + anonymous demo chats return 429. Default `10`, `0` disables |
+| `WAITLIST_NOTIFY_EMAIL` | No | Founder inbox for waitlist signup alerts (DOCBOT-2581). Also needs `RESEND_API_KEY` + `EMAIL_FROM`; any unset = no email. Signups read at `GET /api/admin/waitlist` (platform admin) |
 | `SENTRY_DSN` | No | Enables Sentry error tracking (errors only, `traces_sample_rate=0.0` — no APM/tracing spend). No-op if unset |
 | `SESSION_COST_CEILING_USD` | No | Soft per-session (per-run_id) LLM cost ceiling in USD for Autopilot/Deep Research multi-call loops, default `0.50`. `0` or negative disables the check |
 | `SAML_SP_ENTITY_ID` | SSO | SP entity ID for SAML 2.0 |
@@ -141,7 +151,7 @@ One ticket per branch. One branch per session when possible.
 
 ## Ticket Reference
 
-All work is tracked in `project-tasks/docbot-v2-project-tracking.md`.
+All work is tracked in OpenProject at https://pm.docbot.space (see OpenProject Sync Rule), fed from `project-tasks/docbot-master-backlog.md` and `project-tasks/stories/`. Epic history lives in `project-tasks/docbot-v2-project-tracking.md`.
 
 **Current state (2026-03-29):**
 - EPIC-01 through EPIC-06 — **Done** (archived)
@@ -265,7 +275,7 @@ NL Question
   → [4] SQL Generator        (LLM call #1)
   → [5] SQL Validator        (sqlglot AST — DETERMINISTIC, no LLM)
   → [6] Executor             (pooled engine, 15s timeout, 500 row cap, drift retry)
-  → [7] Answer Generator     (LLM call #2, Groq streaming)
+  → [7] Answer Generator     (LLM call #2, streaming)
 ```
 
 **Schema drift retry**: If Step 6 fails with table/column-not-found, the pipeline invalidates cache, re-introspects, regenerates SQL, and retries once — no user intervention needed.
@@ -274,9 +284,11 @@ Max 2–3 LLM calls. No loops. CSV dialect short-circuits before Step 1.
 
 ## LLM Routing
 
-- **Groq Llama 3.3-70b**: SQL generation, hybrid synthesis, intent classification, answer generation
-- **Groq openai/gpt-oss-120b**: Python/pandas code generation for E2B sandboxes (CSV queries + chart analysis)
-- **Gemini 2.5 Flash via LangExtract**: Financial document extraction (full-document chunked extraction with char_interval source grounding)
+Prod runs `LLM_PRIMARY=bedrock` (region `us-east-1`, all Bedrock model vars set in Railway):
+- **gpt-oss-120b on Bedrock** (`BEDROCK_MODEL` / `BEDROCK_CODE_MODEL` / `BEDROCK_EXTRACT_MODEL`): chat, SQL generation, hybrid synthesis, intent classification, answer generation, Python/pandas code gen for E2B, LangExtract financial extraction (char_interval source grounding)
+- **gpt-oss-20b on Bedrock** (`BEDROCK_FALLBACK_MODEL`): retry target when a primary call fails
+- **Rollback** (`LLM_PRIMARY=groq`): Groq gpt-oss-20b / gpt-oss-120b primary, Gemini 2.5 Flash fallback + LangExtract
+- Model choice (DOCBOT-2585 live tie-out eval, 12 questions x3): gpt-oss-120b 34/36, gpt-oss-20b 33/36, Nemotron Super 120B 26/36, Nemotron Nano 30B 26/36, GLM 4.7 Flash 24/36
 
 ## Code Style
 
@@ -368,22 +380,36 @@ Always prefer to create utils and helper functions whenever required.
 
 ## Commit
 Always have Author: Sanshrit Singhai
+Always end the commit message with `Co-Authored-By: Sanshrit Singhai <97412712+ssinghai6@users.noreply.github.com>`
 Never use Co-Authored-By Claude
 
-## Jira Sync Rule
+## OpenProject Sync Rule (replaced Plane on 2026-11-22, Jira on 2026-11-17)
 
-**Whenever a DOCBOT ticket is implemented and its branch is merged into `main`, immediately update the corresponding Jira ticket to Done.**
+**OpenProject is the live ticket board. Keep it current without being asked.** Board: https://pm.docbot.space/projects/docbot/work_packages (backlog + sprints: `/projects/docbot/backlogs`). Self-hosted on AWS Lightsail; ops notes in `scripts/README-openproject.md`.
 
-- Jira project: `https://dbdocbot.atlassian.net` — project key `SCRUM`
-- Credentials: stored in `scripts/jira_update_status.py` (EMAIL + API_TOKEN)
-- Done transition ID: `51`
-- Also transition all subtasks of the story to Done
-- Run `python scripts/jira_update_status.py --dry-run` first to verify, then without `--dry-run`
-- Use `--epic EPIC-XX` to target a single epic
+Lifecycle: **planned -> board (New) -> picked (In progress, into the current sprint) -> PR (In testing) -> merged (Closed)**. Update the ticket at each of these moments, in the same session:
 
-**How to update:**
-1. Add the new ticket to the `TICKETS` list in `scripts/jira_update_status.py`
-2. Run `python scripts/jira_update_status.py` (script auto-resolves SCRUM keys by summary search)
+| Moment | State | Command |
+|---|---|---|
+| Anything planned (new story, bug, epic or plan doc adds tickets) | `New` on the board | add backlog rows + story files (below), merge, then full sync. A planned ticket must be on the board before the session ends, even if nobody builds it yet |
+| Bug found | `New`, type Bug | `--set-state DOCBOT-XXXX Todo --title "<title>" --type Bug` (plus a backlog row) |
+| Asked to build something with no DOCBOT ticket | create it | add a story file + backlog row (below), then `--set-state DOCBOT-XXXX "In Progress" --title "<title>"` (add `--type Bug` for a bug) |
+| Founder asks to pick a story or bug / work starts (branch created) | `In Progress` | `python3 scripts/openproject_sync.py --set-state DOCBOT-XXXX "In Progress"`. Puts it in the active sprint if it has none |
+| PR opened, CI running, or waiting on founder test/review | `Testing` | `... --set-state DOCBOT-XXXX Testing --note "PR #N"` |
+| PR merged into `main` (or the founder confirms a founder-only task is done) | `Done` | `... --set-state DOCBOT-XXXX Done --note "PR #N merged"` |
+| Dropped / superseded | `Cancelled` | `... --set-state DOCBOT-XXXX Cancelled --note "<why>"` |
+
+States map to OpenProject statuses: Todo/Backlog -> New, In Progress -> In progress, Testing -> In testing, Done -> Closed, Cancelled -> Rejected.
+
+- Close only the ticket that shipped. A PR that ships part of a story leaves it `Testing`/`In Progress`; an epic closes by hand when all its stories are Closed (its % done rolls up on its own).
+- Sprints: 2 weeks, S0..S7. Start one from Backlogs -> Start sprint (builds the sprint board), finish it there, then start the next. A sprint set on the board is kept by the sync.
+- Views: Work packages sidebar `1. Epics: progress`, `2. Roadmap`, `3. Done`, `4. Remaining`, `5. Current sprint`; Boards `Status board` and `DocBot: S<n>`. The default list hides Closed/Rejected.
+- Merged into `dev` only (AWS work) is `Testing`, not `Done`. Done = live on `main`/prod or verified by the founder.
+- New ticket = next free DOCBOT id in `project-tasks/docbot-master-backlog.md` + `project-tasks/stories/DOCBOT-XXXX.md` from the story template (`python3 scripts/validate_stories.py --only XXXX` must pass). Then run the full sync so the description, epic, sprint and points are filled: `git fetch origin && python3 scripts/openproject_sync.py` (reads `origin/main`; dry-run first with `--dry-run`).
+- The full sync loads every ticket in the repo docs: current backlog (Epic -> Feature -> User story, sprints S0..S7), old epics EPIC-01..23 from `docbot-v2-project-tracking.md` / `yc-10-day-plan.md`, and the EPIC-27..40 parking lot. It is idempotent and never moves a state backwards. Re-run it after any merge that changes those files.
+- Key: `OPENPROJECT_API_KEY` env var, else macOS Keychain item `OPENPROJECT_API_KEY`. Never write the key to a file, commit, PR, log or memory. If neither is set, ask the founder to run `! security add-generic-password -a docbot -s OPENPROJECT_API_KEY -w '<token>'` (token from My account -> Access tokens on the board) and stop the board step, not the code work.
+- `.github/workflows/openproject-sync.yml` does the same moves on GitHub events (branch created, PR opened, PR merged) and runs the full sync on every push to `main` that touches the backlog, stories or sync script, using repo secret `OPENPROJECT_API_KEY`. Manual full sync: `gh workflow run openproject-sync.yml`. Still run the commands yourself in-session; they are idempotent.
+- Plane (`scripts/plane_sync.py`) and Jira (`scripts/jira_update_status.py`) are retired. Do not update them. `plane_sync.py` stays only because the backlog parser lives in it.
 
 ## README Update Rule
 

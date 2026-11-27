@@ -41,6 +41,14 @@ class ExportFile:
     filename: str
 
 
+
+def _src_ref(src: dict) -> str:
+    """``X, Page N``; filing chunks without a printed page show the source only (DOCBOT-2637)."""
+    from api.utils.doc_refs import chunk_page
+
+    page = chunk_page(src)
+    return f"{src.get('source')}, Page {page}" if page is not None else str(src.get("source"))
+
 def _iso(value: Optional[datetime]) -> Optional[str]:
     return value.isoformat() if value else None
 
@@ -206,7 +214,7 @@ def render_export(detail: dict[str, Any], fmt: str, now: Optional[datetime] = No
             if msg["sources"]:
                 out += "\nSources:"
                 for src in msg["sources"]:
-                    out += f"\n  - {src.get('source')}, Page {src.get('page')}"
+                    out += f"\n  - {_src_ref(src)}"
             out += "\n"
         return ExportFile(out.encode("utf-8"), "text/plain", f"docbot_{short_id}.txt")
 
@@ -224,7 +232,7 @@ def render_export(detail: dict[str, Any], fmt: str, now: Optional[datetime] = No
             if msg["sources"]:
                 out += "\n**Sources:**\n"
                 for src in msg["sources"]:
-                    out += f"- {src.get('source')}, Page {src.get('page')}\n"
+                    out += f"- {_src_ref(src)}\n"
             out += "\n---\n"
         return ExportFile(out.encode("utf-8"), "text/markdown", f"docbot_{short_id}.md")
 

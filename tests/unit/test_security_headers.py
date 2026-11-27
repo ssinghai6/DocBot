@@ -102,7 +102,11 @@ def test_404_also_gets_headers(client: TestClient) -> None:
 
 
 @pytest.mark.parametrize("path", ["/docs", "/docs/oauth2-redirect", "/redoc"])
-def test_docs_paths_skip_csp_but_keep_other_headers(path: str) -> None:
+def test_docs_paths_skip_csp_but_keep_other_headers(path: str, monkeypatch: pytest.MonkeyPatch) -> None:
+    # DOCBOT-2596: the exemption exists only in ENV=dev (prod: tests/unit/test_docs_exposure.py).
+    import api.utils.security_headers as sh
+
+    monkeypatch.setattr(sh, "DOCS_ENABLED", True)
     headers = security_headers_for_path(path)
     assert "Content-Security-Policy" not in headers
     assert headers["X-Frame-Options"] == "DENY"

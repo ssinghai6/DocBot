@@ -32,6 +32,7 @@ import {
 } from "lucide-react"
 import { Button, Badge, Card } from "@/components/ui"
 import LogoMark from "@/components/LogoMark"
+import WaitlistForm from "@/components/WaitlistForm"
 import { LegalLinks } from "@/components/LegalPage"
 import { SITE_DESCRIPTION, SITE_URL } from "@/lib/site"
 
@@ -90,7 +91,7 @@ const features = [
   },
   {
     icon: <ShieldCheck className="w-6 h-6" />,
-    title: "Enterprise Security",
+    title: "Security Built In",
     description:
       "RBAC with viewer/analyst/admin roles, append-only audit logging, PII auto-masking, SAML SSO, and Fernet-encrypted credential storage.",
     iconColor: "text-[var(--color-success-500)]",
@@ -427,7 +428,7 @@ export default function LandingPage() {
             <div>
               <Badge variant="info" className="mb-6 text-sm px-3 py-1 gap-2 normal-case tracking-normal">
                 <Zap className="w-3.5 h-3.5" />
-                Enterprise Document Intelligence
+                Financial Document Intelligence
               </Badge>
 
               <h1 className="text-4xl sm:text-5xl lg:text-6xl font-bold leading-tight text-[var(--color-text-primary)] mb-6">
@@ -611,7 +612,7 @@ export default function LandingPage() {
           <div className="text-center mb-16">
             <Badge variant="info" className="mb-4">What DocBot Does</Badge>
             <h2 className="text-3xl sm:text-4xl font-bold text-[var(--color-text-primary)] mb-4">
-              Enterprise-grade intelligence across every data source
+              One analyst across every data source
             </h2>
             <p className="text-lg text-[var(--color-text-secondary)] max-w-2xl mx-auto">
               DocBot unifies your documents and databases into a single conversational
@@ -748,6 +749,22 @@ export default function LandingPage() {
         </div>
       </section>
 
+      {/* ── Early access (DOCBOT-2581) ── */}
+      <section id="early-access" className="py-20 px-4 sm:px-6 lg:px-8 border-t border-[var(--color-border-subtle)]">
+        <div className="max-w-md mx-auto">
+          <div className="text-center mb-6">
+            <Badge variant="info" className="mb-4">Get early access</Badge>
+            <h2 className="text-2xl sm:text-3xl font-bold text-[var(--color-text-primary)] mb-3">
+              Join the waitlist
+            </h2>
+            <p className="text-[var(--color-text-secondary)]">
+              Tell us who you are and we&apos;ll get back to you soon.
+            </p>
+          </div>
+          <WaitlistForm source="landing" />
+        </div>
+      </section>
+
       {/* ── CTA section ── */}
       <section className="py-24 px-4 sm:px-6 lg:px-8 relative overflow-hidden">
         <div className="absolute inset-0 -z-10 pointer-events-none" aria-hidden="true">
@@ -781,7 +798,7 @@ export default function LandingPage() {
             </span>
             <span className="flex items-center gap-2">
               <CircleCheck className="w-4 h-4 text-[var(--color-success-500)]" />
-              Enterprise-ready from day one
+              SSO, RBAC and audit log built in
             </span>
           </div>
         </div>
@@ -800,6 +817,7 @@ export default function LandingPage() {
           </div>
 
           <div className="flex items-center gap-4">
+            <Link href="/apis" className="hover:text-[var(--color-text-primary)] transition-colors duration-150 outline-none focus-visible:underline">API</Link>
             <LegalLinks />
             <span className="text-[var(--color-text-quaternary)]">|</span>
             <span>&copy; 2026 DocBot</span>

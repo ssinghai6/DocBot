@@ -35,6 +35,8 @@ SSE event types yielded:
 
 from __future__ import annotations
 
+from api.utils.doc_refs import chunk_header, chunk_key, chunk_label, chunk_page  # DOCBOT-2637
+from api.utils.yoy_facts import YOY_RULE, yoy_prompt_block  # DOCBOT-2637
 import asyncio
 import json
 import logging
@@ -210,9 +212,9 @@ async def _planner_node(state: AutopilotState) -> dict:
       degraded (P1c) — the run can never *silently* collapse to a one-step
       (or doc-only) investigation.
     """
-    api_key = os.getenv("groq_api_key")
-    if not api_key:
-        logger.warning("planner_node: groq_api_key not set — single-step fallback (degraded)")
+    from api.utils.llm_provider import llm_configured
+    if not llm_configured():
+        logger.warning("planner_node: no LLM key set — single-step fallback (degraded)")
         return {
             "plan": [state["question"]],
             "iteration": 0,
@@ -258,6 +260,17 @@ async def _planner_node(state: AutopilotState) -> dict:
                 "for reference only — confirm against the real schema during execution):\n"
                 + "\n".join(_lines) + "\n"
             )
+
+    # DOCBOT-2911: cross-source column mappings for the org (non-fatal; ""
+    # unless the org has >= 2 connected sources).
+    from api.cross_source_service import cross_source_context
+    from api.utils.billing_context import get_principal
+
+    _xs_principal = get_principal()
+    _xsource_block, _ = await cross_source_context(
+        _xs_principal.org_id if _xs_principal else None, state["question"], state.get("connection_id")
+    )
+    ontology_hint += _xsource_block
 
     # Build data-fetch guidance based on available sources
     if state.get("has_db"):
@@ -956,7 +969,7 @@ def make_executor_node(
 
                         scan_chunks(
                             [
-                                (f"{doc.metadata.get('source', 'Unknown')} p{doc.metadata.get('page', 0)}", doc.page_content)
+                                (chunk_label(doc.metadata), doc.page_content)
                                 for doc in docs
                             ],
                             session_id=session_id,
@@ -964,8 +977,7 @@ def make_executor_node(
                         )
 
                         context = "\n\n".join(
-                            f"Source: {doc.metadata.get('source', 'Unknown')}, "
-                            f"Page {doc.metadata.get('page', 0)}\n{doc.page_content}"
+                            f"{chunk_header(doc.metadata)}\n{doc.page_content}"
                             for doc in docs
                         )
                         result_entry["result"] = wrap_untrusted(context[:800])
@@ -987,12 +999,12 @@ def make_executor_node(
                         from api.utils.lineage import safe_snippet
                         seen_keys: set[str] = set()
                         for doc in docs:
-                            key = f"{doc.metadata.get('source', 'Unknown')}_{doc.metadata.get('page', 0)}"
+                            key = chunk_key(doc.metadata)
                             if key not in seen_keys:
                                 seen_keys.add(key)
                                 new_citations.append({
                                     "source": doc.metadata.get("source", "Unknown"),
-                                    "page": doc.metadata.get("page", 0),
+                                    "page": chunk_page(doc.metadata),
                                     # PII-masked excerpt + owning step for lineage
                                     "text": safe_snippet(doc.page_content),
                                     "step_label": step,
@@ -1774,8 +1786,8 @@ async def _synthesizer_node(state: AutopilotState) -> dict:
 
     degradation_reasons = [str(r) for r in (state.get("degradation_reasons") or [])]
 
-    api_key = os.getenv("groq_api_key")
-    if not api_key:
+    from api.utils.llm_provider import llm_configured
+    if not llm_configured():
         base = f"Investigation complete.\n\n{steps_text}"
         if data_summary_text:
             base = (
@@ -1811,6 +1823,10 @@ async def _synthesizer_node(state: AutopilotState) -> dict:
         )
     if discrepancy_instruction:
         system_prompt += f"{discrepancy_instruction}\n\n"
+    # DOCBOT-2637: year-over-year changes computed in code, never by the model
+    yoy_block = yoy_prompt_block(_collect_doc_context(state))
+    if yoy_block:
+        system_prompt += f"{yoy_block.lstrip()}\n{YOY_RULE}\n"
     if degradation_reasons:
         system_prompt += (
             "This investigation is DEGRADED — the following planned steps could "

@@ -124,7 +124,7 @@ function hastText(nodes: HastChild[]): string {
 }
 
 function codeLanguage(code: HastElement): string {
-  const cls = code.properties?.className
+  const cls: unknown = code.properties?.className // @types/hast 3.0.5 types it string[]; keep the string guard
   const list = Array.isArray(cls) ? cls : typeof cls === "string" ? cls.split(" ") : []
   for (const c of list) {
     if (typeof c === "string" && c.startsWith("language-")) return c.slice("language-".length).toLowerCase()

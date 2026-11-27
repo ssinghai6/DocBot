@@ -69,7 +69,7 @@ Every story is only "done" when ALL of the following are true. No exceptions.
 | EPIC-12 | UI Redesign & Finance Vertical | 5 | ✅ Done | Progressive disclosure UI (tabbed sidebar, collapsible sections, Cmd+K command palette), unified file upload, 3-color palette, finance-focused copy, guided onboarding empty state. |
 | EPIC-13 | Sandbox Demo Mode | 5 | ✅ Done | Pre-loaded TechCorp 10-K + SQLite financial database via `/api/demo/init`. One-click hybrid analysis demo with deliberate discrepancies for showcase. |
 | EPIC-15 | AI Engineering Maturity | 6 | ✅ Done (8/8) | DOCBOT-1501/1502 (tracing+dashboard), 1503 (eval CI gate), 1504 (structured-output validation), 1505 (multi-agent spike) — merged 2026-10-03. DOCBOT-1509 (LangSmith tracing, metadata only) — merged 2026-10-06. DOCBOT-1506 (exact-match response cache), 1507 (prompt versioning), 1508 (per-session cost ceiling) — merged 2026-10-07. Gap analysis 2026-09-27 (ai-engineer + senior-project-manager agents). |
-| EPIC-26 | Pre-seed Readiness | 7 | 🟡 In progress | DOCBOT-2601–2610 (19 pts) + pulled-in 2543/2546/2547/2548/2531/2533/2536/2537 (15 pts). Investor call 2026-12-01. Positioning: tie-out wedge + analyst vision + privacy tiers. AWS Wave A test env before Dec 1, cutover after. |
+| EPIC-26 | Pre-seed Readiness | 7 | 🟡 In progress | DOCBOT-2601-2610 (19 pts; 2609 code moved after Dec 1 on 2026-11-17, so 14 pts before Dec 1) + pulled-in 2543/2546/2547/2548/2531/2533/2536/2537/2532/2550/2551 (23 pts). Investor call 2026-12-01. Positioning: tie-out wedge + analyst vision + privacy tiers. AWS Wave A test env before Dec 1; cutover mid-January. Master backlog: `project-tasks/docbot-master-backlog.md`. |
 
 ---
 
@@ -2578,9 +2578,9 @@ All feature development complete through EPIC-13. Monetization sprint begins:
 
 ---
 
-## EPIC-25 — $100K ARR Run-Rate Sprint (2026-11-11 → 2027-02-11)
+## EPIC-25: $5K MRR + 6 Paying Logos by 2027-02-28 ($100K ARR run-rate is the stretch)
 
-Plans (local, gitignored): `project-tasks/exec-plan/{revenue-100k-plan,market-gtm-plan,aws-migration-exec-plan}.html`. Target $8,333 MRR. Gates W2 30 calls, W4 3 paid DPs, W8 $4K, W12 $8.3K; >50% miss → reprioritize.
+Plans (local, gitignored): `project-tasks/exec-plan/{revenue-100k-plan,market-gtm-plan,aws-migration-exec-plan}.html`. **Goal (revised 2026-11-17): >= $5K MRR + >= 6 paying logos by 2027-02-28.** Stretch: $8,333 MRR ($100K ARR run-rate). The $30K pooled-enterprise line is out of the Feb math. Gates (one set, EPIC-26 numbers replace 'W2 30 calls'): by 12-01: 150 contacted, >= 12 calls booked, >= 6 held, >= 3 quotable pains, 1 LOI or verbal DP yes; W4 (about 12-20): 3 paid DPs; W8 (about 01-06): >= $2.5K MRR or 4 paying logos; W12 (02-11): >= $4K MRR; 02-28: >= $5K MRR + 6 paying logos. W8/W12 are scaled from the new target (confirm). >50% miss: reprioritize. Gate tracker 2551 runs from 2026-11-17. Tickets are tracked in Plane (Jira dropped 2026-11-17). Outreach hook: "free tie-out of your last month".
 
 ### Status of existing tickets in this sprint
 | ID | Title | Status |
@@ -2588,22 +2588,25 @@ Plans (local, gitignored): `project-tasks/exec-plan/{revenue-100k-plan,market-gt
 | DOCBOT-2014 | Tie-out export (XLSX/PDF) | Merged — PR #100 |
 | DOCBOT-1810 | Pro subscription + dunning | PR #103 open — held for founder review (Stripe config + price-id filter follow-up) |
 
-### Revenue / sales ops (DOCBOT-2546..2553)
+### Revenue / sales ops (DOCBOT-2546..2553, 2577)
 | ID | Title | Pts | Pri | Acceptance criteria | Owner |
 |---|---|---|---|---|---|
 | DOCBOT-2546 | ICP prospect list (400 named) | 2 | P0 | 400 fractional CFOs / small advisory firms with source link; 200 by W1 | Founder + PM |
 | DOCBOT-2547 | Outreach sequence drafts | 1 | P0 | 3-touch email + LinkedIn drafts, each answering one panel objection; founder sends | PM |
 | DOCBOT-2548 | Discovery call script + qualification | 1 | P0 | Script, 5 qualifiers, disqualifiers, notes template | PM |
 | DOCBOT-2549 | Design-partner agreement template | 1 | P0 | $500/mo x 6; scope, data handling, exit; lawyer review | Founder |
-| DOCBOT-2550 | Tie-out demo script on prospect docs | 2 | P0 | 15-min demo on prospect 10-K/board pack vs books; proof-method wording only | PM + AI |
-| DOCBOT-2551 | Weekly gate tracker | 1 | P0 | Calls, demos, DPs, Pro, packs, MRR vs gates every Friday | Orchestrator |
+| DOCBOT-2550 | Tie-out demo script on prospect docs | 2 | P0 | 15-min demo on prospect 10-K/board pack vs books; proof-method wording only. **Pulled before Dec 1 as P0 (2026-11-17)**; delivers the free tie-out | PM + AI |
+| DOCBOT-2551 | Weekly gate tracker | 1 | P0 | Calls, demos, DPs, Pro, packs, MRR vs gates every Friday. **Starts 2026-11-17** | Orchestrator |
 | DOCBOT-2552 | Enterprise target list + pooled one-pager | 2 | P1 | 20 targets; $25-60K/yr; honest security posture, no SOC 2 claim | Founder + PM |
 | DOCBOT-2553 | Design-partner case studies (3) | 2 | P1 | Hours saved per close, discrepancies found; client approval | PM |
+| DOCBOT-2577 | QBO/Xero CSV export intake path for DP onboarding (CSV only, no connector) | 5 | P0 | QBO and Xero P&L, balance sheet, trial balance and GL CSV exports upload through the existing CSV path; title rows, date-range header, 'Total' rows, indented sub-accounts and parenthesized negatives handled in `csv_preprocessor`; a tie-out question on each fixture returns cited rows; fixtures + tests in `tests/`. Deps: 2532. New 2026-11-17 | senior-dev |
 
-### AWS migration (DOCBOT-2501..2530, + DOCBOT-2576)
+### AWS migration (DOCBOT-2501..2530, + DOCBOT-2576, 2578)
 Source: project-tasks/exec-plan/aws-migration-exec-plan.html. Founder checklist: project-tasks/exec-plan/founder-actions-aws.md.
 
 **Rescope 2026-11-14: $5K AWS credits, leave Railway.** G3 (cost gate) is MET via credits. The prod cutover is now in scope. Decisions: dev doubles as staging (no `envs/staging`); add `envs/prod` instead. Prod = on-demand Fargate (no Spot), RDS backups ≥7d + deletion protection + final snapshot, alarms. Prod RDS/EFS are created in private DB subnets and on one customer-managed KMS key from day one, because neither can be changed in place later (pulled forward from 2521/2523; the rest of those stories stays in Wave C). Prod data is never restored into dev.
+
+**Rescope 2026-11-17:** Wave A (test env, founder about 4 h) before Dec 1. Wave B is spread over Dec-Jan and the cutover 2519 moves to **mid-January, once 3 design partners have been stable for 2 weeks** (not Dec 16-29); 2520 follows 14 days later. New DOCBOT-2578 (MultiFernet dual key) precedes 2509.
 
 Gates: G0 none/$0 · G1 EPIC-16 security gate (required for 2519 only) · G2 dev smoke passed (2505) · G3 cost gate, **met 2026-11-14** · G4 cutover readiness = 7-day prod-env soak ≥99.5% (2513) + restore drill (2510) + rotation handled (2509) + rollback drill ≤15 min (2518) · G5 EPIC-24 Stage A merged (E5 only).
 
@@ -2612,20 +2615,20 @@ Lanes: **devops** = `infra/aws/**`, `.github/workflows/**` · **senior-dev** = `
 | Wave | Scope | Pts | Stories |
 |---|---|---|---|
 | A (now) | Dev live + prod env up with no traffic | 33 | 12 |
-| B | Cutover prep + cutover (2519) | 30 | 8 |
+| B | Cutover prep + cutover (2519, mid-January) | 33 | 9 |
 | C (post-cutover) | Railway sunset, hardening, platform handoff | 34 (10 active P1/P2, 24 deferred P3) | 11 |
-| **Total** | | **97** | **31** |
+| **Total** | | **100** | **32** |
 
 | Epic | Pts | Stories |
 |---|---|---|
 | AWS-E1 Dev env live | 14 | 7 |
-| AWS-E2 Prod environment (was Staging parity) | 27 | 7 |
+| AWS-E2 Prod environment (was Staging parity) | 30 | 8 |
 | AWS-E3 Prod cutover | 24 | 7 |
 | AWS-E4 Hardening | 19 | 6 |
 | AWS-E5 Platform handoff | 13 | 4 |
-| **Total** | **97** | **31** |
+| **Total** | **100** | **32** |
 
-Lane totals: devops 63 · senior-dev 10 · founder 24.
+Lane totals: devops 63 · senior-dev 13 · founder 24.
 
 | ID | Wave | Epic | Title | Pts | Pri | AC (short) | Deps | Gate | Owner |
 |---|---|---|---|---|---|---|---|---|---|
@@ -2641,14 +2644,15 @@ Lane totals: devops 63 · senior-dev 10 · founder 24.
 | DOCBOT-2511 | A | AWS-E2 | Alarms and notifications (prod + dev budget) | 3 | P1 | Prod alarms: ALB 5xx rate, unhealthy targets, ECS running < desired, RDS CPU/free storage/connections, EFS burst credits → SNS email; AWS Budgets on prod and on total account spend vs credits; each alarm shown firing in a forced test | 2508 | G3 | devops |
 | DOCBOT-2512 | A | AWS-E2 | Promote-by-digest dev → prod with manual approval | 3 | P1 | Prod deploys the digest dev already tested, no rebuild; GitHub Environment `aws-prod` approval required; OIDC trust uses `environment:aws-prod` sub; prod ECR tags immutable | 2508 | G3 | devops |
 | DOCBOT-2513 | A | AWS-E2 | 7-day prod-env soak + cost check (replaces 14-day staging soak) | 2 | P1 | Prod env (no customer traffic) synthetic health check every 5 min for 7 days ≥99.5%; one promote-by-digest run during soak; prod idle run rate recorded (target ≤$120/mo) and months-of-credit-runway stated vs expiry | 2576, 2511, 2512 | G4 part | devops |
-| DOCBOT-2509 | B | AWS-E2 | Secrets rotation: RDS-managed + app keys | 5 | P1 | RDS secret rotation triggers an EventBridge forced ECS redeploy; `/api/health` recovers ≤5 min in a forced-rotation test on prod env; runbook for Groq/Gemini/E2B/OWNER_KEY; `DB_ENCRYPTION_KEY` dual-key path proven or follow-up ticket filed (senior-dev if app change) | 2508 | G4 part | devops |
+| DOCBOT-2578 | B | AWS-E2 | DB_ENCRYPTION_KEY MultiFernet dual-key rotation (new 2026-11-17) | 3 | P1 | `DB_ENCRYPTION_KEY` accepts an ordered key list (new first) via MultiFernet; decrypt works with old or new key; idempotent re-encrypt script for stored creds and per-org DEK wrapping (1529); tests for old-only, both, new-only | none | G4 part | senior-dev |
+| DOCBOT-2509 | B | AWS-E2 | Secrets rotation: RDS-managed + app keys | 5 | P1 | RDS secret rotation triggers an EventBridge forced ECS redeploy; `/api/health` recovers ≤5 min in a forced-rotation test on prod env; runbook for Groq/Gemini/E2B/OWNER_KEY; `DB_ENCRYPTION_KEY` rotated through the 2578 dual-key path | 2508, 2578 | G4 part | devops |
 | DOCBOT-2510 | B | AWS-E2 | Prod restore drill (RDS PITR + EFS) | 3 | P1 | Restore prod RDS to a new instance with equal per-table row counts; restore EFS so a restored session answers; RTO/RPO recorded; drill resources deleted after | 2576 | G4 part | devops |
 | DOCBOT-2514 | B | AWS-E3 | Cutover runbook + go/no-go checklist | 3 | P1 | Timed steps (T-7d stable hostname, T-48h TTL 60s, T-0 write freeze, final dump, restore, verify, DNS flip, T+14d sunset), owner per step, comms template, go/no-go list incl. external callback URLs (Stripe, OAuth, SAML); dry-read signed by founder | 2508 | G3 | devops |
 | DOCBOT-2515 | B | AWS-E3 | Postgres rehearsal: Railway → prod RDS | 5 | P1 | Scripts in `infra/aws/scripts/`: `pg_dump -Fc` from Railway, `pg_restore --no-owner` into **prod RDS** (never dev); per-table row counts + checksums match; audit-log immutability trigger present and blocks UPDATE; sequences > max(id); encrypted connection decrypts with the carried-over key; duration recorded; rehearsal DB dropped before cutover | 2514, 2576 | G3 | senior-dev (devops support) |
 | DOCBOT-2516 | B | AWS-E3 | Chroma /data ADR + rehearsal (EFS copy vs re-embed) | 5 | P1 | ADR picks (A) tar `/data/chroma` from Railway onto prod EFS or (B) re-embed from kept source text; chosen path rehearsed on prod EFS; 20 sampled sessions top-5 chunk IDs Jaccard ≥0.9 vs Railway; ADR records `desired_count ≤1` until pgvector (PLAT-0208) | 2514, 2576 | G3 | senior-dev |
 | DOCBOT-2517 | B | AWS-E3 | DNS cutover plan: stable `api.docbot.space` + lowered TTL | 3 | P1 | **Start in Wave A**: `api.docbot.space` → Railway (Railway custom domain) and Vercel prod `RAILWAY_BACKEND_URL` switched to it ≥7 days before cutover; external callbacks (Stripe webhook, OAuth, SAML ACS) use the stable hostname; TTL 60s ≥48h before; post-flip check from 3 resolvers shows ALB ≤10 min | none (plan doc: 2514) | G3 | founder (devops writes plan) |
 | DOCBOT-2518 | B | AWS-E3 | Rollback plan + drill | 3 | P1 | Triggers written (5xx >2% for 10 min, failed health, p95 >2x baseline, data mismatch); drill flips a test hostname between ALB and Railway ≤15 min; data-loss window for writes on AWS before rollback stated and accepted by founder | 2515, 2516, 2517 | G4 part | devops |
-| DOCBOT-2519 | B | AWS-E3 | Founder-only: prod cutover execution | 3 | P1 | Go/no-go signed; write freeze announced; final dump/restore counts match; DNS flipped; 1-hour watch with no rollback trigger; prod smoke (health, PDF chat, CSV, hybrid, login, billing debit) passes | 2509, 2510, 2513, 2518 | G1 + G4 | founder |
+| DOCBOT-2519 | B | AWS-E3 | Founder-only: prod cutover execution (mid-January, after 3 design partners are stable) | 3 | P1 | Go/no-go signed; write freeze announced; final dump/restore counts match; DNS flipped; 1-hour watch with no rollback trigger; prod smoke (health, PDF chat, CSV, hybrid, login, billing debit) passes | 2509, 2510, 2513, 2518 | G1 + G4 | founder |
 | DOCBOT-2520 | C | AWS-E3 | Railway sunset (stop paying) | 2 | P1 | Railway warm + read-only 14 days; final pg_dump + /data tarball archived to S3 (CMK, 90-day retention); Railway services + volume deleted and plan cancelled; `RAILWAY_BACKEND_URL` renamed provider-neutral in Vercel (founder) and code (senior-dev) | 2519 | G3 | founder (senior-dev rename) |
 | DOCBOT-2521 | C | AWS-E4 | Private subnets for tasks + ADR on NAT vs VPC endpoints | 5 | P2 | ECS tasks move to private subnets (RDS/EFS already private via 2508); ADR prices NAT (~$33/mo + data) vs endpoints; LLM/E2B egress still needs NAT; static egress IP noted for customer DB allowlists; smoke passes after move | 2519 | G3 | devops |
 | DOCBOT-2523 | C | AWS-E4 | KMS CMKs for Secrets Manager, logs, ECR, S3 (RDS/EFS done in 2508) | 3 | P2 | CMKs with annual rotation and least-privilege policies on the remaining services; `aws kms describe-key` evidence saved | 2519 | G3 | devops |
@@ -2665,7 +2669,7 @@ Lane totals: devops 63 · senior-dev 10 · founder 24.
 | ID | title | pts | pri | AC | owner |
 |---|---|---|---|---|---|
 | DOCBOT-2531 | Trust package: security page, DPA template, security questionnaire answers | 3 | P0 | Public page states SSO/RBAC/encryption/audit log, read-only access, retention, sub-processors, and "no SOC 2 yet" with a roadmap date; DPA template reviewed; questionnaire answers ready to send; no "enterprise-grade" wording | product-manager + founder |
-| DOCBOT-2532 | Proof-run playbook (QBO/Xero CSV + PDF to cited tie-out table) | 5 | P0 | Runbook takes a closed month (CSV export + board pack PDF) to a match/mismatch table with PDF page + data row per line in <60 min; tested on demo set + one public 10-K; output opens in Excel | product-manager (ai-engineer for eval) |
+| DOCBOT-2532 | Proof-run playbook (QBO/Xero CSV + PDF to cited tie-out table) | 5 | P0 | Runbook takes a closed month (CSV export + board pack PDF) to a match/mismatch table with PDF page + data row per line in <60 min; tested on demo set + one public 10-K; output opens in Excel. **Pulled before Dec 1 as P0 (2026-11-17)**; powers the "free tie-out of your last month" hook | product-manager (ai-engineer for eval) |
 | DOCBOT-2533 | Design-partner offer and order form ($500/mo x 6) | 2 | P0 | Order form states client workspaces included, 6-month term, proof-run before first invoice, 8-slot cap, 2027-01-15 end; Stripe link/invoice tested; matches locked pricing exactly | founder |
 | DOCBOT-2534 | Pitch/landing copy alignment to locked buyer line | 2 | P1 | Hero uses buyer-facing line verbatim; "enterprise-grade security" and public fine-tuning claims removed ("eval loop"); LLM extraction baseline never cited as accuracy; coordinated with SEO landing PR (2536-2540) | senior-developer |
 | DOCBOT-2535 | Launch content + outreach drafts + funnel tracker | 3 | P1 | Drafts: 3 public 10-K tie-out posts, 40 DMs, 3 emails, launch post; weekly tracker DM->call, call->proof-run, proof-run->paid; nothing sent by agents | product-manager |
@@ -2764,9 +2768,9 @@ Source plan: `~/.claude/plans/overall-i-m-lost-right-validated-mochi.md`. Pitch 
 | DOCBOT-2606 | Investor Q&A prep | 1 | P0 | Written answers to the top 20 questions (solo founder, why not ChatGPT/Copilot, data privacy, moat, LLM cost, why fractional CFOs, raise size). Two mock calls held | founder + PM agent | 11-29 |
 | DOCBOT-2607 | Raise ask + use of funds + 18-month milestones | 1 | P0 | Amount, instrument (SAFE cap), 18-month plan tied to the $100K ARR goal, Firm workspace, single-tenant deploy, first hire | founder | 11-25 |
 | DOCBOT-2608 | Deployment-options + data-flow page | 1 | P1 | Diagram of what leaves the box today (LLM calls to Groq/Gemini, E2B code runs) vs. what stays local (embeddings, reranker, encrypted creds); three tiers: Hosted (now), Private model (2609), Single-tenant in your AWS (docbot-platform). Feeds deck slide + trust page | PM agent | 11-24 |
-| DOCBOT-2609 | Private model mode (OpenAI-compatible LLM endpoint) | 5 | P1 | `LLM_BASE_URL` / `LLM_MODEL` / `LLM_API_KEY` env in `api/utils/llm_provider.py` routes all chat calls to a self-hosted OpenAI-compatible server (Ollama/vLLM). Groq→Gemini fallback disabled in this mode so no data leaves. Python sandbox reports "unavailable in private mode" instead of calling E2B. Demoed with Wi-Fi off on the demo dataset. Unit tests mock the endpoint. Branch `feature/DOCBOT-2609-private-model-mode` | senior-dev agent | 11-26 (stretch; drop if P0 slips) |
+| DOCBOT-2609 | Private model mode (OpenAI-compatible LLM endpoint) | 5 | P1 | `LLM_BASE_URL` / `LLM_MODEL` / `LLM_API_KEY` env in `api/utils/llm_provider.py` routes all chat calls to a self-hosted OpenAI-compatible server (Ollama/vLLM). Groq→Gemini fallback disabled in this mode so no data leaves. Python sandbox reports "unavailable in private mode" instead of calling E2B. Demoed with Wi-Fi off on the demo dataset. Unit tests mock the endpoint. Branch `feature/DOCBOT-2609-private-model-mode` | senior-dev agent | **after 12-01** (moved 2026-11-17; mid-January slot in the master backlog). Until it ships, the deck says private model mode is next, not demoed |
 | DOCBOT-2610 | Investor list + follow-up pipeline | 1 | P1 | 15–25 more angels/pre-seed funds (fintech/AI infra) beyond Dec 1, with intros requested from the Dec 1 investor if it goes well | founder | 11-30 |
-| **Total** | | **19** | | | | |
+| **Total** | | **19** (14 before Dec 1; 2609 moved after) | | | | |
 
 ### Existing tickets pulled into the 14 days
 
@@ -2780,9 +2784,12 @@ Source plan: `~/.claude/plans/overall-i-m-lost-right-validated-mochi.md`. Pitch 
 | DOCBOT-2533 | Design-partner offer + order form ($500/mo × 6) | 2 | Lets a yes become an LOI before Dec 1 | 11-24 |
 | DOCBOT-2536 | Merge PR #99 (set `NEXT_PUBLIC_SITE_URL` on Vercel) | 2 | Site investors see | 11-19 |
 | DOCBOT-2537 | Landing copy realignment to wedge line + /landing dedupe | 3 | Site matches deck | 11-24 |
-| **Total** | | **15** | | |
+| DOCBOT-2532 | Proof-run playbook (QBO/Xero CSV + PDF to cited tie-out table), P0 | 5 | Turns the outreach hook "free tie-out of your last month" into a deliverable (added 2026-11-17) | 11-24 |
+| DOCBOT-2550 | Tie-out demo on prospect docs, P0 | 2 | The free tie-out on each booked call (added 2026-11-17) | 11-26 |
+| DOCBOT-2551 | Weekly gate tracker | 1 | Gates must be measured from now (added 2026-11-17) | starts 11-17, every Fri |
+| **Total** | | **23** | | |
 
-**Traction target by Dec 1** (realistic from zero; replaces the W2 gate of 30 calls): 150 contacted, **≥12 calls booked, ≥6 held, ≥3 quotable pain statements, 1 LOI or verbal design-partner yes.** Even 6 real calls beat a slide of assumptions.
+**Traction target by Dec 1** (realistic from zero; replaces the W2 gate of 30 calls): 150 contacted, **≥12 calls booked, ≥6 held, ≥3 quotable pain statements, 1 LOI or verbal design-partner yes.** Even 6 real calls beat a slide of assumptions. Outreach hook: **"free tie-out of your last month"** (2532 proof run on the prospect's own export + board pack, shown live with 2550).
 
 ### AWS test env (founder's ask). Wave A only before Dec 1, no cutover
 
@@ -2801,7 +2808,7 @@ docbot.space keeps serving from Vercel + Railway until cutover. "Test" = the AWS
 | DOCBOT-2511 / 2512 | Alarms (PR #109), promote-by-digest (PR #113) | 6 | devops agent | merge by 11-30 |
 | **Total** | | **28** | | |
 
-Founder AWS time before Dec 1: about 4 hours (checklist in `project-tasks/exec-plan/founder-actions-aws.md`, items 1–9 plus the applies). If Wave A slips, it slips. The pitch does not depend on it.
+Founder AWS time before Dec 1: about 4 hours (checklist in `project-tasks/exec-plan/founder-actions-aws.md`, items 1-9 plus the applies). If Wave A slips, it slips. The pitch does not depend on it. The prod cutover (2519) is mid-January, after 3 design partners are stable, not December.
 
 ---
 
@@ -2809,14 +2816,14 @@ Founder AWS time before Dec 1: about 4 hours (checklist in `project-tasks/exec-p
 
 | Day | Founder | Agents (parallel) |
 |---|---|---|
-| Tue 11-17 | Approve this plan; sign off positioning (2601) | PM agent drafts 2601, 2547, 2548 |
-| Wed 11-18 | Run 2543 live eval; answer AWS checklist items 1–9 | devops agent: 2501 review |
+| Tue 11-17 | Approve this plan; sign off positioning (2601) | PM agent drafts 2601, 2547 (hook: free tie-out of your last month), 2548; 2551 gate tracker starts |
+| Wed 11-18 | Run 2543 live eval; answer AWS checklist items 1-9 | devops agent: 2501 review; PM + ai-engineer agents: 2532 playbook on the demo set |
 | Thu 11-19 | Approve outreach; build 50 prospects; send first 25; set Vercel var → merge #99 | senior-dev agent: 2537 copy |
 | Fri 11-20 | 50 more prospects, send 25; AWS bootstrap apply (2502/2503) | PM agent: deck v1 outline, 2608 diagram |
-| Sat–Sun 11-21/22 | Dev apply (2504); finish deck v1; list at 150 | senior-dev agent: 2609 private mode |
-| Mon 11-23 | Follow-ups; first calls | devops agent: 2505 smoke on api-dev |
+| Sat-Sun 11-21/22 | Dev apply (2504); finish deck v1; list at 150 | PM + ai-engineer agents: 2532 tested on one public 10-K + a QBO-style CSV (2609 moved after Dec 1) |
+| Mon 11-23 | Follow-ups; first calls; offer the free tie-out | devops agent: 2505 smoke on api-dev; PM agent: 2550 demo on the first prospect's docs |
 | Tue 11-24 | Calls; DP order form (2533) | PM agent: trust package (2531) |
-| Wed 11-25 | Calls; raise ask + use of funds (2607) | merge 2537, 2609 if green |
+| Wed 11-25 | Calls; raise ask + use of funds (2607) | merge 2537 (2609 moved after Dec 1) |
 | Thu 11-26 | (Thanksgiving: light day) Record demo video (2603) | — |
 | Fri 11-27 | **Prod freeze.** Golden path 10× (2604); deck v2 with call quotes | senior-dev agent fixes only |
 | Sat 11-28 | Mock call #1 with a friend; revise | PM agent: Q&A doc (2606) |
@@ -2830,12 +2837,12 @@ Founder AWS time before Dec 1: about 4 hours (checklist in `project-tasks/exec-p
 
 | Phase | Dates | Focus | Tickets | Exit gate |
 |---|---|---|---|---|
-| P1: Follow-up + test→prod | Dec 2–20 | Investor follow-ups; AWS prod apply, 7-day soak, rehearsals, **cutover api.docbot.space → AWS**, then Railway sunset | 2576, 2513, 2509, 2510, 2514–2519, 2520 (AWS Wave B, 30 pts + 2520) | Prod smoke on AWS passes; Railway cancelled; at least 2 paid DPs |
-| P2: Design partners live | Dec 14 – Jan 10 | Onboard DPs on their own month-end docs; case studies | 2550, 2532, 2553, 1810 (merge PR #103), 2544, 2545 | 3 paid DPs (W4 gate, now about Dec 20) |
-| P3: Firm workspace | Jan 5 – Feb 1 | Per-client workspaces and invites, the thing Firm buyers pay for | 2562–2568, 2570, 2575, 2569 | Firm tier sellable |
-| P4: Privacy tier 2 | Feb+ (or when a buyer asks) | Single-tenant deploy in the customer's AWS = docbot-platform EPIC-01..03 (PLAT-) | per docbot-platform EPICS.md | First isolation contract |
-| Parked | — | Platform EPIC-06/07, AWS Wave C P3 (2522, 2524–2530), SOC 2 groundwork | — | Post-raise |
+| P1: Design partners live | Dec 2 to Jan 12 | Investor follow-ups; onboard DPs on their own QBO/Xero exports + board packs (free tie-out of last month, then paid); safety before client data flows | 2577, 2549, 1810 (merge PR #103), 2544, 2545; 2812, 3501, 3512, 3510, 3513 | 3 paid DPs (W4, about 12-20); W8 (about 01-06): >= $2.5K MRR or 4 paying logos |
+| P2: AWS Wave B prep (parallel) | Dec 2 to Jan 12 | Prod apply, soak, rotation, restore drill, rehearsals, DNS, rollback drill; G1 security gate | 2578, 2576, 2513, 2509, 2510, 2514, 1613, 1614, 2517, 2515, 2516, 2518 | G4 ready; 3 DPs stable for 2 weeks |
+| P3: Cutover + Firm workspace | Jan 13 to Feb 28 | **Cutover api.docbot.space to AWS mid-January**, Railway sunset 14 days later, Wave C SOC 2 evidence; Stage A, then per-client workspaces, invites, billing; 2609 private model mode code | 2519, 2520, 2523, 2524, 2526; 2401-2406; 2562-2571, 2573-2575; 2312, 2609; 2553, 2552 | W12 (02-11): >= $4K MRR; **02-28: >= $5K MRR + 6 paying logos** (stretch $8.3K MRR) |
+| P4: Phase 2 | Mar 1+ (only if the Feb gate is met) | Remaining EPIC-25 items, then parking-lot pulls | 2521, 2572, 2539, 2540, 2304, 2308, 2309; EPIC-27..40 only on a paid or written buyer ask | Per pulled item |
+| Parked | n/a | EPIC-27..40 parking lot (see master backlog section 7), Platform EPIC-06/07, AWS Wave C P3 (2522, 2525, 2527-2530), EPIC-19 | n/a | A buyer pays or asks in writing (logged in 2551) |
 
-Rule from here: **one ticket per session**. Weekly Friday check against the gates (DOCBOT-2551). If more than half the gates miss, re-prioritize, don't add tracks.
+Rule from here: **one ticket per session**, in the order of `project-tasks/docbot-master-backlog.md` section 6. Weekly Friday check against the gates (DOCBOT-2551). After merge, update the ticket in Plane (Jira dropped 2026-11-17). If more than half the gates miss, re-prioritize, don't add tracks.
 
 ---

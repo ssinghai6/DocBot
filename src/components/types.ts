@@ -171,7 +171,7 @@ export type DbSchemaResponse = z.infer<typeof DbSchemaResponseSchema>
 
 export type Citation = {
   source: string
-  page: number
+  page?: number | null  // DOCBOT-2637: null for filing chunks without a printed page
   text: string
 }
 

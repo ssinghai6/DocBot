@@ -57,7 +57,6 @@ interface UseChatHandlersParams {
 
   setMessages: React.Dispatch<React.SetStateAction<import("@/components/types").Message[]>>
   setInput: React.Dispatch<React.SetStateAction<string>>
-  setIsLoading: React.Dispatch<React.SetStateAction<boolean>>
   setUploadedFiles: React.Dispatch<React.SetStateAction<File[]>>
   setSessionId: React.Dispatch<React.SetStateAction<string | null>>
   setUploadProgress: React.Dispatch<React.SetStateAction<number | null>>
@@ -122,7 +121,6 @@ export function useChatHandlers(params: UseChatHandlersParams) {
 
     setMessages,
     setInput,
-    setIsLoading,
     setUploadedFiles,
     setSessionId,
     setUploadProgress,
@@ -632,7 +630,6 @@ export function useChatHandlers(params: UseChatHandlersParams) {
     }
 
     setUploadedFiles(files);
-    setIsLoading(true);
     setUploadProgress(0);
     setFileUploadState("uploading");
 
@@ -683,7 +680,6 @@ export function useChatHandlers(params: UseChatHandlersParams) {
       setUploadedFiles([]);
       setTimeout(() => setFileUploadState("idle"), 3000);
     } finally {
-      setIsLoading(false);
       setUploadProgress(null);
       if (fileInputRef.current) fileInputRef.current.value = "";
     }
@@ -721,8 +717,17 @@ export function useChatHandlers(params: UseChatHandlersParams) {
     }
   };
 
+  // DOCBOT-2637: the Inspector shows the selected answer's lineage/artifact;
+  // drop it with the answers so it never describes a run that is gone.
+  const clearInspector = () => {
+    const ui = useUIStore.getState();
+    ui.selectLineage(null);
+    ui.selectArtifact(null);
+  };
+
   const clearChat = () => {
     setMessages([]);
+    clearInspector();
     showToast("info", "Chat cleared");
   };
 
@@ -730,6 +735,7 @@ export function useChatHandlers(params: UseChatHandlersParams) {
     setSessionId(null);
     setUploadedFiles([]);
     setMessages([]);
+    clearInspector();
     showToast("info", "Session cleared");
   };
 

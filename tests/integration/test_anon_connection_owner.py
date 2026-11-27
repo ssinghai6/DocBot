@@ -25,6 +25,7 @@ from sqlalchemy.pool import StaticPool
 
 import api.api_key_service as api_key_service
 import api.index as idx
+import api.routes.v1_routes as v1_routes
 from api import rbac_service
 from api.api_key_service import APIKeyRecord
 from api.utils import request_guard
@@ -43,9 +44,9 @@ USERS = {
 
 CONN_A, CONN_B, CONN_LEGACY = "conn-anon-a", "conn-anon-b", "conn-legacy"
 SESS_A, SESS_B, SESS_MEMBER = "sess-anon-a", "sess-anon-b", "sess-member"
-SCHEMA_A = [{"name": "anon_a_table", "columns": [{"name": "x", "type": "INT"}]}]
-SCHEMA_B = [{"name": "anon_b_table", "columns": [{"name": "y", "type": "INT"}]}]
-SCHEMA_LEGACY = [{"name": "legacy_table", "columns": [{"name": "z", "type": "INT"}]}]
+SCHEMA_A = [{"name": "anon_a_table", "columns": [{"name": "x", "type": "INT"}], "schema_fmt": 2}]
+SCHEMA_B = [{"name": "anon_b_table", "columns": [{"name": "y", "type": "INT"}], "schema_fmt": 2}]
+SCHEMA_LEGACY = [{"name": "legacy_table", "columns": [{"name": "z", "type": "INT"}], "schema_fmt": 2}]
 
 
 @pytest.fixture
@@ -97,6 +98,7 @@ async def db(monkeypatch):
             ])
 
     monkeypatch.setattr(idx, "async_session_factory", factory)
+    monkeypatch.setitem(v1_routes._d, "async_session_factory", factory)  # DOCBOT-3901: /v1 lives in v1_routes
     monkeypatch.setattr(rbac_service, "_users_table", idx.users_table)
     monkeypatch.setattr(rbac_service, "_user_sessions_table", idx.user_sessions_table)
     monkeypatch.setattr(rbac_service, "_async_session_factory", factory)
