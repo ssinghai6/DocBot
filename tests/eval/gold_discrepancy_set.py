@@ -121,6 +121,21 @@ GOLD_CASES: list[DiscrepancyCase] = [
         ),
     ),
 
+    DiscrepancyCase(
+        name="share_count_sub_floor_gap",
+        doc_context="Shares outstanding: 1,204,512,300",
+        sql_metadata={"result_preview": [{"shares_outstanding": 1_200_000_000}]},
+        expected=set(),
+        note="DOCBOT-2707: 0.38% gap on a share count; the $1M floor is for dollars only.",
+    ),
+    DiscrepancyCase(
+        name="dollar_gap_below_min_rel",
+        doc_context="Total Revenue: $12,345.6M",
+        sql_metadata={"result_preview": [{"total_revenue": 12_352.0}]},
+        expected=set(),
+        note="DOCBOT-2707: $6.4M gap is only 0.05%, under the 0.1% minimum. Must not flag.",
+    ),
+
     # --- HARD NEGATIVES: unit / granularity mismatches must be SUPPRESSED ------
     DiscrepancyCase(
         name="unit_mismatch_billions_vs_millions",

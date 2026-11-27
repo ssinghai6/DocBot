@@ -352,7 +352,7 @@ def _tieout_tolerance(dv: NumericValue, default: float) -> float:
 def _material(dv: NumericValue, delta: float, rel_diff: float) -> bool:
     """DOCBOT-2707: a sub-floor gap that is still a material dollar break."""
     return (
-        dv.kind != "percent"
+        dv.kind == "currency"  # dollar floor only for $ figures, never share/unit counts
         and abs(delta) >= ABS_MATERIALITY_FLOOR
         and rel_diff >= max(ABS_MATERIALITY_MIN_REL, dv.rounding)
     )
