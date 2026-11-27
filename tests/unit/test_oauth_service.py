@@ -74,20 +74,41 @@ class TestOAuthState:
         state = generate_oauth_state()
         assert validate_oauth_state(state) is True
 
-    def test_state_can_only_be_used_once(self):
+    def test_state_validates_on_another_process(self, monkeypatch):
+        # DOCBOT-4017: no process memory, so a fresh replica (or post-redeploy process) accepts it
+        import api.oauth_service as svc
         state = generate_oauth_state()
-        validate_oauth_state(state)  # consume it
-        assert validate_oauth_state(state) is False
+        getattr(svc, "_pending_states", {}).clear()  # simulate a replica that never saw this state
+        assert validate_oauth_state(state) is True
 
     def test_unknown_state_rejected(self):
         assert validate_oauth_state("totally-fake-state") is False
+        assert validate_oauth_state("") is False
+
+    def test_forged_state_rejected(self):
+        nonce, issued, sig = generate_oauth_state().split("~")
+        assert validate_oauth_state(f"{nonce}x~{issued}~{sig}") is False
+        assert validate_oauth_state(f"{nonce}~{int(issued) + 1000}~{sig}") is False
+        assert validate_oauth_state(f"{nonce}~{issued}~{'0' * len(sig)}") is False
+
+    def test_state_signed_with_other_key_rejected(self, monkeypatch):
+        state = generate_oauth_state()
+        monkeypatch.setenv("DB_ENCRYPTION_KEY", "a-different-key")
+        assert validate_oauth_state(state) is False
 
     def test_expired_state_rejected(self, monkeypatch):
         import api.oauth_service as svc
         state = generate_oauth_state()
-        # Manually set expiry to the past
-        svc._pending_states[state] = time.time() - 1
+        real = time.time()
+        monkeypatch.setattr(svc.time, "time", lambda: real + svc._STATE_TTL + 1)
         assert validate_oauth_state(state) is False
+
+    def test_state_within_ttl_accepted(self, monkeypatch):
+        import api.oauth_service as svc
+        state = generate_oauth_state()
+        real = time.time()
+        monkeypatch.setattr(svc.time, "time", lambda: real + svc._STATE_TTL - 5)
+        assert validate_oauth_state(state) is True
 
 
 # ---------------------------------------------------------------------------
