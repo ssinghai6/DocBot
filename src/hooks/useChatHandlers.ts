@@ -375,8 +375,7 @@ export function useChatHandlers(params: UseChatHandlersParams) {
     setInput("");
     setConnectors([]);
     const ui = useUIStore.getState();
-    ui.selectLineage(null);
-    ui.selectArtifact(null);
+    ui.resetChat();
     ui.setExpiredSessionId(null);
     ui.setPickedTool(null);
     showToast("info", "Signed out");
@@ -660,6 +659,11 @@ export function useChatHandlers(params: UseChatHandlersParams) {
       await ensureOk(response, "Failed to upload");
 
       const data = await response.json();
+      // DOCBOT-2719: a new document replaces the old one; its answers would cite a session that is gone.
+      if (sessionId && sessionId !== data.session_id) {
+        setMessages([]);
+        useUIStore.getState().resetChat();
+      }
       setSessionId(data.session_id);
 
       if (data.suggested_persona && data.suggested_persona !== "Generalist") {
@@ -719,11 +723,8 @@ export function useChatHandlers(params: UseChatHandlersParams) {
 
   // DOCBOT-2637: the Inspector shows the selected answer's lineage/artifact;
   // drop it with the answers so it never describes a run that is gone.
-  const clearInspector = () => {
-    const ui = useUIStore.getState();
-    ui.selectLineage(null);
-    ui.selectArtifact(null);
-  };
+  // DOCBOT-2719: also aborts an in-flight answer so it can't repopulate the cleared chat.
+  const clearInspector = () => useUIStore.getState().resetChat();
 
   const clearChat = () => {
     setMessages([]);

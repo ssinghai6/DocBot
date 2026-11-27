@@ -203,6 +203,10 @@ export function useChatSubmit(params: UseChatSubmitParams) {
       setInput("");
     }
     setIsLoading(true);
+    // DOCBOT-2719: a chat reset (clear, demo, new doc) aborts this stream via the UI store.
+    const ctrl = new AbortController();
+    const { signal } = ctrl;
+    useUIStore.getState().setChatAbort(ctrl);
 
     // DOCBOT-2632: the backend lost this session (404). A demo restarts on the
     // same dataset and the question is re-sent once; anything else explains why.
@@ -343,6 +347,7 @@ export function useChatSubmit(params: UseChatSubmitParams) {
                 method: "POST",
                 headers: { "Content-Type": "application/json" },
                 body: autopilotBody,
+                signal,
               });
               if (r.ok && r.body) return r;
               await throwIfSignInGated(r);
@@ -355,7 +360,7 @@ export function useChatSubmit(params: UseChatSubmitParams) {
               }
               throw new Error(`Autopilot HTTP ${r.status}`);
             } catch (e) {
-              if (e instanceof HttpGateError || e instanceof SessionGoneError) throw e;
+              if (e instanceof HttpGateError || e instanceof SessionGoneError || signal.aborted) throw e;
               lastErr = e;
               if (attempt === 0) {
                 await new Promise(res => setTimeout(res, 1500));
@@ -489,6 +494,7 @@ export function useChatSubmit(params: UseChatSubmitParams) {
           }
         }
       } catch (err) {
+        if (signal.aborted) return;
         if (err instanceof SessionGoneError) {
           await onSessionGone();
           return;
@@ -527,6 +533,7 @@ export function useChatSubmit(params: UseChatSubmitParams) {
             chart_type: chartType,
             history: recentHistory,
           }),
+          signal,
         });
 
         await throwIfSignInGated(response);
@@ -595,6 +602,7 @@ export function useChatSubmit(params: UseChatSubmitParams) {
         }
         setMessages(prev => fillEmptyAssistant(prev, EMPTY_ANSWER_MESSAGE));
       } catch (error: unknown) {
+        if (signal.aborted) return;
         if (error instanceof SessionGoneError) {
           await onSessionGone();
           return;
@@ -638,6 +646,7 @@ export function useChatSubmit(params: UseChatSubmitParams) {
             has_docs: true,
             history: recentHistory,
           }),
+          signal,
         });
 
         await throwIfSignInGated(response);
@@ -728,6 +737,7 @@ export function useChatSubmit(params: UseChatSubmitParams) {
         }
         if (!expired) setMessages(prev => fillEmptyAssistant(prev, EMPTY_ANSWER_MESSAGE));
       } catch (error: unknown) {
+        if (signal.aborted) return;
         if (error instanceof SessionGoneError) {
           await onSessionGone();
           return;
@@ -779,7 +789,8 @@ export function useChatSubmit(params: UseChatSubmitParams) {
           message: userMsg.content,
           history: recentHistory,
           persona: personaToSend,
-        })
+        }),
+        signal,
       });
 
       await throwIfSignInGated(response);
@@ -833,6 +844,7 @@ export function useChatSubmit(params: UseChatSubmitParams) {
       }
       if (!expired) setMessages(prev => fillEmptyAssistant(prev, EMPTY_ANSWER_MESSAGE));
     } catch (error: unknown) {
+      if (signal.aborted) return;
       if (error instanceof SessionGoneError) {
         await onSessionGone();
         return;
