@@ -255,9 +255,8 @@ export function useChatSubmit(params: UseChatSubmitParams) {
           const pref = EXPERT_PERSONAS[routing.persona as keyof typeof EXPERT_PERSONAS]?.tool_preference;
           if (pref === "sql_first" && isDbConnected && !sessionId) effectiveChatMode = "database";
           else if (pref === "rag_first" && sessionId && !isDbConnected) effectiveChatMode = "docs";
-        } else {
-          personaToSend = "Generalist";
         }
+        // Low confidence keeps selectedPersona, the persona the header shows (DOCBOT-2702).
       }
     }
 
