@@ -413,8 +413,8 @@ export default function Sidebar(props: SidebarProps) {
           )}
 
           {/* TOOLS TAB */}
-          {activeTab === "tools" && (
-            <div>
+          {/* Kept mounted so EdgarPanel state survives tab switches (DOCBOT-2701). */}
+          <div hidden={activeTab !== "tools"}>
               {/* EDGAR */}
               <EdgarPanel
                 onFilingIngested={onEdgarFilingIngested}
@@ -477,8 +477,7 @@ export default function Sidebar(props: SidebarProps) {
                   )}
                 </div>
               </div>
-            </div>
-          )}
+          </div>
 
           {/* SETTINGS TAB */}
           {activeTab === "settings" && (

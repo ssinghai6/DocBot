@@ -716,7 +716,7 @@ export default function Home() {
         onEdgarFilingIngested={(sid: string, label: string) => {
           setSessionId(sid)
           setSelectedPersona("Finance Expert")
-          setMessages([])
+          setUploadedFiles([new File([], label)])
           showToast("success", `Ready to chat with ${label}`)
         }}
       />
