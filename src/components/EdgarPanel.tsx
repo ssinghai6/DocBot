@@ -232,14 +232,14 @@ export default function EdgarPanel({ onFilingIngested, showToast, expanded, setE
       }
       setIngestResults(prev => ({ ...prev, ...newResults }))
 
-      // Notify for each successful ingest
-      const ingested = results.filter(r => r.session_id)
-      if (ingested.length > 0) {
-        const last = ingested[ingested.length - 1]
-        if (last.session_id) {
-          onFilingIngested(last.session_id, `${selectedCompany.ticker} ${filingType} (${filingCount} filings)`)
-        }
-        showToast("success", `Ingested ${data.summary?.ingested ?? ingested.length} of ${data.summary?.total ?? results.length} filings`)
+      // DOCBOT-2722: one combined session holds every filing that loaded.
+      const combinedId: string | null | undefined = data.combined_session_id
+      if (combinedId) {
+        const n: number = data.ingested ?? results.filter(r => r.session_id).length
+        onFilingIngested(combinedId, `${selectedCompany.ticker} ${filingType} (${n} ${n === 1 ? "filing" : "filings"})`)
+        showToast("success", `Ingested ${n} of ${data.total ?? results.length} filings`)
+      } else {
+        showToast("error", "No filings could be ingested")
       }
     } catch (err: unknown) {
       const msg = err instanceof Error ? err.message : "Batch ingest failed"

@@ -3618,7 +3618,7 @@ async def edgar_ingest_batch(
     request: Request, body: EdgarBatchIngestRequest, scope: CallerScope = _caller_scope
 ):
     """Ingest multiple years of SEC filings at once."""
-    from api.edgar_service import ingest_multiple_filings
+    from api.edgar_service import combine_filing_sessions, ingest_multiple_filings
 
     # DOCBOT-1623: cap per call, then charge one EDGAR unit per filing.
     if not 1 <= body.count <= request_guard.EDGAR_BATCH_MAX:
@@ -3641,10 +3641,23 @@ async def edgar_ingest_batch(
         get_embeddings_fn=get_embeddings,
         extracted_fields_store=EXTRACTED_FIELDS,
     )
+    # DOCBOT-2722: chat takes one session_id, so merge all successes into one.
+    combined = await combine_filing_sessions(
+        results,
+        ticker=body.ticker,
+        filing_type=body.filing_type,
+        owner=owner_values(scope),
+        sessions_table=sessions_table,
+        async_session_factory=async_session_factory,
+        vector_stores=VECTOR_STORES,
+        get_embeddings_fn=get_embeddings,
+        extracted_fields_store=EXTRACTED_FIELDS,
+    )
     return {
         "cik": body.cik,
         "ticker": body.ticker,
         "filing_type": body.filing_type,
+        "combined_session_id": combined,
         "results": results,
         "total": len(results),
         "ingested": sum(1 for r in results if "session_id" in r),

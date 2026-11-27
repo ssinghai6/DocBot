@@ -370,3 +370,51 @@ async def ingest_multiple_filings(
             })
 
     return results
+
+
+async def combine_filing_sessions(
+    results: list[dict[str, Any]],
+    *,
+    ticker: str,
+    filing_type: str,
+    owner: dict[str, Any] | None = None,
+    sessions_table: Any,
+    async_session_factory: Any,
+    vector_stores: dict,
+    get_embeddings_fn: Any,
+    extracted_fields_store: dict,
+) -> str | None:
+    """DOCBOT-2722: one caller-owned session holding every successful filing.
+
+    Chat/hybrid/autopilot take a single session_id, so a batch must hand back
+    one. Source ids come only from this caller's own ingest results (never the
+    shared cache), so no other user's session is exposed. Returns None when no
+    filing succeeded; a lone success is returned as-is (already caller-owned).
+    """
+    from api.utils.vector_store import merge_stores
+
+    ok = [r["session_id"] for r in results if r.get("session_id")]
+    if len(ok) <= 1:
+        return ok[0] if ok else None
+    session_id = str(uuid.uuid4())
+    loop = asyncio.get_running_loop()
+    merged = await loop.run_in_executor(
+        None, copy_ctx_run(merge_stores, ok, session_id, get_embeddings_fn())
+    )
+    if merged is None:
+        return None
+    store, chunk_count = merged
+    vector_stores[session_id] = store
+    await _insert_session_row(
+        session_id=session_id,
+        source_label=f"{ticker}-{filing_type}-{len(ok)}-filings",
+        pages=chunk_count,
+        size=0,
+        owner_cols=owner if owner is not None else {"user_id": None},
+        sessions_table=sessions_table,
+        async_session_factory=async_session_factory,
+    )
+    fields = [f for sid in ok for f in extracted_fields_store.get(sid) or []]
+    if fields:
+        extracted_fields_store[session_id] = fields
+    return session_id
