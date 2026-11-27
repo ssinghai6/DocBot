@@ -36,7 +36,8 @@ const nextConfig: NextConfig = {
     const backend =
       process.env.NODE_ENV === "development" ? "http://127.0.0.1:8000" : backendUrl;
     // DOCBOT-2339: /v1/* (Developer API, DOCBOT-1530) proxies exactly like /api/*.
-    return ["api", "v1"].map((prefix) => ({
+    // DOCBOT-4015: /admin/* (admin panel: users, roles, audit log, API keys, metrics) too.
+    return ["api", "v1", "admin"].map((prefix) => ({
       source: `/${prefix}/:path*`,
       destination: `${backend}/${prefix}/:path*`,
     }));
