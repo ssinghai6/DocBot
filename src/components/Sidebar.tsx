@@ -102,6 +102,8 @@ export interface SidebarProps {
 
   // EDGAR SEC filings
   onEdgarFilingIngested: (sessionId: string, label: string) => void
+  edgarExpanded: boolean
+  setEdgarExpanded: React.Dispatch<React.SetStateAction<boolean>>
 }
 
 export default function Sidebar(props: SidebarProps) {
@@ -171,6 +173,8 @@ export default function Sidebar(props: SidebarProps) {
     onConnectorSync,
     onConnectorDisconnect,
     onEdgarFilingIngested,
+    edgarExpanded,
+    setEdgarExpanded,
   } = props;
 
   const [marketplaceOpen, setMarketplaceOpen] = useState(false);
@@ -428,6 +432,8 @@ export default function Sidebar(props: SidebarProps) {
               <EdgarPanel
                 onFilingIngested={onEdgarFilingIngested}
                 showToast={showToast}
+                expanded={edgarExpanded}
+                setExpanded={setEdgarExpanded}
               />
 
               {/* DOCBOT-1514: unified Connectors + Personas list, driven by
