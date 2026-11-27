@@ -30,21 +30,19 @@ logger = logging.getLogger(__name__)
 def get_client_ip(request: Any) -> Optional[str]:
     """Extract the real client IP from a FastAPI Request object.
 
-    Respects X-Forwarded-For (Railway / Vercel reverse proxy) and falls back
-    to request.client.host for direct connections.  Returns None if the request
-    object is None or has no client info.
+    DOCBOT-4018: delegates to ``request_guard.client_ip`` — the right-most
+    TRUSTED_PROXY_HOPS X-Forwarded-For entry, never the client-controlled
+    left-most one — falling back to request.client.host. Returns None if the
+    request object is None or has no client info.
     """
     if request is None:
         return None
+    from api.utils.request_guard import client_ip  # lazy: keeps audit_service import-light
     try:
-        forwarded = request.headers.get("X-Forwarded-For")
-        if forwarded:
-            return forwarded.split(",")[0].strip()
-        if request.client:
-            return request.client.host
+        ip = client_ip(request)
     except Exception:
-        pass
-    return None
+        return None
+    return None if ip == "unknown" else ip
 
 
 def audit_ids(scope: Any) -> dict:
