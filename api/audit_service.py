@@ -47,6 +47,34 @@ def get_client_ip(request: Any) -> Optional[str]:
     return None
 
 
+def audit_ids(scope: Any) -> dict:
+    """``user_id``/``org_id`` kwargs for ``log_event`` from a CallerScope (DOCBOT-4016).
+
+    /admin/audit-log filters on org_id, so browser events must carry it.
+    Anonymous callers (or no scope) yield None for both.
+    """
+    if scope is None:
+        return {"user_id": None, "org_id": None}
+    return {"user_id": scope.user_id, "org_id": scope.org_id}
+
+
+async def audit_ids_for_user(user_id: str, users_table: Any, async_session_factory: Any) -> dict:
+    """``user_id``/``org_id`` kwargs for a login event, reading ``users.org_id`` (DOCBOT-4016).
+
+    A lookup failure keeps user_id and drops org_id — auditing never fails a login.
+    """
+    from sqlalchemy import select
+    org_id = None
+    try:
+        async with async_session_factory() as session:
+            org_id = (await session.execute(
+                select(users_table.c.org_id).where(users_table.c.id == user_id)
+            )).scalar_one_or_none()
+    except Exception as exc:  # any DB/driver error; auditing must not fail the login
+        logger.warning("audit org lookup failed (non-fatal): %s", type(exc).__name__)
+    return {"user_id": str(user_id), "org_id": str(org_id) if org_id else None}
+
+
 class AuditEventType(str, Enum):
     query = "query"
     db_connect = "db_connect"

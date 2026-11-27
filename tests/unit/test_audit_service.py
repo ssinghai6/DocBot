@@ -290,3 +290,43 @@ class TestRouteAuditWiring:
         src = self._route_source(idx.autopilot_run)
         assert "AuditEventType.query" in src
         assert "get_client_ip" in src
+
+    def test_browser_routes_stamp_user_and_org(self):
+        """DOCBOT-4016: every browser-side event carries user_id + org_id."""
+        import api.index as idx
+        for fn in (idx.upload_documents, idx.chat, idx.db_connect, idx.db_disconnect,
+                   idx.db_chat, idx.hybrid_chat_route, idx.autopilot_run):
+            assert "**audit_ids(" in self._route_source(fn), fn.__name__
+
+
+# ---------------------------------------------------------------------------
+# DOCBOT-4016: user_id/org_id for browser events
+# ---------------------------------------------------------------------------
+
+class TestAuditIds:
+    def test_from_scope(self):
+        from api.audit_service import audit_ids
+        from api.utils.caller_scope import CallerScope
+        scope = CallerScope(user_id="u1", org_id="o1", anon_token=None)
+        assert audit_ids(scope) == {"user_id": "u1", "org_id": "o1"}
+
+    def test_anonymous_and_none(self):
+        from api.audit_service import audit_ids
+        from api.utils.caller_scope import CallerScope
+        anon = CallerScope(user_id=None, org_id=None, anon_token="abc")
+        assert audit_ids(anon) == audit_ids(None) == {"user_id": None, "org_id": None}
+
+    @pytest.mark.asyncio
+    async def test_for_user_reads_org(self):
+        from sqlalchemy import Column, MetaData, String, Table, insert
+        from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
+        from api.audit_service import audit_ids_for_user
+        users = Table("users", MetaData(), Column("id", String, primary_key=True), Column("org_id", String))
+        engine = create_async_engine("sqlite+aiosqlite://")
+        async with engine.begin() as conn:
+            await conn.run_sync(users.metadata.create_all)
+            await conn.execute(insert(users).values(id="u1", org_id="o1"))
+        factory = async_sessionmaker(engine)
+        assert await audit_ids_for_user("u1", users, factory) == {"user_id": "u1", "org_id": "o1"}
+        assert await audit_ids_for_user("ghost", users, factory) == {"user_id": "ghost", "org_id": None}
+        await engine.dispose()
