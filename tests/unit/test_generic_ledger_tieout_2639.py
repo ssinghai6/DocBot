@@ -86,7 +86,7 @@ def test_sql_prompt_skips_void_entries_and_flips_credit_signs():
     src = inspect.getsource(db_service._generate_sql)
     assert "keep only posted ones" in src
     assert "-SUM(amount)" in src
-    assert db_service.PROMPT_VERSION_SQL_GEN == "v6"
+    assert db_service.PROMPT_VERSION_SQL_GEN == "v7"
 
 
 NET_INCOME_DOC = "Source: CMG, Page 37\n2025 | 2024\nNet income | $1,535,761 | $1,534,110\n"

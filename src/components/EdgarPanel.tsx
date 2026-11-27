@@ -40,12 +40,13 @@ function deadlineIn(ms: number) {
 interface EdgarPanelProps {
   onFilingIngested: (sessionId: string, label: string) => void
   showToast: (type: "success" | "error" | "warning" | "info", message: string) => void
+  expanded: boolean
+  setExpanded: React.Dispatch<React.SetStateAction<boolean>>
 }
 
 const FILING_TYPES = ["10-K", "10-Q", "8-K", "20-F", "6-K"]
 
-export default function EdgarPanel({ onFilingIngested, showToast }: EdgarPanelProps) {
-  const [expanded, setExpanded] = useState(false)
+export default function EdgarPanel({ onFilingIngested, showToast, expanded, setExpanded }: EdgarPanelProps) {
 
   // Search state
   const [searchQuery, setSearchQuery] = useState("")

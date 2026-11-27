@@ -2679,7 +2679,7 @@ async def saml_acs(request: Request, response: Response):
     try:
         user_id = await resolve_provider_login(
             identity_from_saml_attrs(attrs), users_table, user_identities_table,
-            user_sessions_table, async_session_factory,
+            user_sessions_table, async_session_factory, api_keys_table=api_keys_table,
         )
     except IdentityLinkError as exc:
         logger.warning("SSO login refused (%s): %s", attrs["provider"], exc.reason)
@@ -2836,7 +2836,7 @@ async def _github_callback(code: str, state: str, request: Request) -> Response:
     try:
         user_id = await resolve_provider_login(
             identity_from_oauth_attrs(attrs), users_table, user_identities_table,
-            user_sessions_table, async_session_factory,
+            user_sessions_table, async_session_factory, api_keys_table=api_keys_table,
         )
     except ValueError as exc:  # IdentityLinkError or invalid identity
         logger.warning("GitHub login refused: %s", getattr(exc, "reason", "invalid identity"))
@@ -2908,7 +2908,7 @@ async def _google_callback(code: str, state: str, request: Request) -> Response:
     try:
         user_id = await resolve_provider_login(
             identity_from_oauth_attrs(attrs), users_table, user_identities_table,
-            user_sessions_table, async_session_factory,
+            user_sessions_table, async_session_factory, api_keys_table=api_keys_table,
         )
     except ValueError as exc:  # IdentityLinkError or invalid identity
         logger.warning("Google login refused: %s", getattr(exc, "reason", "invalid identity"))

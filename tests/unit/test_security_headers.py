@@ -273,6 +273,24 @@ def test_proxy_sets_nonce_csp() -> None:
     assert "await connection()" in layout  # nonce needs dynamic rendering
 
 
+def test_admin_routes_proxied_to_backend() -> None:
+    """DOCBOT-4015: /admin/* must reach FastAPI, not a Next 404 page."""
+    cfg = (REPO_ROOT / "next.config.ts").read_text()
+    m = re.search(r"return \[([^\]]*)\]\.map\(\(prefix\)", cfg)
+    assert m, "rewrite prefix list not found in next.config.ts"
+    prefixes = re.findall(r'"([^"]+)"', m.group(1))
+    assert {"api", "v1", "admin"} <= set(prefixes)
+
+    proxy = (REPO_ROOT / "src" / "proxy.ts").read_text()
+    src = re.search(r'source: "(/\(\(\?!.*?\)\.\*\))"', proxy)
+    assert src, "proxy matcher source not found in src/proxy.ts"
+    matcher = re.compile(src.group(1))
+    for path in ("/admin/users", "/admin/api-keys/abc", "/api/chat", "/v1/query"):
+        assert not matcher.fullmatch(path), f"{path} should skip the CSP proxy"
+    for path in ("/", "/chat", "/administrator"):
+        assert matcher.fullmatch(path), f"{path} should run the CSP proxy"
+
+
 # ── MarkdownRenderer media policy (DOCBOT-2006) ─────────────────────────────
 
 
