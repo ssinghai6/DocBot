@@ -259,6 +259,7 @@ async def resolve_provider_login(
     identities_table: Any,
     user_sessions_table: Any,
     async_session_factory: Any,
+    api_keys_table: Any = None,
 ) -> str:
     """Return the user_id for a provider login, linking/creating per policy.
 
@@ -293,7 +294,7 @@ async def resolve_provider_login(
                 if existing is not None:
                     return await _link_existing(
                         session, identity, existing, users_table,
-                        identities_table, user_sessions_table, now,
+                        identities_table, user_sessions_table, now, api_keys_table,
                     )
 
                 if not identity.is_saml and not identity.email_verified:
@@ -359,6 +360,7 @@ async def _link_existing(
     identities_table: Any,
     user_sessions_table: Any,
     now: datetime,
+    api_keys_table: Any = None,
 ) -> str:
     account_verified = bool(getattr(existing, "email_verified", False))
 
@@ -381,16 +383,32 @@ async def _link_existing(
         await session.execute(
             delete(user_sessions_table).where(user_sessions_table.c.user_id == existing.id)
         )
+        revoked = await _revoke_claimed_account_keys(session, api_keys_table, existing, now)
         logger.warning(
             "identity: verified %s identity claimed unverified account %s; "
-            "password cleared and sessions revoked",
-            identity.provider, existing.id,
+            "password cleared, sessions revoked, %d API key(s) revoked",
+            identity.provider, existing.id, revoked,
         )
     await session.execute(
         update(users_table).where(users_table.c.id == existing.id).values(**update_vals)
     )
     logger.info("identity: linked %s identity to user %s", identity.provider, existing.id)
     return existing.id
+
+
+async def _revoke_claimed_account_keys(session: Any, keys: Any, existing: Any, now: datetime) -> int:
+    """DOCBOT-4013: revoke every live key of the claimed account's org and any
+    key the account created, so a pre-hijacker loses /v1 access too."""
+    if keys is None:  # caller has no api_keys table (tests of other tables)
+        return 0
+    scope = keys.c.created_by == existing.id
+    org_id = getattr(existing, "org_id", None)
+    if org_id:
+        scope = scope | (keys.c.org_id == org_id)
+    result = await session.execute(
+        update(keys).where(keys.c.revoked_at.is_(None), scope).values(revoked_at=now)
+    )
+    return result.rowcount or 0
 
 
 async def _insert_identity(
