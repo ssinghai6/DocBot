@@ -133,7 +133,7 @@ async def _decrypt_conn_credentials_lazy(
 
 PROMPT_VERSION_SQL_REPHRASE = "v1"          # _rephrase_with_history
 PROMPT_VERSION_SQL_TABLE_SELECTOR = "v1"    # _select_relevant_tables (incl. retry)
-PROMPT_VERSION_SQL_GEN = "v6"               # _generate_sql
+PROMPT_VERSION_SQL_GEN = "v7"               # _generate_sql
 # DOCBOT-2637: reasoning models (gpt-oss on Bedrock) spend output tokens
 # thinking first; at 1200 a pivot query was cut off mid-SQL ("Column not found").
 SQL_GEN_MAX_TOKENS = 3000
@@ -1165,7 +1165,8 @@ def _get_columns_via_information_schema(engine, table_name: str) -> List[Dict[st
 # generator never saw 'Marketing' when only 5 alphabetical values were shown);
 # above that, no values (as before). Bump _SCHEMA_FMT when the cached
 # shape changes so older cache rows are re-introspected.
-_SCHEMA_FMT = 2
+# 3 = DOCBOT-2720 value_pairs.
+_SCHEMA_FMT = 3
 _SAMPLE_MAX_VALUES = 5
 _SAMPLE_MAX_LEN = 60
 _SAMPLE_MAX_DISTINCT = 50
@@ -1225,6 +1226,51 @@ def _attach_sample_values(engine, table_name: str, columns: List[Dict[str, Any]]
         col["sample_values"] = values
         if complete and whole_table:
             col["values_complete"] = True
+    _attach_value_pairs(engine, table_name, columns)
+
+
+# DOCBOT-2720: each value list is sorted on its own, so the generator zipped
+# account_no and account_name by list position ('6200' read as Food). When two
+# sampled columns map 1:1 in the data, the prompt shows the real pairs instead.
+_PAIR_MIN_VALUES = 3
+_PAIR_MAX_CHECKS = 10
+
+
+def _attach_value_pairs(engine, table_name: str, columns: List[Dict[str, Any]]) -> None:
+    """Set ``value_pairs`` ([[code, name], ...], sorted by code) and
+    ``paired_with`` on the code column, and ``paired_with`` on the name column,
+    for sampled columns with the same number of values that are 1:1 in the
+    scanned rows. The shorter-valued column is the code. Each column pairs once.
+    """
+    from sqlalchemy import column as sa_column, table as sa_table
+    from sqlalchemy.exc import SQLAlchemyError
+
+    sampled = [c for c in columns if len(c.get("sample_values") or []) >= _PAIR_MIN_VALUES]
+    checks = 0
+    for i, a in enumerate(sampled):
+        for b in sampled[i + 1:]:
+            if "paired_with" in a or "paired_with" in b or len(a["sample_values"]) != len(b["sample_values"]):
+                continue
+            if checks >= _PAIR_MAX_CHECKS:
+                return
+            checks += 1
+            n = len(a["sample_values"])
+            an, bn = str(a["name"]), str(b["name"])
+            inner = select(sa_column(an), sa_column(bn)).select_from(sa_table(table_name)).limit(_SAMPLE_SCAN_ROWS).subquery()
+            try:
+                with engine.connect() as conn:
+                    rows = conn.execute(select(inner.c[an], inner.c[bn]).distinct().limit(2 * n + 2)).fetchall()
+            except SQLAlchemyError as exc:
+                logger.debug("value pairs skipped for %s: %s", table_name, type(exc).__name__)
+                continue
+            pairs = {(x, y) for x, y in rows if isinstance(x, str) and isinstance(y, str)}
+            # 1:1 iff n distinct pairs cover exactly both value lists
+            if len(pairs) != n or {x for x, _ in pairs} != set(a["sample_values"]) \
+                    or {y for _, y in pairs} != set(b["sample_values"]):
+                continue
+            code, name = (a, b) if sum(map(len, a["sample_values"])) <= sum(map(len, b["sample_values"])) else (b, a)
+            code["value_pairs"] = sorted([x, y] if code is a else [y, x] for x, y in pairs)
+            code["paired_with"], name["paired_with"] = name["name"], code["name"]
 
 
 async def _introspect_schema_from_url(
@@ -1963,16 +2009,28 @@ async def _generate_sql(
     """
     value_chars = [0]
 
+    def _q(v: Any) -> str:
+        return "'" + str(v).replace("'", "''") + "'"
+
     def _fmt_col(c: Dict[str, Any]) -> str:
         samples = c.get("sample_values")
+        pairs = c.get("value_pairs")
+        if c.get("paired_with") and not pairs:  # DOCBOT-2720: name side of a pair
+            return f"{c['name']} ({c['type']}, see {c['paired_with']} pairs)"
         if not samples:
             return f"{c['name']} ({c['type']})"
         # DOCBOT-2633: full lists until the prompt-wide budget is spent, then
         # 5 examples per column so wide schemas can't blow up the prompt.
         complete = bool(c.get("values_complete")) and value_chars[0] < _PROMPT_VALUES_MAX_CHARS
+        if pairs:
+            shown = pairs if complete else pairs[:_SAMPLE_MAX_VALUES]
+            vals = ", ".join(f"{_q(k)}={_q(v)}" for k, v in shown)
+            value_chars[0] += len(vals)
+            label = "values" if complete else "e.g."
+            return f"{c['name']} ({c['type']}, {label} paired {c['name']}={c['paired_with']}: {vals})"
         if not complete:
             samples = samples[:_SAMPLE_MAX_VALUES]
-        vals = ", ".join("'" + str(v).replace("'", "''") + "'" for v in samples)
+        vals = ", ".join(_q(v) for v in samples)
         value_chars[0] += len(vals)
         return f"{c['name']} ({c['type']}, {'values' if complete else 'e.g.'} {vals})"
 
@@ -2012,7 +2070,10 @@ async def _generate_sql(
         "7. A column shown with 'values' lists EVERY value it holds. Filter it only with "
         "those exact strings, copied verbatim, and include every listed value the question "
         "needs (e.g. all expense lines when asked about operating expenses). Never invent "
-        "names that are not in the list.\n\n"
+        "names that are not in the list.\n"
+        "8. Value lists for different columns are sorted independently; never infer which "
+        "code goes with which name from list position. Use the listed pairs (code=name) or "
+        "filter on the name column.\n\n"
         f"Schema:\n{schema_text}"
         f"{few_shot_text}\n\n"
         f"Question: {question}\n\n"
