@@ -618,11 +618,14 @@ export default function Home() {
     setChatMode(resolvedChatMode);
   }
 
-  // Promote to hybrid once when both sources become present; a later manual
-  // Docs/Database pick is not overridden (DOCBOT-2703).
-  useEffect(() => {
+  // Promote to hybrid once per new doc+DB pair; a later manual Docs/Database
+  // pick is not overridden (DOCBOT-2703). Adjusted during render, not in an effect.
+  const sourcePairKey = `${connectionId}|${sessionId}`;
+  const [lastSourcePairKey, setLastSourcePairKey] = useState("");
+  if (sourcePairKey !== lastSourcePairKey) {
+    setLastSourcePairKey(sourcePairKey);
     if (connectionId && sessionId) setChatMode("hybrid");
-  }, [connectionId, sessionId]);
+  }
 
   // Keyboard shortcuts
   useEffect(() => {
