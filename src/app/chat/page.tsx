@@ -346,7 +346,6 @@ export default function Home() {
 
     setMessages,
     setInput,
-    setIsLoading,
     setUploadedFiles,
     setSessionId,
     setUploadProgress,
@@ -644,7 +643,7 @@ export default function Home() {
 
     window.addEventListener('keydown', handleKeyDown);
     return () => window.removeEventListener('keydown', handleKeyDown);
-  }, [input, sessionId, isDbConnected, isLoading, inspectorOpen]); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [input, sessionId, isDbConnected, isLoading, inspectorOpen, setInspectorOpen, handleSendMessage]);
 
   // ── Render ─────────────────────────────────────────────────────────────────
 

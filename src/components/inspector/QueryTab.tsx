@@ -10,7 +10,9 @@ export default function QueryTab({ lineage }: { lineage: Lineage | null }) {
   const artifact = useUIStore((s) => s.selectedArtifact)
   const fromCard = artifact?.type === "sql" ? String(artifact.payload?.sql ?? "") : ""
   const explanation = artifact?.type === "sql" ? String(artifact.payload?.explanation ?? "") : ""
-  const sqlInfo = lineage?.sql ?? null
+  // Lineage belongs to the newest answer; drop its chips when a clicked card shows different SQL.
+  const lineageSql = lineage?.sql ?? null
+  const sqlInfo = lineageSql && (!fromCard || (lineageSql.sql ?? "").trim() === fromCard.trim()) ? lineageSql : null
   const sql = fromCard || sqlInfo?.sql || ""
 
   if (!sql) {
