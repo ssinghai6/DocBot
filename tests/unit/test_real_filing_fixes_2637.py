@@ -226,8 +226,11 @@ def test_clear_session_and_chat_clear_inspector():
     for fn in ("const clearChat = () => {", "const clearSession = () => {"):
         body = src[src.index(fn):src.index("};", src.index(fn))]
         assert "clearInspector();" in body
-    helper = src[src.index("const clearInspector"):src.index("};", src.index("const clearInspector"))]
-    assert "selectLineage(null)" in helper and "selectArtifact(null)" in helper
+    # DOCBOT-2719: clearInspector delegates to the store's resetChat, which also aborts the stream.
+    assert "const clearInspector = () => useUIStore.getState().resetChat();" in src
+    store = (Path(__file__).resolve().parents[2] / "src/store/uiStore.ts").read_text()
+    reset = store[store.index("resetChat: () => {"):store.index("},", store.index("resetChat: () => {"))]
+    assert "selectedLineage: null" in reset and "selectedArtifact: null" in reset
 
 
 # ── 5. page footers: cross-references and the "Form 10-K | N" style ──────────
