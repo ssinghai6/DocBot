@@ -2056,7 +2056,7 @@ async def _generate_sql(
         few_shot_text = f"\n\nSimilar past queries for reference:\n{examples_str}\n"
 
     prompt = (
-        "You are an expert SQL generator. Generate a single valid SELECT query to answer the question.\n"
+        "You are an expert SQL generator. Generate a single valid SELECT query to answer the question.\n"  # nosec B608 # LLM prompt text sent to achat_completion, never executed as SQL
         "RULES:\n"
         "1. Read-only queries ONLY — no INSERT, UPDATE, DELETE, DROP, CREATE, or any DDL/DML.\n"
         "2. Use only the tables and columns listed in the schema.\n"
