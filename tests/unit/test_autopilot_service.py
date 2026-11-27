@@ -221,7 +221,7 @@ class TestPlannerNodeFallback:
             # Ensure groq_api_key is absent
             os.environ.pop("groq_api_key", None)
             result = asyncio.run(_planner_node(state))
-        assert result["plan"] == ["What is revenue?"]
+        assert result["plan"] == ["Query the database for the figures needed to answer: What is revenue?"]
         assert result["iteration"] == 0
 
     def test_plan_never_exceeds_max_iterations(self):
@@ -606,7 +606,8 @@ class TestAutopilotStateOptionalConnection:
         with patch.dict(os.environ, {}, clear=True):
             os.environ.pop("groq_api_key", None)
             result = asyncio.run(_planner_node(state))
-        assert result["plan"] == ["Summarize the report"]
+        assert result["plan"] == ["Search the uploaded documents for: Summarize the report"]
+        assert result["plan_tools"] == {result["plan"][0]: "doc_search"}
 
 
 # ---------------------------------------------------------------------------

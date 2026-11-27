@@ -160,7 +160,8 @@ class TestPlannerFallbackNotSilent:
         state = _make_state(question="What is revenue?")
         with patch.dict(os.environ, {}, clear=True):
             result = asyncio.run(_planner_node(state))
-        assert result["plan"] == ["What is revenue?"]
+        # DOCBOT-2721: the fallback plan targets the connected DB, not the raw question.
+        assert result["plan"] == ["Query the database for the figures needed to answer: What is revenue?"]
         assert result["degradation_reasons"] == ["planner_fallback_single_step"]
 
     def test_degraded_label_present_in_synthesized_answer(self):

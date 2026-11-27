@@ -97,6 +97,13 @@ _DEGR_DATA_TOOL_MISSING = "data_tool_missing"
 # plan schema check. After that it falls back — visibly, never silently.
 _PLANNER_REGENERATION_LIMIT = 1
 
+# DOCBOT-2721: the primary model (gpt-oss on Groq/Bedrock) is a reasoning model
+# whose reasoning tokens count against max_tokens. At 400 it intermittently
+# spent the whole budget reasoning on hard hybrid questions, returned no JSON,
+# failed the retry the same way and fell back. Same fix DOCBOT-2585 applied to
+# the other short-JSON callers (raised to 1000); the planner prompt is longer.
+_PLANNER_MAX_TOKENS = 2000
+
 # P3(a): lowercase claim fragments that read as the answer apologising for
 # missing data. Only actionable when data_results actually holds data —
 # otherwise the guard leaves the answer untouched.
@@ -183,6 +190,9 @@ class AutopilotState(TypedDict):
     # nodes (e.g. "planner_fallback_single_step", "data_tool_missing:step:2:sql_query").
     # Non-empty → the synthesizer labels the answer degraded.
     degradation_reasons: Annotated[list[str], operator.add]
+    # DOCBOT-2721: step text -> tool pinned by the planner's deterministic
+    # fallback plan, so the executor skips the router for those steps.
+    plan_tools: dict[str, str]
 
 
 # ---------------------------------------------------------------------------
@@ -197,6 +207,28 @@ def _sse(data: dict) -> str:
 # ---------------------------------------------------------------------------
 # PlannerNode
 # ---------------------------------------------------------------------------
+
+
+def _fallback_plan(state: AutopilotState) -> dict:
+    """DOCBOT-2721: deterministic plan used when the LLM planner fails.
+
+    One fetch step per connected source, each pinned to its tool, so a hybrid
+    question never silently drops the database (the old fallback was the raw
+    question as one step, which the router sent to doc_search only). The
+    synthesizer still runs over whatever these steps return.
+    """
+    q = state["question"]
+    steps: dict[str, str] = {}
+    if state.get("has_docs"):
+        steps[f"Search the uploaded documents for: {q}"] = "doc_search"
+    if state.get("has_csv"):
+        steps[f"Analyse the uploaded CSV data to answer: {q}"] = "python_analysis"
+    elif state.get("has_db"):
+        steps[f"Query the database for the figures needed to answer: {q}"] = "sql_query"
+    if not steps:
+        # No source: the executor turns this into a clean "unsupported" refusal.
+        return {"plan": [q], "plan_tools": {}}
+    return {"plan": list(steps), "plan_tools": steps}
 
 
 async def _planner_node(state: AutopilotState) -> dict:
@@ -214,9 +246,9 @@ async def _planner_node(state: AutopilotState) -> dict:
     """
     from api.utils.llm_provider import llm_configured
     if not llm_configured():
-        logger.warning("planner_node: no LLM key set — single-step fallback (degraded)")
+        logger.warning("planner_node: no LLM key set — source fallback plan (degraded)")
         return {
-            "plan": [state["question"]],
+            **_fallback_plan(state),
             "iteration": 0,
             "degradation_reasons": [_DEGR_PLANNER_FALLBACK],
         }
@@ -341,16 +373,16 @@ async def _planner_node(state: AutopilotState) -> dict:
                 {"role": "user", "content": user_content},
             ],
             temperature=0,
-            max_tokens=400,
+            max_tokens=_PLANNER_MAX_TOKENS,
             caller="autopilot_planner",
             run_id=state.get("run_id"),
             prompt_version=PROMPT_VERSION_AUTOPILOT_PLANNER,
         )
 
     degradation_reasons: list[str] = []
-    plan: list[str] = [state["question"]]
+    plan_update: dict = {}
     try:
-        plan = _parse_plan_response(await asyncio.to_thread(_attempt, None))
+        plan_update = {"plan": _parse_plan_response(await asyncio.to_thread(_attempt, None))}
     except Exception as first_exc:
         # P1: bounded retry — exactly one regeneration call with the
         # validation error appended, then a visible (non-silent) fallback.
@@ -360,9 +392,9 @@ async def _planner_node(state: AutopilotState) -> dict:
         )
         for _attempt_no in range(_PLANNER_REGENERATION_LIMIT):
             try:
-                plan = _parse_plan_response(
+                plan_update = {"plan": _parse_plan_response(
                     await asyncio.to_thread(_attempt, f"Attempt failed: {first_exc}")
-                )
+                )}
                 break
             except Exception as retry_exc:
                 logger.warning(
@@ -370,10 +402,12 @@ async def _planner_node(state: AutopilotState) -> dict:
                     _attempt_no + 1, retry_exc,
                 )
         else:
+            logger.warning("planner_node: planning failed — source fallback plan (degraded)")
+            plan_update = _fallback_plan(state)
             degradation_reasons.append(_DEGR_PLANNER_FALLBACK)
 
     return {
-        "plan": plan,
+        **plan_update,
         "iteration": 0,
         "degradation_reasons": degradation_reasons,
     }
@@ -767,7 +801,8 @@ def make_executor_node(
             "has_docs": state.get("has_docs", False),
             "has_csv": state.get("has_csv", False),
         }
-        tool = await _select_tool_llm(
+        # DOCBOT-2721: fallback-plan steps carry a pinned tool; skip the router.
+        tool = (state.get("plan_tools") or {}).get(step) or await _select_tool_llm(
             step,
             persona_tool_preference=persona_pref,
             run_id=state.get("run_id"),
@@ -1853,6 +1888,10 @@ async def _synthesizer_node(state: AutopilotState) -> dict:
             run_id=state.get("run_id"),
             prompt_version=PROMPT_VERSION_AUTOPILOT_SYNTHESIZER,
         )
+        # DOCBOT-2721: a reasoning model can spend the budget and return no
+        # content; use the deterministic fallback below, never an empty answer.
+        if not (final_answer or "").strip():
+            raise ValueError("synthesizer returned empty content")
     except Exception as exc:
         logger.warning("synthesizer_node LLM call failed: %s", exc)
         final_answer = f"Investigation complete.\n\n{steps_text}"
