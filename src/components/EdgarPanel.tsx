@@ -31,6 +31,12 @@ type IngestResult = {
   status?: "pending"
 }
 
+// Module-level so the React compiler lint doesn't treat the clock read as render-time impurity.
+function deadlineIn(ms: number) {
+  const end = Date.now() + ms
+  return { passed: () => Date.now() >= end }
+}
+
 interface EdgarPanelProps {
   onFilingIngested: (sessionId: string, label: string) => void
   showToast: (type: "success" | "error" | "warning" | "info", message: string) => void
@@ -155,10 +161,10 @@ export default function EdgarPanel({ onFilingIngested, showToast }: EdgarPanelPr
         company_name: selectedCompany.name,
         ticker: selectedCompany.ticker,
       })
-      const started = Date.now()
+      const deadline = deadlineIn(120_000)
       let result: IngestResult | null = null
       for (let attempt = 0; result === null; attempt++) {
-        const canRetry = attempt < 40 && Date.now() - started < 120_000
+        const canRetry = attempt < 40 && !deadline.passed()
         let res: Response
         try {
           res = await fetch("/api/edgar/ingest", {
