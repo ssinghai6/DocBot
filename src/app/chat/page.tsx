@@ -255,6 +255,8 @@ export default function Home() {
 
   // File Upload State
   const [fileUploadState, setFileUploadState] = useState<FileUploadState>("idle");
+  // Block sends while a new PDF uploads: sessionId still points at the old doc until it finishes.
+  const sendBlocked = isLoading || fileUploadState === "uploading";
 
   // Toast State
   const [toasts, setToasts] = useState<Toast[]>([]);
@@ -626,7 +628,7 @@ export default function Home() {
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
       if ((e.ctrlKey || e.metaKey) && e.key === 'Enter') {
-        if (input.trim() && (sessionId || isDbConnected) && !isLoading) {
+        if (input.trim() && (sessionId || isDbConnected) && !sendBlocked) {
           handleSendMessage();
         }
       }
@@ -643,7 +645,7 @@ export default function Home() {
 
     window.addEventListener('keydown', handleKeyDown);
     return () => window.removeEventListener('keydown', handleKeyDown);
-  }, [input, sessionId, isDbConnected, isLoading, inspectorOpen, setInspectorOpen, handleSendMessage]);
+  }, [input, sessionId, isDbConnected, sendBlocked, inspectorOpen, setInspectorOpen, handleSendMessage]);
 
   // ── Render ─────────────────────────────────────────────────────────────────
 
@@ -743,7 +745,7 @@ export default function Home() {
         chatMode={chatMode}
         setChatMode={setChatMode}
         messages={messages}
-        isLoading={isLoading}
+        isLoading={sendBlocked}
         input={input}
         setInput={setInput}
         chartType={chartType}

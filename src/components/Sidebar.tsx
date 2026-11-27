@@ -246,6 +246,7 @@ export default function Sidebar(props: SidebarProps) {
           href="/"
           aria-label="DocBot home"
           onClick={(e) => {
+            if (e.metaKey || e.ctrlKey || e.shiftKey || e.button !== 0) return // opens new tab; workspace survives
             const hasWorkspaceData = messagesLength > 0 || hasDocSession || !!connectionId
             if (hasWorkspaceData && !window.confirm("Leave the workspace? Loaded sources and chat will be cleared.")) e.preventDefault()
           }}
