@@ -1222,12 +1222,13 @@ async def upload_documents(
         suggested_persona = max(scores, key=lambda k: scores[k]) if scores else "Generalist"
         
         # DOCBOT-602: audit upload event
-        from api.audit_service import log_event, AuditEventType
+        from api.audit_service import log_event, AuditEventType, audit_ids
         log_event(
             AuditEventType.upload,
             audit_log_table,
             async_session_factory,
             session_id=session_id,
+            **audit_ids(_scope),
             detail=", ".join(f["filename"] for f in files_info),
             metadata={"file_count": len(files_info), "chunks": len(splits)},
         )
@@ -1307,12 +1308,13 @@ async def chat(
         _chat_start = time.monotonic()
 
         # ── DOCBOT-602: audit doc-chat query ──────────────────────────────────
-        from api.audit_service import log_event, AuditEventType, get_client_ip
+        from api.audit_service import log_event, AuditEventType, audit_ids, get_client_ip
         log_event(
             AuditEventType.query,
             audit_log_table,
             async_session_factory,
             session_id=request.session_id,
+            **audit_ids(scope),
             detail=request.message[:500],
             metadata={
                 "source": "doc_chat",
@@ -1890,12 +1892,13 @@ async def db_connect(
             anon_owner=scope.anon_token if scope.is_anonymous else None,
         )
         # DOCBOT-602: audit connection event (never log password — only host/dialect)
-        from api.audit_service import log_event, AuditEventType
+        from api.audit_service import log_event, AuditEventType, audit_ids
         log_event(
             AuditEventType.db_connect,
             audit_log_table,
             async_session_factory,
             session_id=request.session_id,
+            **audit_ids(scope),
             detail=f"{request.host}:{request.port}/{request.dbname}",
             metadata={"dialect": request.dialect, "connection_id": result.get("connection_id")},
         )
@@ -1929,12 +1932,13 @@ async def db_disconnect(
             scope=scope,
         )
         # DOCBOT-602: audit disconnect event
-        from api.audit_service import log_event, AuditEventType
+        from api.audit_service import log_event, AuditEventType, audit_ids
         log_event(
             AuditEventType.db_disconnect,
             audit_log_table,
             async_session_factory,
             session_id=request.session_id,
+            **audit_ids(scope),
             detail=connection_id,
         )
         return {"message": "Connection removed successfully."}
@@ -2036,12 +2040,13 @@ async def db_chat(
 
     async def event_stream():
         # DOCBOT-602: audit query event (fire before stream so it's captured even if stream errors)
-        from api.audit_service import log_event, AuditEventType, get_client_ip
+        from api.audit_service import log_event, AuditEventType, audit_ids, get_client_ip
         log_event(
             AuditEventType.query,
             audit_log_table,
             async_session_factory,
             session_id=request.session_id,
+            **audit_ids(scope),
             detail=request.question[:500],
             metadata={
                 "source": "db_chat",
@@ -2424,12 +2429,13 @@ async def hybrid_chat_route(
 
     async def event_stream():
         # DOCBOT-602: audit hybrid query
-        from api.audit_service import log_event, AuditEventType, get_client_ip
+        from api.audit_service import log_event, AuditEventType, audit_ids, get_client_ip
         log_event(
             AuditEventType.query,
             audit_log_table,
             async_session_factory,
             session_id=request.session_id,
+            **audit_ids(scope),
             detail=request.question[:500],
             metadata={
                 "source": "hybrid_chat",
@@ -2518,12 +2524,13 @@ async def autopilot_run(
 
     async def event_stream():
         # DOCBOT-602: audit autopilot query
-        from api.audit_service import log_event, AuditEventType, get_client_ip
+        from api.audit_service import log_event, AuditEventType, audit_ids, get_client_ip
         log_event(
             AuditEventType.query,
             audit_log_table,
             async_session_factory,
             session_id=request.session_id,
+            **audit_ids(scope),
             detail=request.question[:500],
             metadata={
                 "source": "autopilot",
@@ -2700,12 +2707,12 @@ async def saml_acs(request: Request, response: Response):
     )
     logger.info("SSO login success: %s (%s)", attrs["email"], attrs["provider"])
     # DOCBOT-602: audit login event
-    from api.audit_service import log_event, AuditEventType
+    from api.audit_service import log_event, AuditEventType, audit_ids_for_user
     log_event(
         AuditEventType.login,
         audit_log_table,
         async_session_factory,
-        user_id=user_id,
+        **await audit_ids_for_user(user_id, users_table, async_session_factory),
         detail=attrs["email"],
         metadata={"provider": attrs["provider"]},
     )
@@ -2810,7 +2817,7 @@ async def _github_callback(code: str, state: str, request: Request) -> Response:
     )
     from api.auth_service import create_user_session
     from api.identity_service import IdentityLinkError, identity_from_oauth_attrs, resolve_provider_login
-    from api.audit_service import log_event, AuditEventType
+    from api.audit_service import log_event, AuditEventType, audit_ids_for_user
     from fastapi.responses import RedirectResponse
 
     frontend_url = oauth_success_redirect("")
@@ -2843,7 +2850,8 @@ async def _github_callback(code: str, state: str, request: Request) -> Response:
 
     log_event(
         AuditEventType.login, audit_log_table, async_session_factory,
-        user_id=user_id, detail=attrs["email"], metadata={"provider": "github"},
+        **await audit_ids_for_user(user_id, users_table, async_session_factory),
+        detail=attrs["email"], metadata={"provider": "github"},
     )
 
     from api.oauth_service import _frontend_url
@@ -2883,7 +2891,7 @@ async def _google_callback(code: str, state: str, request: Request) -> Response:
     )
     from api.auth_service import create_user_session
     from api.identity_service import identity_from_oauth_attrs, resolve_provider_login
-    from api.audit_service import log_event, AuditEventType
+    from api.audit_service import log_event, AuditEventType, audit_ids_for_user
     from fastapi.responses import RedirectResponse
 
     # DOCBOT-2331: state must match this browser's cookie (login-CSRF), then TTL + single use.
@@ -2914,7 +2922,8 @@ async def _google_callback(code: str, state: str, request: Request) -> Response:
 
     log_event(
         AuditEventType.login, audit_log_table, async_session_factory,
-        user_id=user_id, detail=attrs["email"], metadata={"provider": "google"},
+        **await audit_ids_for_user(user_id, users_table, async_session_factory),
+        detail=attrs["email"], metadata={"provider": "google"},
     )
 
     redirect = RedirectResponse(url=f"{_frontend_url()}/chat?auth_success=1")
@@ -2960,7 +2969,7 @@ async def auth_register(body: RegisterRequest, response: Response, request: Requ
     from api.auth_service import create_user_session
     from api.identity_service import EmailAlreadyRegistered, register_password_user
     from api import email_verification_service as evs
-    from api.audit_service import log_event, AuditEventType
+    from api.audit_service import log_event, AuditEventType, audit_ids_for_user
     import re
 
     email = body.email.lower().strip()
@@ -3003,7 +3012,8 @@ async def auth_register(body: RegisterRequest, response: Response, request: Requ
 
     log_event(
         AuditEventType.login, audit_log_table, async_session_factory,
-        user_id=user_id, detail=email, metadata={"provider": "email", "action": "register"},
+        **await audit_ids_for_user(user_id, users_table, async_session_factory),
+        detail=email, metadata={"provider": "email", "action": "register"},
     )
 
     # DOCBOT-1713: with Resend configured the account starts unverified; mint
@@ -3080,7 +3090,8 @@ async def auth_login(body: LoginRequest, response: Response, request: Request):
 
     log_event(
         AuditEventType.login, audit_log_table, async_session_factory,
-        user_id=user.id, detail=email, metadata={"provider": "email"},
+        user_id=str(user.id), org_id=str(user.org_id) if user.org_id else None,
+        detail=email, metadata={"provider": "email"},
     )
 
     resp = JSONResponse({"status": "ok", "email": email})
@@ -3116,16 +3127,23 @@ async def auth_logout(request: Request):
     from api.auth_service import delete_session
     token = request.cookies.get("docbot_session")
     if token:
+        from api.audit_service import log_event, AuditEventType, audit_ids
+        # DOCBOT-4016: resolve who is logging out before the session row is gone.
+        try:
+            ids = audit_ids(await resolve_caller_scope(request))
+        except Exception as exc:
+            logger.warning("Logout audit identity lookup failed (ignored): %s", type(exc).__name__)
+            ids = audit_ids(None)
         try:
             await delete_session(token, user_sessions_table, async_session_factory)
         except Exception as exc:
             logger.warning("Session deletion error (ignored): %s", exc)
         # DOCBOT-602: audit logout event
-        from api.audit_service import log_event, AuditEventType
         log_event(
             AuditEventType.logout,
             audit_log_table,
             async_session_factory,
+            **ids,
             detail="logout",
         )
     resp = JSONResponse({"status": "logged_out"})
