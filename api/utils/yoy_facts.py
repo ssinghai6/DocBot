@@ -19,6 +19,10 @@ from api.utils.discrepancy_detector import _SOURCE_HEADER_RE
 
 MAX_FACTS = 60
 _YEAR_RE = re.compile(r"(?:19|20)\d\d")
+# Header cell that names one period: "2025", "December 31, 2025", "Fiscal 2025", "FY2025".
+_HEADER_YEAR_RE = re.compile(
+    r"(?:[A-Za-z]+\.?\s+\d{1,2},?\s+|fiscal\s+(?:year\s+)?|fy\s*)?((?:19|20)\d\d)", re.I
+)
 _NIL = {"—", "–", "-", "−"}
 # "(18,509)", "$(18,509)" (DOCBOT-4021: edgar _row_cells output) and "-18,509" are negative
 _NUMBER_RE = re.compile(r"^(\()?\$?\s*(\()?\s*(-|−)?\s*([0-9][0-9,]*(?:\.[0-9]+)?)\s*(%)?\s*(\))?$")
@@ -93,7 +97,7 @@ def _cell_value(cell: str) -> Optional[tuple[float, bool]]:
 
 def _header_years(cells: list[str]) -> Optional[list[Optional[str]]]:
     """Year per column for a header row (None for non-year cells), else None."""
-    years = [c if _YEAR_RE.fullmatch(c) else None for c in cells]
+    years = [m.group(1) if (m := _HEADER_YEAR_RE.fullmatch(c)) else None for c in cells]
     if sum(y is not None for y in years) < 2:
         return None
     if any(y is None and re.search(r"\d", c) for y, c in zip(years, cells)):

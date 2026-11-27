@@ -572,3 +572,12 @@ def test_4021_f_one_card_per_figure():
     rep = detect_discrepancies("Net income was $1.3 billion", meta)
     assert len(rep.discrepancies) == 1
     assert len(_extract_from_text("Net income was $1.3 billion", "doc")) == 1
+
+
+def test_4021_yoy_reads_date_style_header_years():
+    from api.utils.yoy_facts import yoy_facts
+
+    doc = "Revenue | December 31, 2025 | December 31, 2024\nRevenue | 5,000 | 4,000\n"
+    facts = yoy_facts(doc)
+    assert facts, "date-style headers must give column years"
+    assert "2025" in facts[0].line() and "2024" in facts[0].line()
