@@ -203,13 +203,18 @@ class TestImmutabilityTriggerStatements:
 # ---------------------------------------------------------------------------
 
 class TestGetClientIp:
+    """DOCBOT-4018: delegates to request_guard.client_ip (right-most trusted hop)."""
+
+    @pytest.fixture(autouse=True)
+    def _one_hop(self, monkeypatch):
+        from api.utils import request_guard
+        monkeypatch.setattr(request_guard, "TRUSTED_PROXY_HOPS", 1)
 
     def _make_request(self, forwarded=None, host=None):
         """Build a minimal mock that looks like a FastAPI Request."""
+        from starlette.datastructures import Headers
         req = MagicMock()
-        req.headers = {}
-        if forwarded:
-            req.headers = {"X-Forwarded-For": forwarded}
+        req.headers = Headers({"X-Forwarded-For": forwarded} if forwarded else {})
         if host:
             req.client = MagicMock()
             req.client.host = host
@@ -217,10 +222,16 @@ class TestGetClientIp:
             req.client = None
         return req
 
-    def test_returns_first_ip_from_x_forwarded_for(self):
+    def test_ignores_spoofed_left_most_x_forwarded_for(self):
+        from api.audit_service import get_client_ip
+        # Client sent "X-Forwarded-For: 6.6.6.6"; the edge proxy appended the real peer.
+        req = self._make_request(forwarded="6.6.6.6, 203.0.113.9", host="10.0.0.1")
+        assert get_client_ip(req) == "203.0.113.9"
+
+    def test_uses_right_most_trusted_hop(self):
         from api.audit_service import get_client_ip
         req = self._make_request(forwarded="1.2.3.4, 10.0.0.1, 172.16.0.1")
-        assert get_client_ip(req) == "1.2.3.4"
+        assert get_client_ip(req) == "172.16.0.1"
 
     def test_single_ip_in_x_forwarded_for(self):
         from api.audit_service import get_client_ip
@@ -241,14 +252,16 @@ class TestGetClientIp:
         req = self._make_request()  # no forwarded, no host
         assert get_client_ip(req) is None
 
-    def test_x_forwarded_for_takes_priority_over_client_host(self):
+    def test_zero_hops_ignores_header(self, monkeypatch):
         from api.audit_service import get_client_ip
+        from api.utils import request_guard
+        monkeypatch.setattr(request_guard, "TRUSTED_PROXY_HOPS", 0)
         req = self._make_request(forwarded="5.6.7.8", host="10.0.0.1")
-        assert get_client_ip(req) == "5.6.7.8"
+        assert get_client_ip(req) == "10.0.0.1"
 
     def test_strips_whitespace_from_ip(self):
         from api.audit_service import get_client_ip
-        req = self._make_request(forwarded="  9.9.9.9  , 1.1.1.1")
+        req = self._make_request(forwarded="1.1.1.1,   9.9.9.9  ")
         assert get_client_ip(req) == "9.9.9.9"
 
 
@@ -290,3 +303,43 @@ class TestRouteAuditWiring:
         src = self._route_source(idx.autopilot_run)
         assert "AuditEventType.query" in src
         assert "get_client_ip" in src
+
+    def test_browser_routes_stamp_user_and_org(self):
+        """DOCBOT-4016: every browser-side event carries user_id + org_id."""
+        import api.index as idx
+        for fn in (idx.upload_documents, idx.chat, idx.db_connect, idx.db_disconnect,
+                   idx.db_chat, idx.hybrid_chat_route, idx.autopilot_run):
+            assert "**audit_ids(" in self._route_source(fn), fn.__name__
+
+
+# ---------------------------------------------------------------------------
+# DOCBOT-4016: user_id/org_id for browser events
+# ---------------------------------------------------------------------------
+
+class TestAuditIds:
+    def test_from_scope(self):
+        from api.audit_service import audit_ids
+        from api.utils.caller_scope import CallerScope
+        scope = CallerScope(user_id="u1", org_id="o1", anon_token=None)
+        assert audit_ids(scope) == {"user_id": "u1", "org_id": "o1"}
+
+    def test_anonymous_and_none(self):
+        from api.audit_service import audit_ids
+        from api.utils.caller_scope import CallerScope
+        anon = CallerScope(user_id=None, org_id=None, anon_token="abc")
+        assert audit_ids(anon) == audit_ids(None) == {"user_id": None, "org_id": None}
+
+    @pytest.mark.asyncio
+    async def test_for_user_reads_org(self):
+        from sqlalchemy import Column, MetaData, String, Table, insert
+        from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
+        from api.audit_service import audit_ids_for_user
+        users = Table("users", MetaData(), Column("id", String, primary_key=True), Column("org_id", String))
+        engine = create_async_engine("sqlite+aiosqlite://")
+        async with engine.begin() as conn:
+            await conn.run_sync(users.metadata.create_all)
+            await conn.execute(insert(users).values(id="u1", org_id="o1"))
+        factory = async_sessionmaker(engine)
+        assert await audit_ids_for_user("u1", users, factory) == {"user_id": "u1", "org_id": "o1"}
+        assert await audit_ids_for_user("ghost", users, factory) == {"user_id": "ghost", "org_id": None}
+        await engine.dispose()
