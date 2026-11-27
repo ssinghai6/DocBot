@@ -28,6 +28,13 @@ MARKER_TEMPLATE = "[[discrepancy:{id}]]"
 SEVERITY_HIGH_PCT = 1.0
 SEVERITY_MEDIUM_PCT = 0.5
 
+# DOCBOT-2707: materiality is absolute too. A pair under the relative tie-out
+# floor still breaks when the gap is >= $1M (base units, after unit scaling),
+# >= 0.1%, and larger than the report figure's own rounding (so "$2.1 billion"
+# vs 2,095M, or $914,830K vs 914,831K, stays tied out). The 25% ceiling still applies.
+ABS_MATERIALITY_FLOOR = 1_000_000.0
+ABS_MATERIALITY_MIN_REL = 0.001
+
 # ---------------------------------------------------------------------------
 # Data models
 # ---------------------------------------------------------------------------
@@ -45,6 +52,7 @@ class NumericValue:
     doc_file: Optional[str] = None    # doc side: "Source: X, Page N" header
     doc_page: Optional[int] = None
     dimension: str = ""               # db side: row entity, e.g. "lab services"
+    rounding: float = 0.0             # doc side: half the last significant digit, relative to value
 
 
 @dataclass
@@ -270,7 +278,7 @@ def detect_discrepancies(
                 compared.add(id(sv))
 
         tolerance = _tieout_tolerance(dv, delta_threshold)
-        agreeing = [e for e in evaluated if e[4] < tolerance]
+        agreeing = [e for e in evaluated if e[4] < tolerance and not _material(dv, e[3], e[4])]
         if agreeing:
             if _table_cell(dv):
                 tied.update(id(e[0]) for e in agreeing)
@@ -339,6 +347,25 @@ def _tieout_tolerance(dv: NumericValue, default: float) -> float:
     if not m or not dv.value:
         return default
     return min(default, max(1e-4, 0.5 / abs(float(m.group(1).replace(",", "")))))
+
+
+def _material(dv: NumericValue, delta: float, rel_diff: float) -> bool:
+    """DOCBOT-2707: a sub-floor gap that is still a material dollar break."""
+    return (
+        dv.kind != "percent"
+        and abs(delta) >= ABS_MATERIALITY_FLOOR
+        and rel_diff >= max(ABS_MATERIALITY_MIN_REL, dv.rounding)
+    )
+
+
+def _rounding(number_str: str) -> float:
+    """Half the last significant digit of a quoted figure, relative to it.
+    Integer trailing zeros count as rounding ("$2,100M" -> +/-50M)."""
+    digits = number_str.replace(",", "")
+    whole, _, frac = digits.partition(".")
+    unit = 10.0 ** -len(frac) if frac else 10.0 ** (len(whole) - len(whole.rstrip("0")))
+    value = abs(float(digits))
+    return 0.5 * unit / value if value else 0.0
 
 
 _TABLE_CELL_RE = re.compile(r"\|\s*[-–(]?\s*[\$£€¥]?\s*([0-9][0-9,]*)\)?\s*$")
@@ -607,6 +634,7 @@ def _extract_from_text(text: str, source: str) -> list[NumericValue]:
                 kind=kind,
                 doc_file=doc_file if source == "doc" else None,
                 doc_page=doc_page if source == "doc" else None,
+                rounding=_rounding(m.group("number")),
             ))
 
     return results

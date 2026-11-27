@@ -73,6 +73,20 @@ GOLD_CASES: list[DiscrepancyCase] = [
         ),
     ),
 
+    DiscrepancyCase(
+        name="etsy_marketing_material_dollar_gap",
+        doc_context="Marketing: $914,830K\nProduct development: $412,470K",
+        sql_metadata={"result_preview": [
+            {"line_item": "Marketing", "amount_k": 917_830},
+            {"line_item": "Product development", "amount_k": 412_470},
+        ]},
+        expected={"marketing"},
+        note=(
+            "DOCBOT-2707: Etsy-shaped plant — a $3M (0.33%) break on a ~$915M line "
+            "is under the 0.5% relative floor but over the $1M materiality floor."
+        ),
+    ),
+
     # --- TRUE NEGATIVES: matching values, must NOT flag -----------------------
     DiscrepancyCase(
         name="q4_revenue_matches",
@@ -86,6 +100,25 @@ GOLD_CASES: list[DiscrepancyCase] = [
         doc_context="Net Income: $1,140M",
         sql_metadata={"result_preview": [{"net_income": 1140}]},
         expected=set(),
+    ),
+
+    DiscrepancyCase(
+        name="clean_books_exact_and_rounding_only",
+        doc_context=(
+            "Marketing: $914,830K\nRevenue: $2.1 billion\n"
+            "Net Income: $330M\nOperating Expenses: $1,820M"
+        ),
+        sql_metadata={"result_preview": [
+            {"line_item": "Marketing", "amount_k": 914_831},
+            {"line_item": "Revenue", "amount_k": 2_095_000},
+            {"line_item": "Net Income", "amount_k": 330_000},
+            {"line_item": "Operating Expenses", "amount_k": 1_820_000},
+        ]},
+        expected=set(),
+        note=(
+            "DOCBOT-2707: exact ties plus rounding-only gaps ($1K on $914,830K; "
+            "$5M under the +/-$50M rounding of '$2.1 billion') must not flag."
+        ),
     ),
 
     # --- HARD NEGATIVES: unit / granularity mismatches must be SUPPRESSED ------
