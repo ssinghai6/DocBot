@@ -242,7 +242,16 @@ export default function Sidebar(props: SidebarProps) {
       `}>
         <div className="flex-1 min-h-0 overflow-y-auto p-4 flex flex-col">
         {/* Logo */}
-        <Link href="/" aria-label="DocBot home" className="flex items-center gap-2.5 mb-4 h-11 cursor-pointer hover:opacity-80 transition-opacity">
+        <Link
+          href="/"
+          aria-label="DocBot home"
+          onClick={(e) => {
+            if (e.metaKey || e.ctrlKey || e.shiftKey || e.button !== 0) return // opens new tab; workspace survives
+            const hasWorkspaceData = messagesLength > 0 || hasDocSession || !!connectionId
+            if (hasWorkspaceData && !window.confirm("Leave the workspace? Loaded sources and chat will be cleared.")) e.preventDefault()
+          }}
+          className="flex items-center gap-2.5 mb-4 h-11 cursor-pointer hover:opacity-80 transition-opacity"
+        >
           <div className="w-8 h-8 rounded-[5px] bg-[var(--color-cyan-500)]/10 border border-[var(--color-cyan-500)]/30 flex items-center justify-center">
             <LogoMark className="w-4 h-4" />
           </div>
@@ -413,8 +422,8 @@ export default function Sidebar(props: SidebarProps) {
           )}
 
           {/* TOOLS TAB */}
-          {activeTab === "tools" && (
-            <div>
+          {/* Kept mounted so EdgarPanel state survives tab switches (DOCBOT-2701). */}
+          <div hidden={activeTab !== "tools"}>
               {/* EDGAR */}
               <EdgarPanel
                 onFilingIngested={onEdgarFilingIngested}
@@ -477,8 +486,7 @@ export default function Sidebar(props: SidebarProps) {
                   )}
                 </div>
               </div>
-            </div>
-          )}
+          </div>
 
           {/* SETTINGS TAB */}
           {activeTab === "settings" && (

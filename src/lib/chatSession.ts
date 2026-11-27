@@ -1,8 +1,8 @@
 export type ChatMode = "docs" | "database" | "hybrid"
 
 /**
- * Pick the chat mode the available sources allow.
- * - doc session + DB/CSV connection -> "hybrid"
+ * Fall back when the chosen mode's source is gone. Never promotes: a manual
+ * Docs/Database pick sticks; hybrid promotion is a one-time effect in chat/page.tsx.
  * - "database" without a connection -> "docs"
  * - "hybrid" that lost a source -> whichever source remains ("database" or "docs")
  * Idempotent: resolveChatMode(resolveChatMode(m, c, s), c, s) === resolveChatMode(m, c, s).
@@ -12,9 +12,8 @@ export function resolveChatMode(
   connectionId: string | null,
   sessionId: string | null,
 ): ChatMode {
-  if (connectionId && sessionId) return "hybrid"
   if (mode === "database" && !connectionId) return "docs"
-  if (mode === "hybrid") return connectionId ? "database" : "docs"
+  if (mode === "hybrid" && !(connectionId && sessionId)) return connectionId ? "database" : "docs"
   return mode
 }
 

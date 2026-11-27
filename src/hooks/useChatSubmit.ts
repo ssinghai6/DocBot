@@ -245,9 +245,7 @@ export function useChatSubmit(params: UseChatSubmitParams) {
     }
 
     function defaultAutoRoute() {
-      if (sessionId && isDbConnected && chatMode !== "hybrid") {
-        effectiveChatMode = "hybrid";
-      }
+      // Hybrid promotion happens once in chat/page.tsx; a manual Docs/Database pick sticks (DOCBOT-2703).
       if (isAutoMode) {
         const routing = routeQuestion(input, effectiveChatMode, isDbConnected, !!sessionId, EXPERT_PERSONAS);
         if (routing.confidence !== "low") {
@@ -255,21 +253,16 @@ export function useChatSubmit(params: UseChatSubmitParams) {
           const pref = EXPERT_PERSONAS[routing.persona as keyof typeof EXPERT_PERSONAS]?.tool_preference;
           if (pref === "sql_first" && isDbConnected && !sessionId) effectiveChatMode = "database";
           else if (pref === "rag_first" && sessionId && !isDbConnected) effectiveChatMode = "docs";
-        } else {
-          personaToSend = "Generalist";
         }
+        // Low confidence keeps selectedPersona, the persona the header shows (DOCBOT-2702).
       }
     }
 
     function applyPickedToolRouting() {
       const pick = pickedTool!;
       if (pick.category === "persona") {
-        // Force the persona; chat-mode selection still follows the existing
-        // connection-state rule (picking a persona doesn't imply a pipeline).
+        // Force the persona; chat mode stays as selected (picking a persona doesn't imply a pipeline).
         personaToSend = pick.key;
-        if (sessionId && isDbConnected && chatMode !== "hybrid") {
-          effectiveChatMode = "hybrid";
-        }
         useAutopilot = false;
       } else if (pick.key === "autopilot") {
         useAutopilot = true;
