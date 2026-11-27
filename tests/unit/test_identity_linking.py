@@ -6,6 +6,7 @@ for the OAuth exchanges. No network, no live PostgreSQL.
 
 from __future__ import annotations
 
+from datetime import datetime, timezone
 from typing import Any
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -21,6 +22,7 @@ from sqlalchemy import (
     func,
     insert,
     select,
+    update,
 )
 from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 
@@ -36,6 +38,7 @@ from api.identity_service import (
     register_user_identities_table,
     resolve_provider_login,
 )
+from api.api_key_service import register_api_keys_table
 from api.org_service import register_organizations_table
 
 
@@ -69,7 +72,11 @@ def _schema() -> tuple[MetaData, dict[str, Table]]:
         Column("expires_at", DateTime(timezone=True)),
     )
     identities = register_user_identities_table(md)
-    return md, {"organizations": orgs, "users": users, "sessions": sessions, "identities": identities}
+    api_keys = register_api_keys_table(md)
+    return md, {
+        "organizations": orgs, "users": users, "sessions": sessions,
+        "identities": identities, "api_keys": api_keys,
+    }
 
 
 @pytest.fixture
@@ -210,6 +217,52 @@ class TestGoogleLinking:
         assert user.password_hash is None and user.email_verified
         assert user.provider == "google"
         assert await _rows(factory, tables["sessions"]) == []
+
+    async def test_verified_google_on_unverified_account_revokes_api_keys(self, db):
+        """DOCBOT-4013: the pre-hijacker's org keys and own keys die with the claim."""
+        _, factory, tables = db
+        keys = tables["api_keys"]
+        victim = await _seed_user(factory, tables, "owner@x.com", verified=False)
+        then = datetime(2026, 1, 1, tzinfo=timezone.utc)
+        async with factory() as s:
+            async with s.begin():
+                await s.execute(update(tables["users"]).where(
+                    tables["users"].c.id == victim).values(org_id="org-victim"))
+                for kid, org, by, revoked in [
+                    ("org-key", "org-victim", None, None),
+                    ("own-key", "org-other", victim, None),
+                    ("old-key", "org-victim", None, then),
+                    ("other-key", "org-other", "someone", None),
+                ]:
+                    await s.execute(insert(keys).values(
+                        id=kid, org_id=org, key_hash=f"h-{kid}", key_prefix="dk_",
+                        name=kid, scopes="[]", created_at=then, revoked_at=revoked,
+                        created_by=by,
+                    ))
+        await resolve_provider_login(
+            _google("g-1", "owner@x.com", True), tables["users"], tables["identities"],
+            tables["sessions"], factory, api_keys_table=keys,
+        )
+        state = {r.id: r.revoked_at for r in await _rows(factory, keys)}
+        assert state["org-key"] is not None and state["own-key"] is not None
+        assert state["old-key"].replace(tzinfo=timezone.utc) == then  # untouched
+        assert state["other-key"] is None
+
+    async def test_verified_google_on_verified_account_keeps_api_keys(self, db):
+        _, factory, tables = db
+        keys = tables["api_keys"]
+        victim = await _seed_user(factory, tables, "owner@x.com", verified=True)
+        async with factory() as s:
+            async with s.begin():
+                await s.execute(insert(keys).values(
+                    id="k", org_id="o", key_hash="h", key_prefix="dk_", name="k",
+                    scopes="[]", created_at=datetime.now(timezone.utc), created_by=victim,
+                ))
+        await resolve_provider_login(
+            _google("g-1", "owner@x.com", True), tables["users"], tables["identities"],
+            tables["sessions"], factory, api_keys_table=keys,
+        )
+        assert (await _rows(factory, keys))[0].revoked_at is None
 
     def test_google_exchange_reports_email_verified(self):
         info = {"sub": "g-1", "email": "A@x.com", "name": "A", "email_verified": True}

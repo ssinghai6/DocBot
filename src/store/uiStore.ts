@@ -62,11 +62,17 @@ interface UIState {
   // while it is the active session; not persisted).
   expiredSessionId: string | null;
   setExpiredSessionId: (sessionId: string | null) => void;
+
+  // DOCBOT-2719: the in-flight chat stream, so a chat reset can cancel it.
+  chatAbort: AbortController | null;
+  setChatAbort: (ctrl: AbortController | null) => void;
+  /** Abort the in-flight stream and drop the inspector selection (clear/demo/new-doc paths). */
+  resetChat: () => void;
 }
 
 export const useUIStore = create<UIState>()(
   persist(
-    (set) => ({
+    (set, get) => ({
       sidebarCollapsed: false,
       inspectorOpen: true,
       setSidebarCollapsed: (collapsed) => set({ sidebarCollapsed: collapsed }),
@@ -83,6 +89,8 @@ export const useUIStore = create<UIState>()(
       selectLineage: (lineage, opts) =>
         set((s) => ({
           selectedLineage: lineage,
+          // A newer lineage supersedes an older clicked card (DOCBOT-2719).
+          selectedArtifact: null,
           focusSourceId: opts?.focusSourceId ?? null,
           focusDiscrepancyId: opts?.focusDiscrepancyId ?? null,
           inspectorTab: opts?.tab ?? s.inspectorTab,
@@ -118,6 +126,19 @@ export const useUIStore = create<UIState>()(
 
       expiredSessionId: null,
       setExpiredSessionId: (sessionId) => set({ expiredSessionId: sessionId }),
+
+      chatAbort: null,
+      setChatAbort: (ctrl) => set({ chatAbort: ctrl }),
+      resetChat: () => {
+        get().chatAbort?.abort();
+        set({
+          chatAbort: null,
+          selectedLineage: null,
+          selectedArtifact: null,
+          focusSourceId: null,
+          focusDiscrepancyId: null,
+        });
+      },
     }),
     {
       name: "docbot-ui-store",

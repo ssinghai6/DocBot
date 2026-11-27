@@ -243,7 +243,7 @@ export default function ChatArea(props: ChatAreaProps) {
         <SessionInfo
           sessionId={sessionId}
           fileCount={uploadedFiles.length}
-          persona={selectedPersona}
+          persona={isAutoMode ? "Auto" : selectedPersona}
           onClear={clearSession}
         />
 

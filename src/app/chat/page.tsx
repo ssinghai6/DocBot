@@ -145,6 +145,9 @@ export default function Home() {
   const [sidebarOpen, setSidebarOpen] = useState(true);
   const [sidebarTab, setSidebarTab] = useState<"sources" | "tools" | "settings">("sources");
   const [isAutoMode, setIsAutoMode] = useState(true);
+  // Lifted so "Browse SEC Filings" / ⌘K can open the EDGAR section (DOCBOT-2719).
+  const [edgarExpanded, setEdgarExpanded] = useState(false);
+  const openEdgar = () => { setSidebarOpen(true); setSidebarTab("tools"); setEdgarExpanded(true); };
 
   // Demo mode
   const [demoLoading, setDemoLoading] = useState(false);
@@ -395,6 +398,8 @@ export default function Home() {
     showToast,
   });
 
+  const { loadQueryHistory, loadSchemaCacheInfo } = handlers;
+
   // Demo mode handler — dataset: "quickbite" (discrepancy), "fuel" (forecasting),
   // or "tieout" (draft 10-K vs trial balance, DOCBOT-2212). DOCBOT-2632:
   // `keepMessages` restarts an expired demo without wiping the chat.
@@ -414,12 +419,19 @@ export default function Home() {
       setConnectionId(data.connection_id);
       setIsDbConnected(true);
       setDbFileName(demo.db);
+      // DOCBOT-2719: drop a prior CSV/DB's flags, history and schema info.
+      setIsCsvConnection(false);
+      setQueryHistory([]);
+      setSchemaCachedAt(null);
+      loadQueryHistory(data.connection_id);
+      loadSchemaCacheInfo(data.connection_id);
       setChatMode("hybrid");
       setSelectedPersona(demo.persona);
       setIsAutoMode(false);
       setUploadedFiles([new File([], demo.doc)]);
       if (!opts?.keepMessages) {
         setMessages([]);
+        useUIStore.getState().resetChat();
         showToast("success", demo.toast);
       }
       return { sessionId: data.session_id, connectionId: data.connection_id };
@@ -429,7 +441,7 @@ export default function Home() {
     } finally {
       setDemoLoading(false);
     }
-  }, [showToast]);
+  }, [showToast, loadQueryHistory, loadSchemaCacheInfo]);
 
   // DOCBOT-2632: an expired demo restarts on the dataset it was showing.
   const restartDemo = () => handleTryDemo(
@@ -721,6 +733,8 @@ export default function Home() {
         onConnectorRegister={handlers.handleConnectorRegister}
         onConnectorSync={handlers.handleConnectorSync}
         onConnectorDisconnect={handlers.handleConnectorDisconnect}
+        edgarExpanded={edgarExpanded}
+        setEdgarExpanded={setEdgarExpanded}
         onEdgarFilingIngested={(sid: string, label: string) => {
           setSessionId(sid)
           setSelectedPersona("Finance Expert")
@@ -768,7 +782,7 @@ export default function Home() {
         showToast={showToast}
         onUploadClick={() => { setSidebarOpen(true); setSidebarTab("sources"); fileInputRef.current?.click(); }}
         onConnectDatabase={() => { setSidebarOpen(true); setSidebarTab("sources"); setShowLiveDbForm(true); }}
-        onBrowseEdgar={() => { setSidebarOpen(true); setSidebarTab("tools"); }}
+        onBrowseEdgar={openEdgar}
         onTryDemo={handleTryDemo}
         demoLoading={demoLoading}
         pickedTool={toolPicker.pickedTool}
@@ -899,7 +913,7 @@ export default function Home() {
         onClose={cmdPalette.onClose}
         commands={buildCommands({
           onConnectDatabase: () => { setSidebarOpen(true); setSidebarTab("sources"); setShowLiveDbForm(true); },
-          onSearchEdgar: () => { setSidebarOpen(true); setSidebarTab("tools"); },
+          onSearchEdgar: openEdgar,
           onAddConnector: () => { setSidebarOpen(true); setSidebarTab("tools"); },
           onToggleInspector: () => setInspectorOpen(!inspectorOpen),
           onClearChat: messages.length > 0 ? handlers.clearChat : undefined,
