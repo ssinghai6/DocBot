@@ -387,6 +387,8 @@ export function useChatSubmit(params: UseChatSubmitParams) {
         const reader = response.body.getReader();
         const decoder = new TextDecoder();
         let buffer = "";
+        // DOCBOT-2721: a stream that closes without a non-empty answer must not leave an empty bubble.
+        let answered = false;
 
         while (true) {
           const { done, value } = await reader.read();
@@ -430,6 +432,7 @@ export function useChatSubmit(params: UseChatSubmitParams) {
                 applyLineageEvent(data, setMessages);
 
               } else if (data.type === "answer") {
+                if (typeof data.content === "string" && data.content.trim()) answered = true;
                 setMessages(prev => {
                   const updated = [...prev];
                   const last = updated[updated.length - 1];
@@ -492,6 +495,18 @@ export function useChatSubmit(params: UseChatSubmitParams) {
               // malformed JSON — skip
             }
           }
+        }
+        if (!answered && !signal.aborted) {
+          const note = "⚠️ Autopilot stopped before it returned an answer. Please try again.";
+          setMessages(prev => {
+            const updated = [...prev];
+            const last = updated[updated.length - 1];
+            if (last?.role === "assistant" && !last.content.trim()) {
+              updated[updated.length - 1] = { ...last, content: note };
+            }
+            return updated;
+          });
+          showToast("error", "Autopilot did not return an answer");
         }
       } catch (err) {
         if (signal.aborted) return;
