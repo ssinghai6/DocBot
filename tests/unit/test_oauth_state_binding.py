@@ -139,3 +139,14 @@ def test_check_oauth_state_cookie() -> None:
     assert oauth_service.check_oauth_state_cookie("other", "s") is None
     assert oauth_service.check_oauth_state_cookie("s", "s") == ""
     assert oauth_service.check_oauth_state_cookie("s.v", "s") == "v"
+
+
+@pytest.mark.parametrize("provider", ["github", "google"])
+def test_callback_on_another_replica_succeeds(env: dict[str, Any], provider: str) -> None:
+    """DOCBOT-4017: the callback may land on a process that never issued the state."""
+    client = TestClient(idx.app)
+    state, _ = _start(client, provider)
+    getattr(oauth_service, "_pending_states", {}).clear()  # other replica / post-redeploy process
+    resp = client.get(f"/api/auth/{provider}/callback", params={"code": "c", "state": state}, follow_redirects=False)
+    assert "auth_success=1" in resp.headers["location"]
+    env[provider].assert_awaited_once()

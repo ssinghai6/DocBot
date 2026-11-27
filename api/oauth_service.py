@@ -296,35 +296,49 @@ async def is_password_breached(password: str) -> bool:
 
 
 # ---------------------------------------------------------------------------
-# OAuth state — simple in-memory store (short-lived, single-server)
+# OAuth state — stateless, HMAC-signed (DOCBOT-4017)
 # ---------------------------------------------------------------------------
-# CSRF state tokens are short-lived (5 min) and used once.
-# For multi-instance deployments, swap for Redis or signed JWT.
+# state = "nonce~issued_at~sig". No process memory, so any replica (or a fresh
+# process after a redeploy) can validate it. Login-CSRF binding comes from the
+# HttpOnly oauth_state cookie (check_oauth_state_cookie), which the callback
+# deletes, so a state can't be replayed from the browser that started the flow.
 
-import secrets
 import time
-
-_pending_states: dict[str, float] = {}  # state → expiry timestamp
 
 _STATE_TTL = 300  # 5 minutes
 
 
+def _state_key() -> Optional[bytes]:
+    secret = os.getenv("DB_ENCRYPTION_KEY")
+    if not secret:
+        return None
+    return hashlib.sha256(b"docbot-oauth-state:" + secret.encode("utf-8")).digest()
+
+
+def _state_sig(key: bytes, payload: str) -> str:
+    return hmac.new(key, payload.encode("utf-8"), hashlib.sha256).hexdigest()
+
+
 def generate_oauth_state() -> str:
-    state = secrets.token_urlsafe(32)
-    # Prune expired entries
-    now = time.time()
-    expired = [k for k, v in _pending_states.items() if v < now]
-    for k in expired:
-        del _pending_states[k]
-    _pending_states[state] = now + _STATE_TTL
-    return state
+    key = _state_key()
+    if key is None:
+        raise RuntimeError("DB_ENCRYPTION_KEY environment variable is not set.")
+    payload = f"{secrets.token_urlsafe(32)}~{int(time.time())}"
+    return f"{payload}~{_state_sig(key, payload)}"
 
 
 def validate_oauth_state(state: str) -> bool:
-    expiry = _pending_states.pop(state, None)
-    if expiry is None:
+    key = _state_key()
+    if key is None or not state:
         return False
-    return time.time() < expiry
+    payload, _, sig = state.rpartition("~")
+    if not hmac.compare_digest(sig.encode(), _state_sig(key, payload).encode()):
+        return False
+    issued = payload.rpartition("~")[2]
+    if not issued.isdigit():
+        return False
+    # No lower bound: issued_at is signed, and replica clocks may drift slightly.
+    return time.time() - int(issued) <= _STATE_TTL
 
 
 OAUTH_STATE_COOKIE = "oauth_state"
@@ -339,7 +353,7 @@ def pkce_pair() -> tuple[str, str]:
 
 def oauth_state_cookie_value(state: str, verifier: str = "") -> str:
     """Cookie binding the flow to this browser: "state" or "state.verifier"
-    (token_urlsafe never emits '.'). HttpOnly + set by us, so no signature needed:
+    (the state and token_urlsafe never emit '.'). HttpOnly + set by us, so no signature needed:
     an attacker can only alter their own browser's copy."""
     return f"{state}.{verifier}" if verifier else state
 
