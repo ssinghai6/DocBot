@@ -2700,7 +2700,7 @@ async def saml_acs(request: Request, response: Response):
         key="docbot_session",
         value=token,
         httponly=True,
-        secure=request.url.scheme == "https",
+        secure=os.getenv("APP_BASE_URL", "").startswith("https"),
         samesite="lax",
         max_age=int(os.getenv("SESSION_TTL_HOURS", "8")) * 3600,
         path="/",
