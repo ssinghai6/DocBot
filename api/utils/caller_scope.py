@@ -240,35 +240,48 @@ async def is_server_demo_session(session_id: str) -> bool:
         return result.fetchone() is not None
 
 
-async def request_resource_ids(request: Request) -> tuple[Optional[str], Optional[str]]:
-    """``(session_id, connection_id)`` from path params, query string or JSON body."""
-    found: dict[str, Optional[str]] = {"session_id": None, "connection_id": None}
+async def request_resource_ids(request: Request) -> dict[str, set[str]]:
+    """Every ``session_id`` / ``connection_id`` value in path params, query string and JSON body.
+
+    The query string counts only for GET/HEAD: a POST handler reads its ids from
+    the body, so a query id there would vouch for a request that never uses it.
+    """
+    found: dict[str, set[str]] = {"session_id": set(), "connection_id": set()}
     body: Any = {}
     if request.headers.get("content-type", "").startswith("application/json"):
         try:
             body = await request.json()  # Starlette caches the body; route parsing still works
         except ValueError:
             body = {}
-    for key in found:
-        for source in (request.path_params, request.query_params, body if isinstance(body, dict) else {}):
+    sources: list[Any] = [request.path_params, body if isinstance(body, dict) else {}]
+    if request.method in ("GET", "HEAD"):
+        sources.append(request.query_params)
+    for key, values in found.items():
+        for source in sources:
             value = source.get(key)
             if isinstance(value, str) and value:
-                found[key] = value
-                break
-    return found["session_id"], found["connection_id"]
+                values.add(value)
+    return found
 
 
 async def is_demo_only_request(request: Request, *, verify: bool = True) -> bool:
-    """True when the request only touches demo resources (``credit_service.is_demo_request``).
+    """True when every session/connection id in the request is a demo id (at least one present).
 
-    ``verify=False`` skips the sessions lookup (prefix-only) — used where a
-    false positive only hurts the caller (the demo spend cap).
+    Session ids must also exist server-side as demo rows. ``verify=False`` skips
+    the sessions lookup (prefix-only) — used where a false positive only hurts
+    the caller (the demo spend cap).
     """
-    from api.credit_service import is_demo_request
-
-    sid, cid = await request_resource_ids(request)
-    exists = bool(sid) and (await is_server_demo_session(sid) if verify else sid.startswith("demo-"))
-    return is_demo_request(sid, cid, session_exists=exists)
+    ids = await request_resource_ids(request)
+    sids, cids = ids["session_id"], ids["connection_id"]
+    if not sids and not cids:
+        return False
+    if not all(i.startswith("demo-") for i in sids | cids):
+        return False
+    if verify:
+        for sid in sids:
+            if not await is_server_demo_session(sid):
+                return False
+    return True
 
 
 async def require_principal(request: Request) -> CallerScope:
