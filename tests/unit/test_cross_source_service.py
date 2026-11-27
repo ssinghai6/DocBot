@@ -170,3 +170,10 @@ def test_canonicalize_renames_measures_without_clobbering():
 def test_humanize_expands_abbreviations():
     assert xs._humanize("custNo") == "customer number"
     assert xs._humanize("txn_amt") == "transaction amount"
+
+
+def test_canonicalize_renames_tieout_rows_too():
+    meta = {"result_preview": [{"net_sales": 10}], "tieout_rows": [{"net_sales": 10}, {"net_sales": 20}]}
+    out = xs.canonicalize_sql_metadata(meta, {"net_sales": "revenue"})
+    assert out["tieout_rows"] == [{"revenue": 10}, {"revenue": 20}]
+    assert meta["tieout_rows"] == [{"net_sales": 10}, {"net_sales": 20}]

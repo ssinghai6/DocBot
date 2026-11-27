@@ -263,3 +263,14 @@ class TestLegacyUpgrade:
         assert card.id.startswith("d-")
         assert MARKER_RE.fullmatch(f"[[discrepancy:{card.id}]]")
         assert card.report_value == 330.0 and card.books_value == 325.0
+
+
+def test_4021_autopilot_detection_passes_use_full_rows():
+    """Both autopilot detection passes read every books row, not the 10-row sample."""
+    from api.autopilot_service import _executed_rows_preview
+
+    rows = [{"segment": f"S{i}", "revenue": i} for i in range(25)]
+    state = {"data_results": {"0": {"tool": "sql_query", "sample_rows": rows[:10], "tieout_rows": rows}}}
+    assert _executed_rows_preview(state) == rows
+    legacy = {"data_results": {"0": {"tool": "sql_query", "sample_rows": rows[:10]}}}
+    assert _executed_rows_preview(legacy) == rows[:10]

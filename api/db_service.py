@@ -1414,9 +1414,14 @@ async def run_sql_pipeline(
     chat_history: Optional[List[Dict[str, str]]] = None,
     emit_lineage_event: bool = False,
     scope: Optional[CallerScope] = None,
+    include_tieout_rows: bool = False,
 ) -> AsyncGenerator[str, None]:
     """
     Execute the 7-step bounded SQL pipeline and yield SSE-formatted strings.
+
+    ``include_tieout_rows`` (DOCBOT-4021): in-process callers (hybrid /
+    autopilot) also get every masked result row as ``tieout_rows`` in the
+    metadata chunk, so the tie-out checks all books lines, not the UI preview.
 
     LLM calls per question (DOCBOT-2320), no loops:
       typical 3  = table selector + SQL gen + answer
@@ -1795,6 +1800,8 @@ async def run_sql_pipeline(
             "execution_time_ms": execution_time_ms,
             "sources": [t["name"] for t in schema_subset],
         }
+        if include_tieout_rows:
+            meta_chunk["tieout_rows"] = mask_rows(result_dicts)
         yield f"data: {_json_dumps(meta_chunk)}\n\n"
 
         lin.set_sql(

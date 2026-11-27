@@ -20,7 +20,8 @@ from api.utils.discrepancy_detector import _SOURCE_HEADER_RE
 MAX_FACTS = 60
 _YEAR_RE = re.compile(r"(?:19|20)\d\d")
 _NIL = {"—", "–", "-", "−"}
-_NUMBER_RE = re.compile(r"^(\()?\$?\s*(-|−)?\s*([0-9][0-9,]*(?:\.[0-9]+)?)\s*(%)?\s*(\))?$")
+# "(18,509)", "$(18,509)" (DOCBOT-4021: edgar _row_cells output) and "-18,509" are negative
+_NUMBER_RE = re.compile(r"^(\()?\$?\s*(\()?\s*(-|−)?\s*([0-9][0-9,]*(?:\.[0-9]+)?)\s*(%)?\s*(\))?$")
 _UNITS_RE = re.compile(r"\(\s*in (thousands|millions|billions)", re.IGNORECASE)
 
 
@@ -84,10 +85,10 @@ def _cell_value(cell: str) -> Optional[tuple[float, bool]]:
     m = _NUMBER_RE.match(cell)
     if not m:
         return None
-    value = float(m.group(3).replace(",", ""))
-    if m.group(1) and m.group(5) or m.group(2):
+    value = float(m.group(4).replace(",", ""))
+    if (m.group(1) or m.group(2)) and m.group(6) or m.group(3):
         value = -value
-    return value, bool(m.group(4))
+    return value, bool(m.group(5))
 
 
 def _header_years(cells: list[str]) -> Optional[list[Optional[str]]]:

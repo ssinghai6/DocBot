@@ -495,3 +495,80 @@ def test_suffix_letter_needs_word_boundary():
 
     vals = [v.value for v in _extract_from_text("There were 2,375 total employees.", "doc")]
     assert 2375.0 in vals and not any(v > 1e9 for v in vals)
+
+
+# ---------------------------------------------------------------------------
+# DOCBOT-4021: tie-out correctness
+# ---------------------------------------------------------------------------
+
+
+def _items(rep):
+    return [(d.label, d.period, d.doc_value, d.db_value) for d in rep.discrepancies]
+
+
+def test_4021_a_undated_figure_compares_with_closest_period_not_first_row():
+    rows = [{"year": 2024, "revenue": 4.4e9}, {"year": 2025, "revenue": 5.25e9}]
+    rep = detect_discrepancies("Revenue: $5.20 billion", {"result_preview": rows})
+    assert _items(rep) == [("Revenue", "FY2025", 5.2e9, 5.25e9)]
+    assert rep.discrepancies[0].pct == pytest.approx(0.96, abs=0.01)
+
+
+def test_4021_a_date_header_cells_give_the_column_year():
+    doc = "BALANCE SHEETS\n | December 31, 2025 | December 31, 2024\nTotal assets | 4,800 | 4,700"
+    rows = [{"year": 2025, "total_assets": 5000}, {"year": 2024, "total_assets": 4800}]
+    rep = detect_discrepancies(doc, {"result_preview": rows})
+    assert _items(rep) == [("Total assets", "FY2025", 4800.0, 5000.0)]
+
+
+def test_4021_b_detector_reads_full_tieout_rows_beyond_preview():
+    rows = [{"segment": f"Region {i}", "headcount": 7} for i in range(30)]
+    rows.append({"segment": "Lab Services", "revenue": 110})
+    meta = {"result_preview": rows[:10], "tieout_rows": rows}
+    rep = detect_discrepancies("Lab Services: $100", meta)
+    assert [(d.doc_value, d.db_value) for d in rep.discrepancies] == [(100.0, 110.0)]
+    assert detect_discrepancies("Lab Services: $100", {"result_preview": rows[:10]}).discrepancies == []
+
+
+@pytest.mark.parametrize("cell", ["$(18,509)", "($18,509)", "(18,509)", "$ (18,509)"])
+def test_4021_c_paren_negative_after_currency_parses(cell):
+    vals = [v.value for v in _extract_from_text(f"Net loss | {cell}", "doc")]
+    assert vals == [-18509.0]
+
+
+def test_4021_c_prose_paren_negative_and_year_in_parens_not_negative():
+    assert [v.value for v in _extract_from_text("Net loss was $(18,509)", "doc")] == [-18509.0]
+    assert all(v.value >= 0 for v in _extract_from_text("Revenue - (2025) $5B", "doc"))
+
+
+def test_4021_c_yoy_cell_value_parses_dollar_paren():
+    from api.utils.yoy_facts import _cell_value
+
+    assert _cell_value("$(18,509)") == (-18509.0, False)
+    assert _cell_value("(18,509)") == (-18509.0, False)
+
+
+def test_4021_d_negatives_are_scale_aligned():
+    rep = detect_discrepancies("Net loss | (12,345)", {"result_preview": [{"net_loss": -12_845_000}]})
+    assert [(d.doc_value, d.db_value) for d in rep.discrepancies] == [(-12_345_000.0, -12_845_000.0)]
+    # books loss is larger than reported: the % carries the books-vs-report direction
+    assert rep.discrepancies[0].pct == pytest.approx(-4.05, abs=0.01)
+
+
+def test_4021_d_mixed_signs_not_aligned():
+    from api.utils.discrepancy_detector import _align_scale
+
+    assert _align_scale(-12_345.0, 12_845_000.0) == (-12_345.0, 12_845_000.0)
+
+
+def test_4021_e_rounded_prose_figure_ties_within_its_rounding():
+    meta = {"result_preview": [{"net_income": 1_151_000_000}]}
+    assert detect_discrepancies("Net income was $1.2 billion", meta).discrepancies == []
+    # beyond the figure's own rounding it is still a break
+    assert detect_discrepancies("Net income was $1.25 billion", meta).has_discrepancies
+
+
+def test_4021_f_one_card_per_figure():
+    meta = {"result_preview": [{"net_income": 1_151_000_000}]}
+    rep = detect_discrepancies("Net income was $1.3 billion", meta)
+    assert len(rep.discrepancies) == 1
+    assert len(_extract_from_text("Net income was $1.3 billion", "doc")) == 1
