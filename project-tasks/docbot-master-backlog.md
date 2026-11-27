@@ -500,6 +500,7 @@ Builds on 1530 and 2907. Pulled on 2026-11-23 (founder ask: token-gated docbot.s
 | DOCBOT-2638 | BUG: Tie-out against a journal-entry ledger in Postgres misses the planted break on YoY questions | 3 | P0 | Done (2026-11-25) | 0 | S0 | senior-dev | EPIC-26 Pre-seed |
 | DOCBOT-2639 | BUG: Tie-out misses a planted break on a second real filing (Chipotle) and a signed-amount ledger | 3 | P0 | In progress (2026-11-26) | 0 | S0 | senior-dev | EPIC-26 Pre-seed |
 | DOCBOT-2720 | BUG: SQL step pairs account numbers to names by list position | 2 | P0 | Testing (2026-11-27) | 0 | S0 | senior-dev | EPIC-26 Pre-seed |
+| DOCBOT-2722 | BUG: EDGAR batch ingest: only the last filing is queryable | 2 | P0 | Testing (2026-11-27) | 0 | S0 | senior-dev | EPIC-26 Pre-seed |
 | DOCBOT-2632 | BUG: Demo session breaks after a backend restart | 3 | P0 | In progress (found 2026-11-23) | 0 | - | senior-dev | EPIC-26 Pre-seed |
 | DOCBOT-2509 | Secrets rotation | 5 | P1 | Open (Wave B) | 1 | S2 | devops | EPIC-25 AWS |
 | DOCBOT-2510 | Prod restore drill | 3 | P1 | Open (Wave B) | 1 | S2 | devops | EPIC-25 AWS |

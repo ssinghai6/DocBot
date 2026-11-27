@@ -308,6 +308,49 @@ def clone_store(src_session_id: str, dst_session_id: str, embeddings: Any) -> tu
     return store, len(ids)
 
 
+def merge_stores(src_session_ids: list[str], dst_session_id: str, embeddings: Any) -> tuple[Any, int] | None:
+    """DOCBOT-2722: merge several sessions' collections into one new collection.
+
+    Vectors and per-chunk metadata are copied as-is (no re-embedding), so each
+    chunk still names its own filing. Chunk ids are prefixed with the source
+    index so they cannot collide. Sources that are gone are skipped; returns
+    None when nothing could be copied.
+    """
+    from langchain_chroma import Chroma
+
+    client = _get_chroma_client()
+    dst_name = _collection_name(dst_session_id)
+    dst = None
+    total = 0
+    for i, src_id in enumerate(src_session_ids):
+        src_name = _collection_name(src_id)
+        if not _collection_exists(src_name):
+            continue
+        data = client.get_collection(src_name).get(include=["documents", "metadatas", "embeddings"])
+        ids = list(data.get("ids") or [])
+        if not ids:
+            continue
+        if dst is None:
+            _delete_collection_if_exists(dst_name)
+            dst = client.create_collection(dst_name)
+        dst.add(
+            ids=[f"{i}:{x}" for x in ids],
+            documents=data.get("documents"),
+            metadatas=data.get("metadatas"),
+            embeddings=data.get("embeddings"),
+        )
+        total += len(ids)
+    if dst is None:
+        return None
+    store = Chroma(
+        collection_name=dst_name,
+        embedding_function=embeddings,
+        persist_directory=str(_PERSIST_DIR),
+    )
+    logger.info("vector_store: merged %d collections -> %s (%d docs)", len(src_session_ids), dst_name, total)
+    return store, total
+
+
 def delete_store(session_id: str) -> None:
     """
     Delete the Chroma collection for session_id from disk.
