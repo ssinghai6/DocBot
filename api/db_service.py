@@ -133,7 +133,7 @@ async def _decrypt_conn_credentials_lazy(
 
 PROMPT_VERSION_SQL_REPHRASE = "v1"          # _rephrase_with_history
 PROMPT_VERSION_SQL_TABLE_SELECTOR = "v1"    # _select_relevant_tables (incl. retry)
-PROMPT_VERSION_SQL_GEN = "v5"               # _generate_sql
+PROMPT_VERSION_SQL_GEN = "v6"               # _generate_sql
 # DOCBOT-2637: reasoning models (gpt-oss on Bedrock) spend output tokens
 # thinking first; at 1200 a pivot query was cut off mid-SQL ("Column not found").
 SQL_GEN_MAX_TOKENS = 3000
@@ -2002,7 +2002,11 @@ async def _generate_sql(
         "via UNION ALL or a grouped query. Never answer in prose. The database cannot see "
         "the document: never add agree / match / variance flag columns. When accounts roll "
         "up to statement lines (e.g. an fs_line or rollup column), group by that line, not "
-        "by individual accounts.\n"
+        "by individual accounts. If a status column marks entries (e.g. posted / void / "
+        "draft), keep only posted ones. If one signed amount column holds debits positive "
+        "and credits negative: an expense line is SUM(amount), a revenue line is "
+        "-SUM(amount), and a profit line (operating income, net income) is -SUM(amount) "
+        "over every account that rolls into it, revenue and expenses together.\n"
         "6. Filter text columns using the stored format shown in their e.g. values "
         "(e.g. quarter values like 'Q4 2025' need quarter LIKE 'Q4%', not quarter = 'Q4').\n"
         "7. A column shown with 'values' lists EVERY value it holds. Filter it only with "

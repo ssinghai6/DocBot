@@ -225,6 +225,8 @@ def detect_discrepancies(
     pairs_checked = 0
     seen_ids: set[str] = set()
     compared: set[int] = set()  # db_values indexes with a plausible doc figure
+    tied: set[int] = set()      # db values some doc figure agrees with
+    flagged: list[tuple[DiscrepancyItem, int, bool]] = []  # (item, books value id, table cell?)
 
     for dv in doc_values:
         candidates: list[tuple[bool, float, float, int, NumericValue]] = []
@@ -267,7 +269,11 @@ def detect_discrepancies(
             if rel_diff <= max_delta_threshold:
                 compared.add(id(sv))
 
-        if any(e[4] < delta_threshold for e in evaluated):
+        tolerance = _tieout_tolerance(dv, delta_threshold)
+        agreeing = [e for e in evaluated if e[4] < tolerance]
+        if agreeing:
+            if _table_cell(dv):
+                tied.update(id(e[0]) for e in agreeing)
             continue  # a books value agrees with the report figure — ties out
 
         chosen = next((e for e in evaluated if e[4] <= max_delta_threshold), None)
@@ -294,15 +300,53 @@ def detect_discrepancies(
         if item.id in seen_ids:
             continue
         seen_ids.add(item.id)
-        report.discrepancies.append(item)
+        flagged.append((item, id(sv), _table_cell(dv)))
+
+    # DOCBOT-2639: one verdict per books line across statement tables. A filing
+    # repeats a caption in other tables (cash-flow add-backs, segment tables);
+    # if a table copy ties out the line agrees, else only the closest table copy
+    # is the break. Prose figures (MD&A) still flag on their own.
+    closest: dict[int, DiscrepancyItem] = {}
+    for item, sv_id, cell in flagged:
+        if cell and sv_id not in tied:
+            prev = closest.get(sv_id)
+            if prev is None or abs(item.delta) < abs(prev.delta):
+                closest[sv_id] = item
+    report.discrepancies = [
+        item for item, sv_id, cell in flagged if not cell or closest.get(sv_id) is item
+    ]
 
     report.checked_pairs = pairs_checked
     covered = {sv.dimension for sv in db_values if id(sv) in compared}
     report.unpaired_db_lines = list(dict.fromkeys(
-        sv.raw_text.split(" · ")[0] for sv in db_values
-        if sv.dimension and sv.dimension not in covered and " · " in sv.raw_text
+        [sv.raw_text.split(" · ")[0] for sv in db_values
+         if sv.dimension and sv.dimension not in covered and " · " in sv.raw_text]
+        # DOCBOT-2639: a wide row (total_revenue, operating_income, ...) names its
+        # lines by column.
+        + [sv.label for sv in db_values if not sv.dimension and id(sv) not in compared]
     ))
     return report
+
+
+def _tieout_tolerance(dv: NumericValue, default: float) -> float:
+    """DOCBOT-2639: relative gap a doc figure tolerates before it is a break.
+
+    A whole-number statement cell ("Labor | 2,991,680", in thousands) is exact
+    to half a unit, so a $12.5M (0.42%) books gap is a break even though it is
+    under the 0.5% prose default. Rounded prose ("$2.1 billion") keeps the default.
+    """
+    m = _TABLE_CELL_RE.search(dv.raw_text)
+    if not m or not dv.value:
+        return default
+    return min(default, max(1e-4, 0.5 / abs(float(m.group(1).replace(",", "")))))
+
+
+_TABLE_CELL_RE = re.compile(r"\|\s*[-–(]?\s*[\$£€¥]?\s*([0-9][0-9,]*)\)?\s*$")
+
+
+def _table_cell(dv: NumericValue) -> bool:
+    """A whole-number statement-table cell ("Labor | 2,991,680")."""
+    return bool(_TABLE_CELL_RE.search(dv.raw_text))
 
 
 def _kinds_compatible(dv: NumericValue, sv: NumericValue) -> bool:
@@ -627,12 +671,15 @@ def _where_dimension(sql: Any) -> str:
     if tree is None:
         return ""
     values: list[str] = []
-    for node in tree.find_all(exp.EQ, exp.Like):
+    # DOCBOT-2639: WHERE filters only (a CASE WHEN in SELECT splits columns, it does
+    # not name the row), and never record-state filters such as status = 'posted'.
+    nodes = [n for where in tree.find_all(exp.Where) for n in where.find_all(exp.EQ, exp.Like)]
+    for node in nodes:
         col = node.find(exp.Column)
         lit = node.expression if isinstance(node.expression, exp.Literal) else node.this
         if col is None or not isinstance(lit, exp.Literal) or not lit.is_string:
             continue
-        if col.name.lower() in _PERIOD_COLS:
+        if col.name.lower() in _PERIOD_COLS or col.name.lower().endswith(("status", "state")):
             continue
         text = lit.this.strip("%").strip()
         if not text or extract_period(text) or _BARE_QUARTER_RE.match(text):
@@ -689,11 +736,18 @@ def _extract_from_rows(
         if not isinstance(row, dict):
             continue
         period, dimension = _row_period_and_dimension(row)
+        shown = ""  # row name for citations / unpaired lines, when narrower than dimension
         if tag_columns:
             data_dimension = _row_period_and_dimension(
                 {k: v for k, v in row.items() if str(k).lower() not in tag_columns}
             )[1]
-            dimension = data_dimension or fallback_dimension or dimension
+            if not data_dimension and fallback_dimension and dimension:
+                # DOCBOT-2639: "SELECT 'Net Income' AS metric ... WHERE acct_class =
+                # 'revenue'": the tag may be the metric's own name, so match on it too.
+                shown = dimension
+                dimension = f"{fallback_dimension}|{dimension}"
+            else:
+                dimension = data_dimension or fallback_dimension or dimension
         dimension = dimension or fallback_dimension
         dim_label = _normalize_label(dimension) if dimension else ""
         # Ledger account codes ("4100 Revenue - Lab Services") never appear in prose.
@@ -729,7 +783,7 @@ def _extract_from_rows(
             seen.add(key)
 
             col_tokens = set(col_label.split())
-            prefix = f"{dimension.replace('|', ', ')} · " if dimension else ""
+            prefix = f"{(shown or dimension).replace('|', ', ')} · " if dimension else ""
             results.append(NumericValue(
                 label=label,
                 value=num,
@@ -780,6 +834,7 @@ _LABEL_SYNONYMS: dict[str, str] = {
     "earnings": "income",
     "profit": "income",
     "profits": "income",
+    "operations": "operating",  # DOCBOT-2639: "Income from operations" == "operating income"
     "losses": "loss",
     "expenditure": "expense",
     "expenditures": "expenses",

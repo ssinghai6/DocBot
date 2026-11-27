@@ -1,7 +1,7 @@
 # DOCBOT-2638 BUG: Tie-out against a journal-entry ledger in Postgres misses the planted break on YoY questions
 | Epic | Phase | Sprint | Priority | Points | Lane | Due | Status |
 |---|---|---|---|---|---|---|---|
-| EPIC-26 Pre-seed | 0 | S0 | P0 | 3 | senior-dev | 2026-11-25 | In progress (2026-11-24) |
+| EPIC-26 Pre-seed | 0 | S0 | P0 | 3 | senior-dev | 2026-11-25 | Done (2026-11-25) |
 
 ## User story
 As a fractional CFO connecting my client's real accounting database (journal entries, not a statement table), I want the tie-out against a 10-K to compare every line and flag a break whatever way I phrase the question, so that I can trust it on my own books.
@@ -39,7 +39,7 @@ Blocks: investor demo 2026-12-01.
 ## Definition of done
 - [x] AC met
 - [x] tests/CI or evidence
-- [ ] OpenProject ticket updated
+- [x] OpenProject ticket updated
 - [x] tracker row updated
 - [x] no secrets / no banned claims
 

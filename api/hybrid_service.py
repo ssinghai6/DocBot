@@ -329,6 +329,7 @@ async def rag_retrieve(
     session_id: str,
     vector_stores: dict,
     lineage=None,
+    k: int = 8,
 ) -> tuple[str, list[dict]]:
     """Retrieve document context for a question via vector similarity search.
 
@@ -352,7 +353,7 @@ async def rag_retrieve(
         db = vector_stores[session_id]
         retriever = db.as_retriever(
             search_type="similarity",
-            search_kwargs={"k": 8},
+            search_kwargs={"k": k},
         )
 
         # Expand the question into synonym variants and retrieve for each;
@@ -498,6 +499,9 @@ async def _collect_sql_result(
 
 
 BOOK_GUIDED_MAX_CHUNKS = 3
+# DOCBOT-2639: a number-dense statement table embeds poorly (Chipotle's income
+# statement ranks ~17th), but the reranker scores it first; search deeper so it reaches it.
+BOOK_GUIDED_SEARCH_K = 40
 
 
 async def _book_guided_retrieval(
@@ -531,7 +535,9 @@ async def _book_guided_retrieval(
     # DOCBOT-2638: the bare line names match MD&A prose; naming the statement
     # puts the income statement table first.
     query = "Consolidated statements of operations " + " ".join(missing[:8])
-    extra, extra_citations = await rag_retrieve(query, session_id, vector_stores)
+    extra, extra_citations = await rag_retrieve(
+        query, session_id, vector_stores, k=BOOK_GUIDED_SEARCH_K
+    )
     added = [
         chunk for chunk in re.split(r"\n\n(?=Source: )", extra)
         if chunk.strip() and chunk.split("\n", 1)[-1].strip() not in doc_context
