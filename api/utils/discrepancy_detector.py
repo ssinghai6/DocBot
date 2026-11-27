@@ -28,6 +28,13 @@ MARKER_TEMPLATE = "[[discrepancy:{id}]]"
 SEVERITY_HIGH_PCT = 1.0
 SEVERITY_MEDIUM_PCT = 0.5
 
+# DOCBOT-2707: materiality is absolute too. A pair under the relative tie-out
+# floor still breaks when the gap is >= $1M (base units, after unit scaling),
+# >= 0.1%, and larger than the report figure's own rounding (so "$2.1 billion"
+# vs 2,095M, or $914,830K vs 914,831K, stays tied out). The 25% ceiling still applies.
+ABS_MATERIALITY_FLOOR = 1_000_000.0
+ABS_MATERIALITY_MIN_REL = 0.001
+
 # ---------------------------------------------------------------------------
 # Data models
 # ---------------------------------------------------------------------------
@@ -45,6 +52,7 @@ class NumericValue:
     doc_file: Optional[str] = None    # doc side: "Source: X, Page N" header
     doc_page: Optional[int] = None
     dimension: str = ""               # db side: row entity, e.g. "lab services"
+    rounding: float = 0.0             # doc side: half the last significant digit, relative to value
 
 
 @dataclass
@@ -108,6 +116,9 @@ class DiscrepancyReport:
     """Full result returned to the synthesis layer."""
     discrepancies: list[DiscrepancyItem] = field(default_factory=list)
     checked_pairs: int = 0      # how many (doc_label, db_label) pairs were evaluated
+    # DOCBOT-2637: books lines (row entities) no document figure could be
+    # compared with, e.g. the filing table holding them was not retrieved.
+    unpaired_db_lines: list[str] = field(default_factory=list)
 
     @property
     def has_discrepancies(self) -> bool:
@@ -208,8 +219,9 @@ def detect_discrepancies(
         db_values = _extract_from_text(csv_answer, source="db")
     else:
         rows = sql_metadata.get("result_preview", [])
+        sql = sql_metadata.get("sql_query")
         db_values = _extract_from_rows(
-            rows, fallback_dimension=_where_dimension(sql_metadata.get("sql_query"))
+            rows, fallback_dimension=_where_dimension(sql), tag_columns=_literal_columns(sql)
         )
 
     sources = [str(x) for x in (sql_metadata.get("sources") or []) if x]
@@ -220,6 +232,9 @@ def detect_discrepancies(
     report = DiscrepancyReport()
     pairs_checked = 0
     seen_ids: set[str] = set()
+    compared: set[int] = set()  # db_values indexes with a plausible doc figure
+    tied: set[int] = set()      # db values some doc figure agrees with
+    flagged: list[tuple[DiscrepancyItem, int, bool]] = []  # (item, books value id, table cell?)
 
     for dv in doc_values:
         candidates: list[tuple[bool, float, float, int, NumericValue]] = []
@@ -232,7 +247,11 @@ def detect_discrepancies(
             # DOCBOT-2542: a row's entity alone names the figure ("Lab Services:
             # $104.9M" vs {segment: "Lab Services", segment_revenue: ...}); the
             # column name only adds tokens that dilute Jaccard below threshold.
-            sim = max(label_sim, _label_similarity(dv.label, sv.dimension)) if sv.dimension else label_sim
+            # DOCBOT-2585: "|" separates WHERE literals ("Sales and marketing|opex");
+            # each may name the figure on its own, or all of them together.
+            sim = max(
+                [label_sim] + [_label_similarity(dv.label, d) for d in (sv.dimension, *sv.dimension.split("|"))]
+            ) if sv.dimension else label_sim
             if sim < match_threshold:
                 continue
             period_match = bool(dv.period and sv.period == dv.period)
@@ -255,8 +274,14 @@ def detect_discrepancies(
             delta = db_val - doc_val
             rel_diff = abs(delta / doc_val) if doc_val != 0 else (abs(delta) if delta != 0 else 0)
             evaluated.append((sv, doc_val, db_val, delta, rel_diff))
+            if rel_diff <= max_delta_threshold:
+                compared.add(id(sv))
 
-        if any(e[4] < delta_threshold for e in evaluated):
+        tolerance = _tieout_tolerance(dv, delta_threshold)
+        agreeing = [e for e in evaluated if e[4] < tolerance and not _material(dv, e[3], e[4])]
+        if agreeing:
+            if _table_cell(dv):
+                tied.update(id(e[0]) for e in agreeing)
             continue  # a books value agrees with the report figure — ties out
 
         chosen = next((e for e in evaluated if e[4] <= max_delta_threshold), None)
@@ -283,10 +308,72 @@ def detect_discrepancies(
         if item.id in seen_ids:
             continue
         seen_ids.add(item.id)
-        report.discrepancies.append(item)
+        flagged.append((item, id(sv), _table_cell(dv)))
+
+    # DOCBOT-2639: one verdict per books line across statement tables. A filing
+    # repeats a caption in other tables (cash-flow add-backs, segment tables);
+    # if a table copy ties out the line agrees, else only the closest table copy
+    # is the break. Prose figures (MD&A) still flag on their own.
+    closest: dict[int, DiscrepancyItem] = {}
+    for item, sv_id, cell in flagged:
+        if cell and sv_id not in tied:
+            prev = closest.get(sv_id)
+            if prev is None or abs(item.delta) < abs(prev.delta):
+                closest[sv_id] = item
+    report.discrepancies = [
+        item for item, sv_id, cell in flagged if not cell or closest.get(sv_id) is item
+    ]
 
     report.checked_pairs = pairs_checked
+    covered = {sv.dimension for sv in db_values if id(sv) in compared}
+    report.unpaired_db_lines = list(dict.fromkeys(
+        [sv.raw_text.split(" · ")[0] for sv in db_values
+         if sv.dimension and sv.dimension not in covered and " · " in sv.raw_text]
+        # DOCBOT-2639: a wide row (total_revenue, operating_income, ...) names its
+        # lines by column.
+        + [sv.label for sv in db_values if not sv.dimension and id(sv) not in compared]
+    ))
     return report
+
+
+def _tieout_tolerance(dv: NumericValue, default: float) -> float:
+    """DOCBOT-2639: relative gap a doc figure tolerates before it is a break.
+
+    A whole-number statement cell ("Labor | 2,991,680", in thousands) is exact
+    to half a unit, so a $12.5M (0.42%) books gap is a break even though it is
+    under the 0.5% prose default. Rounded prose ("$2.1 billion") keeps the default.
+    """
+    m = _TABLE_CELL_RE.search(dv.raw_text)
+    if not m or not dv.value:
+        return default
+    return min(default, max(1e-4, 0.5 / abs(float(m.group(1).replace(",", "")))))
+
+
+def _material(dv: NumericValue, delta: float, rel_diff: float) -> bool:
+    """DOCBOT-2707: a sub-floor gap that is still a material dollar break."""
+    return (
+        dv.kind == "currency"  # dollar floor only for $ figures, never share/unit counts
+        and abs(delta) >= ABS_MATERIALITY_FLOOR
+        and rel_diff >= max(ABS_MATERIALITY_MIN_REL, dv.rounding)
+    )
+
+
+def _rounding(number_str: str) -> float:
+    """Half the last significant digit of a quoted figure, relative to it.
+    Integer trailing zeros count as rounding ("$2,100M" -> +/-50M)."""
+    digits = number_str.replace(",", "")
+    whole, _, frac = digits.partition(".")
+    unit = 10.0 ** -len(frac) if frac else 10.0 ** (len(whole) - len(whole.rstrip("0")))
+    value = abs(float(digits))
+    return 0.5 * unit / value if value else 0.0
+
+
+_TABLE_CELL_RE = re.compile(r"\|\s*[-–(]?\s*[\$£€¥]?\s*([0-9][0-9,]*)\)?\s*$")
+
+
+def _table_cell(dv: NumericValue) -> bool:
+    """A whole-number statement-table cell ("Labor | 2,991,680")."""
+    return bool(_TABLE_CELL_RE.search(dv.raw_text))
 
 
 def _kinds_compatible(dv: NumericValue, sv: NumericValue) -> bool:
@@ -314,7 +401,13 @@ _PERIOD_Q_RE = re.compile(r"\bQ([1-4])\s*(?:FY\s*)?'?(\d{4}|\d{2})\b", re.IGNORE
 _PERIOD_Q_REV_RE = re.compile(r"\b((?:19|20)\d{2})\s*[-/ ]?\s*Q([1-4])\b", re.IGNORECASE)
 _PERIOD_FY_RE = re.compile(r"\b(?:FY|fiscal\s+year)\s*'?(\d{4}|\d{2})\b", re.IGNORECASE)
 _BARE_QUARTER_RE = re.compile(r"^\s*Q([1-4])\s*$", re.IGNORECASE)
-_SOURCE_HEADER_RE = re.compile(r"^Source:\s*(?P<file>.+?),\s*Page\s+(?P<page>\d+)\s*$", re.MULTILINE)
+# DOCBOT-2637: filing chunks without a printed page use ", Section S" (doc_refs.chunk_header)
+_FLAG_VALUES = frozenset({"yes", "no", "y", "n", "true", "false", "match", "mismatch", "ok", "agree", "disagree"})
+_YEAR_CELL_RE = re.compile(r"(?:19|20)[0-9]{2}")
+_COLUMN_YEAR_RE = re.compile(r"(?<![0-9])((?:19|20)[0-9]{2})(?![0-9])")
+_SOURCE_HEADER_RE = re.compile(
+    r"^Source:\s*(?P<file>.+?)(?:,\s*Page\s+(?P<page>\d+)|,\s*Section\s+.*)?\s*$", re.MULTILINE
+)
 
 _YEAR_COLS = frozenset({"year", "fiscal_year", "fy", "yr", "calendar_year"})
 _PERIOD_COLS = _YEAR_COLS | frozenset({
@@ -366,7 +459,7 @@ _LABEL_VALUE_RE = re.compile(
     r"(?P<sign>[-–]?)\s*"
     r"[\$£€¥]?\s*"
     r"(?P<number>[0-9][0-9,]*(?:\.[0-9]+)?)"                  # number
-    r"\s*(?P<suffix>[KkMmBbTt](?:illion|n|)?)?",             # optional K/M/B suffix
+    r"\s*(?P<suffix>[KkMmBbTt](?:illion|n|)?\b)?",             # optional K/M/B suffix
     re.IGNORECASE,
 )
 
@@ -377,7 +470,7 @@ _INLINE_VALUE_RE = re.compile(
     r"(?P<sign>[-–]?)\s*"
     r"[\$£€¥]?\s*"
     r"(?P<number>[0-9][0-9,]*(?:\.[0-9]+)?)"
-    r"\s*(?P<suffix>[KkMmBbTt](?:illion|n|)?)?",
+    r"\s*(?P<suffix>[KkMmBbTt](?:illion|n|)?\b)?",
     re.IGNORECASE,
 )
 
@@ -389,8 +482,19 @@ _LABEL_CURRENCY_RE = re.compile(
     r"(?P<sign>[-–]?)\s*"
     r"[\$£€¥]\s*"                                             # currency REQUIRED
     r"(?P<number>[0-9][0-9,]*(?:\.[0-9]+)?)"
-    r"\s*(?P<suffix>[KkMmBbTt](?:illion|n|)?)?",
+    r"\s*(?P<suffix>[KkMmBbTt](?:illion|n|)?\b)?",
     re.IGNORECASE,
+)
+
+# Table rows from filings rendered as "Label | 914,830 | 856,565" (DOCBOT-2634).
+# The first numeric cell is the row's value: statements list the latest period first.
+_TABLE_ROW_RE = re.compile(
+    r"^(?P<label>[A-Za-z][^|\n]{1,80}?)\s*\|\s*"
+    r"(?P<sign>[-–(]?)\s*"
+    r"[\$£€¥]?\s*"
+    r"(?P<number>[0-9][0-9,]*(?:\.[0-9]+)?)\)?"
+    r"(?P<suffix>)\s*(?=\||$)",
+    re.MULTILINE,
 )
 
 _SUFFIX_MULTIPLIERS = {
@@ -424,9 +528,37 @@ def _parse_number(number_str: str, sign: str, suffix: str | None) -> float:
     if suffix:
         multiplier = _SUFFIX_MULTIPLIERS.get(suffix[0].upper(), 1)
         value *= multiplier
-    if sign in ("-", "–"):
+    if sign in ("-", "–", "("):
         value = -value
     return value
+
+
+def _table_column_period(text: str, chunk_start: int, line_start: int, number_start: int) -> Optional[str]:
+    """DOCBOT-2637: year of a filing-table cell, from the table's header row.
+
+    Filing tables render as ``2025 | 2024 | 2023`` then ``Marketing | 914,830
+    | 856,565 | ...``; without this every cell had no period, so a 2024
+    column could be compared with 2025 books. Walks up the table (a blank
+    line ends it) to the year header and picks the cell's column.
+    """
+    line_end = text.find("\n", number_start)
+    row = text[line_start: line_end if line_end >= 0 else len(text)]
+    if " | " not in row:
+        return None
+    col = text.count(" | ", line_start, number_start)  # 1 = first value cell
+    row_cells = row.count(" | ") + 1
+    for prev in reversed(text[chunk_start:line_start].splitlines()):
+        if not prev.strip():
+            return None
+        cells = [c.strip() for c in prev.split(" | ")]
+        if len(cells) < 2:
+            continue
+        if all(_YEAR_CELL_RE.fullmatch(c) for c in cells) and len(cells) == row_cells - 1:
+            return f"FY{cells[col - 1]}" if 0 < col <= len(cells) else None
+        if (not re.search(r"\d", cells[0]) and len(cells) == row_cells
+                and all(_YEAR_CELL_RE.fullmatch(c) for c in cells[1:])):
+            return f"FY{cells[col]}" if 0 < col < len(cells) else None
+    return None
 
 
 def _doc_context_for(text: str, start: int, number_start: int) -> tuple[Optional[str], Optional[str], Optional[int]]:
@@ -443,10 +575,12 @@ def _doc_context_for(text: str, start: int, number_start: int) -> tuple[Optional
         header = h
     chunk_start = header.end() if header else 0
     file = header.group("file").strip()[:200] if header else None
-    page = int(header.group("page")) if header else None
+    page = int(header.group("page")) if header and header.group("page") else None
 
     line_start = text.rfind("\n", 0, start) + 1
     period = extract_period(text[max(line_start, chunk_start):number_start])
+    if period is None:
+        period = _table_column_period(text, chunk_start, line_start, number_start)
     if period is None and line_start > chunk_start:
         # Only heading-like lines ("REVENUE BY SEGMENT — FY2025": no digits
         # left once the period is removed) set a section period; data lines
@@ -464,7 +598,7 @@ def _extract_from_text(text: str, source: str) -> list[NumericValue]:
     results: list[NumericValue] = []
     seen: set[tuple[str, float, Optional[str]]] = set()
 
-    for pattern in (_LABEL_VALUE_RE, _INLINE_VALUE_RE, _LABEL_CURRENCY_RE):
+    for pattern in (_TABLE_ROW_RE, _LABEL_VALUE_RE, _INLINE_VALUE_RE, _LABEL_CURRENCY_RE):
         for m in pattern.finditer(text):
             try:
                 value = _parse_number(m.group("number"), m.group("sign"), m.group("suffix"))
@@ -500,6 +634,7 @@ def _extract_from_text(text: str, source: str) -> list[NumericValue]:
                 kind=kind,
                 doc_file=doc_file if source == "doc" else None,
                 doc_page=doc_page if source == "doc" else None,
+                rounding=_rounding(m.group("number")),
             ))
 
     return results
@@ -524,6 +659,8 @@ def _row_period_and_dimension(row: dict) -> tuple[Optional[str], str]:
                 continue
             if col_l in _PERIOD_COLS:
                 continue
+            if val.strip().lower() in _FLAG_VALUES:
+                continue  # DOCBOT-2637: an "agree: No" flag column is not the row's entity
             if re.search(r"[A-Za-z]", val) and len(val) <= 60:
                 dims.append(val)
         elif col_l in _YEAR_COLS and _is_numeric_like(val):
@@ -547,7 +684,8 @@ def _where_dimension(sql: Any) -> str:
     lives solely in the WHERE clause, so the row alone labels the value
     "amount" and nothing ties out. Read equality / LIKE string literals on
     non-period columns from the sqlglot AST (never regex) and use them as the
-    row dimension. Returns "" when nothing applies or the SQL does not parse.
+    row dimension, up to two joined by "|". Returns "" when nothing applies or
+    the SQL does not parse.
     """
     if not sql:
         return ""
@@ -561,27 +699,63 @@ def _where_dimension(sql: Any) -> str:
     if tree is None:
         return ""
     values: list[str] = []
-    for node in tree.find_all(exp.EQ, exp.Like):
+    # DOCBOT-2639: WHERE filters only (a CASE WHEN in SELECT splits columns, it does
+    # not name the row), and never record-state filters such as status = 'posted'.
+    nodes = [n for where in tree.find_all(exp.Where) for n in where.find_all(exp.EQ, exp.Like)]
+    for node in nodes:
         col = node.find(exp.Column)
         lit = node.expression if isinstance(node.expression, exp.Literal) else node.this
         if col is None or not isinstance(lit, exp.Literal) or not lit.is_string:
             continue
-        if col.name.lower() in _PERIOD_COLS:
+        if col.name.lower() in _PERIOD_COLS or col.name.lower().endswith(("status", "state")):
             continue
         text = lit.this.strip("%").strip()
         if not text or extract_period(text) or _BARE_QUARTER_RE.match(text):
             continue
         if re.search(r"[A-Za-z]", text) and len(text) <= 60 and text not in values:
             values.append(text)
-    return " ".join(values[:2])
+    return "|".join(values[:2])
 
 
-def _extract_from_rows(rows: list[dict], fallback_dimension: str = "") -> list[NumericValue]:
+def _literal_columns(sql: Any) -> frozenset[str]:
+    """Lower-cased output columns the SQL fills with a string constant.
+
+    DOCBOT-2585: the generator sometimes tags rows itself, e.g.
+    ``SELECT period, 'MD&A' AS source, amount ... WHERE category = 'Sales and
+    marketing' UNION ALL ...``. Such a tag is not a data entity, so it must not
+    hide the WHERE-clause metric name from the row label.
+    """
+    if not sql:
+        return frozenset()
+    import sqlglot
+    import sqlglot.expressions as exp
+
+    try:
+        tree = sqlglot.parse_one(str(sql))
+    except sqlglot.errors.SqlglotError:
+        return frozenset()
+    if tree is None:
+        return frozenset()
+    literal: set[str] = set()
+    data: set[str] = set()
+    for select in tree.find_all(exp.Select):
+        for proj in select.expressions:
+            is_tag = isinstance(proj, exp.Alias) and isinstance(proj.this, exp.Literal) and proj.this.is_string
+            (literal if is_tag else data).add(proj.alias_or_name.lower())
+    # "SELECT segment ... UNION ALL SELECT 'Total' AS segment": real data in one branch, not a tag.
+    return frozenset(literal - data)
+
+
+def _extract_from_rows(
+    rows: list[dict], fallback_dimension: str = "", tag_columns: frozenset[str] = frozenset()
+) -> list[NumericValue]:
     """
     Extract numeric values from SQL result_preview rows.
     Each key becomes the label; each numeric value is extracted. Text
     dimension columns (segment / product names) are prefixed to the label and
     period columns (quarter / year) become the value's period.
+    ``tag_columns`` (constant-literal columns, see ``_literal_columns``) only
+    name the row when neither data columns nor the WHERE clause do.
     """
     results: list[NumericValue] = []
     seen: set[tuple[str, float, Optional[str]]] = set()
@@ -590,10 +764,25 @@ def _extract_from_rows(rows: list[dict], fallback_dimension: str = "") -> list[N
         if not isinstance(row, dict):
             continue
         period, dimension = _row_period_and_dimension(row)
+        shown = ""  # row name for citations / unpaired lines, when narrower than dimension
+        if tag_columns:
+            data_dimension = _row_period_and_dimension(
+                {k: v for k, v in row.items() if str(k).lower() not in tag_columns}
+            )[1]
+            if not data_dimension and fallback_dimension and dimension:
+                # DOCBOT-2639: "SELECT 'Net Income' AS metric ... WHERE acct_class =
+                # 'revenue'": the tag may be the metric's own name, so match on it too.
+                shown = dimension
+                dimension = f"{fallback_dimension}|{dimension}"
+            else:
+                dimension = data_dimension or fallback_dimension or dimension
         dimension = dimension or fallback_dimension
         dim_label = _normalize_label(dimension) if dimension else ""
         # Ledger account codes ("4100 Revenue - Lab Services") never appear in prose.
-        entity = " ".join(t for t in dim_label.split() if not t.isdigit())
+        entity = "|".join(
+            " ".join(t for t in _normalize_label(part).split() if not t.isdigit())
+            for part in dimension.split("|")
+        ) if dimension else ""
         for col, val in row.items():
             if str(col).lower() in _PERIOD_COLS:
                 continue
@@ -605,23 +794,30 @@ def _extract_from_rows(rows: list[dict], fallback_dimension: str = "") -> list[N
                 continue
 
             col_label = _normalize_label(str(col))
+            value_period = period
+            # DOCBOT-2637: a pivoted query puts the year in the column name
+            # (amount_2025, fy2024): that column's values belong to that year.
+            col_year = _COLUMN_YEAR_RE.search(str(col))
+            if col_year and period is None:
+                value_period = f"FY{col_year.group(1)}"
+                col_label = _normalize_label(_COLUMN_YEAR_RE.sub(" ", str(col)))
             if not col_label or len(col_label) < 2:
                 continue
             label = f"{dim_label} {col_label}".strip() if dim_label else col_label
 
-            key = (label, round(num, 2), period)
+            key = (label, round(num, 2), value_period)
             if key in seen:
                 continue
             seen.add(key)
 
             col_tokens = set(col_label.split())
-            prefix = f"{dimension} · " if dimension else ""
+            prefix = f"{(shown or dimension).replace('|', ', ')} · " if dimension else ""
             results.append(NumericValue(
                 label=label,
                 value=num,
                 raw_text=f"{prefix}{col}: {val}",
                 source="db",
-                period=period,
+                period=value_period,
                 kind="percent" if col_tokens & _PERCENT_TOKENS else "plain",
                 dimension=entity,
             ))
@@ -666,6 +862,7 @@ _LABEL_SYNONYMS: dict[str, str] = {
     "earnings": "income",
     "profit": "income",
     "profits": "income",
+    "operations": "operating",  # DOCBOT-2639: "Income from operations" == "operating income"
     "losses": "loss",
     "expenditure": "expense",
     "expenditures": "expenses",

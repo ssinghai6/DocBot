@@ -62,6 +62,19 @@ export class HttpGateError extends Error {}
 export class SignInGatedError extends HttpGateError {}
 export class PlatformCapacityError extends HttpGateError {}
 
+/** DOCBOT-2632: the backend no longer has this chat session / DB connection (404). */
+export class SessionGoneError extends Error {}
+
+const SESSION_GONE = /^session not found|^connection '[^']*' not found/i
+
+/** Throw SessionGoneError for a 404 "Session not found" / "Connection '…' not found". */
+export async function throwIfSessionGone(response: Response): Promise<void> {
+  const gate = await classifyResponse(response)
+  if (gate?.kind === "other" && gate.status === 404 && SESSION_GONE.test(gate.message)) {
+    throw new SessionGoneError(gate.message)
+  }
+}
+
 // The chat page registers one listener that maps gates to UI (AuthModal, toast, paywall).
 type GateListener = (gate: HttpGate) => void
 let gateListener: GateListener | null = null

@@ -159,6 +159,12 @@ resource "aws_ecs_service" "api" {
   desired_count                     = var.desired_count
   health_check_grace_period_seconds = 180
 
+  # Stop-then-start deploys: Chroma's SQLite on EFS must never have two writers
+  # (ADR 0001). The default 100/200 runs old and new tasks side by side.
+  # Cost: a short outage on every deploy (~task start + health grace).
+  deployment_minimum_healthy_percent = 0
+  deployment_maximum_percent         = 100
+
   capacity_provider_strategy {
     capacity_provider = var.use_fargate_spot ? "FARGATE_SPOT" : "FARGATE"
     weight            = 1

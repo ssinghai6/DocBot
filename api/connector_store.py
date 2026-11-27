@@ -73,6 +73,17 @@ def register_edgar_cache_table(metadata):
     return edgar_filings_cache
 
 
+# DOCBOT-2637: create_all never adds columns to an existing table, so a
+# marketplace_connections table created before DOCBOT-704 lacks the sync
+# columns and every read of it fails. Additive and idempotent; run on startup.
+CONNECTOR_COLUMN_MIGRATIONS: list[str] = [
+    "ALTER TABLE marketplace_connections ADD COLUMN IF NOT EXISTS sync_status TEXT DEFAULT 'idle'",
+    "ALTER TABLE marketplace_connections ADD COLUMN IF NOT EXISTS sync_cursor TEXT",
+    "ALTER TABLE marketplace_connections ADD COLUMN IF NOT EXISTS last_sync_at TIMESTAMPTZ",
+    "ALTER TABLE marketplace_connections ADD COLUMN IF NOT EXISTS updated_at TIMESTAMPTZ NOT NULL DEFAULT now()",
+]
+
+
 def register_connector_tables(metadata):
     """Define the marketplace_connections table on shared metadata.
 
@@ -540,8 +551,10 @@ async def save_filing_cache(
     logger.info("Cached EDGAR filing %s (session=%s)", accession_number, session_id)
 
 
-async def update_filing_cache_session(accession_number: str, session_id: str) -> None:
-    """Re-point a cached filing at a new source session (its old store was gone)."""
+async def update_filing_cache_session(
+    accession_number: str, session_id: str, *, text_hash: Optional[str] = None,
+) -> None:
+    """Re-point a cached filing at a new source session (old store gone or stale format)."""
     if _edgar_cache_table is None or _async_session_factory is None:
         return
     async with _async_session_factory() as session:
@@ -549,7 +562,7 @@ async def update_filing_cache_session(accession_number: str, session_id: str) ->
             await session.execute(
                 update(_edgar_cache_table)
                 .where(_edgar_cache_table.c.accession_number == accession_number)
-                .values(session_id=session_id)
+                .values(session_id=session_id, **({"text_hash": text_hash} if text_hash else {}))
             )
 
 

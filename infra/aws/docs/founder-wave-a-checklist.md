@@ -11,7 +11,7 @@ Never paste real values into tickets, PRs or chat.
 | # | Step | Est. | Done |
 |---|---|---|---|
 | 0 | Tools + credentials | 20 min | [ ] |
-| 1 | `dev` synced with `main` (2502) | done | [x] |
+| 1 | `dev` synced with `main` (2502): re-check before every deploy | 2 min | [ ] |
 | 2 | Bootstrap: state bucket + lock table | 15 min | [ ] |
 | 3 | Account: OIDC, ECR, budgets, anomaly alerts, migration bucket (2504 budgets) | 30 min | [ ] |
 | 4 | Dev: ACM cert + validation CNAMEs | 40 min | [ ] |
@@ -34,12 +34,13 @@ aws sso login --profile <PROFILE> && export AWS_PROFILE=<PROFILE>
 **Verify:** `aws sts get-caller-identity --query Account --output text` prints the
 intended account; `terraform version` >= 1.9.
 
-## 1. dev synced with main (DOCBOT-2502): already done
+## 1. dev synced with main (DOCBOT-2502): re-check before every deploy
 
 **Verify:** `git fetch origin && git diff --stat origin/dev...origin/main -- api src infra Dockerfile requirements.txt next.config.ts`
 prints nothing (no app or infra change on `main` missing from `dev`). Docs/CI-only
 commits on `main` (e.g. Plane sync) do not matter for the deploy; if this prints
-anything, repeat README step 0 (merge `origin/main` into `dev`).
+anything, repeat README step 0 (merge `origin/main` into `dev`). `dev` drifted 115
+commits behind once (synced 2026-11-27); merge `main` into `dev` weekly, never rebase.
 
 ## 2. Bootstrap (15 min)
 

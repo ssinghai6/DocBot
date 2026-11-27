@@ -1,0 +1,354 @@
+{
+  "schema_version": 1,
+  "diagram_type": "architecture",
+  "meta": {
+    "title": "DocBot System Architecture",
+    "locale": "en",
+    "quality_profile": "showcase",
+    "views": [
+      {
+        "id": "chat-path",
+        "label": "Question to answer",
+        "focus": [
+          "clients",
+          "next",
+          "api",
+          "engines",
+          "llm",
+          "llms"
+        ],
+        "note": "Every chat, SQL, hybrid and Autopilot request: browser or API key, Vercel rewrite, FastAPI guards, analysis engine, LLM with fallback."
+      },
+      {
+        "id": "data-plane",
+        "label": "Where data lives",
+        "focus": [
+          "engines",
+          "chroma",
+          "pg",
+          "target",
+          "e2b"
+        ],
+        "note": "Vectors in Chroma, app state in Postgres, customer DBs read-only, CSV and Python in E2B."
+      },
+      {
+        "id": "identity-commerce",
+        "label": "Identity and connectors",
+        "focus": [
+          "api",
+          "idp",
+          "conn",
+          "third",
+          "pg"
+        ],
+        "note": "OAuth / SAML / password + RBAC, and scheduled Shopify, Amazon and EDGAR syncs."
+      }
+    ]
+  },
+  "components": [
+    {
+      "id": "clients",
+      "type": "external",
+      "label": "Browser / API client",
+      "sublabel": "UI or Bearer key",
+      "pos": [
+        40,
+        320
+      ],
+      "size": [
+        150,
+        64
+      ]
+    },
+    {
+      "id": "next",
+      "type": "frontend",
+      "label": "Next.js 16",
+      "sublabel": "Vercel, CSP proxy",
+      "pos": [
+        300,
+        320
+      ],
+      "size": [
+        150,
+        64
+      ]
+    },
+    {
+      "id": "api",
+      "type": "backend",
+      "label": "FastAPI gateway",
+      "sublabel": "82 routes, Railway",
+      "tag": "abuse_guard, RBAC, credits",
+      "pos": [
+        580,
+        320
+      ],
+      "size": [
+        160,
+        64
+      ]
+    },
+    {
+      "id": "idp",
+      "type": "security",
+      "label": "Identity providers",
+      "sublabel": "GitHub, Google, SAML",
+      "pos": [
+        580,
+        100
+      ],
+      "size": [
+        160,
+        64
+      ]
+    },
+    {
+      "id": "engines",
+      "type": "backend",
+      "label": "Analysis engines",
+      "sublabel": "RAG, SQL, Hybrid, Autopilot",
+      "pos": [
+        860,
+        320
+      ],
+      "size": [
+        180,
+        64
+      ]
+    },
+    {
+      "id": "chroma",
+      "type": "database",
+      "label": "Chroma + ONNX",
+      "sublabel": "vectors, local embeddings",
+      "pos": [
+        860,
+        100
+      ],
+      "size": [
+        180,
+        64
+      ]
+    },
+    {
+      "id": "llm",
+      "type": "backend",
+      "label": "llm_provider",
+      "sublabel": "primary + fallback, cost log",
+      "pos": [
+        1140,
+        320
+      ],
+      "size": [
+        180,
+        64
+      ]
+    },
+    {
+      "id": "llms",
+      "type": "external",
+      "label": "LLM APIs",
+      "sublabel": "Groq, Bedrock, Gemini",
+      "pos": [
+        1140,
+        100
+      ],
+      "size": [
+        180,
+        64
+      ]
+    },
+    {
+      "id": "e2b",
+      "type": "external",
+      "label": "E2B sandbox",
+      "sublabel": "pandas, matplotlib",
+      "pos": [
+        1140,
+        560
+      ],
+      "size": [
+        180,
+        64
+      ]
+    },
+    {
+      "id": "target",
+      "type": "database",
+      "label": "Customer databases",
+      "sublabel": "Postgres, MySQL, Azure SQL",
+      "pos": [
+        860,
+        560
+      ],
+      "size": [
+        180,
+        64
+      ]
+    },
+    {
+      "id": "pg",
+      "type": "database",
+      "label": "PostgreSQL",
+      "sublabel": "33 tables, Railway",
+      "pos": [
+        580,
+        560
+      ],
+      "size": [
+        160,
+        64
+      ]
+    },
+    {
+      "id": "conn",
+      "type": "backend",
+      "label": "Connectors",
+      "sublabel": "APScheduler sync",
+      "pos": [
+        300,
+        560
+      ],
+      "size": [
+        150,
+        64
+      ]
+    },
+    {
+      "id": "third",
+      "type": "external",
+      "label": "Commerce + filings",
+      "sublabel": "Shopify, Amazon, EDGAR",
+      "pos": [
+        40,
+        560
+      ],
+      "size": [
+        150,
+        64
+      ]
+    }
+  ],
+  "boundaries": [
+    {
+      "kind": "security-group",
+      "label": "Untrusted code",
+      "wraps": [
+        "e2b"
+      ]
+    }
+  ],
+  "connections": [
+    {
+      "id": "c-clients-next",
+      "from": "clients",
+      "to": "next",
+      "label": "HTTPS, SSE",
+      "variant": "emphasis"
+    },
+    {
+      "id": "c-next-api",
+      "from": "next",
+      "to": "api",
+      "label": "/api, /v1 rewrite",
+      "variant": "emphasis"
+    },
+    {
+      "id": "c-api-engines",
+      "from": "api",
+      "to": "engines",
+      "label": "chat routes",
+      "variant": "emphasis"
+    },
+    {
+      "id": "c-engines-llm",
+      "from": "engines",
+      "to": "llm",
+      "label": "prompts",
+      "variant": "emphasis"
+    },
+    {
+      "id": "c-llm-llms",
+      "from": "llm",
+      "to": "llms",
+      "label": "HTTPS, fallback"
+    },
+    {
+      "id": "c-api-idp",
+      "from": "api",
+      "to": "idp",
+      "label": "OAuth, SAML",
+      "variant": "security"
+    },
+    {
+      "id": "c-engines-chroma",
+      "from": "engines",
+      "to": "chroma",
+      "label": "embed, search"
+    },
+    {
+      "id": "c-engines-target",
+      "from": "engines",
+      "to": "target",
+      "label": "read-only SELECT",
+      "variant": "security",
+      "labelDy": 24
+    },
+    {
+      "id": "c-llm-e2b",
+      "from": "engines",
+      "to": "e2b",
+      "label": "run code"
+    },
+    {
+      "id": "c-api-pg",
+      "from": "api",
+      "to": "pg",
+      "label": "sessions, credits, audit",
+      "labelDy": 24
+    },
+    {
+      "id": "c-conn-api",
+      "from": "api",
+      "to": "conn",
+      "label": "sync, ingest",
+      "variant": "dashed"
+    },
+    {
+      "id": "c-conn-third",
+      "from": "conn",
+      "to": "third",
+      "label": "HTTPS"
+    }
+  ],
+  "cards": [
+    {
+      "dot": "cyan",
+      "title": "Request path",
+      "items": [
+        "Vercel rewrites /api and /v1 to Railway",
+        "Rate limit, auth, RBAC and credit reserve before any engine",
+        "Answers stream back as SSE"
+      ]
+    },
+    {
+      "dot": "emerald",
+      "title": "AI",
+      "items": [
+        "gpt-oss-20b on Groq by default, Bedrock optional",
+        "Gemini 2.5 Flash fallback and LangExtract",
+        "Local ONNX embeddings and reranker"
+      ]
+    },
+    {
+      "dot": "rose",
+      "title": "Security",
+      "items": [
+        "sqlglot AST check and read-only transactions",
+        "SSRF check with pinned DNS",
+        "Generated code runs only in E2B"
+      ]
+    }
+  ]
+}

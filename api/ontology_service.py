@@ -82,7 +82,9 @@ from __future__ import annotations
 
 import json
 import logging
+import re
 import uuid as _uuid
+from pathlib import Path
 from typing import Any, Optional
 
 from sqlalchemy import Column, DateTime, String, Table, Text, UniqueConstraint, func, select
@@ -90,6 +92,7 @@ from sqlalchemy import insert as sa_insert
 from sqlalchemy import update as sa_update
 
 from api.utils.embeddings import cosine_similarity
+from api.utils.value_fingerprint import MAX_FINGERPRINTS, fingerprint_values
 
 logger = logging.getLogger(__name__)
 
@@ -107,6 +110,9 @@ _AMOUNT_TYPE_HINTS = ("int", "float", "numeric", "decimal", "double", "real", "m
 _CATEGORY_NAME_HINTS = ("type", "category", "status", "name", "label", "kind", "region", "segment")
 
 _MAX_COLS_PER_TABLE = 20  # mirrors api/utils/table_selector.py's cap
+# DOCBOT-2911: SQL value fingerprints only for join-key-like columns, bounded per connection.
+_FINGERPRINT_TAGS = ("entity", "category")
+_MAX_FINGERPRINT_COLS = 30
 
 
 def _infer_semantic_tag(col_name: str, col_type: str) -> str:
@@ -134,6 +140,7 @@ def _build_column_metadata(table: dict) -> list[dict]:
             "semantic_tag": _infer_semantic_tag(c.get("name", ""), c.get("type", "")),
             # null_pct: not cheaply available from existing introspection — deferred.
             "null_pct": None,
+            "value_hashes": [],  # DOCBOT-2911: filled for id/category columns by _attach_sql_value_hashes
         }
         for c in cols
     ]
@@ -265,15 +272,19 @@ async def build_ontology(connection_id: str) -> None:
         logger.debug("ontology_service: not wired, skipping build for %s", connection_id)
         return
 
-    import asyncio
-
     try:
+        conn_row = await _load_connection_row(connection_id)
+        if conn_row is not None and conn_row.dialect == "csv":
+            # CSV ontology is built once at upload from the raw bytes
+            # (build_csv_ontology); the bytes never change, so a schema
+            # refresh must not overwrite it with the TEXT-only schema cache.
+            return
+
         # Local import — avoids a module-level circular import with
         # api.db_service (which calls into this module for the step-2
         # pre-filter). get_schema() reuses the existing schema_cache, so
         # this is a cache hit in the common case, not a fresh introspection.
         from api.db_service import get_schema
-        from api.utils.embeddings_provider import get_embeddings
 
         schema = await get_schema(
             connection_id, _db_connections_table, _schema_cache_table, _async_session_factory
@@ -282,10 +293,8 @@ async def build_ontology(connection_id: str) -> None:
             return
 
         all_table_names = [t.get("name", "") for t in schema]
-        embeddings_model = get_embeddings()
 
         per_table: list[dict] = []
-        texts: list[str] = []
         for table in schema:
             table_name = table.get("name", "")
             if not table_name:
@@ -297,56 +306,13 @@ async def build_ontology(connection_id: str) -> None:
                 "data_card": _build_data_card(table),
                 "join_hints": _infer_join_hints(table_name, column_metadata, all_table_names),
             })
-            texts.append(_build_embedding_text(table_name, column_metadata))
 
         if not per_table:
             return
 
-        def _batch_embed() -> list[list[float]]:
-            return embeddings_model.embed_documents(texts)
-
-        loop = asyncio.get_running_loop()
-        vectors: list[list[float]] = await loop.run_in_executor(None, _batch_embed)
-
-        # Upsert pattern: explicit "row exists? update : insert" check, same
-        # convention already used for schema_cache_table in
-        # api/db_service.py::get_schema() — kept dialect-agnostic (works
-        # against SQLite for unit tests, not just PostgreSQL) rather than
-        # the pg-only ON CONFLICT used by the sibling table_embeddings table.
-        async with _async_session_factory() as session:
-            async with session.begin():
-                existing_result = await session.execute(
-                    select(_ontology_table.c.table_name).where(
-                        _ontology_table.c.connection_id == connection_id
-                    )
-                )
-                existing_names = {row.table_name for row in existing_result.fetchall()}
-
-                for row, vec in zip(per_table, vectors):
-                    values = {
-                        "column_metadata_json": json.dumps(row["column_metadata"]),
-                        "embedding": json.dumps(vec),
-                        "data_card_json": json.dumps(row["data_card"]),
-                        "join_hints_json": json.dumps(row["join_hints"]),
-                    }
-                    if row["table_name"] in existing_names:
-                        await session.execute(
-                            sa_update(_ontology_table)
-                            .where(
-                                _ontology_table.c.connection_id == connection_id,
-                                _ontology_table.c.table_name == row["table_name"],
-                            )
-                            .values(**values, updated_at=func.now())
-                        )
-                    else:
-                        await session.execute(
-                            sa_insert(_ontology_table).values(
-                                id=str(_uuid.uuid4()),
-                                connection_id=connection_id,
-                                table_name=row["table_name"],
-                                **values,
-                            )
-                        )
+        if conn_row is not None:
+            await _attach_sql_value_hashes(connection_id, conn_row, per_table)
+        await _embed_and_upsert(connection_id, per_table)
 
         logger.info(
             "ontology_service: built ontology for connection=%s tables=%d",
@@ -354,6 +320,289 @@ async def build_ontology(connection_id: str) -> None:
         )
     except Exception as exc:
         logger.warning("ontology_service: build_ontology failed (non-fatal) for %s: %s", connection_id, exc)
+
+
+async def _load_connection_row(connection_id: str) -> Optional[Any]:
+    """The db_connections row, or None if unavailable (never raises)."""
+    try:
+        async with _async_session_factory() as session:
+            result = await session.execute(
+                select(_db_connections_table).where(_db_connections_table.c.id == connection_id)
+            )
+            return result.fetchone()
+    except Exception as exc:
+        logger.debug("ontology_service: connection row unavailable for %s: %s", connection_id, exc)
+        return None
+
+
+async def _attach_sql_value_hashes(connection_id: str, conn_row: Any, per_table: list[dict]) -> None:
+    """Fill ``value_hashes`` for id/category columns via bounded DISTINCT reads.
+
+    Read-only enforcement is the pipeline's own: sqlglot AST validation, then
+    ``_execute_query`` (read-only transaction, 15s timeout, row cap). At most
+    ``_MAX_FINGERPRINT_COLS`` columns per connection; any failure skips silently.
+    """
+    import asyncio
+
+    from sqlglot import exp
+
+    from api.db_service import (
+        ExecutionTimeoutError,
+        _decrypt_conn_credentials_lazy,
+        _execute_query,
+        _resolve_connection,
+    )
+    from api.utils.sql_validator import validate_and_sanitize_sql
+
+    dialect = conn_row.dialect
+    sg_dialect = {"postgresql": "postgres", "azure_sql": "tsql"}.get(dialect, dialect)
+    try:
+        creds = await _decrypt_conn_credentials_lazy(
+            conn_row, connection_id, _db_connections_table, _async_session_factory
+        )
+        sync_url, entra_args = await asyncio.get_running_loop().run_in_executor(
+            None, _resolve_connection, creds
+        )
+    except Exception as exc:
+        logger.debug("ontology_service: value hashes skipped for %s: %s", connection_id, type(exc).__name__)
+        return
+
+    budget = _MAX_FINGERPRINT_COLS
+    for row in per_table:
+        for col in row["column_metadata"]:
+            if col["semantic_tag"] not in _FINGERPRINT_TAGS:
+                continue
+            if budget <= 0:
+                return
+            budget -= 1
+            sql = (
+                exp.select(exp.column(col["name"], quoted=True))
+                .distinct()
+                .from_(exp.table_(row["table_name"], quoted=True))
+                .limit(MAX_FINGERPRINTS)
+                .sql(dialect=sg_dialect)
+            )
+            try:
+                safe_sql = validate_and_sanitize_sql(sql, dialect=dialect)
+                rows, _ = await _execute_query(
+                    safe_sql, sync_url, dialect, entra_args, row_cap=MAX_FINGERPRINTS
+                )
+            except ExecutionTimeoutError:
+                return  # a slow source: don't spend 15s on each remaining column
+            except Exception as exc:
+                logger.debug("ontology_service: value hashes skipped for a column: %s", type(exc).__name__)
+                continue
+            col["value_hashes"] = fingerprint_values(r[0] for r in rows)
+
+
+async def _embed_and_upsert(connection_id: str, per_table: list[dict]) -> None:
+    """Embed each table's text repr and upsert its row (raises on failure)."""
+    import asyncio
+
+    from api.utils.embeddings_provider import get_embeddings
+
+    embeddings_model = get_embeddings()
+    texts = [_build_embedding_text(r["table_name"], r["column_metadata"]) for r in per_table]
+
+    def _batch_embed() -> list[list[float]]:
+        return embeddings_model.embed_documents(texts)
+
+    vectors: list[list[float]] = await asyncio.get_running_loop().run_in_executor(None, _batch_embed)
+
+    # Upsert pattern: explicit "row exists? update : insert" check, same
+    # convention already used for schema_cache_table in
+    # api/db_service.py::get_schema() — kept dialect-agnostic (works
+    # against SQLite for unit tests, not just PostgreSQL) rather than
+    # the pg-only ON CONFLICT used by the sibling table_embeddings table.
+    async with _async_session_factory() as session:
+        async with session.begin():
+            existing_result = await session.execute(
+                select(_ontology_table.c.table_name).where(
+                    _ontology_table.c.connection_id == connection_id
+                )
+            )
+            existing_names = {row.table_name for row in existing_result.fetchall()}
+
+            for row, vec in zip(per_table, vectors):
+                values = {
+                    "column_metadata_json": json.dumps(row["column_metadata"]),
+                    "embedding": json.dumps(vec),
+                    "data_card_json": json.dumps(row["data_card"]),
+                    "join_hints_json": json.dumps(row["join_hints"]),
+                }
+                if row["table_name"] in existing_names:
+                    await session.execute(
+                        sa_update(_ontology_table)
+                        .where(
+                            _ontology_table.c.connection_id == connection_id,
+                            _ontology_table.c.table_name == row["table_name"],
+                        )
+                        .values(**values, updated_at=func.now())
+                    )
+                else:
+                    await session.execute(
+                        sa_insert(_ontology_table).values(
+                            id=str(_uuid.uuid4()),
+                            connection_id=connection_id,
+                            table_name=row["table_name"],
+                            **values,
+                        )
+                    )
+
+
+# ---------------------------------------------------------------------------
+# CSV uploads (DOCBOT-2911) — built from the raw bytes + cached DataProfile,
+# never through the SQL pipeline
+# ---------------------------------------------------------------------------
+
+
+def _read_csv_raw(file_bytes: bytes) -> Any:
+    """Headerless str frame, read exactly like ``split_csv_sections`` so its
+    section row/col indices line up."""
+    import io
+
+    import pandas as pd
+
+    for enc in ("utf-8-sig", "utf-8", "latin-1"):
+        try:
+            raw = pd.read_csv(io.BytesIO(file_bytes), header=None, dtype=str, on_bad_lines="skip", encoding=enc)
+        except (UnicodeDecodeError, pd.errors.ParserError):
+            continue
+        return raw.dropna(how="all").reset_index(drop=True).dropna(axis=1, how="all")
+    return None
+
+
+def _csv_tables(
+    file_bytes: bytes, table_name: str, sections: list[dict], data_profile: Optional[dict]
+) -> list[dict]:
+    """One ontology row per CSV section. Raw values only ever leave as hashes."""
+    from api.utils.csv_preprocessor import dicts_to_sections
+
+    raw = _read_csv_raw(file_bytes)
+    if raw is None or raw.empty:
+        return []
+    dtypes = (data_profile or {}).get("dtypes") or {}
+    parsed = dicts_to_sections(sections)
+
+    out: list[dict] = []
+    for sec in parsed:
+        name = table_name
+        if len(parsed) > 1:
+            slug = re.sub(r"[^a-z0-9_]", "_", sec.name.strip().lower())[:40]
+            name = f"{table_name}__{sec.index}_{slug}"
+        data = raw.iloc[sec.data_start_idx:sec.data_end_idx]
+        column_metadata = []
+        for i, col in enumerate(sec.columns[:_MAX_COLS_PER_TABLE]):
+            if not col or i >= raw.shape[1]:
+                continue
+            values = data.iloc[:, i]
+            col_type = dtypes.get(col, "TEXT") if len(parsed) == 1 else "TEXT"
+            column_metadata.append({
+                "name": col,
+                "type": col_type,
+                "semantic_tag": _infer_semantic_tag(col, col_type),
+                "null_pct": round(float(values.isna().mean()) * 100, 1) if len(values) else None,
+                "value_hashes": fingerprint_values(values.tolist()),
+            })
+        out.append({
+            "table_name": name,
+            "column_metadata": column_metadata,
+            "data_card": {
+                "column_count": len(sec.columns),
+                "is_view": False,
+                "row_count": sec.row_count,
+                "example_rows": [],  # never raw values: this table is plaintext
+            },
+            "join_hints": [],
+        })
+    all_names = [t["table_name"] for t in out]
+    for t in out:
+        t["join_hints"] = _infer_join_hints(t["table_name"], t["column_metadata"], all_names)
+    return out
+
+
+async def build_csv_ontology(
+    connection_id: str,
+    file_bytes: bytes,
+    table_name: str,
+    sections: list[dict],
+    data_profile: Optional[dict] = None,
+) -> None:
+    """Build the ontology for a CSV upload. Never raises (fire-and-forget)."""
+    if not is_wired():
+        return
+    import asyncio
+
+    try:
+        per_table = await asyncio.get_running_loop().run_in_executor(
+            None, _csv_tables, file_bytes, table_name, sections, data_profile
+        )
+        if per_table:
+            await _embed_and_upsert(connection_id, per_table)
+            logger.info(
+                "ontology_service: built CSV ontology for connection=%s tables=%d",
+                connection_id, len(per_table),
+            )
+    except Exception as exc:
+        logger.warning("ontology_service: build_csv_ontology failed (non-fatal) for %s: %s", connection_id, exc)
+
+
+# ---------------------------------------------------------------------------
+# Org-wide read (DOCBOT-2911) — cross-source matching across an org's sources
+# ---------------------------------------------------------------------------
+
+
+async def list_org_ontology(org_id: str) -> list[dict]:
+    """Every ontology table of every connection in *org_id*.
+
+    Org scope comes from the join to ``db_connections.org_id`` (no copy on
+    the ontology table). Only user-owned rows count: the DOCBOT-1524 backfill
+    stamps the default org on anonymous rows, so ``org_id`` alone would leak
+    anonymous/demo connections into the default org (same rule as
+    ``db_service._api_key_org_clause``). ``org_id`` None/empty returns ``[]``.
+    Never raises.
+    """
+    if not org_id or not is_wired() or _db_connections_table is None:
+        return []
+    o, c = _ontology_table, _db_connections_table
+    try:
+        async with _async_session_factory() as session:
+            result = await session.execute(
+                select(
+                    o.c.connection_id, o.c.table_name, o.c.column_metadata_json, o.c.embedding,
+                    c.c.dialect, c.c.dbname, c.c.host,
+                )
+                .select_from(o.join(c, o.c.connection_id == c.c.id))
+                .where(c.c.org_id == org_id, c.c.user_id.is_not(None))
+                .order_by(o.c.connection_id, o.c.table_name)
+            )
+            rows = result.fetchall()
+    except Exception as exc:
+        logger.warning("ontology_service: list_org_ontology failed (non-fatal): %s", exc)
+        return []
+
+    out: list[dict] = []
+    for r in rows:
+        cols = json.loads(r.column_metadata_json) if r.column_metadata_json else []
+        out.append({
+            "connection_id": r.connection_id,
+            "dialect": r.dialect,
+            # uploaded sqlite dbname is a temp path; never expose the directory
+            "connection_name": Path(r.dbname).name if r.host == "__local_file__" else r.dbname,
+            "table_name": r.table_name,
+            "columns": [
+                {
+                    "name": col.get("name"),
+                    "type": col.get("type"),
+                    "semantic_tag": col.get("semantic_tag"),
+                    "null_pct": col.get("null_pct"),
+                    "value_hashes": col.get("value_hashes") or [],
+                }
+                for col in cols
+            ],
+            "embedding": json.loads(r.embedding) if isinstance(r.embedding, str) else r.embedding,
+        })
+    return out
 
 
 # ---------------------------------------------------------------------------

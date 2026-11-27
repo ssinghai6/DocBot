@@ -11,6 +11,8 @@ result is logged to query_history for observability.
 
 from __future__ import annotations
 
+from api.utils.doc_refs import chunk_header, chunk_key, chunk_label, chunk_page  # DOCBOT-2637
+from api.utils.yoy_facts import YOY_RULE, yoy_contradictions, yoy_facts, yoy_prompt_block  # DOCBOT-2637
 import asyncio
 import hashlib
 import json
@@ -53,7 +55,7 @@ PROMPT_VERSION_INTENT_CLASSIFICATION = "v1"
 # DOCBOT-1507: hybrid_chat's synthesis prompt is built dynamically (persona +
 # doc/sql context), so there's no single string constant to tag — this
 # version applies to the prompt-assembly logic in hybrid_chat() below.
-PROMPT_VERSION_HYBRID_SYNTHESIS = "v1"
+PROMPT_VERSION_HYBRID_SYNTHESIS = "v2"  # DOCBOT-2637: query-scope rule + computed YoY
 
 # DOCBOT-2542: a question that asks whether the document and the books agree
 # needs both lanes, or the discrepancy detector never runs. The LLM router
@@ -210,7 +212,7 @@ async def classify_intent(
                 {"role": "user", "content": question},
             ],
             model=_MODEL,
-            max_tokens=200,
+            max_tokens=1000,
             temperature=0,
             caller="intent_classification",
             prompt_version=PROMPT_VERSION_INTENT_CLASSIFICATION,
@@ -327,6 +329,7 @@ async def rag_retrieve(
     session_id: str,
     vector_stores: dict,
     lineage=None,
+    k: int = 8,
 ) -> tuple[str, list[dict]]:
     """Retrieve document context for a question via vector similarity search.
 
@@ -350,7 +353,7 @@ async def rag_retrieve(
         db = vector_stores[session_id]
         retriever = db.as_retriever(
             search_type="similarity",
-            search_kwargs={"k": 8},
+            search_kwargs={"k": k},
         )
 
         # Expand the question into synonym variants and retrieve for each;
@@ -374,7 +377,8 @@ async def rag_retrieve(
                 lineage.add_source(
                     kind="pdf",
                     label=str(doc.metadata.get("source", "Unknown")),
-                    page=doc.metadata.get("page", 0),
+                    page=chunk_page(doc.metadata),
+                    chunk=doc.metadata.get("chunk_index"),
                     snippet=doc.page_content,
                     rerank_score=rerank_scores.get(id(doc)),
                 )
@@ -386,15 +390,14 @@ async def rag_retrieve(
 
         scan_chunks(
             [
-                (f"{doc.metadata.get('source', 'Unknown')} p{doc.metadata.get('page', 0)}", doc.page_content)
+                (chunk_label(doc.metadata), doc.page_content)
                 for doc in docs
             ],
             session_id=session_id,
         )
 
         context = "\n\n".join(
-            f"Source: {doc.metadata.get('source', 'Unknown')}, "
-            f"Page {doc.metadata.get('page', 0)}\n{doc.page_content}"
+            f"{chunk_header(doc.metadata)}\n{doc.page_content}"
             for doc in docs
         )
 
@@ -402,12 +405,12 @@ async def rag_retrieve(
         seen: set[str] = set()
         citations: list[dict] = []
         for doc in docs:
-            key = f"{doc.metadata.get('source', 'Unknown')}_{doc.metadata.get('page', 0)}"
+            key = chunk_key(doc.metadata)
             if key not in seen:
                 seen.add(key)
                 citations.append({
                     "source": doc.metadata.get("source", "Unknown"),
-                    "page": doc.metadata.get("page", 0),
+                    "page": chunk_page(doc.metadata),
                     "text": safe_snippet(doc.page_content),
                 })
 
@@ -495,6 +498,146 @@ async def _collect_sql_result(
         return None
 
 
+BOOK_GUIDED_MAX_CHUNKS = 3
+# DOCBOT-2639: a number-dense statement table embeds poorly (Chipotle's income
+# statement ranks ~17th), but the reranker scores it first; search deeper so it reaches it.
+BOOK_GUIDED_SEARCH_K = 40
+
+
+async def _book_guided_retrieval(
+    doc_context: str,
+    doc_citations: list[dict],
+    sql_metadata: dict | None,
+    session_id: str,
+    vector_stores: dict,
+    lineage,
+) -> tuple[str, list[dict]]:
+    """DOCBOT-2637: fetch the filing pages for books lines retrieval missed.
+
+    Retrieval runs on the question alone, so a phrasing like "how did each
+    expense line change vs FY2024" can return a stock-comp table instead of
+    the income statement, and the tie-out silently compares nothing. When the
+    books returned lines that no retrieved filing figure could be compared
+    with, search again by those line names and add up to
+    BOOK_GUIDED_MAX_CHUNKS new chunks. Filings only (retrieved context holds
+    year-header statement tables); no LLM call.
+    """
+    if not sql_metadata or not doc_context or sql_metadata.get("csv_answer"):
+        return doc_context, doc_citations
+    if not sql_metadata.get("result_preview") or not yoy_prompt_block(doc_context):
+        return doc_context, doc_citations
+    from api.utils.discrepancy_detector import detect_discrepancies
+
+    missing = detect_discrepancies(doc_context, sql_metadata).unpaired_db_lines
+    if not missing:
+        return doc_context, doc_citations
+    started = time.perf_counter()
+    # DOCBOT-2638: the bare line names match MD&A prose; naming the statement
+    # puts the income statement table first.
+    query = "Consolidated statements of operations " + " ".join(missing[:8])
+    extra, extra_citations = await rag_retrieve(
+        query, session_id, vector_stores, k=BOOK_GUIDED_SEARCH_K
+    )
+    added = [
+        chunk for chunk in re.split(r"\n\n(?=Source: )", extra)
+        if chunk.strip() and chunk.split("\n", 1)[-1].strip() not in doc_context
+    ][:BOOK_GUIDED_MAX_CHUNKS]
+    if not added:
+        return doc_context, doc_citations
+    keys = {(c.get("source"), c.get("page")) for c in doc_citations}
+    added_heads = {a.split("\n", 1)[0] for a in added}
+    for c in extra_citations:
+        key = (c.get("source"), c.get("page"))
+        if key not in keys and chunk_header({"source": key[0], "page": key[1]}) in added_heads:
+            keys.add(key)
+            doc_citations = doc_citations + [c]
+            lineage.add_source(kind="pdf", label=str(c.get("source")), page=c.get("page"),
+                               snippet=c.get("text"))
+    lineage.add_step(
+        "book_guided_retrieval", tool="vector_search+rerank", lane="docs",
+        latency_ms=(time.perf_counter() - started) * 1000,
+        detail=f"{len(added)} chunk(s) for books lines: {', '.join(missing[:8])}",
+    )
+    return doc_context + "\n\n" + "\n\n".join(added), doc_citations
+
+
+async def _complete_tieout_lines(
+    sql_metadata: dict | None,
+    doc_context: str,
+    connection_id: str | None,
+    db_connections_table,
+    schema_cache_table,
+    async_session_factory,
+    lineage,
+) -> None:
+    """DOCBOT-2637: re-run the books query with filing lines it skipped.
+
+    Without this, a line the SQL step left out (Etsy's "Asset impairment
+    charges") reached synthesis as "not in the books" although the books hold
+    it. Updates ``sql_metadata`` in place; on any failure the first query's
+    result stands.
+    """
+    if not sql_metadata or not doc_context or not connection_id:
+        return
+    if not sql_metadata.get("sql_query") or sql_metadata.get("csv_answer"):
+        return
+    from api.db_service import complete_tieout_lines
+
+    started = time.perf_counter()
+    try:
+        done = await complete_tieout_lines(
+            connection_id, sql_metadata["sql_query"], doc_context,
+            list(sql_metadata.get("sources") or []),
+            db_connections_table, schema_cache_table, async_session_factory,
+        )
+    except Exception as exc:  # noqa: BLE001 -- best effort; the original rows stand
+        logger.warning("hybrid_chat: skipped-line completion failed: %s", exc)
+        return
+    if done is None:
+        return
+    sql, rows, added = done
+    sql_metadata.update(sql_query=sql, result_preview=rows[:20], row_count=len(rows))
+    lineage.add_step(
+        "complete_tieout_lines", tool="sqlglot_ast", lane="db",
+        latency_ms=(time.perf_counter() - started) * 1000,
+        detail=f"added skipped lines: {', '.join(added)}",
+    )
+
+
+async def _correct_yoy_claims(
+    answer: str, wrong: list[str], persona_def: str, format_block: str,
+    yoy_section: str, question: str, run_id: str,
+) -> str | None:
+    """DOCBOT-2637: one rewrite fixing statements that contradict computed changes."""
+    from api.utils.llm_provider import achat_completion
+
+    prompt = (
+        f"{persona_def}\n\n"
+        "Some statements in your previous answer contradict the year-over-year changes "
+        "computed from the filing. Rewrite the FULL answer, keeping everything else "
+        "exactly, and correct each listed statement so it matches the computed change. "
+        "Keep every [[discrepancy:...]] marker exactly as written.\n"
+        f"{format_block}\n"
+        "STATEMENTS TO CORRECT:\n" + "\n".join(f"- {w}" for w in wrong) + "\n"
+        f"{yoy_section}\n"
+        f"Question: {question}\n\n"
+        f"Previous answer:\n{answer}\n\n"
+        "Rewrite the full answer:"
+    )
+    try:
+        return await achat_completion(
+            [{"role": "user", "content": prompt}],
+            temperature=0.2,
+            max_tokens=2500,
+            caller="hybrid_yoy_correction",
+            run_id=run_id,
+            prompt_version=PROMPT_VERSION_HYBRID_SYNTHESIS,
+        )
+    except Exception as exc:  # noqa: BLE001 -- the original answer stands
+        logger.warning("hybrid_chat: year-over-year correction failed: %s", exc)
+        return None
+
+
 # ---------------------------------------------------------------------------
 # DOCBOT-1518: active discrepancy gate helper
 # ---------------------------------------------------------------------------
@@ -578,6 +721,9 @@ async def hybrid_chat(
     run_id = current_run_id() or new_run_id()
     _trace_cm = run_trace(run_id)
     _trace_cm.__enter__()
+    # DOCBOT-2636: lets GET /api/hybrid/answer/{run_id} answer "pending" until done.
+    from api.answer_recovery_service import mark_done, mark_running
+    mark_running(run_id, session_id, connection_id)
 
     # DOCBOT-1510: per-answer lineage collector
     from api.utils.lineage import LineageCollector
@@ -634,7 +780,7 @@ async def hybrid_chat(
             detail="fallback to default route" if classification.fallback_applied else intent,
         )
 
-        yield f"data: {json.dumps({'type': 'metadata', 'intent': intent, 'has_sql': has_db, 'has_docs': has_docs})}\n\n"
+        yield f"data: {json.dumps({'type': 'metadata', 'intent': intent, 'has_sql': has_db, 'has_docs': has_docs, 'run_id': run_id})}\n\n"
 
         # ── Step 2: gather context based on intent ────────────────────────────
         doc_context = ""
@@ -695,6 +841,14 @@ async def hybrid_chat(
 
             if sql_task is not None:
                 sql_metadata = await sql_task
+
+            doc_context, doc_citations = await _book_guided_retrieval(
+                doc_context, doc_citations, sql_metadata, session_id, vector_stores, lineage,
+            )
+            await _complete_tieout_lines(
+                sql_metadata, doc_context, connection_id, db_connections_table,
+                schema_cache_table, async_session_factory, lineage,
+            )
 
         if has_db and intent != "doc" and sql_metadata is None:
             lineage.mark_step(
@@ -770,6 +924,8 @@ async def hybrid_chat(
                 )
 
         doc_section = ""
+        # DOCBOT-2637: year-over-year changes computed in code, never by the model
+        yoy_section = yoy_prompt_block(doc_context) if doc_context else ""
         if doc_context:
             from api.utils.prompt_guard import wrap_untrusted
 
@@ -795,9 +951,26 @@ async def hybrid_chat(
         # below) so the active discrepancy gate after streaming can check
         # `report.has_discrepancies` regardless of which branch set it.
         discrepancy_report = None
+
+        # DOCBOT-2911: org-scoped cross-source column mappings. Non-fatal —
+        # returns ("", {}) on any failure or when the org has < 2 sources.
+        from api.cross_source_service import canonicalize_sql_metadata, cross_source_context
+
+        xsource_section = ""
+        xsource_terms: dict[str, str] = {}
+        if has_db:
+            from api.utils.billing_context import get_principal
+
+            _xs_principal = get_principal()
+            xsource_section, xsource_terms = await cross_source_context(
+                _xs_principal.org_id if _xs_principal else None, question, connection_id
+            )
+
         if intent == "hybrid" and doc_context and sql_metadata:
             from api.utils.discrepancy_detector import detect_discrepancies
-            report = detect_discrepancies(doc_context, sql_metadata)
+            report = detect_discrepancies(
+                doc_context, canonicalize_sql_metadata(sql_metadata, xsource_terms)
+            )
             discrepancy_report = report
             for item in report.discrepancies:
                 lineage.add_discrepancy(item)
@@ -850,11 +1023,17 @@ async def hybrid_chat(
             "look for any of: Job Title, Position, Role, Designation, SOC Occupation Title, "
             "Occupation Title.\n"
             "- Only say information is absent when you have examined all chunks and confirmed "
-            "it does not appear anywhere.\n\n"
+            "it does not appear anywhere.\n"
+            # DOCBOT-2637: the database results are one query's rows, not the whole books.
+            "- The database results hold only the rows this query returned. If a document "
+            "line has no matching database row, say it was not part of the query result; "
+            "never say it is missing from the books or the database, and never mark it as "
+            "a mismatch.\n"
+            f"{YOY_RULE if yoy_section else ''}\n"
             f"Question: {question}"
             f"{extracted_section}"
-            f"\n\n[DOCUMENT CONTEXT]\n{doc_section}"
-            f"\n\n[DATABASE RESULTS]\n{sql_section}\n\n"
+            f"\n\n[DOCUMENT CONTEXT]\n{doc_section}{yoy_section}"
+            f"\n\n[DATABASE RESULTS]\n{sql_section}{xsource_section}\n\n"
             "Answer:"
         )
 
@@ -893,6 +1072,8 @@ async def hybrid_chat(
             from api.utils.exceptions import StreamInterruptedError
             detail = str(exc) if isinstance(exc, StreamInterruptedError) else "Synthesis failed. Please try again."
             yield f"data: {json.dumps({'type': 'error', 'detail': detail})}\n\n"
+            # DOCBOT-2583: always close the stream so the client never waits forever.
+            yield f"data: {json.dumps({'type': 'done', 'citations': [], 'run_id': run_id})}\n\n"
             return
 
         # DOCBOT-1518: active discrepancy gate. detect_discrepancies() above
@@ -966,6 +1147,34 @@ async def hybrid_chat(
             else:
                 lineage.add_step("verify_discrepancy_addressed", tool="none", detail="already addressed")
 
+        # DOCBOT-2637: year-over-year wording must match the computed changes.
+        # Deterministic check, no LLM call unless a statement contradicts a
+        # computed change ("higher tax provision" when it fell 22%); then one
+        # rewrite, kept only if it fixes something and keeps the markers.
+        if yoy_section:
+            _yoy_facts = yoy_facts(doc_context)
+            _yoy_answer = "".join(_answer_parts)
+            _yoy_wrong = yoy_contradictions(_yoy_answer, _yoy_facts)
+            if _yoy_wrong:
+                rewritten = await _correct_yoy_claims(
+                    _yoy_answer, _yoy_wrong, persona_def, format_block, yoy_section, question, run_id,
+                )
+                keeps_markers = not (
+                    discrepancy_report is not None and discrepancy_report.has_discrepancies
+                    and not _answer_addresses_discrepancies(rewritten or "")
+                )
+                if rewritten and keeps_markers and len(yoy_contradictions(rewritten, _yoy_facts)) < len(_yoy_wrong):
+                    masked_rewrite = normalize_markdown(mask_pii(rewritten))
+                    _answer_parts[:] = [masked_rewrite]
+                    yield f"data: {json.dumps({'type': 'replace', 'content': masked_rewrite})}\n\n"
+                    lineage.add_step("verify_yoy_claims", tool="llm", status="retried",
+                                     detail=f"rewrote {len(_yoy_wrong)} year-over-year statement(s)")
+                else:
+                    lineage.add_step("verify_yoy_claims", tool="llm", status="error",
+                                     detail="rewrite did not fix the statements; original kept")
+            else:
+                lineage.add_step("verify_yoy_claims", tool="none", detail="matches computed changes")
+
         # DOCBOT-2002: marker hygiene before the lineage/trace persist. The
         # model was told to place ``[[discrepancy:<id>]]`` markers and never
         # write the literal "[DISCREPANCY]" tag — but it sometimes does both
@@ -1031,4 +1240,5 @@ async def hybrid_chat(
 
         yield f"data: {json.dumps({'type': 'done', 'citations': doc_citations, 'run_id': run_id, 'trace_id': trace_id})}\n\n"
     finally:
+        mark_done(run_id)
         _trace_cm.__exit__(None, None, None)

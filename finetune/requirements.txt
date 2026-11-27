@@ -13,9 +13,9 @@
 # script's docstring) but a real training run needs all of them with CUDA
 # available.
 
-torch>=2.14.1
+torch>=2.15.0
 transformers>=4.57.6
-peft>=0.21.2
+peft>=0.22.0
 trl>=0.29.1
 bitsandbytes>=0.50.2
 accelerate>=0.34.2

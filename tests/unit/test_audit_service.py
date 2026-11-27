@@ -17,7 +17,8 @@ from unittest.mock import AsyncMock, MagicMock, patch, call
 class TestAuditEventType:
     def test_all_event_types_defined(self):
         from api.audit_service import AuditEventType
-        expected = {"query", "db_connect", "db_disconnect", "upload", "login", "logout", "api_key_use"}
+        expected = {"query", "db_connect", "db_disconnect", "upload", "login", "logout", "api_key_use",
+                    "api_key_create", "api_key_revoke", "api_key_expired"}
         actual = {e.value for e in AuditEventType}
         assert actual == expected
 

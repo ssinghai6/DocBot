@@ -31,6 +31,19 @@ _async_session_factory: Any = None
 _pending_writes: set[asyncio.Task] = set()
 
 
+async def wait_pending_writes(timeout: float = 5.0) -> None:
+    """Let in-flight lineage writes land before a read (DOCBOT-2604).
+
+    The export link is live as soon as the SSE lineage event arrives, which can be
+    before the background insert commits; without this a fast click 404s.
+    shortcut: single-process only (one uvicorn worker); with several workers the
+    write may live in another process, upgrade to a short retry on miss then.
+    """
+    pending = list(_pending_writes)
+    if pending:
+        await asyncio.wait(pending, timeout=timeout)
+
+
 def register_lineage_table(metadata) -> Table:
     """Define answer_lineage on shared metadata (called from api/index.py)."""
     return Table(

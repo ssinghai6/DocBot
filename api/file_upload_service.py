@@ -329,6 +329,16 @@ async def _register_csv_connection(
                 )
             )
 
+    # DOCBOT-2911: ontology from the raw bytes + profile, fire-and-forget like
+    # connect_database. Never blocks or fails the upload.
+    try:
+        from api.ontology_service import build_csv_ontology
+        asyncio.ensure_future(build_csv_ontology(
+            connection_id, file_bytes, table_name, sections, data_profile,
+        ))
+    except Exception:
+        logger.warning("CSV ontology build could not be scheduled for %s", connection_id)
+
     return connection_id
 
 
@@ -399,6 +409,13 @@ async def _register_file_as_connection(
                     expires_at=expires_at,
                 )
             )
+
+    # DOCBOT-2911: same fire-and-forget ontology build as connect_database.
+    try:
+        from api.ontology_service import build_ontology
+        asyncio.ensure_future(build_ontology(connection_id))
+    except Exception:
+        logger.warning("Ontology build could not be scheduled for %s", connection_id)
 
     return connection_id
 

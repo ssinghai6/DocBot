@@ -23,6 +23,7 @@ import { resolveChatMode, createAnonymousSessionId, type ChatMode } from "@/lib/
 import { VerifyRequestSchema, VerifyResponseSchema } from "@/lib/schemas/emailVerify"
 import { OwnerUnlockResponseSchema } from "@/lib/schemas/ownerUnlock"
 import { gateResponse, onHttpGate } from "@/lib/httpGate"
+import { z } from "zod"
 import type { Paywall } from "@/components/OutOfCreditsModal"
 
 import {
@@ -74,6 +75,8 @@ function ToastContainer({ toasts, onDismiss }: { toasts: Toast[]; onDismiss: (id
 }
 
 type DemoDataset = "quickbite" | "fuel" | "tieout";
+const DEMO_DATASETS: DemoDataset[] = ["quickbite", "fuel", "tieout"];
+const DemoInitSchema = z.object({ session_id: z.string(), connection_id: z.string() });
 
 const DEMO_UI: Record<DemoDataset, { db: string; doc: string; persona: string; toast: string }> = {
   quickbite: {
@@ -252,6 +255,8 @@ export default function Home() {
 
   // File Upload State
   const [fileUploadState, setFileUploadState] = useState<FileUploadState>("idle");
+  // Block sends while a new PDF uploads: sessionId still points at the old doc until it finishes.
+  const sendBlocked = isLoading || fileUploadState === "uploading";
 
   // Toast State
   const [toasts, setToasts] = useState<Toast[]>([]);
@@ -343,7 +348,6 @@ export default function Home() {
 
     setMessages,
     setInput,
-    setIsLoading,
     setUploadedFiles,
     setSessionId,
     setUploadProgress,
@@ -391,6 +395,48 @@ export default function Home() {
     showToast,
   });
 
+  // Demo mode handler — dataset: "quickbite" (discrepancy), "fuel" (forecasting),
+  // or "tieout" (draft 10-K vs trial balance, DOCBOT-2212). DOCBOT-2632:
+  // `keepMessages` restarts an expired demo without wiping the chat.
+  const handleTryDemo = useCallback(async (
+    dataset: DemoDataset = "quickbite",
+    opts?: { keepMessages?: boolean },
+  ): Promise<{ sessionId: string; connectionId: string } | null> => {
+    setDemoLoading(true);
+    try {
+      const res = await fetch(`/api/demo/init?dataset=${dataset}`, { method: "POST" });
+      // DOCBOT-1711 / 2305: sign-in, rate, credits or capacity gate → shown by the gate listener.
+      if (await gateResponse(res)) return null;
+      if (!res.ok) throw new Error("Demo initialization failed");
+      const data = DemoInitSchema.parse(await res.json());
+      const demo = DEMO_UI[dataset];
+      setSessionId(data.session_id);
+      setConnectionId(data.connection_id);
+      setIsDbConnected(true);
+      setDbFileName(demo.db);
+      setChatMode("hybrid");
+      setSelectedPersona(demo.persona);
+      setIsAutoMode(false);
+      setUploadedFiles([new File([], demo.doc)]);
+      if (!opts?.keepMessages) {
+        setMessages([]);
+        showToast("success", demo.toast);
+      }
+      return { sessionId: data.session_id, connectionId: data.connection_id };
+    } catch {
+      showToast("error", "Failed to load demo. Please try again.");
+      return null;
+    } finally {
+      setDemoLoading(false);
+    }
+  }, [showToast]);
+
+  // DOCBOT-2632: an expired demo restarts on the dataset it was showing.
+  const restartDemo = () => handleTryDemo(
+    DEMO_DATASETS.find(d => DEMO_UI[d].db === dbFileName) ?? "quickbite",
+    { keepMessages: true },
+  );
+
   const { handleSendMessage, paywall, dismissPaywall } = useChatSubmit({
     input,
     sessionId,
@@ -416,6 +462,7 @@ export default function Home() {
 
     showToast,
     loadQueryHistory: handlers.loadQueryHistory,
+    restartDemo,
   });
 
   const shownPaywall = paywall ?? gatePaywall;
@@ -564,20 +611,27 @@ export default function Home() {
     }
   }, [input]);
 
-  // Promote to hybrid when both sources exist; fall back when the active mode's
-  // required source becomes unavailable. Adjusted during render (guarded, and
-  // resolveChatMode is idempotent) instead of in an effect, so there is no
-  // extra commit with a stale mode.
+  // Fall back when the active mode's required source becomes unavailable.
+  // Adjusted during render (guarded, and resolveChatMode is idempotent).
   const resolvedChatMode = resolveChatMode(chatMode, connectionId, sessionId);
   if (resolvedChatMode !== chatMode) {
     setChatMode(resolvedChatMode);
+  }
+
+  // Promote to hybrid once per new doc+DB pair; a later manual Docs/Database
+  // pick is not overridden (DOCBOT-2703). Adjusted during render, not in an effect.
+  const sourcePairKey = `${connectionId}|${sessionId}`;
+  const [lastSourcePairKey, setLastSourcePairKey] = useState("");
+  if (sourcePairKey !== lastSourcePairKey) {
+    setLastSourcePairKey(sourcePairKey);
+    if (connectionId && sessionId) setChatMode("hybrid");
   }
 
   // Keyboard shortcuts
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
       if ((e.ctrlKey || e.metaKey) && e.key === 'Enter') {
-        if (input.trim() && (sessionId || isDbConnected) && !isLoading) {
+        if (input.trim() && (sessionId || isDbConnected) && !sendBlocked) {
           handleSendMessage();
         }
       }
@@ -594,35 +648,7 @@ export default function Home() {
 
     window.addEventListener('keydown', handleKeyDown);
     return () => window.removeEventListener('keydown', handleKeyDown);
-  }, [input, sessionId, isDbConnected, isLoading, inspectorOpen]); // eslint-disable-line react-hooks/exhaustive-deps
-
-  // Demo mode handler — dataset: "quickbite" (discrepancy), "fuel" (forecasting),
-  // or "tieout" (draft 10-K vs trial balance, DOCBOT-2212)
-  const handleTryDemo = useCallback(async (dataset: DemoDataset = "quickbite") => {
-    setDemoLoading(true);
-    try {
-      const res = await fetch(`/api/demo/init?dataset=${dataset}`, { method: "POST" });
-      // DOCBOT-1711 / 2305: sign-in, rate, credits or capacity gate → shown by the gate listener.
-      if (await gateResponse(res)) return;
-      if (!res.ok) throw new Error("Demo initialization failed");
-      const data = await res.json();
-      const demo = DEMO_UI[dataset];
-      setSessionId(data.session_id);
-      setConnectionId(data.connection_id);
-      setIsDbConnected(true);
-      setDbFileName(demo.db);
-      setChatMode("hybrid");
-      setSelectedPersona(demo.persona);
-      setIsAutoMode(false);
-      setUploadedFiles([new File([], demo.doc)]);
-      setMessages([]);
-      showToast("success", demo.toast);
-    } catch {
-      showToast("error", "Failed to load demo. Please try again.");
-    } finally {
-      setDemoLoading(false);
-    }
-  }, [showToast]);
+  }, [input, sessionId, isDbConnected, sendBlocked, inspectorOpen, setInspectorOpen, handleSendMessage]);
 
   // ── Render ─────────────────────────────────────────────────────────────────
 
@@ -698,7 +724,7 @@ export default function Home() {
         onEdgarFilingIngested={(sid: string, label: string) => {
           setSessionId(sid)
           setSelectedPersona("Finance Expert")
-          setMessages([])
+          setUploadedFiles([new File([], label)])
           showToast("success", `Ready to chat with ${label}`)
         }}
       />
@@ -722,7 +748,7 @@ export default function Home() {
         chatMode={chatMode}
         setChatMode={setChatMode}
         messages={messages}
-        isLoading={isLoading}
+        isLoading={sendBlocked}
         input={input}
         setInput={setInput}
         chartType={chartType}
@@ -824,6 +850,7 @@ export default function Home() {
         <OutOfCreditsModal
           paywall={shownPaywall}
           isSignedIn={authUser !== null}
+          email={authUser?.email}
           onSignIn={() => { dismissPaywall(); setGatePaywall(null); setAuthModalTab("register"); setAuthModalOpen(true); }}
           onClose={() => { dismissPaywall(); setGatePaywall(null); }}
         />

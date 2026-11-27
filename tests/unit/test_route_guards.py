@@ -168,6 +168,11 @@ PUBLIC_ROUTES: dict[RouteKey, str] = {
     ("POST", "/api/auth/logout"): "Clears the caller's own session cookie; no-op when anonymous.",
     ("GET", "/api/billing/packs"): "DOCBOT-1803: static credit-pack catalogue (names, credits, "
                                    "prices); Stripe price ids / payment links are stripped.",
+    ("POST", "/api/waitlist"): "DOCBOT-2581: anonymous waitlist signup (replaces payments). Abuse "
+                               "controls: global per-IP POST limiter in abuse_guard, honeypot field, "
+                               "length caps; write-only (never echoes entries).",
+    ("GET", "/v1/openapi.json"): "DOCBOT-3901: spec of the public /v1 surface only (filtered); "
+                                 "describes no data, needed by the docs page and SDK generators.",
     ("POST", "/api/marketplace/webhook/shopify"): "Shopify server-to-server webhook; no browser session. "
                                                   "Authenticated by HMAC-SHA256 over the raw body with the "
                                                   "connector's webhook_secret; shop domain header validated "
@@ -269,6 +274,21 @@ def test_listed_routes_exist_and_are_not_double_classified(bucket_name: str) -> 
     guarded = {k for k in bucket if k in routes and _has_guard(routes[k])}
     assert not missing, f"{bucket_name} lists routes that no longer exist:\n{_fmt(missing)}"
     assert not guarded, f"{bucket_name} lists routes that now have a guard; remove them:\n{_fmt(guarded)}"
+
+
+def _has_api_key_guard(route: APIRoute) -> bool:
+    return any(
+        "require_api_key" in (getattr(d.call, "__qualname__", "") or "").split(".")
+        for d in _walk(route.dependant)
+    )
+
+
+def test_every_v1_route_requires_an_api_key() -> None:
+    """DOCBOT-3901: /v1 is API-key only; a session-cookie guard is not enough."""
+    v1 = {k: r for k, r in _api_routes().items() if k[1].startswith("/v1/")}
+    assert v1, "expected /v1 routes"
+    missing = {k for k, r in v1.items() if k not in PUBLIC_ROUTES and not _has_api_key_guard(r)}
+    assert not missing, f"/v1 route(s) without require_api_key:\n{_fmt(missing)}"
 
 
 def test_guard_detection_sees_known_guards() -> None:

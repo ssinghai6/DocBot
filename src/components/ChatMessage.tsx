@@ -267,11 +267,15 @@ function CitationsBlock({ citations, messageId, lineage }: { citations: Citation
               })
             }}
             className="text-[10px] px-2 py-1 bg-[var(--color-bg-surface)] rounded-[3px] border border-[var(--color-border-subtle)] text-[var(--color-text-tertiary)] hover:text-[var(--color-text-primary)] hover:border-[var(--color-cyan-500)]/40 transition-colors"
-            title={`${citation.source} — Page ${citation.page}`}
+            title={citation.page != null ? `${citation.source} — Page ${citation.page}` : citation.source}
           >
             <span className="text-[var(--color-cyan-500)] font-medium">{citation.source}</span>
-            <span className="text-[var(--color-text-quaternary)] mx-1">·</span>
-            <span className="text-[var(--color-text-tertiary)] tabular-nums">p{citation.page}</span>
+            {citation.page != null && (
+              <>
+                <span className="text-[var(--color-text-quaternary)] mx-1">·</span>
+                <span className="text-[var(--color-text-tertiary)] tabular-nums">p{citation.page}</span>
+              </>
+            )}
           </button>
         ))}
       </div>

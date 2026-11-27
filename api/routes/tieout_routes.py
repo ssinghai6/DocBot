@@ -13,7 +13,7 @@ from fastapi import APIRouter, Depends, HTTPException
 from fastapi.responses import Response
 
 from api import tieout_export
-from api.lineage_service import get_lineage
+from api.lineage_service import get_lineage, wait_pending_writes
 from api.rbac_service import UserRole, require_role
 from api.resource_scope_service import run_row_accessible
 from api.utils.caller_scope import CallerScope, require_principal
@@ -42,6 +42,7 @@ def wire_tieout_routes(
 async def download_tieout(
     run_id: str, fmt: Literal["xlsx", "pdf"], scope: CallerScope = Depends(require_principal)
 ) -> Response:
+    await wait_pending_writes()
     if not await run_row_accessible(
         _state["lineage"], run_id, scope, _state["sessions"], _state["connections"], _state["factory"]
     ):
