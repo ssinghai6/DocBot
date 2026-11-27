@@ -39,6 +39,8 @@ _DONE_TASK_TTL_SEC: float = 600.0
 
 def _evict_later(key: tuple, task: asyncio.Task) -> None:
     """Drop a finished task nobody polled for, unless the key was reused."""
+    if not task.cancelled():
+        task.exception()  # mark retrieved so an unpolled failure doesn't log "never retrieved"
     def _evict() -> None:
         if _INGEST_TASKS.get(key) is task:
             _INGEST_TASKS.pop(key, None)

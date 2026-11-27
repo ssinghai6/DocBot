@@ -165,7 +165,8 @@ export default function EdgarPanel({ onFilingIngested, showToast }: EdgarPanelPr
           if (!canRetry) throw err
           res = new Response(null, { status: 599 })
         }
-        const pending = res.status >= 500 || (res.ok && (await res.clone().json().catch(() => ({}))).status === "pending")
+        // Retry only proxy/network drops; a real 500 or capacity 503 is final.
+        const pending = [502, 504, 599].includes(res.status) || (res.ok && (await res.clone().json().catch(() => ({}))).status === "pending")
         if (pending && canRetry) {
           if (attempt === 0) showToast("info", "Still processing…")
           await new Promise(r => setTimeout(r, 3000))
