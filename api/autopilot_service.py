@@ -946,13 +946,14 @@ def make_executor_node(
                         artifact_id=None,
                     )
                     # DOCBOT-2002: structured inputs for the tie-out detection
-                    # (rows mirror data_result sample_rows so both detection
+                    # (rows mirror data_result tieout_rows so both detection
                     # passes agree on item ids; sources/sql feed the db citation).
+                    # DOCBOT-4021: every books row (run_sql_pipeline's tieout_rows), not the preview
+                    full_rows = sql_meta.get("tieout_rows") or preview
+                    tieout_rows = [r for r in full_rows if isinstance(r, dict)] if isinstance(full_rows, list) else []
+                    result_entry["data_result"]["tieout_rows"] = tieout_rows
                     result_entry["tieout_sql"] = {
-                        "result_preview": [
-                            r for r in (preview[:10] if isinstance(preview, list) else [])
-                            if isinstance(r, dict)
-                        ],
+                        "result_preview": tieout_rows,
                         "sources": [str(s) for s in (sql_meta.get("sources") or []) if s],
                         "sql_query": result_entry.get("sql"),
                     }
@@ -1719,8 +1720,12 @@ def _executed_rows_preview(state: AutopilotState) -> list[dict]:
         return rows
     for key in sorted(data_results.keys()):
         entry = data_results.get(key)
-        if isinstance(entry, dict) and isinstance(entry.get("sample_rows"), list):
-            rows.extend(r for r in entry["sample_rows"] if isinstance(r, dict))
+        if not isinstance(entry, dict):
+            continue
+        # DOCBOT-4021: same full rows as tieout_sql so both detection passes agree on ids
+        source = entry.get("tieout_rows") or entry.get("sample_rows")
+        if isinstance(source, list):
+            rows.extend(r for r in source if isinstance(r, dict))
     return rows
 
 

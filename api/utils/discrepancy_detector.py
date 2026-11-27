@@ -218,7 +218,8 @@ def detect_discrepancies(
     if csv_answer:
         db_values = _extract_from_text(csv_answer, source="db")
     else:
-        rows = sql_metadata.get("result_preview", [])
+        # DOCBOT-4021: every books row, not the 10-20 row UI preview
+        rows = sql_metadata.get("tieout_rows") or sql_metadata.get("result_preview", [])
         sql = sql_metadata.get("sql_query")
         db_values = _extract_from_rows(
             rows, fallback_dimension=_where_dimension(sql), tag_columns=_literal_columns(sql)
@@ -284,11 +285,18 @@ def detect_discrepancies(
                 tied.update(id(e[0]) for e in agreeing)
             continue  # a books value agrees with the report figure — ties out
 
-        chosen = next((e for e in evaluated if e[4] <= max_delta_threshold), None)
-        if chosen is None:
+        # DOCBOT-4021: candidates ranked equal on period/label (the same books line
+        # in other periods) break by closeness, not row order, so an undated
+        # "$5.2 billion" is compared with the year it describes.
+        plausible = [
+            (c[:3], e) for c, e in zip(candidates, evaluated) if e[4] <= max_delta_threshold
+        ]
+        if not plausible:
             continue
+        best_rank = plausible[0][0]
+        chosen = min((e for rank, e in plausible if rank == best_rank), key=lambda e: e[4])
         sv, doc_val, db_val, delta, _rel = chosen
-        pct = (delta / doc_val * 100) if doc_val != 0 else None
+        pct = (delta / abs(doc_val) * 100) if doc_val != 0 else None  # sign = books vs report
 
         item = DiscrepancyItem(
             label=_canonical_label(dv.label, sv.label, dv.raw_text),
@@ -345,7 +353,9 @@ def _tieout_tolerance(dv: NumericValue, default: float) -> float:
     """
     m = _TABLE_CELL_RE.search(dv.raw_text)
     if not m or not dv.value:
-        return default
+        # DOCBOT-4021: "$1.2 billion" vs 1,151M is within the figure's own decimal
+        # rounding; integer zeros ("$330M", "$1,000,000") may be exact, so not those.
+        return max(default, dv.rounding) if re.search(r"[0-9]\.[0-9]", dv.raw_text) else default
     return min(default, max(1e-4, 0.5 / abs(float(m.group(1).replace(",", "")))))
 
 
@@ -368,7 +378,7 @@ def _rounding(number_str: str) -> float:
     return 0.5 * unit / value if value else 0.0
 
 
-_TABLE_CELL_RE = re.compile(r"\|\s*[-–(]?\s*[\$£€¥]?\s*([0-9][0-9,]*)\)?\s*$")
+_TABLE_CELL_RE = re.compile(r"\|\s*[-–(]?\s*[\$£€¥]?\s*[-–(]?\s*([0-9][0-9,]*)\)?\s*$")
 
 
 def _table_cell(dv: NumericValue) -> bool:
@@ -403,7 +413,6 @@ _PERIOD_FY_RE = re.compile(r"\b(?:FY|fiscal\s+year)\s*'?(\d{4}|\d{2})\b", re.IGN
 _BARE_QUARTER_RE = re.compile(r"^\s*Q([1-4])\s*$", re.IGNORECASE)
 # DOCBOT-2637: filing chunks without a printed page use ", Section S" (doc_refs.chunk_header)
 _FLAG_VALUES = frozenset({"yes", "no", "y", "n", "true", "false", "match", "mismatch", "ok", "agree", "disagree"})
-_YEAR_CELL_RE = re.compile(r"(?:19|20)[0-9]{2}")
 _COLUMN_YEAR_RE = re.compile(r"(?<![0-9])((?:19|20)[0-9]{2})(?![0-9])")
 _SOURCE_HEADER_RE = re.compile(
     r"^Source:\s*(?P<file>.+?)(?:,\s*Page\s+(?P<page>\d+)|,\s*Section\s+.*)?\s*$", re.MULTILINE
@@ -456,8 +465,8 @@ def _strip_periods(label: str) -> str:
 _LABEL_VALUE_RE = re.compile(
     r"(?P<label>[A-Za-z][A-Za-z0-9 _/\-]{1,60}?)"          # label (2-60 chars)
     r"\s*[:\-=]\s*"                                           # separator
-    r"(?P<sign>[-–]?)\s*"
-    r"[\$£€¥]?\s*"
+    r"(?P<sign>[-–]|\((?=\s*[\$£€¥]))?\s*"                    # "-", or "(" before "$"
+    r"(?:[\$£€¥]\s*(?P<sign2>[-–(]?)\s*)?"                     # "$(18,509)" / "$-5"
     r"(?P<number>[0-9][0-9,]*(?:\.[0-9]+)?)"                  # number
     r"\s*(?P<suffix>[KkMmBbTt](?:illion|n|)?\b)?",             # optional K/M/B suffix
     re.IGNORECASE,
@@ -467,8 +476,8 @@ _LABEL_VALUE_RE = re.compile(
 _INLINE_VALUE_RE = re.compile(
     r"(?P<label>[A-Za-z][A-Za-z0-9 _/\-]{1,60}?)\s+"
     r"(?:was|were|is|are|of|totaling?|equaling?|reached?|hit|at)\s+"
-    r"(?P<sign>[-–]?)\s*"
-    r"[\$£€¥]?\s*"
+    r"(?P<sign>[-–]|\((?=\s*[\$£€¥]))?\s*"                    # "-", or "(" before "$"
+    r"(?:[\$£€¥]\s*(?P<sign2>[-–(]?)\s*)?"                     # "$(18,509)" / "$-5"
     r"(?P<number>[0-9][0-9,]*(?:\.[0-9]+)?)"
     r"\s*(?P<suffix>[KkMmBbTt](?:illion|n|)?\b)?",
     re.IGNORECASE,
@@ -479,8 +488,8 @@ _INLINE_VALUE_RE = re.compile(
 # a currency symbol so bare numbers ("Operating Margin 27") don't false-match.
 _LABEL_CURRENCY_RE = re.compile(
     r"(?P<label>[A-Za-z][A-Za-z0-9 _/\-]{1,40}?)\s*[:\-]?\s+"
-    r"(?P<sign>[-–]?)\s*"
-    r"[\$£€¥]\s*"                                             # currency REQUIRED
+    r"(?P<sign>[-–]|\((?=\s*[\$£€¥]))?\s*"
+    r"[\$£€¥]\s*(?P<sign2>[-–(]?)\s*"                         # currency REQUIRED
     r"(?P<number>[0-9][0-9,]*(?:\.[0-9]+)?)"
     r"\s*(?P<suffix>[KkMmBbTt](?:illion|n|)?\b)?",
     re.IGNORECASE,
@@ -491,7 +500,7 @@ _LABEL_CURRENCY_RE = re.compile(
 _TABLE_ROW_RE = re.compile(
     r"^(?P<label>[A-Za-z][^|\n]{1,80}?)\s*\|\s*"
     r"(?P<sign>[-–(]?)\s*"
-    r"[\$£€¥]?\s*"
+    r"[\$£€¥]?\s*(?P<sign2>[-–(]?)\s*"
     r"(?P<number>[0-9][0-9,]*(?:\.[0-9]+)?)\)?"
     r"(?P<suffix>)\s*(?=\||$)",
     re.MULTILINE,
@@ -513,22 +522,25 @@ def _align_scale(a: float, b: float) -> tuple[float, float]:
     Only aligns when the ratio is >~31x (rounds to at least 1000^1); genuine
     reporting discrepancies (a few %) are left untouched.
     """
-    if a <= 0 or b <= 0:
+    if a == 0 or b == 0 or (a > 0) != (b > 0):
         return a, b
+    # DOCBOT-4021: a net loss "(12,345)" in thousands vs -12,845,000 aligns too
+    sign = 1.0 if a > 0 else -1.0
+    a, b = abs(a), abs(b)
     hi, lo = (a, b) if a >= b else (b, a)
     k = round(math.log(hi / lo) / math.log(1000))
     if k < 1:
-        return a, b
+        return sign * a, sign * b
     lo_scaled = lo * (1000 ** k)
-    return (a, lo_scaled) if a >= b else (lo_scaled, b)
+    return (sign * a, sign * lo_scaled) if a >= b else (sign * lo_scaled, sign * b)
 
 
-def _parse_number(number_str: str, sign: str, suffix: str | None) -> float:
+def _parse_number(number_str: str, sign: Optional[str], suffix: str | None) -> float:
     value = float(number_str.replace(",", ""))
     if suffix:
         multiplier = _SUFFIX_MULTIPLIERS.get(suffix[0].upper(), 1)
         value *= multiplier
-    if sign in ("-", "–", "("):
+    if sign and sign[0] in "-–(":
         value = -value
     return value
 
@@ -553,11 +565,13 @@ def _table_column_period(text: str, chunk_start: int, line_start: int, number_st
         cells = [c.strip() for c in prev.split(" | ")]
         if len(cells) < 2:
             continue
-        if all(_YEAR_CELL_RE.fullmatch(c) for c in cells) and len(cells) == row_cells - 1:
-            return f"FY{cells[col - 1]}" if 0 < col <= len(cells) else None
+        # DOCBOT-4021: "December 31, 2025" headers carry the year inside the cell
+        years = [m.group(1) if m else None for m in map(_COLUMN_YEAR_RE.search, cells)]
+        if all(years) and len(cells) == row_cells - 1:
+            return f"FY{years[col - 1]}" if 0 < col <= len(cells) else None
         if (not re.search(r"\d", cells[0]) and len(cells) == row_cells
-                and all(_YEAR_CELL_RE.fullmatch(c) for c in cells[1:])):
-            return f"FY{cells[col]}" if 0 < col < len(cells) else None
+                and all(years[1:])):
+            return f"FY{years[col]}" if 0 < col < len(cells) else None
     return None
 
 
@@ -597,11 +611,15 @@ def _extract_from_text(text: str, source: str) -> list[NumericValue]:
     """Extract (label, numeric_value) pairs from free text."""
     results: list[NumericValue] = []
     seen: set[tuple[str, float, Optional[str]]] = set()
+    # DOCBOT-4021: one figure per number in the text; "Net income was $1.3 billion"
+    # matches two patterns with labels "net income" / "net income was"
+    seen_numbers: set[tuple[int, float]] = set()
 
     for pattern in (_TABLE_ROW_RE, _LABEL_VALUE_RE, _INLINE_VALUE_RE, _LABEL_CURRENCY_RE):
         for m in pattern.finditer(text):
             try:
-                value = _parse_number(m.group("number"), m.group("sign"), m.group("suffix"))
+                sign = (m.group("sign") or "") + (m.group("sign2") or "")
+                value = _parse_number(m.group("number"), sign, m.group("suffix"))
             except (ValueError, KeyError):
                 continue
 
@@ -612,9 +630,10 @@ def _extract_from_text(text: str, source: str) -> list[NumericValue]:
             period, doc_file, doc_page = _doc_context_for(text, m.start(), m.start("number"))
 
             key = (label, round(value, 2), period)
-            if key in seen:
+            if key in seen or (m.start("number"), value) in seen_numbers:
                 continue
             seen.add(key)
+            seen_numbers.add((m.start("number"), value))
 
             matched = m.group(0)
             tail = text[m.end():m.end() + 2].lstrip()

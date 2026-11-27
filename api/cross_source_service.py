@@ -285,17 +285,22 @@ def canonicalize_sql_metadata(sql_metadata: dict, col_terms: dict[str, str]) -> 
     Lets the discrepancy detector match a doc's "Revenue" to a DB column named
     e.g. ``net_sales``. Never renames onto an existing key.
     """
-    rows = sql_metadata.get("result_preview")
-    if not col_terms or not rows:
+    if not col_terms:
         return sql_metadata
-    renamed = []
-    for row in rows:
-        if not isinstance(row, dict):
-            renamed.append(row)
+    out = dict(sql_metadata)
+    for key in ("result_preview", "tieout_rows"):  # DOCBOT-4021: detector reads tieout_rows
+        rows = sql_metadata.get(key)
+        if not rows:
             continue
-        new: dict = {}
-        for k, v in row.items():
-            t = col_terms.get(k)
-            new[t if t and t not in row and t not in new else k] = v
-        renamed.append(new)
-    return {**sql_metadata, "result_preview": renamed}
+        renamed = []
+        for row in rows:
+            if not isinstance(row, dict):
+                renamed.append(row)
+                continue
+            new: dict = {}
+            for k, v in row.items():
+                t = col_terms.get(k)
+                new[t if t and t not in row and t not in new else k] = v
+            renamed.append(new)
+        out[key] = renamed
+    return out

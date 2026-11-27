@@ -462,6 +462,7 @@ async def _collect_sql_result(
             async_session_factory=async_session_factory,
             expert_personas=expert_personas,
             chart_type=chart_type,
+            include_tieout_rows=True,
         ):
             if not raw_chunk.startswith("data: "):
                 continue
@@ -596,7 +597,7 @@ async def _complete_tieout_lines(
     if done is None:
         return
     sql, rows, added = done
-    sql_metadata.update(sql_query=sql, result_preview=rows[:20], row_count=len(rows))
+    sql_metadata.update(sql_query=sql, result_preview=rows[:20], tieout_rows=rows, row_count=len(rows))
     lineage.add_step(
         "complete_tieout_lines", tool="sqlglot_ast", lane="db",
         latency_ms=(time.perf_counter() - started) * 1000,
