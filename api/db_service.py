@@ -15,6 +15,7 @@ from __future__ import annotations
 import json
 import logging
 import os
+import re
 import time
 import uuid
 from datetime import datetime, timedelta, timezone
@@ -133,11 +134,11 @@ async def _decrypt_conn_credentials_lazy(
 
 PROMPT_VERSION_SQL_REPHRASE = "v1"          # _rephrase_with_history
 PROMPT_VERSION_SQL_TABLE_SELECTOR = "v1"    # _select_relevant_tables (incl. retry)
-PROMPT_VERSION_SQL_GEN = "v7"               # _generate_sql
+PROMPT_VERSION_SQL_GEN = "v8"               # _generate_sql (v8: DOCBOT-2723 grounding)
 # DOCBOT-2637: reasoning models (gpt-oss on Bedrock) spend output tokens
 # thinking first; at 1200 a pivot query was cut off mid-SQL ("Column not found").
 SQL_GEN_MAX_TOKENS = 3000
-PROMPT_VERSION_SQL_ANSWER_GEN = "v1"        # _stream_answer
+PROMPT_VERSION_SQL_ANSWER_GEN = "v2"        # _stream_answer (v2: DOCBOT-2723 empty result)
 
 
 # ---------------------------------------------------------------------------
@@ -1165,13 +1166,16 @@ def _get_columns_via_information_schema(engine, table_name: str) -> List[Dict[st
 # generator never saw 'Marketing' when only 5 alphabetical values were shown);
 # above that, no values (as before). Bump _SCHEMA_FMT when the cached
 # shape changes so older cache rows are re-introspected.
-# 3 = DOCBOT-2720 value_pairs.
-_SCHEMA_FMT = 3
+# 3 = DOCBOT-2720 value_pairs. 4 = DOCBOT-2723 100k-row scan.
+_SCHEMA_FMT = 4
 _SAMPLE_MAX_VALUES = 5
 _SAMPLE_MAX_LEN = 60
 _SAMPLE_MAX_DISTINCT = 50
 _SAMPLE_LIST_MAX_CHARS = 1500
-_SAMPLE_SCAN_ROWS = 5000
+# DOCBOT-2723: 5000 rows saw 20 of San Diego's 36 account_class values (rows
+# sorted by department), so 'Energy and Utilities' never reached the prompt.
+# shortcut: bounded scan, so tables past 100k rows can still miss categories.
+_SAMPLE_SCAN_ROWS = 100_000
 _SAMPLE_MAX_COLUMNS = 60
 _TEXT_TYPE_MARKERS = ("CHAR", "TEXT", "STRING", "CLOB")
 _SENSITIVE_COLUMN_MARKERS = (
@@ -1203,7 +1207,7 @@ def _attach_sample_values(engine, table_name: str, columns: List[Dict[str, Any]]
         if any(m in name.lower() for m in _SENSITIVE_COLUMN_MARKERS):
             continue
         budget[0] -= 1
-        # Bounded scan (first 5000 rows) keeps introspection cheap on big tables;
+        # Bounded scan (first _SAMPLE_SCAN_ROWS rows) keeps introspection cheap on big tables;
         # a list is only called complete when the whole table fits in the scan.
         inner = select(sa_column(name)).select_from(sa_table(table_name)).limit(_SAMPLE_SCAN_ROWS).subquery()
         c = inner.c[name]
@@ -1423,7 +1427,7 @@ async def run_sql_pipeline(
       worst   6  = rephrase (only with chat_history) + table selector + its one
                    malformed-JSON retry (LLM fallback path only) + SQL gen +
                    ONE extra SQL gen (corrective validation retry OR schema-drift
-                   regen, never both) + answer
+                   regen OR empty-result retry (DOCBOT-2723), at most one) + answer
 
     ``emit_lineage_event`` (DOCBOT-1510): when True, a ``lineage`` SSE event
     is yielded just before ``done``. Off for hybrid/Autopilot callers, which
@@ -1665,6 +1669,7 @@ async def run_sql_pipeline(
 
             # Schema drift detected — invalidate cache, re-introspect, regenerate SQL, retry once
             _drift_retry = True
+            _extra_sql_call_left = False
             logger.warning("Schema drift detected, refreshing schema and retrying: %s", exec_err)
             async with async_session_factory() as session:
                 async with session.begin():
@@ -1691,6 +1696,15 @@ async def run_sql_pipeline(
                 question, schema_subset, few_shot_examples, dialect, lin, allow_retry=False,
             )
             rows, column_names = await _execute_query(validated_sql, sync_url, dialect, entra_connect_args)
+
+        # DOCBOT-2723: 0 rows / NULL total = the filters missed; same one-call budget.
+        _empty_retry = _extra_sql_call_left and _is_empty_result(validated_sql, dialect, rows)
+        if _empty_retry:
+            validated_sql, rows, column_names = await _retry_empty_result(
+                question, schema_subset, few_shot_examples, dialect, lin,
+                validated_sql, rows, column_names, sync_url, entra_connect_args,
+            )
+        _empty = _is_empty_result(validated_sql, dialect, rows)
 
         execution_time_ms = int(time.time() * 1000) - start_ms
         lin.add_step("execute", tool=dialect, status="retried" if _drift_retry else "ok",
@@ -1794,6 +1808,7 @@ async def run_sql_pipeline(
             "row_count": len(rows),
             "execution_time_ms": execution_time_ms,
             "sources": [t["name"] for t in schema_subset],
+            "empty_result": _empty,
         }
         yield f"data: {_json_dumps(meta_chunk)}\n\n"
 
@@ -1807,16 +1822,18 @@ async def run_sql_pipeline(
             result_preview=meta_chunk["result_preview"],
         )
 
-        # Persist query + embedding (non-blocking; failure is only a warning)
+        # Persist query + embedding (non-blocking; failure is only a warning).
+        # DOCBOT-2723: only first-try, non-empty runs are marked as few-shot examples.
         query_id = str(uuid.uuid4())
+        _verified = not (_sql_retried or _drift_retry or _empty_retry or _empty)
         await _store_query_history(
             query_id, connection_id, question, validated_sql,
-            f"{len(rows)} rows", q_embedding,
+            f"{len(rows)} rows" + (_VERIFIED_SUFFIX if _verified else ""), q_embedding,
             query_history_table, query_embeddings_table, async_session_factory
         )
 
         # Stream answer tokens
-        async for token in _stream_answer(question, validated_sql, result_dicts, persona_def):
+        async for token in _stream_answer(question, validated_sql, result_dicts, persona_def, empty=_empty):
             yield f"data: {_json_dumps({'type': 'token', 'content': token})}\n\n"
 
         if emit_lineage_event:
@@ -1948,6 +1965,9 @@ async def _select_relevant_tables(question: str, schema: List[Dict[str, Any]]) -
 # ---------------------------------------------------------------------------
 
 
+_VERIFIED_SUFFIX = " (verified)"
+
+
 async def _retrieve_few_shot(
     connection_id: str,
     query_embedding: List[float],
@@ -1955,7 +1975,7 @@ async def _retrieve_few_shot(
     query_embeddings_table: Table,
     async_session_factory,
 ) -> List[Dict[str, Any]]:
-    """Return up to 3 similar past queries for this connection."""
+    """Return up to 3 similar past queries for this connection, verified runs only."""
     try:
         async with async_session_factory() as session:
             result = await session.execute(
@@ -1968,7 +1988,11 @@ async def _retrieve_few_shot(
                     query_embeddings_table,
                     query_history_table.c.id == query_embeddings_table.c.query_id,
                 )
-                .where(query_history_table.c.connection_id == connection_id)
+                .where(
+                    query_history_table.c.connection_id == connection_id,
+                    # DOCBOT-2723: never learn from retried/empty/failed runs
+                    query_history_table.c.result_summary.like(f"%{_VERIFIED_SUFFIX}"),
+                )
                 .limit(100)
             )
             rows = result.fetchall()
@@ -1993,6 +2017,68 @@ async def _retrieve_few_shot(
 
 
 _PROMPT_VALUES_MAX_CHARS = 6000
+_HINT_MAX = 8
+
+
+def _norm_phrase(s: str) -> str:
+    return " ".join(re.sub(r"[^a-z0-9]+", " ", s.lower().replace("&", " and ")).split())
+
+
+def _category_hints(question: str, schema_subset: List[Dict[str, Any]]) -> List[tuple[str, str, str]]:
+    """DOCBOT-2723: (table, column, value) for each listed column value the
+    question names, ignoring case, punctuation and '&' vs 'and'. Longest first;
+    a value found only inside a longer matched value is dropped ('Utilities'
+    under 'Energy and Utilities'). Deterministic, no LLM.
+    """
+    q = f" {_norm_phrase(question)} "
+    found = [
+        (n, t["name"], str(c["name"]), v)
+        for t in schema_subset for c in t.get("columns", [])
+        for v in c.get("sample_values") or []
+        if isinstance(v, str)
+        for n in [_norm_phrase(v)]
+        if len(n) >= 3 and any(ch.isalpha() for ch in n) and f" {n} " in q
+    ]
+    found.sort(key=lambda f: -len(f[0]))
+    kept: List[str] = []
+    hints: List[tuple[str, str, str]] = []
+    for n, tname, cname, v in found:
+        if any(n != k and f" {n} " in f" {k} " for k in kept):
+            continue
+        kept.append(n)
+        hints.append((tname, cname, v))
+        if len(hints) >= _HINT_MAX:
+            break
+    return hints
+
+
+def _is_empty_result(sql: str, dialect: str, rows: List[Any]) -> bool:
+    """DOCBOT-2723: True when the query found nothing: no rows, or every
+    aggregate column (SUM/COUNT/... in the outer SELECT, first UNION branch)
+    is NULL, or 0 under COALESCE, in every row. A wrong filter on a total
+    gives exactly this, and it must not reach the answer as "not in the books".
+    """
+    if not rows:
+        return True
+    import sqlglot
+    from sqlglot import exp
+    from api.utils.sql_validator import _DIALECT_ALIASES
+
+    try:
+        node = sqlglot.parse_one(sql, read=_DIALECT_ALIASES.get(dialect, dialect))
+    except sqlglot.errors.ParseError:
+        return False
+    while isinstance(node, exp.SetOperation):
+        node = node.left
+    if not isinstance(node, exp.Select):
+        return False
+    aggs = [(i, bool(e.find(exp.Coalesce))) for i, e in enumerate(node.expressions) if e.find(exp.AggFunc)]
+    if not aggs:
+        return False
+    return all(
+        row[i] is None or (coalesced and row[i] == 0)
+        for row in rows for i, coalesced in aggs if i < len(row)
+    )
 
 
 async def _generate_sql(
@@ -2040,13 +2126,23 @@ async def _generate_sql(
 
     schema_text = "\n\n".join(_fmt_table(t) for t in schema_subset)
 
+    hints = _category_hints(question, schema_subset)
+    hint_text = ""
+    if hints:
+        hint_text = "\n\nQuestion terms that are listed values (rule 9):\n" + "\n".join(
+            f"- {t}.{c} = {_q(v)}" for t, c, v in hints
+        )
+
     few_shot_text = ""
     if few_shot_examples:
         examples_str = "\n\n".join(
             f"Q: {ex['nl_question']}\nSQL: {ex['sql_query']}"
             for ex in few_shot_examples
         )
-        few_shot_text = f"\n\nSimilar past queries for reference:\n{examples_str}\n"
+        few_shot_text = (
+            "\n\nSimilar past queries for reference (style only; do not copy their "
+            f"filters, rule 10):\n{examples_str}\n"
+        )
 
     prompt = (
         "You are an expert SQL generator. Generate a single valid SELECT query to answer the question.\n"
@@ -2073,8 +2169,18 @@ async def _generate_sql(
         "names that are not in the list.\n"
         "8. Value lists for different columns are sorted independently; never infer which "
         "code goes with which name from list position. Use the listed pairs (code=name) or "
-        "filter on the name column.\n\n"
+        "filter on the name column.\n"
+        "9. When the question names a category or line item, look for it first among the "
+        "listed column values (ignore case; '&' = 'and'). If it is listed, filter that column "
+        "with the exact listed string (= or IN). Use LIKE on a column without listed values "
+        "(e.g. account names) only when no listed value matches.\n"
+        "10. Add only filters the question implies: no sign filters (amount > 0), no type "
+        "exclusions, nothing copied from past queries. To total revenue or expenses, select "
+        "rows by the category/type values listed (every value that belongs, none from the "
+        "other side); never sum revenue and expense rows together. Negate a sum only under "
+        "the signed-amount rule in 5.\n\n"
         f"Schema:\n{schema_text}"
+        f"{hint_text}"
         f"{few_shot_text}\n\n"
         f"Question: {question}\n\n"
         f"{feedback + chr(10) + chr(10) if feedback else ''}"
@@ -2153,6 +2259,46 @@ async def _generate_validated_sql(
         lin.add_step("sql_validation", tool="sqlglot_ast", status="error",
                      detail=f"sql_gen_error: {exc}")
         raise
+
+
+async def _retry_empty_result(
+    question: str,
+    schema_subset: List[Dict[str, Any]],
+    few_shot_examples: List[Dict[str, Any]],
+    dialect: str,
+    lin: Any,
+    sql: str,
+    rows: List[Any],
+    column_names: List[str],
+    sync_url: str,
+    entra_connect_args: Optional[Dict[str, Any]],
+) -> tuple[str, List[Any], List[str]]:
+    """DOCBOT-2723: ONE corrective SQL-gen call after a query that found
+    nothing (``_is_empty_result``), fed the SQL and the listed values the
+    question names. Same sqlglot + read-only executor guards as steps 5-6.
+    Any failure keeps the first result.
+    """
+    hints = _category_hints(question, schema_subset)
+    listed = "; ".join(f"{t}.{c} = '{v}'" for t, c, v in hints)
+    feedback = (
+        "Your previous query ran but found nothing (0 rows or a NULL total), so its "
+        f"filters match no data:\n{sql}\n"
+        "Re-check every filter against the listed column values (rule 9): filter the "
+        "column whose listed values hold the question's line item, with the exact listed "
+        "string, and drop filters the question does not imply (rule 10)."
+        + (f"\nListed values the question names: {listed}" if listed else "")
+    )
+    try:
+        raw = await _generate_sql(question, schema_subset, few_shot_examples, feedback=feedback)
+        new_sql = validate_and_sanitize_sql(extract_sql(raw, dialect), dialect=dialect)
+        new_rows, new_cols = await _execute_query(new_sql, sync_url, dialect, entra_connect_args)
+    except Exception as exc:  # noqa: BLE001 — best-effort retry; first result stands
+        logger.warning("Empty-result retry failed: %s", type(exc).__name__)
+        lin.add_step("empty_result_retry", tool="llm", status="error", detail=type(exc).__name__)
+        return sql, rows, column_names
+    lin.add_step("empty_result_retry", tool="llm", status="retried",
+                 detail=f"{len(new_rows)} rows after retry")
+    return new_sql, list(new_rows), new_cols
 
 
 # ---------------------------------------------------------------------------
@@ -2347,13 +2493,26 @@ async def fetch_full_series(
 # ---------------------------------------------------------------------------
 
 
+# DOCBOT-2723: shared with hybrid synthesis (hybrid_service)
+EMPTY_RESULT_RULE = (
+    "- The database query found no matching data (0 rows or a NULL total). Say no "
+    "matching rows were found, so the database figure could not be determined; do NOT "
+    "say the item is absent from the books, zero, or that the books disagree."
+)
+
+
 async def _stream_answer(
     question: str,
     sql: str,
     result_dicts: List[Dict[str, Any]],
     persona_def: str,
+    empty: bool = False,
 ) -> AsyncGenerator[str, None]:
-    """LLM call #3: stream a plain-English answer in persona voice."""
+    """LLM call #3: stream a plain-English answer in persona voice.
+
+    ``empty`` (DOCBOT-2723): the query found nothing even after the retry, so
+    the answer must say the figure could not be determined, not that it is absent.
+    """
     from api.utils.response_format import SOURCE_DB, build_format_block, unclosed_fence_suffix
 
     preview = json.dumps(result_dicts[:20], default=str, indent=2)
@@ -2364,7 +2523,9 @@ async def _stream_answer(
         "- Do not reveal the raw SQL unless explicitly asked.\n"
         "- When the user provides explicit parameters or assumptions in their question, "
         "perform the requested calculations step by step using those values combined with the query results.\n"
-        "- Use the persona's voice.\n\n"
+        "- Use the persona's voice.\n"
+        + (EMPTY_RESULT_RULE + "\n" if empty else "")
+        + "\n"
         f"{build_format_block({SOURCE_DB})}\n\n"
         f"Question: {question}\n\n"
         f"Query result ({len(result_dicts)} rows):\n{preview}\n\n"

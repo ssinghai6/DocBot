@@ -569,7 +569,7 @@ class TestOntologyPrefilterFallbackSafety:
             received_schemas.append(schema)
             return ["orders"]
 
-        async def _mock_stream_answer(question, sql, result_dicts, persona_def):
+        async def _mock_stream_answer(question, sql, result_dicts, persona_def, **_kw):
             for tok in ["Answer", " text"]:
                 yield tok
 
