@@ -32,9 +32,9 @@ VALID_CHART_TYPES = {"auto", "bar", "line", "scatter", "heatmap"}
 # DOCBOT-1507: one PROMPT_VERSION_* constant per prompt-constructing function
 # in this module. Bump manually ("v1" -> "v2") when wording/instructions
 # change — see the convention note in api/utils/llm_provider.py.
-PROMPT_VERSION_SANDBOX_ANALYSIS_CODE_GEN = "v1"  # generate_analysis_code (SQL-fed chart codegen)
+PROMPT_VERSION_SANDBOX_ANALYSIS_CODE_GEN = "v2"  # generate_analysis_code (SQL-fed chart codegen); v2: INSUFFICIENT_DATA contract
 PROMPT_VERSION_SANDBOX_REPHRASE = "v1"           # _rephrase_for_csv
-PROMPT_VERSION_SANDBOX_CSV_CODE_GEN = "v1"       # CSV-on-E2B code generation
+PROMPT_VERSION_SANDBOX_CSV_CODE_GEN = "v2"       # CSV-on-E2B code generation; v2: INSUFFICIENT_DATA contract
 
 # Regex to detect complex analytical queries that need more code/time
 _COMPLEX_QUERY_RE = _re_module.compile(
@@ -49,6 +49,15 @@ _FORECAST_RE = _re_module.compile(
     r'\b(forecast|predict|projection|project(?:ed|ing)?|extrapolat|'
     r'next\s+(?:quarter|year|month|period)|future)\b',
     _re_module.IGNORECASE,
+)
+
+# DOCBOT-2725: shared codegen contract — the pipeline turns this marker into an
+# honest "not enough data" answer instead of a NaN forecast and empty charts.
+_INSUFFICIENT_DATA_RULE = (
+    "- If `df` does not contain the numeric data needed (e.g. fewer than 3 "
+    "historical numeric values for a forecast/regression, or only free text with "
+    "no numbers), print('INSUFFICIENT_DATA: <what is missing>') and stop: do NOT "
+    "fit a model, invent or assume values, or plot anything.\n"
 )
 
 # Threshold (in data points) above which a series is "long" enough to warrant a
@@ -674,6 +683,7 @@ async def generate_analysis_code(
         "(e.g. `1180M`, `$5.2 billion`, `1,180`) — these are SyntaxErrors. If the "
         "data is free text, extract numbers with regex/pd.to_numeric and strip "
         "'$', ',', 'M'/'B' first.\n"
+        f"{_INSUFFICIENT_DATA_RULE}"
         "- Keep code under 80 lines"
     )
 
@@ -1067,7 +1077,8 @@ async def generate_csv_analysis_code(
         "1. Do NOT import pandas, numpy, or json — already imported in preamble\n"
         "2. Import matplotlib.pyplot as plt, seaborn as sns if needed for charts\n"
         "3. Output ONLY raw Python code — no markdown fences, no explanations\n"
-        "4. ALWAYS .dropna() or .fillna(0) before boolean masks or aggregation\n\n"
+        "4. ALWAYS .dropna() or .fillna(0) before boolean masks or aggregation\n"
+        f"5. {_INSUFFICIENT_DATA_RULE[2:]}\n"
         "DATA CLEANING PATTERNS (use as needed):\n"
         "- Currency: col.str.replace(r'[$,]', '', regex=True).pipe(pd.to_numeric, errors='coerce')\n"
         "- Percentages: col.str.rstrip('%').pipe(pd.to_numeric, errors='coerce').div(100)\n"
@@ -1682,6 +1693,18 @@ async def run_csv_query_on_e2b(
                     else:
                         logger.warning("CSV retry also failed: %s, using original error", retry_result.error[:200])
                         # Keep original result (don't show retry error)
+
+        # DOCBOT-2725: marker / all-NaN forecast -> honest message, no charts.
+        from api.utils.data_sufficiency import INSUFFICIENT_DATA_PREFIX, detect_insufficient_output
+
+        _insufficient = None if result.error else detect_insufficient_output(
+            result.stdout, bool(_FORECAST_RE.search(question))
+        )
+        if _insufficient:
+            result = result.model_copy(update={
+                "charts": [],
+                "stdout": "**Not enough data:** " + _insufficient[len(INSUFFICIENT_DATA_PREFIX):].strip(),
+            })
 
         # --- SSE: metadata chunk ---
         cols_summary = ", ".join(column_names[:6])

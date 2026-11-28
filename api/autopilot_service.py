@@ -73,7 +73,7 @@ _LIST_STATE_KEYS = ("steps_completed", "citations", "degradation_reasons")
 # manually when the wording/instructions change — see PROMPT_VERSION
 # convention in api/utils/llm_provider.py.
 PROMPT_VERSION_AUTOPILOT_PLANNER = "v1"
-PROMPT_VERSION_AUTOPILOT_SYNTHESIZER = "v2"
+PROMPT_VERSION_AUTOPILOT_SYNTHESIZER = "v3"  # v3: DOCBOT-2726 insufficient-data rule
 
 # Internal step-result prefixes that signal a failed/empty step. These are
 # scrubbed from user-facing output and replaced with a calm generic message —
@@ -91,6 +91,16 @@ from api.utils.exceptions import safe_error_message  # noqa: E402
 # can never silently collapse to a one-step / doc-only investigation.
 _DEGR_PLANNER_FALLBACK = "planner_fallback_single_step"
 _DEGR_DATA_TOOL_MISSING = "data_tool_missing"
+# DOCBOT-2724/2725: the step had too little numeric data to analyse (UI contract).
+from api.utils.data_sufficiency import (  # noqa: E402
+    INSUFFICIENT_DATA_ANSWER_RULE,
+    INSUFFICIENT_DATA_REASON as _DEGR_INSUFFICIENT_DATA,
+    MIN_HISTORY_POINTS,
+    count_year_value_pairs,
+    detect_insufficient_output,
+    guess_metric,
+    insufficient_history_message,
+)
 
 # P1: the planner makes at most ONE bounded regeneration call (with the
 # validation error appended to the prompt) when its first output fails the
@@ -726,6 +736,23 @@ async def _persist_analysis_artifact(
         return None
 
 
+def _mark_insufficient(result_entry: dict, message: str) -> None:
+    """DOCBOT-2724/2725: honest insufficient-data step — no chart, no artifact,
+    no data_result, so nothing downstream treats NaN output as findings."""
+    result_entry["result"] = message
+    result_entry["failure_reason"] = _DEGR_INSUFFICIENT_DATA
+    result_entry["chart_b64"] = None
+    result_entry["artifact_id"] = None
+    result_entry["data_result"] = None
+
+
+def _has_insufficient_step(state: AutopilotState) -> bool:
+    return any(
+        s.get("failure_reason") == _DEGR_INSUFFICIENT_DATA
+        for s in state.get("steps_completed", [])
+    )
+
+
 def _sql_data_result(
     *, step: str, row_count: int, preview: Any, sql: Any, explanation: Any, artifact_id: Optional[str]
 ) -> dict:
@@ -1062,6 +1089,7 @@ def make_executor_node(
                         from api.sandbox_service import (
                             generate_csv_analysis_code,
                             _run_csv_in_sandbox,
+                            _FORECAST_RE,
                         )
                         import base64 as _base64
 
@@ -1218,6 +1246,10 @@ def make_executor_node(
                                         if sandbox_result.stdout
                                         else f"Step failed: {sandbox_result.error}"
                                     )
+                                elif _insufficient := detect_insufficient_output(
+                                    sandbox_result.stdout, bool(_FORECAST_RE.search(step))
+                                ):
+                                    _mark_insufficient(result_entry, _insufficient)
                                 else:
                                     result_entry["result"] = (
                                         sandbox_result.stdout[:500]
@@ -1244,6 +1276,7 @@ def make_executor_node(
                                 if (
                                     sandbox_result.charts
                                     and session_artifacts_table is not None
+                                    and result_entry["failure_reason"] != _DEGR_INSUFFICIENT_DATA
                                 ):
                                     from api.artifact_service import save_artifact
 
@@ -1325,6 +1358,7 @@ def make_executor_node(
                                         break
 
                     # Fallback: if no SQL artifact, try doc_search results as context
+                    from_docs = False
                     if not prior_rows:
                         doc_context_parts: list[str] = []
                         for prior in reversed(state.get("steps_completed", [])):
@@ -1333,6 +1367,7 @@ def make_executor_node(
                         if doc_context_parts:
                             # Synthesise doc results into a pseudo-data context for code gen
                             prior_rows = [{"document_context": "\n\n".join(doc_context_parts)}]
+                            from_docs = True
 
                     if not prior_rows:
                         result_entry["result"] = "No prior data available for analysis."
@@ -1353,14 +1388,36 @@ def make_executor_node(
                         analysis_question = step
                         if _FORECAST_RE.search(_orig_q) and not _FORECAST_RE.search(step):
                             analysis_question = f"{step}\n\nOverall goal: {_orig_q}"
-
-                        code = await generate_analysis_code(
-                            result_dicts=prior_rows,
-                            question=analysis_question,
-                            persona_def=persona_def,
-                            chart_type="auto",
+                        _is_series_task = bool(
+                            _FORECAST_RE.search(analysis_question)
+                            or re.search(r"\bregress", analysis_question, re.IGNORECASE)
                         )
-                        if code:
+
+                        # DOCBOT-2724: a forecast/regression over doc text needs
+                        # a numeric history; without one, skip E2B entirely.
+                        _doc_points = (
+                            count_year_value_pairs(prior_rows[0]["document_context"])
+                            if from_docs and _is_series_task
+                            else MIN_HISTORY_POINTS
+                        )
+                        if _doc_points < MIN_HISTORY_POINTS:
+                            _mark_insufficient(
+                                result_entry,
+                                insufficient_history_message(
+                                    _doc_points, guess_metric(_orig_q or step)
+                                ),
+                            )
+                            code = None
+                        else:
+                            code = await generate_analysis_code(
+                                result_dicts=prior_rows,
+                                question=analysis_question,
+                                persona_def=persona_def,
+                                chart_type="auto",
+                            )
+                        if result_entry["failure_reason"] == _DEGR_INSUFFICIENT_DATA:
+                            pass  # gated above: no code, no sandbox run
+                        elif code:
                             # Surface the exact code we run in E2B so the UI can
                             # show "Generated Python" — a core demo selling point.
                             result_entry["code"] = code
@@ -1403,6 +1460,10 @@ def make_executor_node(
                                     sandbox_result.stdout[:500] if sandbox_result.stdout
                                     else f"Step failed: {sandbox_result.error}"
                                 )
+                            elif _insufficient := detect_insufficient_output(
+                                sandbox_result.stdout, _is_series_task
+                            ):
+                                _mark_insufficient(result_entry, _insufficient)
                             else:
                                 result_entry["result"] = (
                                     sandbox_result.stdout[:500] if sandbox_result.stdout
@@ -1427,7 +1488,11 @@ def make_executor_node(
                                 if _analysis_artifact_id and not result_entry["artifact_id"]:
                                     result_entry["artifact_id"] = _analysis_artifact_id
                             # Persist first chart as an artifact
-                            if sandbox_result.charts and session_artifacts_table is not None:
+                            if (
+                                sandbox_result.charts
+                                and session_artifacts_table is not None
+                                and result_entry["failure_reason"] != _DEGR_INSUFFICIENT_DATA
+                            ):
                                 from api.artifact_service import save_artifact
 
                                 artifact_id = await save_artifact(
@@ -1874,6 +1939,8 @@ async def _synthesizer_node(state: AutopilotState) -> dict:
             "answer with a short note stating that the analysis is degraded and "
             "that findings may be incomplete.\n\n"
         )
+    if _has_insufficient_step(state):
+        system_prompt += f"{INSUFFICIENT_DATA_ANSWER_RULE}\n\n"
     user_content = (
         f"Original question: {state['question']}\n\n"
         f"Investigation results:\n{steps_text}"
@@ -1918,7 +1985,7 @@ async def _synthesizer_node(state: AutopilotState) -> dict:
 
 # DOCBOT-1507: bump manually ("v1" -> "v2") whenever either prompt below
 # changes — see PROMPT_VERSION convention in api/utils/llm_provider.py.
-PROMPT_VERSION_AUTOPILOT_VERIFIER = "v1"
+PROMPT_VERSION_AUTOPILOT_VERIFIER = "v2"  # v2: DOCBOT-2726 insufficient-data rule
 
 
 def _has_apology_claim(answer: str) -> bool:
@@ -2042,7 +2109,11 @@ async def _apply_claim_guard(state: AutopilotState, answer: str) -> str:
         zero_entries = _zero_row_sql_entries(state)
 
         if _has_apology_claim(answer):
-            if has_real_data and data_summary_text:
+            # DOCBOT-2726: "not enough data" is the honest answer when a step
+            # reported INSUFFICIENT_DATA — don't force it to "use the numbers".
+            if _has_insufficient_step(state):
+                pass
+            elif has_real_data and data_summary_text:
                 answer = await _force_fixup_with_data(state, answer, data_summary_text)
             elif rows_total == 0 and zero_entries:
                 answer = answer.rstrip() + "\n\n" + _refusal_detail(zero_entries)
@@ -2106,6 +2177,7 @@ async def _verifier_node(state: AutopilotState) -> dict:
         f"Actual data retrieved: {s.get('result', 'N/A')}"
         for i, s in enumerate(steps)
     )
+    insufficient = _has_insufficient_step(state)
 
     from api.utils.prompt_guard import PROMPT_INJECTION_DEFENSE_NOTICE
 
@@ -2119,7 +2191,15 @@ async def _verifier_node(state: AutopilotState) -> dict:
         "flag hedging, missing detail, rounding differences under 1%, or stylistic "
         "choices as contradictions.\n\n"
         f"{PROMPT_INJECTION_DEFENSE_NOTICE}\n\n"
-        'Respond with ONLY a JSON object: {"contradiction_found": true or false, '
+        + (
+            "A step returned INSUFFICIENT_DATA: any forecast value, coefficient, "
+            "growth rate or assumed number in the answer that is not in the "
+            "retrieved data IS a contradiction (unless the user explicitly asked "
+            "for a hypothetical scenario).\n\n"
+            if insufficient
+            else ""
+        )
+        + 'Respond with ONLY a JSON object: {"contradiction_found": true or false, '
         '"explanation": "<specific description of the contradiction, or empty '
         'string if none>"}. No markdown fences, no other text.'
     )
@@ -2169,7 +2249,8 @@ async def _verifier_node(state: AutopilotState) -> dict:
             "the FULL answer so it accurately reflects the retrieved data, fixing "
             "the specific contradiction described below, while keeping everything "
             "else that was already correct.\n"
-            f"{build_format_block(_autopilot_sources(state, steps))}"
+            + (f"{INSUFFICIENT_DATA_ANSWER_RULE}\n" if insufficient else "")
+            + f"{build_format_block(_autopilot_sources(state, steps))}"
         )
         correction_user_content = (
             f"Original question: {state.get('question', '')}\n\n"
@@ -2520,6 +2601,7 @@ async def run_autopilot(
                             "explanation": step_result.get("explanation"),
                             "code": step_code,
                             "error": friendly_error,
+                            "failure_reason": step_result.get("failure_reason"),
                         })
                     # Accumulate citations from doc_search steps
                     new_cits = updates.get("citations", [])
