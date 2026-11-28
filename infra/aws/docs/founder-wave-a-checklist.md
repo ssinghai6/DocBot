@@ -51,17 +51,21 @@ terraform output
 ```
 
 Move `terraform.tfstate` out of the repo afterwards (local state, no secrets, but
-needed to change the bucket later).
+needed to change the bucket later). It now lives at `~/docbot-aws/bootstrap.tfstate`;
+to change bootstrap later run terraform with
+`-state=$HOME/docbot-aws/bootstrap.tfstate -var aws_region=us-east-1 -var state_bucket_name=docbot-tfstate-<ACCOUNT_ID>`.
 
 **Verify:** `aws s3api get-bucket-versioning --bucket docbot-tfstate-<ACCOUNT_ID>`
 shows `Enabled`; `aws dynamodb describe-table --table-name docbot-tfstate-lock --query Table.TableStatus` is `ACTIVE`.
 
 ## 3. Account stack (30 min)
 
-Fill `bucket` and `region` in `infra/aws/account/backend.hcl` from step 2 outputs.
-`cp terraform.tfvars.example terraform.tfvars`; set `budget_email`. If
-`aws ce get-anomaly-monitors` already lists a services monitor, set
-`anomaly_monitor_arn`. If `aws iam list-open-id-connect-providers` already shows
+Fill `bucket` and `region` in `infra/aws/account/backend.hcl` from step 2 outputs,
+locally only: do not commit it (it reveals the account ID).
+`cp terraform.tfvars.example terraform.tfvars`; set `budget_email`. Cost Explorer
+must be enabled first. If `aws ce get-anomaly-monitors` lists
+`Default-Services-Monitor`, set `anomaly_monitor_arn` to it (reuse it; do not
+create a second SERVICE monitor). If `aws iam list-open-id-connect-providers` already shows
 `token.actions.githubusercontent.com`, set `create_github_oidc_provider = false`.
 If PR #86's flat `infra/aws/dev` was ever applied, run the imports in the README
 first ("Already applied PR #86's flat infra/aws/dev?").
@@ -72,7 +76,9 @@ terraform plan -out=tfplan && terraform apply tfplan
 ```
 
 Then: Billing -> Cost allocation tags -> activate `Environment` (per-env budgets
-read $0 without it). Click the cost-anomaly confirmation email.
+read $0 without it). The tag only appears ~24 h after the first tagged resource is
+billed; activate it then, before step 5. Until then the account gross budget is the
+real guard. Click the cost-anomaly confirmation email if one arrives.
 
 **Verify:** `aws ecr describe-repositories --repository-names docbot-api --query 'repositories[0].imageTagMutability'`
 prints `IMMUTABLE_WITH_EXCLUSION`; `aws budgets describe-budgets --account-id <ACCOUNT_ID> --query 'Budgets[].BudgetName'`
@@ -174,7 +180,11 @@ persistence, `xff-shape` log line).
 
 ## After wave A
 
-Not in this checklist: prod apply, `aws-prod` GitHub environment, restore drill
+Before any prod deploy: create the GitHub environment `aws-prod` with deployment
+branch policy = `main` only and required reviewer = founder. It does not exist yet,
+and GitHub would auto-create it **unprotected** on the first workflow run.
+
+Not in this checklist: prod apply, restore drill
 ([backup-restore.md](backup-restore.md)), rotation test
 ([secrets-rotation.md](secrets-rotation.md)), cutover ([dns-cutover.md](dns-cutover.md)).
 To save money while dev is idle: [cost.md](cost.md) (scale to zero).
