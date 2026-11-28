@@ -233,6 +233,26 @@ class ConnectionNotFoundError(Exception):
     """Raised when a connection_id does not exist or belongs to a different session."""
 
 
+SQLITE_FILE_GONE_MSG = (
+    "The uploaded file is no longer available — the server was restarted and "
+    "temporary files were cleared. Please re-upload your file to continue."
+)
+
+
+def _require_sqlite_file(creds: Dict[str, Any]) -> None:
+    """Uploaded SQLite files live in a temp dir wiped on container restart.
+
+    DOCBOT-2726: checked on every query, not only on a schema-cache miss: with a
+    cached schema the query used to hit the missing path, SQLite created an empty
+    file there, and every later question failed as a generic internal error.
+    """
+    if creds.get("dialect") != "sqlite":
+        return
+    db_path = creds.get("dbname", "")
+    if db_path and (not os.path.exists(db_path) or os.path.getsize(db_path) == 0):
+        raise ConnectionNotFoundError(SQLITE_FILE_GONE_MSG)
+
+
 # ---------------------------------------------------------------------------
 # DOCBOT-1603 (SEC-06): connection / schema-cache / query-history scoping
 # ---------------------------------------------------------------------------
@@ -1107,16 +1127,7 @@ async def get_schema(
                     )
         return schema
 
-    # For SQLite (SQLite file uploads), the file lives in /tmp which is wiped on container restart.
-    # Detect this early and give the user an actionable message rather than a cryptic OperationalError.
-    if creds.get("dialect") == "sqlite":
-        import os as _os
-        db_path = creds.get("dbname", "")
-        if db_path and not _os.path.exists(db_path):
-            raise ConnectionNotFoundError(
-                "The uploaded file is no longer available — the server was restarted and "
-                "temporary files were cleared. Please re-upload your file to continue."
-            )
+    _require_sqlite_file(creds)
 
     import asyncio as _asyncio
     sync_url, entra_connect_args = await _asyncio.get_running_loop().run_in_executor(
@@ -1657,6 +1668,7 @@ async def run_sql_pipeline(
         creds = await _decrypt_conn_credentials_lazy(
             conn_row, connection_id, db_connections_table, async_session_factory
         )
+        _require_sqlite_file(creds)
         import asyncio as _asyncio
         sync_url, entra_connect_args = await _asyncio.get_running_loop().run_in_executor(
             None, _resolve_connection, creds
@@ -1728,10 +1740,11 @@ async def run_sql_pipeline(
             result_dicts = mask_rows(result_dicts)
 
         # ── Step 6.5: Python code generation + E2B sandbox (DOCBOT-301/302) ──
-        # Runs for any non-empty result set; failure never blocks the main pipeline.
-        # Small result sets (1–4 rows) are valid for bar/pie charts — the previous
-        # >= 5 gate killed legitimate small-result visualisations.
-        if len(rows) >= 1:
+        # Failure never blocks the main pipeline. Small result sets (2–4 rows) are
+        # valid for bar/pie charts. DOCBOT-2726: skipped for a single row (nothing to
+        # chart) and for tie-out callers (hybrid/autopilot) unless a chart was asked
+        # for: it cost an LLM call + an E2B run per answer and sent books to the sandbox.
+        if _should_run_analysis(question, chart_type, len(rows), include_tieout_rows):
             try:
                 from api.sandbox_service import df_preamble, generate_analysis_code, run_python as run_sandbox
 
@@ -1970,6 +1983,18 @@ async def _select_relevant_tables(question: str, schema: List[Dict[str, Any]]) -
 # ---------------------------------------------------------------------------
 # Step 3 helper — few-shot retrieval
 # ---------------------------------------------------------------------------
+
+
+_CHART_ASK_RE = re.compile(r"\b(chart|plot|graph|visuali[sz]|histogram|trend line)", re.IGNORECASE)
+
+
+def _should_run_analysis(question: str, chart_type: str, n_rows: int, tieout_caller: bool) -> bool:
+    """DOCBOT-2726: gate for step 6.5 (LLM pandas code + E2B sandbox)."""
+    if n_rows < 1:
+        return False
+    if chart_type != "auto" or _CHART_ASK_RE.search(question):
+        return True
+    return n_rows >= 2 and not tieout_caller
 
 
 _VERIFIED_SUFFIX = " (verified)"

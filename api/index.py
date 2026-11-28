@@ -2467,6 +2467,8 @@ async def hybrid_chat_route(
                 chart_type=request.chart_type,
             ):
                 yield chunk
+        except ConnectionNotFoundError as exc:
+            yield f"data: {json.dumps({'type': 'error', 'error_type': 'ConnectionNotFoundError', 'detail': str(exc)})}\n\n"
         except Exception as exc:
             logger.error("hybrid_chat_route error: %s", type(exc).__name__)
             yield f"data: {json.dumps({'type': 'error', 'detail': 'An internal error occurred.'})}\n\n"
