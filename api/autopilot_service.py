@@ -91,6 +91,16 @@ from api.utils.exceptions import safe_error_message  # noqa: E402
 # can never silently collapse to a one-step / doc-only investigation.
 _DEGR_PLANNER_FALLBACK = "planner_fallback_single_step"
 _DEGR_DATA_TOOL_MISSING = "data_tool_missing"
+# DOCBOT-2724/2725: the step had too little numeric data to analyse (UI contract).
+from api.utils.data_sufficiency import (  # noqa: E402
+    INSUFFICIENT_DATA_ANSWER_RULE,
+    INSUFFICIENT_DATA_REASON as _DEGR_INSUFFICIENT_DATA,
+    MIN_HISTORY_POINTS,
+    count_year_value_pairs,
+    detect_insufficient_output,
+    guess_metric,
+    insufficient_history_message,
+)
 
 # P1: the planner makes at most ONE bounded regeneration call (with the
 # validation error appended to the prompt) when its first output fails the
@@ -726,6 +736,23 @@ async def _persist_analysis_artifact(
         return None
 
 
+def _mark_insufficient(result_entry: dict, message: str) -> None:
+    """DOCBOT-2724/2725: honest insufficient-data step — no chart, no artifact,
+    no data_result, so nothing downstream treats NaN output as findings."""
+    result_entry["result"] = message
+    result_entry["failure_reason"] = _DEGR_INSUFFICIENT_DATA
+    result_entry["chart_b64"] = None
+    result_entry["artifact_id"] = None
+    result_entry["data_result"] = None
+
+
+def _has_insufficient_step(state: AutopilotState) -> bool:
+    return any(
+        s.get("failure_reason") == _DEGR_INSUFFICIENT_DATA
+        for s in state.get("steps_completed", [])
+    )
+
+
 def _sql_data_result(
     *, step: str, row_count: int, preview: Any, sql: Any, explanation: Any, artifact_id: Optional[str]
 ) -> dict:
@@ -1325,6 +1352,7 @@ def make_executor_node(
                                         break
 
                     # Fallback: if no SQL artifact, try doc_search results as context
+                    from_docs = False
                     if not prior_rows:
                         doc_context_parts: list[str] = []
                         for prior in reversed(state.get("steps_completed", [])):
@@ -1333,6 +1361,7 @@ def make_executor_node(
                         if doc_context_parts:
                             # Synthesise doc results into a pseudo-data context for code gen
                             prior_rows = [{"document_context": "\n\n".join(doc_context_parts)}]
+                            from_docs = True
 
                     if not prior_rows:
                         result_entry["result"] = "No prior data available for analysis."
@@ -1353,14 +1382,36 @@ def make_executor_node(
                         analysis_question = step
                         if _FORECAST_RE.search(_orig_q) and not _FORECAST_RE.search(step):
                             analysis_question = f"{step}\n\nOverall goal: {_orig_q}"
-
-                        code = await generate_analysis_code(
-                            result_dicts=prior_rows,
-                            question=analysis_question,
-                            persona_def=persona_def,
-                            chart_type="auto",
+                        _is_series_task = bool(
+                            _FORECAST_RE.search(analysis_question)
+                            or re.search(r"\bregress", analysis_question, re.IGNORECASE)
                         )
-                        if code:
+
+                        # DOCBOT-2724: a forecast/regression over doc text needs
+                        # a numeric history; without one, skip E2B entirely.
+                        _doc_points = (
+                            count_year_value_pairs(prior_rows[0]["document_context"])
+                            if from_docs and _is_series_task
+                            else MIN_HISTORY_POINTS
+                        )
+                        if _doc_points < MIN_HISTORY_POINTS:
+                            _mark_insufficient(
+                                result_entry,
+                                insufficient_history_message(
+                                    _doc_points, guess_metric(_orig_q or step)
+                                ),
+                            )
+                            code = None
+                        else:
+                            code = await generate_analysis_code(
+                                result_dicts=prior_rows,
+                                question=analysis_question,
+                                persona_def=persona_def,
+                                chart_type="auto",
+                            )
+                        if result_entry["failure_reason"] == _DEGR_INSUFFICIENT_DATA:
+                            pass  # gated above: no code, no sandbox run
+                        elif code:
                             # Surface the exact code we run in E2B so the UI can
                             # show "Generated Python" — a core demo selling point.
                             result_entry["code"] = code
@@ -2520,6 +2571,7 @@ async def run_autopilot(
                             "explanation": step_result.get("explanation"),
                             "code": step_code,
                             "error": friendly_error,
+                            "failure_reason": step_result.get("failure_reason"),
                         })
                     # Accumulate citations from doc_search steps
                     new_cits = updates.get("citations", [])
