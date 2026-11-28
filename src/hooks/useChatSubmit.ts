@@ -17,6 +17,7 @@ import type { RecoveryPoll } from "@/lib/chatStream"
 import { RecoveredAnswerSchema } from "@/lib/schemas/answer"
 import { AutopilotStepEventSchema } from "@/lib/schemas/autopilotStep"
 import { isInsufficientStep } from "@/lib/autopilotStep"
+import { autopilotToast, blocksOnMissingData, fetchRouteIntent, insufficientDataReply, regexWantsAutopilot } from "@/lib/intentRouter"
 import type { Paywall } from "@/components/OutOfCreditsModal"
 import {
   HttpGateError,
@@ -298,23 +299,30 @@ export function useChatSubmit(params: UseChatSubmitParams) {
       setChatMode(effectiveChatMode);
     }
 
-    // ── Smart autopilot auto-trigger ────────────────────────────────────────
-    // Auto-enable autopilot ONLY for genuinely multi-step analytical questions.
-    // Simple single-intent visualization requests (plot/show/graph/...) must
-    // stay on the fast path — autopilot cannot currently produce charts for
-    // CSV sources and hijacking these queries breaks the plotting pipeline.
-    const SIMPLE_VIZ = /^\s*(plot|show|graph|chart|draw|visualize|visualise|display|histogram|heatmap|render|what is|tell me)\b/i;
-    const MULTI_STEP_TRIGGER = /\b(predict|forecast|what.?if|simulat|root.?cause|deep.?dive|break.?down|investigat|diagnos|scenario|correlat|regress|cluster|anomal|outli)\b/i;
-    const COMPLEX_COMPARE = /\bcompar\w*\s+.+\s+(vs|versus|against|with|to)\b/i;
-
-    // Skipped entirely when an explicit tool pick already decided useAutopilot.
+    // ── Smart autopilot auto-trigger (DOCBOT-2729) ──────────────────────────
+    // The LLM intent router decides fast vs autopilot and whether the sources
+    // hold the data the task needs. The old keyword regex runs only when the
+    // router times out (1.5s) or fails. An explicit tool pick skips all this.
     if (!pickedTool && !useAutopilot && (connectionId || sessionId)) {
-      if (SIMPLE_VIZ.test(input)) {
-        // Simple viz — never auto-trigger, use the fast path
-        useAutopilot = false;
-      } else if (MULTI_STEP_TRIGGER.test(input) || COMPLEX_COMPARE.test(input)) {
+      const intent = await fetchRouteIntent({
+        question: input,
+        history: recentHistory,
+        session_id: sessionId ?? null,
+        connection_id: connectionId ?? null,
+      });
+      if (signal.aborted) {
+        setIsLoading(false);
+        return;
+      }
+      if (intent && blocksOnMissingData(intent)) {
+        // Answer up front instead of spending autopilot credits on a NaN forecast.
+        setMessages(prev => [...prev, { role: "assistant", content: insufficientDataReply(intent), timestamp: new Date() }]);
+        setIsLoading(false);
+        return;
+      }
+      if (intent ? intent.route === "autopilot" : regexWantsAutopilot(input)) {
         useAutopilot = true;
-        showToast("info", "Autopilot activated \u2014 multi-step analysis in progress");
+        showToast("info", intent ? autopilotToast(intent.task) : "Autopilot activated \u2014 multi-step analysis in progress");
       }
     }
 
