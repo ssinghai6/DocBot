@@ -1055,7 +1055,8 @@ async def upload_documents(
         
         all_content = []
         files_info = []
-        
+        pdf_pages: list[tuple[str, list[str]]] = []
+
         # DOCBOT-1616: count cap before any file is read.
         upload_limits.check_file_count(len(files))
 
@@ -1100,6 +1101,8 @@ async def upload_documents(
                             page_content=cleaned_text,
                             metadata={"source": file.filename, "page": page_num + 1}
                         ))
+            # DOCBOT-2731: per-file, per-page chunks; table rows get their own chunk
+            pdf_pages.append((file.filename, page_texts))
 
             files_info.append({
                 "filename": file.filename,
@@ -1111,32 +1114,17 @@ async def upload_documents(
         if not all_content:
             raise HTTPException(status_code=400, detail="No readable text found in documents. Please ensure PDFs contain text, not just images.")
 
-        # DOCBOT-1003: SemanticChunker for financial/legal docs, with
-        # RecursiveCharacterTextSplitter fallback for all other types.
+        # DOCBOT-1003 / DOCBOT-2731: per-PDF chunking that keeps the true page;
+        # table rows become their own chunks, prose goes through the
+        # SemanticChunker (financial/legal) or the recursive splitter.
         full_text = " ".join(d.page_content for d in all_content)
-        from api.utils.chunker import chunk_document, detect_doc_type
-        _detected_type = detect_doc_type(full_text)
+        from api.utils.chunker import chunk_pdf_pages, detect_doc_type
         _chunk_start = time.time()
-        splits = chunk_document(full_text, doc_type=_detected_type)
+        splits = []
+        for _fname, _pages in pdf_pages:
+            _doc_type = detect_doc_type(" ".join(_pages))
+            splits.extend(chunk_pdf_pages(_pages, _fname, doc_type=_doc_type))
         logger.info("upload: chunked %d chars into %d chunks in %.1fs", len(full_text), len(splits), time.time() - _chunk_start)
-
-        # Restore per-page metadata: map each split back to the nearest source
-        # document by matching content prefix, falling back to the first doc.
-        _src_map = {d.page_content[:80]: d.metadata for d in all_content}
-
-        def _best_metadata(chunk_text: str) -> dict:
-            prefix = chunk_text[:80]
-            if prefix in _src_map:
-                return _src_map[prefix]
-            # Fall back: find which source document contains this chunk
-            for src_doc in all_content:
-                if chunk_text[:40] in src_doc.page_content:
-                    return src_doc.metadata
-            return all_content[0].metadata if all_content else {}
-
-        for split in splits:
-            if not split.metadata:
-                split.metadata = _best_metadata(split.page_content)
 
         # Use cached embeddings for better performance
         embeddings = get_embeddings()

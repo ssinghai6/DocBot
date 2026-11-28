@@ -10,6 +10,8 @@ from __future__ import annotations
 
 from typing import Any, Callable, Optional
 
+from api.utils.pdf_layout import layout_page_text
+
 PASSWORD_PROTECTED_DETAIL = (
     "This PDF is password-protected. Remove the password and upload it again."
 )
@@ -65,7 +67,9 @@ def extract_pdf_pages(
         form_text = form_fields_fn(doc) if form_fields_fn else ""
         texts: list[str] = []
         for page_num in range(page_count):
-            text = doc[page_num].get_text("text")
+            page = doc[page_num]
+            # DOCBOT-2731: tables rendered as "label | v1 | v2" rows
+            text = layout_page_text(page.get_text("words"), page.get_text("text"))
             if page_num == 0 and form_text:
                 text = form_text + "\n\n" + (text or "")
             texts.append(text)

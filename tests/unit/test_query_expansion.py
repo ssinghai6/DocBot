@@ -209,12 +209,14 @@ class TestDeduplicateDocs:
         pages = [d.metadata["page"] for d in result]
         assert pages == [1, 3, 2]
 
-    def test_content_prefix_used_for_dedup(self):
+    def test_shared_prefix_is_not_a_duplicate(self):
+        """DOCBOT-2731: PDF table-row chunks share a long title prefix."""
         base = "A" * 90
         d1 = _make_doc("f.pdf", 1, base + "DIFFERENT_SUFFIX_1" + "X" * 200)
         d2 = _make_doc("f.pdf", 1, base + "DIFFERENT_SUFFIX_2" + "Y" * 200)
-        result = deduplicate_docs([[d1], [d2]])
-        assert len(result) == 1
+        d3 = _make_doc("f.pdf", 1, base + "DIFFERENT_SUFFIX_1" + "X" * 200)
+        result = deduplicate_docs([[d1], [d2, d3]])
+        assert len(result) == 2
 
     def test_clearly_different_content_kept(self):
         d1 = _make_doc("f.pdf", 1, "Section A: Total Revenue: $42.1M")
