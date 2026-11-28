@@ -35,6 +35,17 @@
             ],
             "title": "Query"
           },
+          "row": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Row"
+          },
           "table": {
             "anyOf": [
               {
@@ -210,6 +221,13 @@
               "type": "string"
             },
             "title": "Sub Questions",
+            "type": "array"
+          },
+          "ties": {
+            "items": {
+              "$ref": "#/components/schemas/LineageDiscrepancy"
+            },
+            "title": "Ties",
             "type": "array"
           },
           "total_latency_ms": {

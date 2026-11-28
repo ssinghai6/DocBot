@@ -288,14 +288,16 @@ export default function LineageTab({ lineage }: { lineage: Lineage | null }) {
         </div>
       )}
 
-      {lineage.discrepancies.length > 0 && (
+      {lineage.discrepancies.length + lineage.ties.length > 0 && (
         <>
           <Connector label="cross-check" />
           <div className="rounded-[5px] border border-[var(--color-amber-500)]/50 bg-[var(--color-amber-500)]/5 p-3">
             <div className="flex items-center gap-1.5 mb-2 text-[var(--color-amber-500)]">
               <TriangleAlert className="w-3 h-3" />
               <span className="text-[10px] font-semibold uppercase tracking-wider">
-                {lineage.discrepancies.length} discrepanc{lineage.discrepancies.length === 1 ? "y" : "ies"} between docs and data
+                {lineage.discrepancies.length > 0
+                  ? `${lineage.discrepancies.length} discrepanc${lineage.discrepancies.length === 1 ? "y" : "ies"} between docs and data`
+                  : "Docs and data tie out"}
               </span>
               {/* DOCBOT-2014: tie-out workpaper download (same-origin, session cookie) */}
               <span className="ml-auto flex items-center gap-1">
@@ -313,6 +315,10 @@ export default function LineageTab({ lineage }: { lineage: Lineage | null }) {
                 ))}
               </span>
             </div>
+            {/* DOCBOT-2732: tied lines ship in the workpaper only; cards stay exceptions */}
+            <p className="mb-2 text-[10px] text-[var(--color-text-tertiary)]">
+              {lineage.ties.length} tie out, {lineage.discrepancies.length} exception{lineage.discrepancies.length === 1 ? "" : "s"}
+            </p>
             <div className="space-y-2">
               {lineage.discrepancies.map((d, i) => (
                 <TieOutCard key={d.id || `disc-${i}`} card={d} focus={focusDiscrepancyId === d.id} />

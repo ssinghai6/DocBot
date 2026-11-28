@@ -978,7 +978,7 @@ async def hybrid_chat(
                 doc_context, canonicalize_sql_metadata(sql_metadata, xsource_terms)
             )
             discrepancy_report = report
-            for item in report.discrepancies:
+            for item in [*report.discrepancies, *report.ties]:
                 lineage.add_discrepancy(item)
             discrepancy_instruction = report.to_prompt_block()
             if not discrepancy_instruction:
