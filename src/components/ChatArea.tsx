@@ -15,6 +15,8 @@ import {
 import ChatMessage from "@/components/ChatMessage"
 import MarkdownRenderer from "@/components/MarkdownRenderer"
 import ChatEmptyState from "@/components/ChatEmptyState"
+import { InsufficientDataBody, InsufficientDataChip } from "@/components/InsufficientData"
+import { isInsufficientStep } from "@/lib/autopilotStep"
 import { Tooltip, Button } from "@/components/ui"
 import type { Message, AutopilotStep, Toast, PickedTool } from "@/components/types"
 import { useUIStore } from "@/store/uiStore"
@@ -507,6 +509,8 @@ export default function ChatArea(props: ChatAreaProps) {
                   isLoading={isLoading}
                   isLastMessage={idx === messages.length - 1}
                   onCopy={copyToClipboard}
+                  onUploadClick={onUploadClick}
+                  onConnectDatabase={onConnectDatabase}
                 />
               </div>
             ))}
@@ -550,8 +554,11 @@ export default function ChatArea(props: ChatAreaProps) {
                               "bg-[var(--color-success-500)]/15 text-[var(--color-success-500)]"
                             }`}>{step.tool.replace("_", " ")}</span>
                             <span className="text-[var(--color-text-tertiary)] truncate">{step.step_label}</span>
+                            {isInsufficientStep(step) && <InsufficientDataChip />}
                           </div>
-                          {step.summary ? (
+                          {isInsufficientStep(step) ? (
+                            <InsufficientDataBody step={step} onUploadClick={onUploadClick} onConnectDatabase={onConnectDatabase} />
+                          ) : step.summary ? (
                             <>
                               <MarkdownRenderer content={step.summary} variant="compact" />
                               {step.content && (
@@ -578,10 +585,10 @@ export default function ChatArea(props: ChatAreaProps) {
                               </pre>
                             </details>
                           )}
-                          {step.chart_b64 && (
+                          {step.chart_b64 && !isInsufficientStep(step) && (
                             <img src={`data:image/png;base64,${step.chart_b64}`} alt="chart" className="mt-2 rounded-[3px] max-h-32 object-contain" />
                           )}
-                          {step.error && !step.summary && (
+                          {step.error && !step.summary && !isInsufficientStep(step) && (
                             <p className="text-[var(--color-danger-500)] mt-1">⚠ {step.error}</p>
                           )}
                         </div>

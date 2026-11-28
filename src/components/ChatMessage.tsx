@@ -8,6 +8,9 @@ import {
 } from "lucide-react"
 
 import type { Message, ChartMeta, AutopilotStep, Citation, Lineage } from "./types"
+import { InsufficientDataBody, InsufficientDataChip } from "./InsufficientData"
+import type { DataCtaHandlers } from "./InsufficientData"
+import { isInsufficientStep } from "@/lib/autopilotStep"
 import { TraceFeedbackResponseSchema } from "./types"
 import { useUIStore } from "@/store/uiStore"
 import MarkdownRenderer from "./MarkdownRenderer"
@@ -148,7 +151,7 @@ function CollapsibleCode({ code }: { code: string }) {
   )
 }
 
-function AutopilotStepsList({ steps }: { steps: AutopilotStep[] }) {
+function AutopilotStepsList({ steps, onUploadClick, onConnectDatabase }: { steps: AutopilotStep[] } & DataCtaHandlers) {
   return (
     <div className="mt-3 pt-3 border-t border-[var(--color-border-subtle)] space-y-1.5">
       <div className="flex items-center gap-1.5 mb-1.5">
@@ -171,8 +174,11 @@ function AutopilotStepsList({ steps }: { steps: AutopilotStep[] }) {
               {step.tool.replace("_", " ")}
             </span>
             <span className="text-[var(--color-text-tertiary)] truncate flex-1">{step.step_label}</span>
+            {isInsufficientStep(step) && <InsufficientDataChip />}
           </div>
-          {step.summary ? (
+          {isInsufficientStep(step) ? (
+            <InsufficientDataBody step={step} onUploadClick={onUploadClick} onConnectDatabase={onConnectDatabase} />
+          ) : step.summary ? (
             <>
               <MarkdownRenderer content={step.summary} variant="compact" />
               {step.content && (
@@ -199,10 +205,10 @@ function AutopilotStepsList({ steps }: { steps: AutopilotStep[] }) {
               </pre>
             </details>
           )}
-          {step.chart_b64 && (
+          {step.chart_b64 && !isInsufficientStep(step) && (
             <img src={`data:image/png;base64,${step.chart_b64}`} alt="chart" className="mt-2 rounded-[3px] max-h-32 object-contain" />
           )}
-          {step.error && !step.summary && (
+          {step.error && !step.summary && !isInsufficientStep(step) && (
             <p className="text-[var(--color-danger-500)] mt-1">⚠ {step.error}</p>
           )}
         </div>
@@ -362,7 +368,7 @@ function AgentMessageContent({ msg }: { msg: Message }) {
 
 // ── Props ─────────────────────────────────────────────────────────────────────
 
-interface ChatMessageProps {
+interface ChatMessageProps extends DataCtaHandlers {
   message: Message
   isLoading: boolean
   isLastMessage: boolean
@@ -376,6 +382,8 @@ export default function ChatMessage({
   isLoading,
   isLastMessage,
   onCopy,
+  onUploadClick,
+  onConnectDatabase,
 }: ChatMessageProps) {
   // Stable per-message id for inspector artifact keys
   // useId() gives a render-pure fallback when the message has no timestamp.
@@ -483,7 +491,7 @@ export default function ChatMessage({
         )}
 
         {/* Autopilot steps */}
-        {hasAutopilot && <AutopilotStepsList steps={msg.autopilotSteps!} />}
+        {hasAutopilot && <AutopilotStepsList steps={msg.autopilotSteps!} onUploadClick={onUploadClick} onConnectDatabase={onConnectDatabase} />}
 
         {/* Citations */}
         {msg.citations && msg.citations.length > 0 && (

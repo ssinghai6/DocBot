@@ -16,6 +16,7 @@ import { EMPTY_ANSWER_MESSAGE, RECOVERING_MESSAGE, StreamErrorEvent, fillEmptyAs
 import type { RecoveryPoll } from "@/lib/chatStream"
 import { RecoveredAnswerSchema } from "@/lib/schemas/answer"
 import { AutopilotStepEventSchema } from "@/lib/schemas/autopilotStep"
+import { isInsufficientStep } from "@/lib/autopilotStep"
 import type { Paywall } from "@/components/OutOfCreditsModal"
 import {
   HttpGateError,
@@ -424,6 +425,7 @@ export function useChatSubmit(params: UseChatSubmitParams) {
                   explanation: step.explanation ?? null,
                   code: step.code ?? null,
                   error: step.error ?? null,
+                  failure_reason: step.failure_reason ?? null,
                 };
                 localSteps.push(stepEntry);
                 setAutopilotSteps(prev => [...prev, stepEntry]);
@@ -454,6 +456,7 @@ export function useChatSubmit(params: UseChatSubmitParams) {
                   .filter(Boolean)
                   .join("\n\n");
                 const aggregatedCharts = localSteps
+                  .filter(s => !isInsufficientStep(s))
                   .map(s => s.chart_b64)
                   .filter((b): b is string => !!b);
                 const doneCitations = Array.isArray(data.citations) ? data.citations : [];

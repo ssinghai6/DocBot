@@ -297,6 +297,7 @@ export type AutopilotStep = {
   explanation?: string | null
   code?: string | null        // generated Python/pandas code executed in E2B
   error?: string | null
+  failure_reason?: string | null  // DOCBOT-2727: "insufficient_data" → amber chip + upload CTAs
 }
 
 export type Message = {
