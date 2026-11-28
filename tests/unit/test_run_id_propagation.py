@@ -175,11 +175,11 @@ class TestRunSqlPipelineSharesRunId:
             seen_run_ids.append(current_run_id())
             return ["orders"]
 
-        async def _mock_generate_sql(question, schema_subset, few_shot_examples):
+        async def _mock_generate_sql(question, schema_subset, few_shot_examples, **_kw):
             seen_run_ids.append(current_run_id())
             return "SELECT * FROM orders LIMIT 10"
 
-        async def _mock_stream_answer(question, sql, result_dicts, persona_def):
+        async def _mock_stream_answer(question, sql, result_dicts, persona_def, **_kw):
             seen_run_ids.append(current_run_id())
             for tok in ["Answer", " text"]:
                 yield tok
@@ -216,7 +216,8 @@ class TestRunSqlPipelineSharesRunId:
             )
             await _collect(gen)
 
-        assert len(seen_run_ids) == 3
+        # 4 = selector + SQL gen + DOCBOT-2723 empty-result retry (0 rows) + answer
+        assert len(seen_run_ids) == 4
         assert all(rid is not None for rid in seen_run_ids), seen_run_ids
         assert len(set(seen_run_ids)) == 1, seen_run_ids
 

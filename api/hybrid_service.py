@@ -55,7 +55,7 @@ PROMPT_VERSION_INTENT_CLASSIFICATION = "v1"
 # DOCBOT-1507: hybrid_chat's synthesis prompt is built dynamically (persona +
 # doc/sql context), so there's no single string constant to tag — this
 # version applies to the prompt-assembly logic in hybrid_chat() below.
-PROMPT_VERSION_HYBRID_SYNTHESIS = "v2"  # DOCBOT-2637: query-scope rule + computed YoY
+PROMPT_VERSION_HYBRID_SYNTHESIS = "v3"  # DOCBOT-2723: empty books result rule (v2: 2637 scope + YoY)
 
 # DOCBOT-2542: a question that asks whether the document and the books agree
 # needs both lanes, or the discrepancy detector never runs. The LLM router
@@ -923,6 +923,9 @@ async def hybrid_chat(
                 sql_section = (
                     f"\n\nDatabase results ({row_count} rows) from [{source_str}]:\n{preview}\n"
                 )
+                if sql_metadata.get("empty_result"):
+                    from api.db_service import EMPTY_RESULT_RULE
+                    sql_section += EMPTY_RESULT_RULE + "\n"
 
         doc_section = ""
         # DOCBOT-2637: year-over-year changes computed in code, never by the model
