@@ -2163,6 +2163,10 @@ _REVENUE_WORDS = (
     "transfers in", "interest", "rent", "franchise", "sales", "income", "grant", "dividend",
 )
 _SIDE_LIST_MAX = 20
+_PROFIT_WORDS = (
+    "income", "profit", "earnings", "margin", "ebit", "surplus", "deficit", "net impact",
+    "net loss", "operating loss", "bottom line",
+)
 
 
 def _value_side(value: str) -> Optional[str]:
@@ -2178,8 +2182,11 @@ def _side_exclusions(question: str, schema_subset: List[Dict[str, Any]]) -> tupl
     as (side asked, [(table, column, values)]). Empty when the side is unclear.
     """
     q = f" {_norm_phrase(question)}"
+    # a profit line (net / operating income, margin, surplus) nets both sides: never exclude
+    if any(f" {w}" in q for w in _PROFIT_WORDS):
+        return "", []
     exp_q = any(f" {w}" in q for w in ("expense", "expenditure", "spending", "spend", "cost"))
-    rev_q = any(f" {w}" in q for w in ("revenue", "income", "receipts"))
+    rev_q = any(f" {w}" in q for w in ("revenue", "receipts"))
     if exp_q == rev_q:
         return "", []
     asked, other = ("expense", "revenue") if exp_q else ("revenue", "expense")

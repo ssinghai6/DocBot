@@ -112,3 +112,15 @@ def test_sql_gen_runs_at_temperature_zero():
     import re
     temps = re.findall(r"temperature=([\w.]+)", inspect.getsource(db_service._generate_sql))
     assert temps and set(temps) == {"0"}
+
+
+def test_profit_line_questions_get_no_side_exclusions():
+    from api.db_service import _side_exclusions
+    schema = [{"name": "gl_journal", "columns": [{"name": "account_name", "sample_values": [
+        "Revenue", "Labor", "Occupancy", "General and administrative expenses", "Interest and other income, net"]}]}]
+    for q in ("Does FY2025 net income agree with the books?",
+              "Does operating income in the 10-K tie to the ledger?",
+              "What is the operating margin for FY2025?"):
+        assert _side_exclusions(q, schema) == ("", []), q
+    asked, excl = _side_exclusions("Do total operating expenses agree with the books?", schema)
+    assert asked == "expense" and excl and "Revenue" in excl[0][2]
