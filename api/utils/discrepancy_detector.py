@@ -77,6 +77,7 @@ class DiscrepancyItem:
     db_query: Optional[str] = None
     id: str = ""
     severity: Severity = "medium"
+    status: Literal["exception", "ties"] = "exception"  # DOCBOT-2732
 
     def __post_init__(self) -> None:
         if not self.id:
@@ -119,6 +120,8 @@ class DiscrepancyReport:
     # DOCBOT-2637: books lines (row entities) no document figure could be
     # compared with, e.g. the filing table holding them was not retrieved.
     unpaired_db_lines: list[str] = field(default_factory=list)
+    # DOCBOT-2732: doc/books pairs that agree (status "ties"), for the workpaper.
+    ties: list[DiscrepancyItem] = field(default_factory=list)
 
     @property
     def has_discrepancies(self) -> bool:
@@ -236,6 +239,24 @@ def detect_discrepancies(
     compared: set[int] = set()  # db_values indexes with a plausible doc figure
     tied: set[int] = set()      # db values some doc figure agrees with
     flagged: list[tuple[DiscrepancyItem, int, bool]] = []  # (item, books value id, table cell?)
+    tie_ids: set[str] = set()
+
+    def _pair(dv: NumericValue, sv: NumericValue, doc_val: float, db_val: float, delta: float) -> DiscrepancyItem:
+        return DiscrepancyItem(
+            label=_canonical_label(dv.label, sv.label, dv.raw_text),
+            doc_value=doc_val,
+            db_value=db_val,
+            delta=delta,
+            pct=(delta / abs(doc_val) * 100) if doc_val != 0 else None,  # sign = books vs report
+            doc_snippet=dv.raw_text[:80],
+            db_snippet=sv.raw_text[:80],
+            period=dv.period or sv.period,
+            unit=_unit_for(dv, sv),
+            doc_file=dv.doc_file,
+            doc_page=dv.doc_page,
+            db_table=db_table,
+            db_query=db_query,
+        )
 
     for dv in doc_values:
         candidates: list[tuple[bool, float, float, int, NumericValue]] = []
@@ -283,6 +304,11 @@ def detect_discrepancies(
         if agreeing:
             if _table_cell(dv):
                 tied.update(id(e[0]) for e in agreeing)
+            tie = _pair(dv, *agreeing[0][:4])  # agreeing keeps candidate rank order
+            tie.status = "ties"
+            if tie.id not in tie_ids:
+                tie_ids.add(tie.id)
+                report.ties.append(tie)
             continue  # a books value agrees with the report figure — ties out
 
         # DOCBOT-4021: candidates ranked equal on period/label (the same books line
@@ -296,23 +322,7 @@ def detect_discrepancies(
         best_rank = plausible[0][0]
         chosen = min((e for rank, e in plausible if rank == best_rank), key=lambda e: e[4])
         sv, doc_val, db_val, delta, _rel = chosen
-        pct = (delta / abs(doc_val) * 100) if doc_val != 0 else None  # sign = books vs report
-
-        item = DiscrepancyItem(
-            label=_canonical_label(dv.label, sv.label, dv.raw_text),
-            doc_value=doc_val,
-            db_value=db_val,
-            delta=delta,
-            pct=pct,
-            doc_snippet=dv.raw_text[:80],
-            db_snippet=sv.raw_text[:80],
-            period=dv.period or sv.period,
-            unit=_unit_for(dv, sv),
-            doc_file=dv.doc_file,
-            doc_page=dv.doc_page,
-            db_table=db_table,
-            db_query=db_query,
-        )
+        item = _pair(dv, sv, doc_val, db_val, delta)
         if item.id in seen_ids:
             continue
         seen_ids.add(item.id)

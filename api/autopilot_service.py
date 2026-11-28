@@ -2644,6 +2644,8 @@ async def run_autopilot(
                     except Exception as exc:
                         logger.warning("autopilot tie-out detection failed (non-fatal): %s", exc)
                         _tieout_report = None
+                    for item in _tieout_report.ties if _tieout_report is not None else []:
+                        lineage.add_discrepancy(item)  # DOCBOT-2732: tied lines for the workpaper
                     if _tieout_report is not None and _tieout_report.has_discrepancies:
                         for item in _tieout_report.discrepancies:
                             lineage.add_discrepancy(item)

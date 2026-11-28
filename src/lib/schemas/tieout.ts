@@ -25,6 +25,7 @@ export const TieOutDocCitationSchema = z.object({
 export const TieOutDbCitationSchema = z.object({
   table: z.string().nullish(),
   query: z.string().nullish(),
+  row: z.string().nullish(),
 })
 
 export const TieOutCardSchema = z.object({

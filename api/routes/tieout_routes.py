@@ -48,7 +48,7 @@ async def download_tieout(
     ):
         raise HTTPException(status_code=404, detail="Lineage not found.")
     lineage = await get_lineage(run_id)
-    if lineage is None or not lineage.discrepancies:
+    if lineage is None or not (lineage.discrepancies or lineage.ties):
         raise HTTPException(status_code=404, detail="No tie-out lines for this answer.")
     rendered = tieout_export.render(lineage, fmt)
     if rendered is None:

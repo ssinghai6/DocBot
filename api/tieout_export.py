@@ -1,7 +1,8 @@
 """Tie-out workpaper export (XLSX / PDF) — DOCBOT-2014.
 
-One row per structured discrepancy in a persisted answer lineage
-(``Lineage.discrepancies``, DOCBOT-2002): item, report value + doc citation,
+One row per tie-out line in a persisted answer lineage: every exception
+(``Lineage.discrepancies``, DOCBOT-2002) then every tied line
+(``Lineage.ties``, DOCBOT-2732): item, report value + doc citation,
 books value + DB/CSV citation, delta, delta %, severity, status.
 
 XLSX via openpyxl; PDF via PyMuPDF (already a dependency for PDF parsing).
@@ -25,7 +26,9 @@ TIE_TOLERANCE = 0.005  # rounding noise below half a cent
 Cell = Union[str, float, None]
 
 
-def _status(d: LineageDiscrepancy) -> str:
+def _status(d: LineageDiscrepancy, tied: bool = False) -> str:
+    if tied:
+        return "Ties out"
     if d.delta is None:
         return "Needs review"
     return "Ties out" if abs(d.delta) < TIE_TOLERANCE else "Exception"
@@ -38,18 +41,20 @@ def _doc_source(d: LineageDiscrepancy) -> str:
 
 def _db_source(d: LineageDiscrepancy) -> str:
     c = d.db_citation
-    return " | ".join(p for p in (c.table, c.query) if p)
+    return " | ".join(p for p in (c.table, c.row, c.query) if p)
 
 
 def tieout_rows(lineage: Lineage) -> list[tuple[Cell, ...]]:
-    return [
+    rows = [
         (
             d.metric, d.period or "", d.report_value, _doc_source(d),
             d.books_value, _db_source(d), d.delta, d.delta_pct,
-            d.severity, _status(d),
+            d.severity, _status(d, tied),
         )
-        for d in lineage.discrepancies
+        for lines, tied in ((lineage.discrepancies, False), (lineage.ties, True))
+        for d in lines
     ]
+    return sorted(rows, key=lambda r: r[-1] == "Ties out")  # exceptions first, stable
 
 
 def _title(lineage: Lineage) -> str:
@@ -74,7 +79,7 @@ def build_xlsx(lineage: Lineage) -> bytes:
     for row in ws.iter_rows():
         for cell in row:
             # Document/LLM text must never become a live formula in the workpaper.
-            if isinstance(cell.value, str) and cell.value.startswith("="):
+            if isinstance(cell.value, str) and cell.value.startswith(("=", "+", "-", "@")):
                 cell.data_type = "s"
     for col in ("C", "E", "G"):
         for cell in ws[col][4:]:
