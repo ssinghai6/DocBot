@@ -31,6 +31,7 @@ from fastapi.responses import JSONResponse
 
 from api import credit_service
 from api.api_key_service import require_api_key
+from api.db_service import ConnectionNotFoundError
 from api.routes.connector_routes import ConnectorDateRangeRequest
 from api.sandbox_session_service import (
     begin_test_key_billing,
@@ -230,6 +231,8 @@ async def v1_hybrid_chat(
                     trace_id = evt.get("trace_id")
                 elif etype == "error":
                     error_detail = evt.get("detail") or evt.get("content") or "An internal error occurred."
+        except ConnectionNotFoundError as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
         except Exception as exc:
             logger.error("v1_hybrid_chat error: %s", type(exc).__name__)
             raise HTTPException(status_code=502, detail="An internal error occurred.") from exc

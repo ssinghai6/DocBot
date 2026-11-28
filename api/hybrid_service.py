@@ -443,7 +443,7 @@ async def _collect_sql_result(
     Drains run_sql_pipeline() until the first metadata chunk, then returns
     the parsed dict so hybrid_chat() can incorporate results into synthesis.
     """
-    from api.db_service import run_sql_pipeline
+    from api.db_service import ConnectionNotFoundError, run_sql_pipeline
 
     try:
         metadata_result: dict | None = None
@@ -494,6 +494,8 @@ async def _collect_sql_result(
             metadata_result["analysis_code_event"] = analysis_code_event
 
         return metadata_result
+    except ConnectionNotFoundError:
+        raise  # DOCBOT-2733: "please re-upload" must reach the user, not a books-less answer
     except Exception as exc:
         logger.warning("_collect_sql_result failed: %s", exc)
         return None
