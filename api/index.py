@@ -3511,6 +3511,12 @@ from api.routes.answer_routes import router as answer_router, wire_answer_routes
 app.include_router(answer_router)
 wire_answer_routes(agent_traces_table, sessions_table, db_connections_table, async_session_factory)
 
+# ── DOCBOT-2728: LLM intent router (fast vs autopilot, data readiness) ───────
+from api.routes.intent_routes import router as intent_router, wire_intent_routes  # noqa: E402
+
+app.include_router(intent_router)
+wire_intent_routes(sessions_table, db_connections_table, schema_cache_table, async_session_factory)
+
 # ── DOCBOT-1712: post-signup onboarding (workspace name + use case) ───────────
 from api.routes.onboarding_routes import (  # noqa: E402
     router as onboarding_router,

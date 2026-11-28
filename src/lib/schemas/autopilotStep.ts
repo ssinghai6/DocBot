@@ -19,6 +19,8 @@ export const AutopilotStepEventSchema = z.object({
   explanation: z.string().nullish(),
   code: z.string().nullish(),
   error: z.string().nullish(),
+  // DOCBOT-2727: "insufficient_data" when the step found no usable data (DOCBOT-2724/2725).
+  failure_reason: z.string().nullish(),
 })
 
 export type AutopilotStepEvent = z.infer<typeof AutopilotStepEventSchema>
