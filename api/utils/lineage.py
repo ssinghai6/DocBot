@@ -77,6 +77,7 @@ class DiscrepancyDocCitation(BaseModel):
 class DiscrepancyDbCitation(BaseModel):
     table: Optional[str] = None
     query: Optional[str] = None
+    row: Optional[str] = None  # DOCBOT-2725: the books line, PII-masked
 
 
 DiscrepancySeverity = Literal["low", "medium", "high"]
@@ -162,6 +163,8 @@ class Lineage(BaseModel):
     sources: list[LineageSource] = Field(default_factory=list)
     sql: Optional[LineageSql] = None
     discrepancies: list[LineageDiscrepancy] = Field(default_factory=list)
+    # DOCBOT-2725: report figures that tie out to the books (same shape).
+    ties: list[LineageDiscrepancy] = Field(default_factory=list)
     model_calls: list[LineageModelCall] = Field(default_factory=list)
     pii: LineagePii = Field(default_factory=LineagePii)
     cache_hit: bool = False
@@ -355,10 +358,12 @@ class LineageCollector:
 
     # -- discrepancies -----------------------------------------------------
     def add_discrepancy(self, item: "DiscrepancyItem") -> None:
-        """Record one detector ``DiscrepancyItem`` as a structured tie-out."""
-        if any(d.id == item.id for d in self._data.discrepancies):
+        """Record one detector ``DiscrepancyItem`` as a structured tie-out.
+        Items with ``status == "ties"`` (DOCBOT-2725) go to ``ties``."""
+        target = self._data.ties if getattr(item, "status", "exception") == "ties" else self._data.discrepancies
+        if any(d.id == item.id for d in target):
             return
-        self._data.discrepancies.append(
+        target.append(
             LineageDiscrepancy(
                 id=item.id,
                 metric=item.label[:120],
@@ -376,6 +381,7 @@ class LineageCollector:
                 db_citation=DiscrepancyDbCitation(
                     table=item.db_table[:200] if item.db_table else None,
                     query=item.db_query[:2000] if item.db_query else None,
+                    row=safe_snippet(item.db_snippet, 120),
                 ),
             )
         )

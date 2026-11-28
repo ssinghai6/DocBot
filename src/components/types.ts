@@ -259,6 +259,7 @@ export const LineageSchema = z.object({
   sources: z.array(LineageSourceSchema).default([]),
   sql: LineageSqlSchema.nullish(),
   discrepancies: z.array(LineageDiscrepancySchema).default([]),
+  ties: z.array(LineageDiscrepancySchema).default([]),
   model_calls: z.array(LineageModelCallSchema).default([]),
   pii: z.object({ masked: z.boolean().default(false), counts: z.record(z.string(), z.number()).default({}) }).default({ masked: false, counts: {} }),
   cache_hit: z.boolean().default(false),
