@@ -1089,6 +1089,7 @@ def make_executor_node(
                         from api.sandbox_service import (
                             generate_csv_analysis_code,
                             _run_csv_in_sandbox,
+                            _FORECAST_RE,
                         )
                         import base64 as _base64
 
@@ -1245,6 +1246,10 @@ def make_executor_node(
                                         if sandbox_result.stdout
                                         else f"Step failed: {sandbox_result.error}"
                                     )
+                                elif _insufficient := detect_insufficient_output(
+                                    sandbox_result.stdout, bool(_FORECAST_RE.search(step))
+                                ):
+                                    _mark_insufficient(result_entry, _insufficient)
                                 else:
                                     result_entry["result"] = (
                                         sandbox_result.stdout[:500]
@@ -1271,6 +1276,7 @@ def make_executor_node(
                                 if (
                                     sandbox_result.charts
                                     and session_artifacts_table is not None
+                                    and result_entry["failure_reason"] != _DEGR_INSUFFICIENT_DATA
                                 ):
                                     from api.artifact_service import save_artifact
 
@@ -1454,6 +1460,10 @@ def make_executor_node(
                                     sandbox_result.stdout[:500] if sandbox_result.stdout
                                     else f"Step failed: {sandbox_result.error}"
                                 )
+                            elif _insufficient := detect_insufficient_output(
+                                sandbox_result.stdout, _is_series_task
+                            ):
+                                _mark_insufficient(result_entry, _insufficient)
                             else:
                                 result_entry["result"] = (
                                     sandbox_result.stdout[:500] if sandbox_result.stdout
@@ -1478,7 +1488,11 @@ def make_executor_node(
                                 if _analysis_artifact_id and not result_entry["artifact_id"]:
                                     result_entry["artifact_id"] = _analysis_artifact_id
                             # Persist first chart as an artifact
-                            if sandbox_result.charts and session_artifacts_table is not None:
+                            if (
+                                sandbox_result.charts
+                                and session_artifacts_table is not None
+                                and result_entry["failure_reason"] != _DEGR_INSUFFICIENT_DATA
+                            ):
                                 from api.artifact_service import save_artifact
 
                                 artifact_id = await save_artifact(
