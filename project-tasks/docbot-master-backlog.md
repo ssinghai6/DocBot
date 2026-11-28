@@ -503,6 +503,7 @@ Builds on 1530 and 2907. Pulled on 2026-11-23 (founder ask: token-gated docbot.s
 | DOCBOT-2721 | BUG: Autopilot planner falls back to a docs-only single step; empty answer bubble | 2 | P0 | Testing (2026-11-27) | 0 | S0 | senior-dev | EPIC-26 Pre-seed |
 | DOCBOT-2722 | BUG: EDGAR batch ingest: only the last filing is queryable | 2 | P0 | Testing (2026-11-27) | 0 | S0 | senior-dev | EPIC-26 Pre-seed |
 | DOCBOT-2723 | BUG: SQL grounding on a real ledger: category values, empty-result retry, verified few-shot | 3 | P0 | Testing (2026-11-27) | 0 | S0 | senior-dev | EPIC-26 Pre-seed |
+| DOCBOT-2733 | BUG: uploaded books fail as internal error after restart; chart sandbox runs on every tie-out | 2 | P0 | Testing (2026-11-28) | 0 | S0 | senior-dev | EPIC-26 Pre-seed |
 | DOCBOT-2632 | BUG: Demo session breaks after a backend restart | 3 | P0 | In progress (found 2026-11-23) | 0 | - | senior-dev | EPIC-26 Pre-seed |
 | DOCBOT-2509 | Secrets rotation | 5 | P1 | Open (Wave B) | 1 | S2 | devops | EPIC-25 AWS |
 | DOCBOT-2510 | Prod restore drill | 3 | P1 | Open (Wave B) | 1 | S2 | devops | EPIC-25 AWS |
