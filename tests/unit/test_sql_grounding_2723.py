@@ -102,7 +102,7 @@ async def test_prompt_has_grounding_and_no_unrequested_filter_rules():
     assert "no sign filters (amount > 0)" in prompt
     assert "never sum revenue and expense rows together" in prompt
     assert "do not copy their filters" in prompt
-    assert db_service.PROMPT_VERSION_SQL_GEN == "v8"
+    assert db_service.PROMPT_VERSION_SQL_GEN == "v9"
 
 
 # ── 2. empty / NULL result ───────────────────────────────────────────────────

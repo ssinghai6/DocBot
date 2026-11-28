@@ -44,9 +44,9 @@ USERS = {
 
 CONN_A, CONN_B, CONN_LEGACY = "conn-anon-a", "conn-anon-b", "conn-legacy"
 SESS_A, SESS_B, SESS_MEMBER = "sess-anon-a", "sess-anon-b", "sess-member"
-SCHEMA_A = [{"name": "anon_a_table", "columns": [{"name": "x", "type": "INT"}], "schema_fmt": 4}]
-SCHEMA_B = [{"name": "anon_b_table", "columns": [{"name": "y", "type": "INT"}], "schema_fmt": 4}]
-SCHEMA_LEGACY = [{"name": "legacy_table", "columns": [{"name": "z", "type": "INT"}], "schema_fmt": 4}]
+SCHEMA_A = [{"name": "anon_a_table", "columns": [{"name": "x", "type": "INT"}], "schema_fmt": 5}]
+SCHEMA_B = [{"name": "anon_b_table", "columns": [{"name": "y", "type": "INT"}], "schema_fmt": 5}]
+SCHEMA_LEGACY = [{"name": "legacy_table", "columns": [{"name": "z", "type": "INT"}], "schema_fmt": 5}]
 
 
 @pytest.fixture

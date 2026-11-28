@@ -33,6 +33,7 @@ except ImportError:
     _SEMANTIC_AVAILABLE = False
 
 from api.utils.embeddings_provider import get_embeddings
+from api.utils.pdf_layout import is_number_cell
 
 # Document types that benefit from semantic chunking (boundary-aware splitting
 # rather than fixed character windows).
@@ -329,4 +330,116 @@ def chunk_filing(text: str, table_max_chars: int = FILING_TABLE_MAX_CHARS) -> li
         ))
         if headings:
             section = headings[-1]
+    return docs
+
+
+# ---------------------------------------------------------------------------
+# DOCBOT-2731: PDF chunker: per page, table rows as their own chunks
+# ---------------------------------------------------------------------------
+
+# Above this many row chunks per PDF, further tables are packed whole
+# (_split_table) so a table-heavy 500-page PDF stays bounded.
+PDF_TABLE_ROW_CHUNKS_MAX = int(os.getenv("PDF_TABLE_ROW_CHUNKS_MAX", "3000"))
+
+
+def _cells(line: str) -> list[str]:
+    return [c.strip() for c in line.split("|")]
+
+
+def _is_pdf_table(block: str) -> bool:
+    """A table block rendered by pdf_layout: pipe rows, at least one numeric."""
+    rows = [ln for ln in block.splitlines() if "|" in ln]
+    return len(rows) >= 2 and any(
+        sum(is_number_cell(c) for c in _cells(r)[1:]) >= 2 for r in rows
+    )
+
+
+def _table_row_chunks(block: str, caption: str, page: int) -> list[str]:
+    """One chunk per row: title (p.N) | section | label | header value | ..."""
+    title = " / ".join(ln.strip() for ln in caption.splitlines() if ln.strip()) or "Table"
+    header: list[str] = []
+    section = ""
+    out: list[str] = []
+    for line in (ln.strip() for ln in block.splitlines()):
+        if not line:
+            continue
+        if "|" not in line:
+            section = line  # "Revenue" / "Expenditures"
+            continue
+        label, *vals = _cells(line)
+        if not out and not header and not any(is_number_cell(v) for v in vals):
+            header = vals
+            if label:
+                title = f"{title} ({label})"
+            continue
+        parts = [f"{title} (p.{page})", *([section] if section else []), label or "(no label)"]
+        for i, v in enumerate(vals):
+            if v:
+                head = header[i] if i < len(header) else ""
+                parts.append(f"{head} {v}".strip())
+        out.append(" | ".join(parts))
+    return out
+
+
+def chunk_pdf_pages(page_texts: list[str], source: str, doc_type: str = "general") -> list[Document]:
+    """Chunk one PDF's pages (``extract_pdf_pages`` output) keeping the true page.
+
+    Table blocks (rendered by ``pdf_layout``) become one chunk per row carrying
+    the table title, column headers and page. Prose from every page goes
+    through ``chunk_document`` in one pass (so the semantic-size cap still
+    applies per document), and each prose chunk is mapped back to the page it
+    starts on.
+    """
+    docs: list[Document] = []
+    prose_parts: list[str] = []
+    starts: list[int] = []
+    pages: list[int] = []
+    pos = 0
+    n_rows = 0
+    for page_num, text in enumerate(page_texts, start=1):
+        if not text or not text.strip():
+            continue
+        prose: list[str] = []
+        for block in text.split("\n\n"):
+            if not block.strip():
+                continue
+            if not _is_pdf_table(block):
+                prose.append(block.strip())
+                continue
+            caption = _caption(prose[-1]) if prose else ""
+            if n_rows < PDF_TABLE_ROW_CHUNKS_MAX:
+                pieces = _table_row_chunks(block, caption, page_num)
+                n_rows += len(pieces)
+                kind = "table_row"
+            else:
+                pieces = _split_table(block.strip(), f"{caption} (p.{page_num})", FILING_TABLE_MAX_CHARS)
+                kind = "table"
+            docs.extend(
+                Document(page_content=p, metadata={"source": source, "page": page_num, "chunk_type": kind})
+                for p in pieces
+            )
+        page_prose = "\n\n".join(prose)
+        if len(page_prose) > 50:  # same "meaningful text" floor as the upload loop
+            starts.append(pos)
+            pages.append(page_num)
+            prose_parts.append(page_prose)
+            pos += len(page_prose) + 2
+
+    if prose_parts:
+        text = "\n\n".join(prose_parts)
+        cursor = 0
+        for chunk in chunk_document(text, doc_type=doc_type):
+            # anchor on the chunk's first line searching forward: running page
+            # headers repeat on every page, so a backward search would land late
+            head = next((ln.strip() for ln in chunk.page_content.splitlines() if len(ln.strip()) >= 8), "")
+            found = text.find(head, cursor) if head else -1
+            cursor = found if found >= 0 else cursor
+            page = pages[max(bisect.bisect_right(starts, cursor) - 1, 0)]
+            docs.append(Document(
+                page_content=chunk.page_content,
+                metadata={"source": source, "page": page, "chunk_type": "text"},
+            ))
+    docs.sort(key=lambda d: d.metadata["page"])
+    for i, d in enumerate(docs):
+        d.metadata["chunk_index"] = i
     return docs

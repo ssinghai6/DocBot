@@ -223,7 +223,7 @@ def expand_query_llm(question: str, *, hf_api_key: str | None = None) -> list[st
 
 def deduplicate_docs(doc_lists: list[list]) -> list:
     """Merge multiple lists of LangChain Document objects, deduplicating by
-    (source, page, first-100-chars).
+    (source, page, full text).
 
     Earlier lists have priority — their documents appear first in the output.
     """
@@ -234,7 +234,8 @@ def deduplicate_docs(doc_lists: list[list]) -> list:
             key = (
                 doc.metadata.get("source", ""),
                 doc.metadata.get("page", 0),
-                doc.page_content[:100],
+                # full text: PDF table-row chunks share a long title prefix (DOCBOT-2731)
+                doc.page_content,
             )
             if key not in seen:
                 seen.add(key)

@@ -72,7 +72,7 @@ async def test_code_name_columns_get_true_pairs(tmp_path):
     assert "paired_with" not in cols["status"] and "paired_with" not in cols["memo"]
     # the plain lists stay (tie-out line recovery reads them)
     assert cols["account_name"]["sample_values"] == sorted(n for _, n in ACCOUNTS)
-    assert schema[0]["schema_fmt"] == db_service._SCHEMA_FMT == 4
+    assert schema[0]["schema_fmt"] == db_service._SCHEMA_FMT == 5
 
 
 @pytest.mark.asyncio

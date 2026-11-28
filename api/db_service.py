@@ -134,7 +134,7 @@ async def _decrypt_conn_credentials_lazy(
 
 PROMPT_VERSION_SQL_REPHRASE = "v1"          # _rephrase_with_history
 PROMPT_VERSION_SQL_TABLE_SELECTOR = "v1"    # _select_relevant_tables (incl. retry)
-PROMPT_VERSION_SQL_GEN = "v8"               # _generate_sql (v8: DOCBOT-2723 grounding)
+PROMPT_VERSION_SQL_GEN = "v9"               # _generate_sql (v9: DOCBOT-2731 signs, granularity, sides)
 # DOCBOT-2637: reasoning models (gpt-oss on Bedrock) spend output tokens
 # thinking first; at 1200 a pivot query was cut off mid-SQL ("Column not found").
 SQL_GEN_MAX_TOKENS = 3000
@@ -1178,7 +1178,8 @@ def _get_columns_via_information_schema(engine, table_name: str) -> List[Dict[st
 # above that, no values (as before). Bump _SCHEMA_FMT when the cached
 # shape changes so older cache rows are re-introspected.
 # 3 = DOCBOT-2720 value_pairs. 4 = DOCBOT-2723 100k-row scan.
-_SCHEMA_FMT = 4
+# 5 = DOCBOT-2731 amount_sign on amount columns.
+_SCHEMA_FMT = 5
 _SAMPLE_MAX_VALUES = 5
 _SAMPLE_MAX_LEN = 60
 _SAMPLE_MAX_DISTINCT = 50
@@ -1288,6 +1289,48 @@ def _attach_value_pairs(engine, table_name: str, columns: List[Dict[str, Any]]) 
             code["paired_with"], name["paired_with"] = name["name"], code["name"]
 
 
+# DOCBOT-2731: the generator negated revenue (-SUM) on a ledger that stores
+# every amount positive. Measure it: an amount column is "credits_negative"
+# when negative rows carry >= 10% of its absolute total (Chipotle ~50%,
+# San Diego 0.06%), else "positive". The prompt states the convention.
+_AMOUNT_NAME_MARKERS = ("amount", "amt", "balance", "value", "debit", "credit", "total", "net")
+_NUMERIC_TYPE_MARKERS = ("INT", "REAL", "NUM", "DEC", "FLOAT", "DOUBLE", "MONEY")
+_CREDIT_NEGATIVE_SHARE = 0.10
+_AMOUNT_MAX_COLUMNS = 5
+
+
+def _attach_amount_signs(engine, table_name: str, columns: List[Dict[str, Any]]) -> None:
+    """Set ``amount_sign`` ("credits_negative" | "positive") on numeric
+    amount-like columns from one bounded scan of the table."""
+    from sqlalchemy import case, column as sa_column, func, table as sa_table
+    from sqlalchemy.exc import SQLAlchemyError
+
+    cols = [
+        c for c in columns
+        if any(m in str(c.get("type", "")).upper() for m in _NUMERIC_TYPE_MARKERS)
+        and any(m in str(c["name"]).lower() for m in _AMOUNT_NAME_MARKERS)
+    ][:_AMOUNT_MAX_COLUMNS]
+    if not cols:
+        return
+    names = [str(c["name"]) for c in cols]
+    inner = select(*[sa_column(n) for n in names]).select_from(sa_table(table_name)).limit(_SAMPLE_SCAN_ROWS).subquery()
+    exprs = []
+    for n in names:
+        x = inner.c[n]
+        exprs += [func.sum(case((x < 0, -x), else_=0)), func.sum(func.abs(x))]
+    try:
+        with engine.connect() as conn:
+            row = conn.execute(select(*exprs)).one()
+    except SQLAlchemyError as exc:
+        logger.debug("amount signs skipped for %s: %s", table_name, type(exc).__name__)
+        return
+    for i, c in enumerate(cols):
+        neg, total = row[2 * i], row[2 * i + 1]
+        if total:
+            share = float(neg or 0) / float(total)
+            c["amount_sign"] = "credits_negative" if share >= _CREDIT_NEGATIVE_SHARE else "positive"
+
+
 async def _introspect_schema_from_url(
     sync_url: str, dialect: str,
     entra_connect_args: Optional[Dict[str, Any]] = None,
@@ -1336,6 +1379,7 @@ async def _introspect_schema_from_url(
             except Exception:
                 col_list = _get_columns_via_information_schema(engine, tname)
             _attach_sample_values(engine, tname, col_list, sample_budget)
+            _attach_amount_signs(engine, tname, col_list)
             schema.append({"name": tname, "columns": col_list, "schema_fmt": _SCHEMA_FMT})
 
         # Append views (tagged with is_view for downstream awareness)
@@ -1351,6 +1395,7 @@ async def _introspect_schema_from_url(
                 col_list = _get_columns_via_information_schema(engine, vname)
             if dialect == "sqlite":  # views can be expensive on server DBs
                 _attach_sample_values(engine, vname, col_list, sample_budget)
+                _attach_amount_signs(engine, vname, col_list)
             schema.append({"name": vname, "columns": col_list, "is_view": True, "schema_fmt": _SCHEMA_FMT})
 
         return schema
@@ -2061,6 +2106,11 @@ def _category_hints(question: str, schema_subset: List[Dict[str, Any]]) -> List[
     question names, ignoring case, punctuation and '&' vs 'and'. Longest first;
     a value found only inside a longer matched value is dropped ('Utilities'
     under 'Energy and Utilities'). Deterministic, no LLM.
+
+    DOCBOT-2731: a value in a broad column (account_type 'Personnel') whose
+    name also starts a value of a finer column in the same table (more listed
+    values: account_class 'Personnel Cost') is replaced by those finer
+    values, since report lines sit at the finer level.
     """
     q = f" {_norm_phrase(question)} "
     found = [
@@ -2081,7 +2131,66 @@ def _category_hints(question: str, schema_subset: List[Dict[str, Any]]) -> List[
         hints.append((tname, cname, v))
         if len(hints) >= _HINT_MAX:
             break
-    return hints
+    listed = {
+        (t["name"], str(c["name"])): [w for w in c.get("sample_values") or [] if isinstance(w, str)]
+        for t in schema_subset for c in t.get("columns", [])
+    }
+    out: List[tuple[str, str, str]] = []
+    for tname, cname, v in hints:
+        n, width = _norm_phrase(v), len(listed[(tname, cname)])
+        finer = [
+            (tname, c2, w)
+            for (t2, c2), vals in listed.items() if t2 == tname and len(vals) > width
+            for w in vals if w != v and f" {_norm_phrase(w)} ".startswith(f" {n} ")
+        ]
+        for h in finer if 0 < len(finer) <= 3 else [(tname, cname, v)]:
+            if h not in out:
+                out.append(h)
+    return out[:_HINT_MAX]
+
+
+# DOCBOT-2731: an expense total once pulled in revenue account_types
+# ('Charges for Current Services', 'Other Local Taxes') -> $2.38B. Name-based
+# side of a listed value; a name with words from both sides ('Provision for
+# income taxes') is left unclassified.
+_EXPENSE_WORDS = (
+    "expense", "expenditure", "cost", "provision", "depreciation", "amortization", "personnel",
+    "supplies", "contract", "utilities", "debt", "transfers out", "benefit", "labor", "salar",
+    "wage", "impairment", "capital outlay", "capital expenditure",
+)
+_REVENUE_WORDS = (
+    "revenue", "tax", "fee", "charges for", "fines", "forfeiture", "license", "permit",
+    "transfers in", "interest", "rent", "franchise", "sales", "income", "grant", "dividend",
+)
+_SIDE_LIST_MAX = 20
+
+
+def _value_side(value: str) -> Optional[str]:
+    n = f" {_norm_phrase(value)}"
+    exp = any(f" {w}" in n for w in _EXPENSE_WORDS)
+    rev = any(f" {w}" in n for w in _REVENUE_WORDS)
+    return None if exp == rev else ("expense" if exp else "revenue")
+
+
+def _side_exclusions(question: str, schema_subset: List[Dict[str, Any]]) -> tuple[str, List[tuple[str, str, List[str]]]]:
+    """For a question about only expenses (or only revenue): the listed values
+    of mixed revenue/expense category columns that belong to the OTHER side,
+    as (side asked, [(table, column, values)]). Empty when the side is unclear.
+    """
+    q = f" {_norm_phrase(question)}"
+    exp_q = any(f" {w}" in q for w in ("expense", "expenditure", "spending", "spend", "cost"))
+    rev_q = any(f" {w}" in q for w in ("revenue", "income", "receipts"))
+    if exp_q == rev_q:
+        return "", []
+    asked, other = ("expense", "revenue") if exp_q else ("revenue", "expense")
+    out: List[tuple[str, str, List[str]]] = []
+    for t in schema_subset:
+        for c in t.get("columns", []):
+            vals = [v for v in c.get("sample_values") or [] if isinstance(v, str)]
+            sides = {v: _value_side(v) for v in vals}
+            if asked in sides.values() and other in sides.values():
+                out.append((t["name"], str(c["name"]), [v for v in vals if sides[v] == other][:_SIDE_LIST_MAX]))
+    return asked, out
 
 
 def _is_empty_result(sql: str, dialect: str, rows: List[Any]) -> bool:
@@ -2131,6 +2240,11 @@ async def _generate_sql(
         return "'" + str(v).replace("'", "''") + "'"
 
     def _fmt_col(c: Dict[str, Any]) -> str:
+        sign = c.get("amount_sign")  # DOCBOT-2731
+        if sign == "credits_negative":
+            return f"{c['name']} ({c['type']}, signed: debits/expenses positive, credits/revenue negative)"
+        if sign == "positive":
+            return f"{c['name']} ({c['type']}, stored positive for revenue and expense rows alike)"
         samples = c.get("sample_values")
         pairs = c.get("value_pairs")
         if c.get("paired_with") and not pairs:  # DOCBOT-2720: name side of a pair
@@ -2165,6 +2279,38 @@ async def _generate_sql(
             f"- {t}.{c} = {_q(v)}" for t, c, v in hints
         )
 
+    asked, exclusions = _side_exclusions(question, schema_subset)
+    if exclusions:
+        other = "revenue" if asked == "expense" else "expense"
+        hint_text += (
+            f"\n\nThis question totals {asked}s. These listed values are {other} categories; "
+            "never include them (rule 10):\n"
+            + "\n".join(f"- {t}.{c}: {', '.join(_q(v) for v in vals)}" for t, c, vals in exclusions)
+        )
+
+    # DOCBOT-2731: the -SUM rule only when the data really stores credits negative
+    signs = {c.get("amount_sign") for t in schema_subset for c in t["columns"]}
+    if "credits_negative" in signs:
+        sign_rule = (
+            "A column marked 'signed' holds debits positive and credits negative: an expense "
+            "line is SUM(amount), a revenue line is -SUM(amount), and a profit line (operating "
+            "income, net income) is -SUM(amount) over every account that rolls into it, revenue "
+            "and expenses together."
+        )
+    elif "positive" in signs:
+        sign_rule = (
+            "Amount columns marked 'stored positive' hold revenue and expense rows both as "
+            "positive numbers: total any line with SUM(amount), never negate it, and compute "
+            "a profit line as the revenue SUM minus the expense SUM."
+        )
+    else:
+        sign_rule = (
+            "If one signed amount column holds debits positive and credits negative: an expense "
+            "line is SUM(amount), a revenue line is -SUM(amount), and a profit line (operating "
+            "income, net income) is -SUM(amount) over every account that rolls into it, revenue "
+            "and expenses together."
+        )
+
     few_shot_text = ""
     if few_shot_examples:
         examples_str = "\n\n".join(
@@ -2189,10 +2335,7 @@ async def _generate_sql(
         "the document: never add agree / match / variance flag columns. When accounts roll "
         "up to statement lines (e.g. an fs_line or rollup column), group by that line, not "
         "by individual accounts. If a status column marks entries (e.g. posted / void / "
-        "draft), keep only posted ones. If one signed amount column holds debits positive "
-        "and credits negative: an expense line is SUM(amount), a revenue line is "
-        "-SUM(amount), and a profit line (operating income, net income) is -SUM(amount) "
-        "over every account that rolls into it, revenue and expenses together.\n"
+        f"draft), keep only posted ones. {sign_rule}\n"
         "6. Filter text columns using the stored format shown in their e.g. values "
         "(e.g. quarter values like 'Q4 2025' need quarter LIKE 'Q4%', not quarter = 'Q4').\n"
         "7. A column shown with 'values' lists EVERY value it holds. Filter it only with "
@@ -2205,7 +2348,9 @@ async def _generate_sql(
         "9. When the question names a category or line item, look for it first among the "
         "listed column values (ignore case; '&' = 'and'). If it is listed, filter that column "
         "with the exact listed string (= or IN). Use LIKE on a column without listed values "
-        "(e.g. account names) only when no listed value matches.\n"
+        "(e.g. account names) only when no listed value matches. When the line matches values "
+        "in more than one column (a broad type such as 'Personnel' and a finer class such as "
+        "'Personnel Cost'), filter the finer, report-line-level column the hints name.\n"
         "10. Add only filters the question implies: no sign filters (amount > 0), no type "
         "exclusions, nothing copied from past queries. To total revenue or expenses, select "
         "rows by the category/type values listed (every value that belongs, none from the "
