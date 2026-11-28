@@ -73,7 +73,7 @@ _LIST_STATE_KEYS = ("steps_completed", "citations", "degradation_reasons")
 # manually when the wording/instructions change — see PROMPT_VERSION
 # convention in api/utils/llm_provider.py.
 PROMPT_VERSION_AUTOPILOT_PLANNER = "v1"
-PROMPT_VERSION_AUTOPILOT_SYNTHESIZER = "v2"
+PROMPT_VERSION_AUTOPILOT_SYNTHESIZER = "v3"  # v3: DOCBOT-2726 insufficient-data rule
 
 # Internal step-result prefixes that signal a failed/empty step. These are
 # scrubbed from user-facing output and replaced with a calm generic message —
@@ -1939,6 +1939,8 @@ async def _synthesizer_node(state: AutopilotState) -> dict:
             "answer with a short note stating that the analysis is degraded and "
             "that findings may be incomplete.\n\n"
         )
+    if _has_insufficient_step(state):
+        system_prompt += f"{INSUFFICIENT_DATA_ANSWER_RULE}\n\n"
     user_content = (
         f"Original question: {state['question']}\n\n"
         f"Investigation results:\n{steps_text}"
@@ -1983,7 +1985,7 @@ async def _synthesizer_node(state: AutopilotState) -> dict:
 
 # DOCBOT-1507: bump manually ("v1" -> "v2") whenever either prompt below
 # changes — see PROMPT_VERSION convention in api/utils/llm_provider.py.
-PROMPT_VERSION_AUTOPILOT_VERIFIER = "v1"
+PROMPT_VERSION_AUTOPILOT_VERIFIER = "v2"  # v2: DOCBOT-2726 insufficient-data rule
 
 
 def _has_apology_claim(answer: str) -> bool:
@@ -2107,7 +2109,11 @@ async def _apply_claim_guard(state: AutopilotState, answer: str) -> str:
         zero_entries = _zero_row_sql_entries(state)
 
         if _has_apology_claim(answer):
-            if has_real_data and data_summary_text:
+            # DOCBOT-2726: "not enough data" is the honest answer when a step
+            # reported INSUFFICIENT_DATA — don't force it to "use the numbers".
+            if _has_insufficient_step(state):
+                pass
+            elif has_real_data and data_summary_text:
                 answer = await _force_fixup_with_data(state, answer, data_summary_text)
             elif rows_total == 0 and zero_entries:
                 answer = answer.rstrip() + "\n\n" + _refusal_detail(zero_entries)
@@ -2171,6 +2177,7 @@ async def _verifier_node(state: AutopilotState) -> dict:
         f"Actual data retrieved: {s.get('result', 'N/A')}"
         for i, s in enumerate(steps)
     )
+    insufficient = _has_insufficient_step(state)
 
     from api.utils.prompt_guard import PROMPT_INJECTION_DEFENSE_NOTICE
 
@@ -2184,7 +2191,15 @@ async def _verifier_node(state: AutopilotState) -> dict:
         "flag hedging, missing detail, rounding differences under 1%, or stylistic "
         "choices as contradictions.\n\n"
         f"{PROMPT_INJECTION_DEFENSE_NOTICE}\n\n"
-        'Respond with ONLY a JSON object: {"contradiction_found": true or false, '
+        + (
+            "A step returned INSUFFICIENT_DATA: any forecast value, coefficient, "
+            "growth rate or assumed number in the answer that is not in the "
+            "retrieved data IS a contradiction (unless the user explicitly asked "
+            "for a hypothetical scenario).\n\n"
+            if insufficient
+            else ""
+        )
+        + 'Respond with ONLY a JSON object: {"contradiction_found": true or false, '
         '"explanation": "<specific description of the contradiction, or empty '
         'string if none>"}. No markdown fences, no other text.'
     )
@@ -2234,7 +2249,8 @@ async def _verifier_node(state: AutopilotState) -> dict:
             "the FULL answer so it accurately reflects the retrieved data, fixing "
             "the specific contradiction described below, while keeping everything "
             "else that was already correct.\n"
-            f"{build_format_block(_autopilot_sources(state, steps))}"
+            + (f"{INSUFFICIENT_DATA_ANSWER_RULE}\n" if insufficient else "")
+            + f"{build_format_block(_autopilot_sources(state, steps))}"
         )
         correction_user_content = (
             f"Original question: {state.get('question', '')}\n\n"
