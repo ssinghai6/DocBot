@@ -215,7 +215,7 @@ def _call_llm(messages: list[dict[str, str]]) -> str:
         messages,
         model=GROQ_MODEL,
         temperature=0,
-        max_tokens=300,
+        max_tokens=800,  # gpt-oss reasoning tokens count against this budget
         caller="intent_router",
         prompt_version=PROMPT_VERSION_INTENT_ROUTER,
     )
